@@ -18,7 +18,13 @@ class AgentList():
         self.is_list = cfg.get("agent_is_list", False)
         self.agents_scope = agents_scope
         
-
+    def write_checkpoint(self, timestep, timesteps):
+        if self.is_list:
+            for agent in self.agents:
+                agent.write_checkpoint(timestep, timesteps)
+        else:
+            self.agents.write_checkpoint(timestep, timesteps)
+            
     def init(self, trainer_cfg):
         if self.is_list:
             for agent in self.agents:
@@ -92,20 +98,11 @@ class AgentList():
                           infos: Any,
                           timestep: int,
                           timesteps: int,
-                          reward_dist: dict,
-                          term_dist: dict,
                           alive_mask: torch.Tensor = None) -> None:
         if self.is_list:
             for agent, scope in zip(self.agents, self.agents_scope):
-                    agent_rew_dist = {}
-                    for rew_type in reward_dist.keys():
-                        agent_rew_dist[rew_type] = reward_dist[rew_type][scope[0]:scope[1]]
-
-                    agent_term_dist = {}
-                    for con in term_dist.keys():
-                        agent_term_dist[con] = term_dist[con][scope[0]:scope[1]]
-
                     if alive_mask is None:
+
                         agent.record_transition(
                             states=states[scope[0]:scope[1]],
                             actions=actions[scope[0]:scope[1]],
@@ -115,9 +112,7 @@ class AgentList():
                             truncated=truncated[scope[0]:scope[1]],
                             infos=infos,
                             timestep=timestep,
-                            timesteps=timesteps,
-                            reward_dist = agent_rew_dist,
-                            term_dist = agent_term_dist
+                            timesteps=timesteps
                         )
                     else:
                         alive_mask[scope[0]:scope[1]] = agent.record_transition(
@@ -130,8 +125,6 @@ class AgentList():
                             infos=infos,
                             timestep=timestep,
                             timesteps=timesteps,
-                            reward_dist = agent_rew_dist,
-                            term_dist = agent_term_dist,
                             alive_mask=alive_mask[scope[0]:scope[1]]
                         )
             return alive_mask
@@ -146,8 +139,6 @@ class AgentList():
                 infos=infos,
                 timestep=timestep,
                 timesteps=timesteps,
-                reward_dist = reward_dist,
-                term_dist = term_dist,
                 alive_mask=alive_mask
             )
 

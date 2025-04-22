@@ -101,18 +101,18 @@ class DataManager():
     def add_histogram(self, name, data, step):
         wandb.log({name: wandb.Histogram(data)}, step=step)
 
-    def add_ckpt(self, ckpt_path, wandb_path):
+    def add_ckpt(self, name, ckpt_path):
         """
             Save model parameters
             - ckpt_path: path on local files
             - wandb path: location to save it to
         """
         # set up a ckpt folder and artifact logger
-        #self.ckpt_art = wandb.Artifact(name=f"{self.run_name}_ckpts",
-        #                                type='ckpt')
-        #self.ckpt_art.add_file(local_path= ckpt_path,
-        #                       name=name)
-        #self.ckpt_art.save()
+        self.ckpt_art = wandb.Artifact(name=f"{self.run_name}_ckpts",
+                                        type='ckpt')
+        self.ckpt_art.add_file(local_path= ckpt_path,
+                               name=name)
+        self.ckpt_art.save()
         
     def get_dir(self):
         return wandb.run.dir

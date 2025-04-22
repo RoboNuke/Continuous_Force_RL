@@ -173,11 +173,8 @@ class WandbLoggerPPO(PPO):
                 self.tracking_data[prefix + "Episode / Total timesteps (min)"].append(np.min(track_timesteps))
                 self.tracking_data[prefix + "Episode / Total timesteps (mean)"].append(np.mean(track_timesteps))
 
-                for rew_type in self.rew_types:
-                    #print(f"final {rew_type}: { np.mean(self.rews['_track_'+rew_type]) }")
-                    self.track_data(prefix + "Reward / " + rew_type, np.mean(self.rews["_track_"+rew_type]))
-
             keep = {}
+            #self.data_manager.add_save(os.path.join(self.experiment_dir, "checkpoints"))
             for k, v in self.tracking_data.items():
                 if k.endswith("_video"):
                     try:
@@ -195,37 +192,28 @@ class WandbLoggerPPO(PPO):
                     self.data_manager.add_scalar({k:np.max(v)}, timestep * self.num_envs)
                 else:
                     self.data_manager.add_scalar({k:np.mean(v)}, timestep * self.num_envs)
+                """
+                elif k.endswith("_ckpt"):
+                #    print(k,v)
+                    try:
+                        import shutil
+                        shutil.copyfile(
+                            os.path.join(self.experiment_dir, "checkpoints", v[0]),
+                            os.path.join(wandb.run.dir, "checkpoints", v[0])
+                        )  
+                        print("Saving:", os.path.join(self.experiment_dir, "checkpoints", v[0]))
+                        self.data_manager.add_save(
+                            os.path.join(wandb.run.dir, "checkpoints", v[0]),
+                            "checkpoints/"
+                        )
+                    except FileNotFoundError:
+                        keep[k]=v"""
             
-            tot = 0
-            for name in self.totals:
-                self.data_manager.add_scalar(
-                    {prefix + "Termination / " + name: self.totals[name]}, 
-                    timestep*self.num_envs
-                )
-                tot += 0 if 'engage' in name else self.totals[name]
-                self.totals[name] = 0
-
-            timeouts = max(0, self.num_envs - tot)
-            self.curr_engaged[:] = False
-            self.data_manager.add_scalar(
-                {prefix + "Termination / time_out" : timeouts}, 
-                timestep*self.num_envs
-            )
-
-            for name in self.once:
-                self.data_manager.add_scalar(
-                    {prefix + " Termination / " + name + " once": torch.sum(self.once[name])}, 
-                    timestep*self.num_envs
-                )
-                self.once[name][:] = False
             #self.data_manager.add_scalar({prefix + 'Termination / Engaged':torch.sum(self.engaged_once).item()}, timestep * self.num_envs)
         # reset data containers for next iteration
         self._track_rewards.clear()
         self._track_timesteps.clear()
         self.tracking_data.clear()
-        for rew_type in self.rew_types:
-            self.rews[rew_type]*=0
-            self.rews["_track_"+rew_type].clear()
         
         self.reset_tracking()
         if self.log_wandb:
@@ -283,8 +271,6 @@ class WandbLoggerPPO(PPO):
                         infos: Any,
                         timestep: int,
                         timesteps: int,
-                        reward_dist: dict,
-                        term_dist: dict,
                         alive_mask: torch.Tensor = None) -> None:
         """Record an environment transition in memory
 
@@ -350,20 +336,6 @@ class WandbLoggerPPO(PPO):
             if self._cumulative_rewards is None:
                 self._cumulative_rewards = torch.zeros_like(rewards, dtype=torch.float32)
                 self._cumulative_timesteps = torch.zeros_like(rewards, dtype=torch.int32)
-                #self.engaged_once = torch.zeros((self.num_envs, ), dtype=torch.bool, device = self.device)
-                self.totals = {}
-                for name in infos['my_log_data']["count_step"]:
-                    self.totals[name] = 0
-
-                self.once = {}
-                for name in infos['my_log_data']['once']:
-                    self.once[name] = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
-                self.curr_engaged = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
-                self.rews = {}
-                self.rew_types = [name for name in infos['my_log_data']['step_rew']]
-                for name in self.rew_types:
-                    self.rews[name] = torch.zeros_like(rewards, dtype=torch.float32)
-                    self.rews["_track_"+name] = collections.deque(maxlen=1000)
 
             # handle reward 
             prefix = "Training "
@@ -381,32 +353,13 @@ class WandbLoggerPPO(PPO):
                         torch.max( infos['smoothness'][skey] ).item()
                     )
 
-            for key in infos['log']:
-                if 'Curriculum/init_height_sampling' in key:
-                    self.track_data(key, infos['log'][key])
-
             # record step reward data
             self.tracking_data[prefix + "Reward / Instantaneous reward (max)"].append(torch.max(rewards).item())
             self.tracking_data[prefix + "Reward / Instantaneous reward (min)"].append(torch.min(rewards).item())
             self.tracking_data[prefix + "Reward / Instantaneous reward (mean)"].append(torch.mean(rewards).item())
-
-            for name in infos['my_log_data']["once"]:
-                self.once[name] = torch.logical_or(self.once[name], infos['my_log_data']['once'][name])
-                if 'engage' in name: # count step is the current status, once is the rollout status
-                    self.curr_engaged = torch.logical_or(self.curr_engaged, infos['my_log_data']['count_step'][name])
                     
             if eval_mode:
                 self._cumulative_rewards += alive_mask * rewards
-
-                for rew_type in self.rew_types:
-                    #self.rews[rew_type] += alive_mask * infos['my_log_data']['step_rew'][rew_type]
-                    #self.rews["_track_" + rew_type].extend(
-                    #    (alive_mask * self.rews[rew_type][:,0]).reshape(-1).tolist()
-                    #)
-                    rew = infos['my_log_data']['step_rew'][rew_type]
-                    #print(rew_type, rew.size(), self.rews[rew_type].size())
-                    self.rews[rew_type].add_(alive_mask * rew[:,None])
-                    #self.rews[rew_type][finished_episodes] = 0
 
                 self._cumulative_timesteps[alive_mask] += 1
                 
@@ -414,41 +367,28 @@ class WandbLoggerPPO(PPO):
                 finished_episodes = torch.logical_and(~mask_update, alive_mask)[:,0]
                 # term this step and alive overall
 
+                for key in infos:
+                    self.track_data(prefix + key, (infos[key][alive_mask[:,0]]).float().mean().item())
+
+
                 alive_mask *= mask_update
 
             else:
                 self._cumulative_rewards.add_(rewards)
                 self._cumulative_timesteps.add_(1)
 
-                for rew_type in self.rew_types:
-                    rew = infos['my_log_data']['step_rew'][rew_type]
-                    #print(rew_type, rew.size(), self.rews[rew_type].size())
-                    self.rews[rew_type].add_(rew[:,None])
-
                 finished_episodes = (terminated + truncated).nonzero(as_tuple=False)
+                for key in infos:
+                    self.track_data(prefix + key, (infos[key]).float().mean().item())
 
             if finished_episodes.numel():
                 # storage cumulative rewards and timesteps
                 self._track_rewards.extend(self._cumulative_rewards[finished_episodes][:, 0].reshape(-1).tolist())
-                for rew_type in self.rew_types:
-                    #print(f'rew_type logging: {self.rews[rew_type][finished_episodes][:,0].reshape(-1).tolist()[0]}')
-                    self.rews["_track_" + rew_type].extend(self.rews[rew_type][finished_episodes][:,0].reshape(-1).tolist())
-                    self.rews[rew_type][finished_episodes] = 0
-
                 self._track_timesteps.extend(self._cumulative_timesteps[finished_episodes][:, 0].reshape(-1).tolist())
 
                 # reset the cumulative rewards and timesteps
                 self._cumulative_rewards[finished_episodes] = 0
                 self._cumulative_timesteps[finished_episodes] = 0
-
-                for name in infos['my_log_data']["count_step"]:
-                    if 'engage' in name: 
-                        # engage is special because it doesn't have to be true at the end of rollout to count
-                        self.totals[name] += torch.sum(self.curr_engaged[finished_episodes].float())
-                        self.curr_engaged[finished_episodes] = False
-                    else:
-                        self.totals[name] += torch.sum(infos['my_log_data']['count_step'][name][finished_episodes].float())
-                    infos['my_log_data']['count_step'][name][finished_episodes] = False
 
                     
         return alive_mask
@@ -458,14 +398,6 @@ class WandbLoggerPPO(PPO):
             return
         self._cumulative_rewards *= 0
         self._cumulative_timesteps *= 0
-        for rew_type in self.rew_types:
-            self.rews[rew_type] *= 0.0
-            self.rews["_track_"+rew_type].clear()
-        
-        for name in self.totals:
-            self.totals[name] *= 0
-            self.once[name][:] = False
-        self.curr_engaged[:] = False
         self._track_rewards.clear()
         self._track_timesteps.clear() 
 

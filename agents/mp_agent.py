@@ -66,12 +66,6 @@ def fn_processor(process_index, *args):
         # record agent's experience
         elif task == "record_transition":
             alive_mask_is_none = queue.get()
-            raw_rew_dist = queue.get()
-            for key in raw_rew_dist.keys():
-                _rew_dist[key] = raw_rew_dist[key][scope[0] : scope[1]]
-            raw_term_dist = queue.get()
-            for key in raw_term_dist.keys():
-                _term_dist[key] = raw_term_dist[key][scope[0] : scope[1]]
 
             with torch.no_grad():
                 r = queue.get()[scope[0] : scope[1]]
@@ -86,30 +80,14 @@ def fn_processor(process_index, *args):
                         red_info['smoothness'] = {}
                         for s_key in info['smoothness'].keys():
                             red_info['smoothness'][s_key] = info['smoothness'][s_key][scope[0] : scope[1]]
-                    elif key == "my_log_data":
-                        red_info['my_log_data'] = {}
-                        for log_key in info[key].keys():
-                            #print("\tlog key:", log_key, type(info[key][log_key]))
-                            if type(info[key][log_key]) == dict:
-                                #print("\t\tMaking new dict ", info[key][log_key].keys())
-                                red_info[key][log_key] = {}
-                                for data_key in info[key][log_key].keys():
-                                    #print("\t\tData key:", data_key)
-                                    red_info[key][log_key][data_key] = info[key][log_key][data_key][scope[0] : scope[1]]
-                            else:
-                                #print("\t\tstored")
-                                red_info[key][log_key] = info[key][log_key][scope[0] : scope[1]]
                     else:
-                        red_info[key] = {}
-                        for small_key in info[key]:
-                            #print("\tSmall Key:", small_key)
-                            if "Curriculum" in small_key:
-                                #print("\t\tKey:", key)
-                                if str(process_index) in small_key:
-                                    #print(f"\t\tKeept {process_index}: {small_key}")
-                                    red_info[key][small_key] = info[key][small_key]
-                            else:
-                                red_info[key][small_key] = info[key][small_key]
+                        if type(info[key]) == dict:
+                            red_info[key] = {}
+                            for small_key in info[key]:
+                                red_info[key][small_key] = info[key][small_key][scope[0] : scope[1]]
+                        else:
+                            red_info[key] = info[key][scope[0] : scope[1]]
+
                 #print("Sent Info:", red_info['log'])
                 alive_mask = None if alive_mask_is_none else queue.get()[scope[0] : scope[1]]
                 alive_mask_out = agent.record_transition(
@@ -122,16 +100,10 @@ def fn_processor(process_index, *args):
                     infos=red_info,
                     timestep=msg["timestep"],
                     timesteps=msg["timesteps"],
-                    reward_dist=_rew_dist,
-                    term_dist=_term_dist,
                     alive_mask= alive_mask,
                 )
-                #if not alive_mask_out.is_cuda:
-                #    alive_mask_out.share_memory_()
                 if not alive_mask_is_none:
-                    #print("mask sizes:", alive_mask.size(), alive_mask_out.size())
                     alive_mask = alive_mask_out
-                #queue.put(alive_mask_out)
 
                 if alive_mask_is_none:
                     queue.get()
@@ -219,9 +191,7 @@ class MPAgent():
             process.start()
             
         self.barrier.wait()
-        #import time
-        #time.sleep(10)
-        #assert 1 == 0
+        
         print("Multiprocess Agents Created!")
 
     def set_agents(self, agents):
@@ -237,7 +207,6 @@ class MPAgent():
                 except RuntimeError:
                     pass
 
-    
     def init(self, trainer_cfg):
         # initialize agents
         for pipe, queue, agent in zip(self.producer_pipes, self.queues, self.agents):
@@ -298,8 +267,6 @@ class MPAgent():
                           infos: Any,
                           timestep: int,
                           timesteps: int,
-                          reward_dist: dict,
-                          term_dist: dict,
                           alive_mask: torch.Tensor = None) -> None:
         if not rewards.is_cuda:
             rewards.share_memory_()
@@ -316,14 +283,6 @@ class MPAgent():
         if alive_mask is not None and not alive_mask.is_cuda:
             alive_mask.share_memory_()
 
-        for rew_type in reward_dist.keys():
-            if type(reward_dist[rew_type]) == torch.Tensor and not reward_dist[rew_type].is_cuda:
-                reward_dist[rew_type].share_memory_()
-
-        for con in term_dist.keys():
-            if not term_dist[con].is_cuda:
-                term_dist[con].share_memory_()
-
         for big_key in infos.keys():
             for key in infos[big_key].keys():
                 if type(infos[big_key][key]) == torch.Tensor and not infos[big_key][key].is_cuda:
@@ -339,8 +298,6 @@ class MPAgent():
                 "task":"record_transition", "timestep":timestep, "timesteps":timesteps
             }, [
                 alive_mask is None,
-                reward_dist,
-                term_dist,
                 rewards,
                 next_states,
                 terminated,
@@ -349,12 +306,8 @@ class MPAgent():
                 alive_mask
             ]
         )
-        #print("after record, about to return")
         if not alive_mask is None:
-            #outputs = torch.vstack([queue.get() for queue in self.queues])
-            #print("returning")
             return alive_mask
-        #print("not returning")
 
     def set_running_mode(self, mode: str) -> None:
         self.send({"task":"set_running_mode"}, [mode])

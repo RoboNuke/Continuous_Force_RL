@@ -129,3 +129,83 @@ class SimBaAgent(GaussianMixin, DeterministicMixin, Model):
             self._shared_output = None
             val = self.critic(shared_output)
             return self.critic(shared_output), {}
+        
+
+class SimBaActor(GaussianMixin, Model):
+    def __init__(
+        self,
+        observation_space,
+        action_space,
+        device, 
+        act_init_std = 0.60653066, # -0.5 value used in maniskill 
+        actor_n = 2,
+        actor_latent=512,
+
+        clip_actions=False,
+        clip_log_std=True, 
+        min_log_std=-20, 
+        max_log_std=2, 
+        reduction="sum"
+        ):
+        Model.__init__(self, observation_space, action_space, device)
+        GaussianMixin.__init__(self, clip_actions, clip_log_std, min_log_std, max_log_std, reduction)
+
+        self.actor_mean = SimBaNet(
+            n=actor_n, 
+            in_size=self.num_observations, 
+            out_size=self.num_actions, 
+            latent_size=actor_latent, 
+            device=device,
+            tan_out=True
+        )
+        with torch.no_grad():
+            self.actor_mean.output[-2].weight *= 0.01
+
+        self.actor_logstd = nn.Parameter(
+            torch.ones(1, self.num_actions) * math.log(act_init_std)
+        )
+
+    def act(self, inputs, role):
+        #print(inputs, role)
+        return GaussianMixin.act(self, inputs, role)
+
+    def compute(self, inputs, role):
+        #print(inputs, role)
+        action_mean = self.actor_mean(inputs['states'])
+        return action_mean, self.actor_logstd.expand_as(action_mean), {}
+        
+
+class SimBaCritic(DeterministicMixin, Model):
+    def __init__(self, 
+            observation_space,
+            action_space,
+            device, 
+            critic_output_init_mean = 0.0,
+            critic_n = 1, 
+            critic_latent=128,
+            clip_actions=False,
+        ):
+        Model.__init__(self, observation_space, action_space, device)
+        DeterministicMixin.__init__(self, clip_actions)
+
+        in_size = self.num_observations
+        
+        self.critic = SimBaNet(
+            n=critic_n, 
+            in_size=in_size, 
+            out_size=1, 
+            latent_size=critic_latent, 
+            tan_out=False,
+            device=device
+        )
+
+        he_layer_init(self.critic.output[-1], bias_const=critic_output_init_mean) # 2.5 is about average return for random policy w/curriculum
+        
+
+    def act(self, inputs, role):
+        #print(inputs, role)
+        return DeterministicMixin.act(self, inputs, role)
+
+    def compute(self, inputs, role):
+        #print(inputs, role)
+        return self.critic(inputs['states']), {}

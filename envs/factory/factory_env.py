@@ -7,14 +7,14 @@ import numpy as np
 import torch
 
 import carb
-import omni.isaac.core.utils.torch as torch_utils
+import isaacsim.core.utils.torch as torch_utils
 
-import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.assets import Articulation
-from omni.isaac.lab.envs import DirectRLEnv
-from omni.isaac.lab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
-from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
-from omni.isaac.lab.utils.math import axis_angle_from_quat
+import isaaclab.sim as sim_utils
+from isaaclab.assets import Articulation
+from isaaclab.envs import DirectRLEnv
+from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
+from isaaclab.utils.math import axis_angle_from_quat
 
 from . import factory_control as fc
 from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
@@ -207,7 +207,7 @@ class FactoryEnv(DirectRLEnv):
         self.left_finger_jacobian = jacobians[:, self.left_finger_body_idx - 1, 0:6, 0:7]
         self.right_finger_jacobian = jacobians[:, self.right_finger_body_idx - 1, 0:6, 0:7]
         self.fingertip_midpoint_jacobian = (self.left_finger_jacobian + self.right_finger_jacobian) * 0.5
-        self.arm_mass_matrix = self._robot.root_physx_view.get_mass_matrices()[:, 0:7, 0:7]
+        self.arm_mass_matrix = self._robot.root_physx_view.get_generalized_mass_matrices()[:, 0:7, 0:7]
         self.joint_pos = self._robot.data.joint_pos.clone()
         self.joint_vel = self._robot.data.joint_vel.clone()
 
@@ -467,7 +467,8 @@ class FactoryEnv(DirectRLEnv):
 
         # Only log episode success rates at the end of an episode.
         if torch.any(self.reset_buf):
-            self.extras["successes"] = torch.count_nonzero(curr_successes) / self.num_envs
+            #self.extras["successes"] = torch.count_nonzero(curr_successes) / self.num_envs
+            self.extras['successes'] = curr_successes
 
         # Get the time at which an episode first succeeds.
         first_success = torch.logical_and(curr_successes, torch.logical_not(self.ep_succeeded))
@@ -477,9 +478,9 @@ class FactoryEnv(DirectRLEnv):
         self.ep_success_times[first_success_ids] = self.episode_length_buf[first_success_ids]
         nonzero_success_ids = self.ep_success_times.nonzero(as_tuple=False).squeeze(-1)
 
-        if len(nonzero_success_ids) > 0:  # Only log for successful episodes.
-            success_times = self.ep_success_times[nonzero_success_ids].sum() / len(nonzero_success_ids)
-            self.extras["success_times"] = success_times
+        #if len(nonzero_success_ids) > 0:  # Only log for successful episodes.
+        #    #success_times = self.ep_success_times[nonzero_success_ids].sum() / len(nonzero_success_ids)
+        #    self.extras["success_times"] = self.ep_success_times
 
         self.prev_actions = self.actions.clone()
         return rew_buf
@@ -520,7 +521,9 @@ class FactoryEnv(DirectRLEnv):
         )
 
         for rew_name, rew in rew_dict.items():
-            self.extras[f"logs_rew_{rew_name}"] = rew.mean()
+            if 'action' in rew_name:
+                continue
+            self.extras[f"logs_rew_{rew_name}"] = rew #.mean()
 
         return rew_buf
 
@@ -641,7 +644,7 @@ class FactoryEnv(DirectRLEnv):
         joint_vel = torch.zeros_like(joint_pos)
         joint_effort = torch.zeros_like(joint_pos)
         self.ctrl_target_joint_pos[env_ids, :] = joint_pos
-        print(f"Resetting {len(env_ids)} envs...")
+        #print(f"Resetting {len(env_ids)} envs...")
         self._robot.set_joint_position_target(self.ctrl_target_joint_pos[env_ids], env_ids=env_ids)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
         self._robot.reset()

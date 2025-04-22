@@ -1,6 +1,5 @@
 seed: -1
 num_envs: 256
-use_curriculum: False
 break_force: -1
 #replicate_physics: False
 #scene:
@@ -15,7 +14,7 @@ models:
     latent_size: 1024
   actor:
     n: 1
-    latent_size: 256 # default should be 128 but it doesn't feel right to be so small
+    latent_size: 128 # default should be 128 but it doesn't feel right to be so small
 
 agent:
   class: PPO
@@ -48,12 +47,12 @@ agent:
   # logging and checkpoint
   track_layernorms: True
   experiment:
-    directory: "Tests"
-    experiment_name: "test"
+    directory: "OG_ENVS_BASELINE"
+    experiment_name: "OG_Baseline"
     write_interval: 50 #75
     checkpoint_interval: 2000
-    tags: ['debug_apr21','no_curriculum','hpc','rl_update','relative_obs']
-    group: 'hpc_tests'
+    tags: ['debug_apr21','og_envs','rl_update']
+    group: 'og_env_tests'
     project: "DMP_Observation_Testing" #'DMP_Observation_Testing'
   
   logging_tags:
