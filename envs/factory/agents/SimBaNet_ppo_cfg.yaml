@@ -1,0 +1,72 @@
+seed: -1
+num_envs: 256
+use_curriculum: False
+break_force: -1
+#replicate_physics: False
+#scene:
+#  replicate_physics: False
+# this is the parameters for the BroNet shared model
+models:
+  force_encoding: None
+  act_init_std: 0.16 # this is in approx meters now!
+  critic_output_init_mean: 1.0
+  critic:
+    n: 2
+    latent_size: 1024
+  actor:
+    n: 1
+    latent_size: 256 # default should be 128 but it doesn't feel right to be so small
+
+agent:
+  class: PPO
+  rollouts: 50
+  learning_epochs: 4
+  mini_batches: 100 #32 # 128 steps / minibatch (256 envs * 50 steps per update)
+  discount_factor: 0.99
+  lambda: 0.99
+  learning_rate: 1.0e-5
+  learning_rate_scheduler: KLAdaptiveLR
+  learning_rate_scheduler_kwargs:
+    kl_threshold: 0.01
+    min_lr: 1.0e-6
+  # below are not args
+  random_timesteps: 0
+  learning_starts: 0
+
+  grad_norm_clip: 0.5
+  ratio_clip: 0.2
+  clip_predicted_values: False
+  value_clip: 0.2 #0.0
+
+  entropy_loss_scale: 0.0 #0.000005
+  value_loss_scale: 1.0
+  kl_threshold: 0.05
+  rewards_shaper_scale: 1.0
+  time_limit_bootstrap: True
+
+  agent_is_list: False
+  # logging and checkpoint
+  track_layernorms: True
+  experiment:
+    directory: "Tests"
+    experiment_name: "test"
+    write_interval: 50 #75
+    checkpoint_interval: 2000
+    tags: ['debug_apr21','no_curriculum','hpc','rl_update','relative_obs']
+    group: 'hpc_tests'
+    project: "DMP_Observation_Testing" #'DMP_Observation_Testing'
+  
+  logging_tags:
+    obs_type: "basic" # "basic", "policy_history", "history", "DMP"
+    act_type: "basic" # "basic", "predict_action", "DMP"
+
+video_tracking:
+  # note to use this must run with --video --enable_cameras
+  record_training: True
+  train_video_interval: 450
+  record_evals: True
+  video_length: 50
+
+
+defaults:
+  - override hydra/job_logging: custom
