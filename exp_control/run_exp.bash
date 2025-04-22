@@ -10,9 +10,9 @@ else
 fi
 
 exp_idx=$1
-if [ "$exp_idx" -gt 4 ]; then
-  exp_idx=0
-fi
+#if [ "$exp_idx" -gt 4 ]; then
+#  exp_idx=0
+#fi
 
 
 echo "Exp: ${names[$exp_idx]}"

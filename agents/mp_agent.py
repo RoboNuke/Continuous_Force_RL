@@ -139,6 +139,13 @@ def fn_processor(process_index, *args):
             agent.reset_tracking()
             barrier.wait()
 
+        elif task == "write_checkpoint":
+            agent.write_checkpoint(
+                timestep=msg["timestep"], 
+                timesteps=msg["timesteps"]
+            )
+            barrier.wait()
+
         elif task == "set_running_mode":
             agent.set_running_mode(queue.get())
             barrier.wait()
@@ -284,13 +291,16 @@ class MPAgent():
             alive_mask.share_memory_()
 
         for big_key in infos.keys():
-            for key in infos[big_key].keys():
-                if type(infos[big_key][key]) == torch.Tensor and not infos[big_key][key].is_cuda:
-                    infos[big_key][key].share_memory_()
-                elif type(infos[big_key][key]) == dict:
-                    for small_key in infos[big_key][key].keys():
-                        if type(infos[big_key][key][small_key]) == torch.Tensor and not infos[big_key][key][small_key].is_cuda:
-                            infos[big_key][key][small_key].share_memory_()
+            if type(infos[big_key]) == dict:
+                for key in infos[big_key].keys():
+                    if type(infos[big_key][key]) == torch.Tensor and not infos[big_key][key].is_cuda:
+                        infos[big_key][key].share_memory_()
+                    elif type(infos[big_key][key]) == dict:
+                        for small_key in infos[big_key][key].keys():
+                            if type(infos[big_key][key][small_key]) == torch.Tensor and not infos[big_key][key][small_key].is_cuda:
+                                infos[big_key][key][small_key].share_memory_()
+            else:
+                infos[big_key].share_memory_()
 
         #print("sending record trans") 
         self.send(
@@ -320,3 +330,6 @@ class MPAgent():
 
     def reset_tracking(self) -> None:
         self.send({"task":"reset_tracking"} )
+
+    def write_checkpoint(self, timestep: int, timesteps: int) -> None:
+        self.send({"task":"write_checkpoint", "timestep":timestep, "timesteps":timesteps})
