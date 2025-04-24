@@ -125,7 +125,7 @@ def main(
 
     """Train with skrl agent."""
     #max_rollout_steps = agent_cfg['agent']['rollouts']
-    max_rollout_steps = (1/env_cfg.sim.dt) / env_cfg.decimation * env_cfg.episode_length_s
+    max_rollout_steps = int((1/env_cfg.sim.dt) / env_cfg.decimation * env_cfg.episode_length_s)
     agent_cfg['agent']['rollouts'] = max_rollout_steps
     agent_cfg['agent']['experiment']['write_interval'] = max_rollout_steps
     agent_cfg['agent']['experiment']['checkpoint_interval'] = max_rollout_steps * 10
