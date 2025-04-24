@@ -1,6 +1,6 @@
 
 names=("Std_Obs" "DMP_Obs" "Hist_Obs" "Force_only_DMP" "Force_only_Hist")
-envs=("Isaac-Factory-PegInsert-Local-v0" "Isaac-Factory-GearMesh-Local-v0" "TIsaac-Factory-NutThread-Local-v0" )
+envs=("Isaac-Factory-PegInsert-Local-v0" "Isaac-Factory-GearMesh-Local-v0" "Isaac-Factory-NutThread-Local-v0" )
 
 # default num_agents is 2
 if [ -z "$2" ]; then
