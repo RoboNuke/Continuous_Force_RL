@@ -3,7 +3,7 @@
 num_agents=4
 num_exp_per_env=2
 num_exp_env=3
-nick_names=("PiH" "Gear_Mesh" "Nut_Thread" "Force_only_DMP" "Force_only_Hist")
+nick_names=("PiH" "Gear_Mesh" "Nut_Thread")
 
 for env_idx in $(seq 0 $((num_exp_env - 1)))
 do

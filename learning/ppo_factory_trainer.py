@@ -124,8 +124,13 @@ def main(
     global mp_agent
 
     """Train with skrl agent."""
-    max_rollout_steps = agent_cfg['agent']['rollouts']
-    
+    #max_rollout_steps = agent_cfg['agent']['rollouts']
+    max_rollout_steps = (1/env_cfg.sim.dt) / env_cfg.decimation * env_cfg.episode_length_s
+    agent_cfg['agent']['rollouts'] = max_rollout_steps
+    agent_cfg['agent']['experiment']['write_interval'] = max_rollout_steps
+    agent_cfg['agent']['experiment']['checkpoint_interval'] = max_rollout_steps * 10
+    agent_cfg['agent']['experiment']['tags'].append(env_cfg.task_name)
+
     assert args_cli.num_envs % args_cli.num_agents == 0, f'Number of agents {args_cli.num_agents} does not even divide into number of envs {args_cli.num_envs}'
     env_per_agent = args_cli.num_envs // args_cli.num_agents
     
@@ -137,19 +142,9 @@ def main(
     
     # override configurations with non-hydra CLI arguments
     env_cfg.scene.num_envs = args_cli.num_envs 
-    env_cfg.scene.replicate_physics = True
+    #env_cfg.scene.replicate_physics = True
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
 
-    
-    sim_dt = 1/50.0 
-    policy_dt = 0.1#50*sim_dt
-    dec =  int(policy_dt / sim_dt )
-    episode_length_s = 5.0
-
-    env_cfg.episode_length_s = episode_length_s
-    env_cfg.sim.dt = sim_dt
-    env_cfg.decimation = dec
-    env_cfg.sim.render_interval = dec
     env_cfg.num_agents = args_cli.num_agents
     
     agent_cfg['seed'] = args_cli.seed
@@ -298,7 +293,7 @@ def main(
             "entity":args_cli.wandb_entity,
             "api_key":args_cli.wandb_api_key,
             "tags":a_cfg['agent']['experiment']['tags'],
-            "group":a_cfg['agent']['experiment']['group'],
+            "group":a_cfg['agent']['experiment']['group'] + env_cfg.task_name,
             #"tags":args_cli.wandb_tags,
             #"group":args_cli.wandb_group,
             "run_name":a_cfg["agent"]["experiment"]["experiment_name"]

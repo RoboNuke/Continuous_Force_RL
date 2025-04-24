@@ -549,7 +549,7 @@ class FactoryEnv(DirectRLEnv):
             if 'action' in rew_name or 'engaged' in rew_name or 'successes' in rew_name:
                 continue
             self.extras[f"Reward / {rew_name}"] = rew #.mean()
-
+        self.extras[f'Reward / Keypoint Distance'] = self.keypoint_dist
         return rew_buf
 
     def _reset_idx(self, env_ids):

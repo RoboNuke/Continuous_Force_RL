@@ -18,7 +18,7 @@ models:
 
 agent:
   class: PPO
-  rollouts: 50
+  rollouts: 150 # set by env
   learning_epochs: 4
   mini_batches: 100 #32 # 128 steps / minibatch (256 envs * 50 steps per update)
   discount_factor: 0.99
@@ -44,16 +44,17 @@ agent:
   time_limit_bootstrap: True
 
   agent_is_list: False
+
   # logging and checkpoint
   track_layernorms: True
   experiment:
-    directory: "OG_ENVS_BASELINE"
-    experiment_name: "OG_Baseline"
-    write_interval: 50 #75
-    checkpoint_interval: 2000
+    directory: "Factory_Baseline"
+    experiment_name: "Factory_Env_Baseline"
+    write_interval: 150 #75 # set by env
+    checkpoint_interval: 1500 # set by env
     tags: ['debug_apr22','og_envs','rl_update']
-    group: 'og_env_wandb_tests'
-    project: "DMP_Observation_Testing" #'DMP_Observation_Testing'
+    group: 'og_env_' # task name is added to this
+    project: "DMP_Observation_Testing" 
   
   logging_tags:
     obs_type: "basic" # "basic", "policy_history", "history", "DMP"
