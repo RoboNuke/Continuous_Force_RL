@@ -8,7 +8,7 @@ break_force: -1
 models:
   force_encoding: None
   act_init_std: 5.0 
-  critic_output_init_mean: 16.5
+  critic_output_init_mean: 33
   critic:
     n: 2
     latent_size: 1024
@@ -24,7 +24,7 @@ agent:
   discount_factor: 0.99
   lambda: 0.99
   learning_rate: 1.0e-5
-  #learning_rate_scheduler: KLAdaptiveLR
+  learning_rate_scheduler: KLAdaptiveLR
   learning_rate_scheduler_kwargs:
     kl_threshold: 0.0005
     min_lr: 1.0e-6
