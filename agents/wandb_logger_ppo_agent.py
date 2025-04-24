@@ -29,6 +29,7 @@ class WandbLoggerPPO(PPO):
             action_space: Optional[Union[int, Tuple[int], gym.Space, gymnasium.Space]] = None,
             num_envs: int = 256,
             device: Optional[Union[str, torch.device]] = None,
+            state_size=-1,
             cfg: Optional[dict] = None
     ) -> None:
         super().__init__(models, memory, observation_space, action_space, device, cfg)
@@ -37,6 +38,9 @@ class WandbLoggerPPO(PPO):
         
         self._track_rewards = collections.deque(maxlen=1000)
         self._track_timesteps = collections.deque(maxlen=1000)
+        if state_size == -1:
+            state_size=observation_space
+        self.state_size = state_size
 
     def init(self, trainer_cfg: Optional[Mapping[str, Any]] = None) -> None:
         """Initialize the agent
@@ -73,7 +77,7 @@ class WandbLoggerPPO(PPO):
         
         # create tensors in memory
         if self.memory is not None:
-            self.memory.create_tensor(name="states", size=self.observation_space, dtype=torch.float32)
+            self.memory.create_tensor(name="states", size=self.state_size, dtype=torch.float32)
             self.memory.create_tensor(name="actions", size=self.action_space, dtype=torch.float32)
             self.memory.create_tensor(name="rewards", size=1, dtype=torch.float32)
             self.memory.create_tensor(name="terminated", size=1, dtype=torch.bool)
@@ -158,20 +162,31 @@ class WandbLoggerPPO(PPO):
         :type timesteps: int
         """
         if self.log_wandb:
-            prefix = "Eval_" if eval else "Training_"
+            prefix = "Eval " if eval else "Training "
 
             # handle cumulative rewards
             if len(self._track_rewards):
                 track_rewards = np.array(self._track_rewards)
                 track_timesteps = np.array(self._track_timesteps)
                 
-                self.tracking_data[prefix + "Reward / Return (max)"].append(np.max(track_rewards))
-                self.tracking_data[prefix + "Reward / Return (min)"].append(np.min(track_rewards))
+                #self.tracking_data[prefix + "Reward / Return (max)"].append(np.max(track_rewards))
+                #self.tracking_data[prefix + "Reward / Return (min)"].append(np.min(track_rewards))
                 self.tracking_data[prefix + "Reward / Return (mean)"].append(np.mean(track_rewards))
 
                 self.tracking_data[prefix + "Episode / Total timesteps (max)"].append(np.max(track_timesteps))
                 self.tracking_data[prefix + "Episode / Total timesteps (min)"].append(np.min(track_timesteps))
                 self.tracking_data[prefix + "Episode / Total timesteps (mean)"].append(np.mean(track_timesteps))
+            
+            for name, rew in self._track_comp_rews.items():
+                if len(rew):
+                    track_rew = np.array(rew)
+                    if 'successes' in name or 'engaged' in name:
+                        self.track_data( prefix + name + " rate", np.sum(rew)/self.num_envs)
+                    else:
+                        self.track_data( prefix+name+" (mean)", np.mean(track_rew))
+                        if 'times' in name or 'lengths' in name:
+                            self.track_data( prefix+name+" (min)", np.min(track_rew))
+                            self.track_data( prefix+name+" (max)", np.max(track_rew))
 
             keep = {}
             #self.data_manager.add_save(os.path.join(self.experiment_dir, "checkpoints"))
@@ -214,6 +229,8 @@ class WandbLoggerPPO(PPO):
         self._track_rewards.clear()
         self._track_timesteps.clear()
         self.tracking_data.clear()
+        for key in self._track_comp_rews:
+            self._track_comp_rews[key].clear()
         
         self.reset_tracking()
         if self.log_wandb:
@@ -304,6 +321,7 @@ class WandbLoggerPPO(PPO):
                 rewards = self._rewards_shaper(rewards, timestep, timesteps)
 
             # compute values
+            #print("pre value:", states.size())
             values, _, _ = self.value.act({"states": self._state_preprocessor(states)}, role="value")
             #print("Avg Raw Values:", torch.mean(values))
             values = self._value_preprocessor(values, inverse=True)
@@ -317,6 +335,8 @@ class WandbLoggerPPO(PPO):
             # alternative approach to deal with termination, see ppo but no matter what it 
             # goes through every sample in the memory (even if not filled), this way we set 
             # the actions to zero on termination, and then pass the fixed state in basically
+            #copy_state = {'policy':states['policy'].clone(), 'critic':states['critic'].clone()}
+            #copy_next_state = {'policy':next_states['policy'].clone(), 'critic':next_states['critic'].clone()}
             self.add_sample_to_memory(
                 states=states.clone(), 
                 actions=actions.clone(), 
@@ -328,19 +348,22 @@ class WandbLoggerPPO(PPO):
                 values=values.clone()
             )
 
-
-
         #print('eval mode:', 'on' if eval_mode else 'off')
         if self.write_interval > 0 or eval_mode:
             # compute the cumulative sum of the rewards and timesteps
             if self._cumulative_rewards is None:
                 self._cumulative_rewards = torch.zeros_like(rewards, dtype=torch.float32)
                 self._cumulative_timesteps = torch.zeros_like(rewards, dtype=torch.int32)
+                self._comp_rews = {}
+                self._track_comp_rews = {}
+                for key in infos:
+                    #    #if not ('success' in key or 'engage' in key):
+                    self._comp_rews[key] = torch.zeros_like(rewards, dtype=torch.float32)
+                    #    self._track_comp_rews[key] = collections.deque(maxlen=1000)
+                
 
             # handle reward 
-            prefix = "Training "
-            if eval_mode:
-                prefix = "Eval "
+            prefix = "Eval " if eval_mode else "Training "
 
             if 'smoothness' in infos.keys():
                 for skey in infos['smoothness']:
@@ -359,19 +382,18 @@ class WandbLoggerPPO(PPO):
             self.tracking_data[prefix + "Reward / Instantaneous reward (mean)"].append(torch.mean(rewards).item())
                     
             if eval_mode:
-                self._cumulative_rewards += alive_mask * rewards
-
+                self._cumulative_rewards += alive_mask[:,None] * rewards
                 self._cumulative_timesteps[alive_mask] += 1
                 
-                mask_update = ~torch.logical_or(terminated, truncated) # one that didn't term
-                finished_episodes = torch.logical_and(~mask_update, alive_mask)[:,0]
+                mask_update = torch.logical_or(terminated, truncated) # one that didn't term
+                
+                finished_episodes = torch.logical_and(mask_update, alive_mask[:,None]).nonzero(as_tuple=False)
                 # term this step and alive overall
-
                 for key in infos:
-                    self.track_data(prefix + key, (infos[key][alive_mask[:,0]]).float().mean().item())
+                    if not ('success' in key or 'engage' in key): # we only update these on resetting 
+                        self._comp_rews[key][alive_mask,0] = infos[key][alive_mask]
 
-
-                alive_mask *= mask_update
+                alive_mask[mask_update[:,0]] = False
 
             else:
                 self._cumulative_rewards.add_(rewards)
@@ -379,9 +401,20 @@ class WandbLoggerPPO(PPO):
 
                 finished_episodes = (terminated + truncated).nonzero(as_tuple=False)
                 for key in infos:
-                    self.track_data(prefix + key, (infos[key]).float().mean().item())
+                    if not ('success' in key or 'engage' in key): # we only update these on resetting 
+                        self._comp_rews[key][:,0].add_(infos[key])
 
-            if finished_episodes.numel():
+            # track instantaneous rewards
+            for key, rew in infos.items():
+                if 'success' in key or 'engage' in key:
+                    continue
+
+                self.track_data(prefix + key + " (mean)", torch.mean(rew).item())
+                if 'times' in key or 'lengths' in key:
+                    self.track_data( prefix+key+" (min)", np.min(rew))
+                    self.track_data( prefix+key+" (max)", np.max(rew))
+
+            if finished_episodes.numel(): 
                 # storage cumulative rewards and timesteps
                 self._track_rewards.extend(self._cumulative_rewards[finished_episodes][:, 0].reshape(-1).tolist())
                 self._track_timesteps.extend(self._cumulative_timesteps[finished_episodes][:, 0].reshape(-1).tolist())
@@ -389,6 +422,21 @@ class WandbLoggerPPO(PPO):
                 # reset the cumulative rewards and timesteps
                 self._cumulative_rewards[finished_episodes] = 0
                 self._cumulative_timesteps[finished_episodes] = 0
+
+                for key, rew in infos.items():
+                    if 'success' in key or 'engage' in key:
+                        if key not in self._track_comp_rews:
+                            self._track_comp_rews[key] = collections.deque(maxlen=1000)
+                        self._track_comp_rews[key].extend(
+                            infos[key][finished_episodes].reshape(-1).tolist()
+                        )
+                    #else:
+                    #    pass
+                    #    #self._track_comp_rews[key].extend(
+                    #    #    self._comp_rews[key][finished_episodes][:,0].reshape(-1).tolist()
+                    #    #)
+                    #    #if not ('success' in key or 'engage' in key):
+                    #    #self._comp_rews[key][finished_episodes] = 0
 
                     
         return alive_mask
@@ -400,6 +448,10 @@ class WandbLoggerPPO(PPO):
         self._cumulative_timesteps *= 0
         self._track_rewards.clear()
         self._track_timesteps.clear() 
+        for key in self._track_comp_rews:
+            self._track_comp_rews[key].clear()
+            if key in self._comp_rews:
+                self._comp_rews[key] *= 0
 
     def set_running_mode(self, mode):
         super().set_running_mode(mode)
@@ -418,28 +470,48 @@ class WandbLoggerPPO(PPO):
         
         if self.cfg['track_layernorms']:
             self.track_data(
-                "Layer Weight Norm / Output", 
-                torch.linalg.norm(self.value.critic.output[-2].weight, dim=None, ord=None).item()
+                "Critic Layer Weight Norm / Output", 
+                torch.linalg.norm(self.value.critic.output[-1].weight, dim=None, ord=None).item()
             )
+            #print("critic output norm:", torch.linalg.norm(self.value.critic.output[-1].weight, dim=None, ord=None).item())
             self.track_data(
-                "Layer Weight Norm / Input", 
+                "Critic Layer Weight Norm / Input", 
                 torch.linalg.norm(self.value.critic.input[0].weight, dim=None, ord=None).item()
             )
 
             for layer_idx, layer in enumerate(self.value.critic.layers):
                 self.track_data(
-                    f"Layer Weight Norm / Layer {layer_idx}-1", 
+                    f"Critic Layer Weight Norm / Layer {layer_idx}-1", 
                     torch.linalg.norm(layer.path[1].weight, dim=None, ord=None).item()
                 )
                 self.track_data(
-                    f"Layer Weight Norm / Layer {layer_idx}-2", 
+                    f"Critic Layer Weight Norm / Layer {layer_idx}-2", 
                     torch.linalg.norm(layer.path[3].weight, dim=None, ord=None).item()
                 )
-        
+
+            self.track_data(
+                "Actor Layer Weight Norm / Output", 
+                torch.linalg.norm(self.policy.actor_mean.output[-2].weight, dim=None, ord=None).item()
+            )
+            self.track_data(
+                "Actor Layer Weight Norm / Input", 
+                torch.linalg.norm(self.policy.actor_mean.input[0].weight, dim=None, ord=None).item()
+            )
+
+            for layer_idx, layer in enumerate(self.policy.actor_mean.layers):
+                self.track_data(
+                    f"Actor Layer Weight Norm / Layer {layer_idx}-1", 
+                    torch.linalg.norm(layer.path[1].weight, dim=None, ord=None).item()
+                )
+                self.track_data(
+                    f"Actor Layer Weight Norm / Layer {layer_idx}-2", 
+                    torch.linalg.norm(layer.path[3].weight, dim=None, ord=None).item()
+                )
 
     def resetAdamOptimizerTime(self, opt):
         for p,v in opt.state_dict()['state'].items():
-            v["step"]=torch.Tensor([0])            
+            v["step"]=torch.Tensor([0])        
+                
     #def act(self, states: torch.Tensor, timestep: int, timesteps: int) -> torch.Tensor:
     """Process the environment's states to make a decision (actions) using the main policy
 

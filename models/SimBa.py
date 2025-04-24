@@ -140,6 +140,7 @@ class SimBaActor(GaussianMixin, Model):
         act_init_std = 0.60653066, # -0.5 value used in maniskill 
         actor_n = 2,
         actor_latent=512,
+        action_gain=1.0,
 
         clip_actions=False,
         clip_log_std=True, 
@@ -149,7 +150,7 @@ class SimBaActor(GaussianMixin, Model):
         ):
         Model.__init__(self, observation_space, action_space, device)
         GaussianMixin.__init__(self, clip_actions, clip_log_std, min_log_std, max_log_std, reduction)
-
+        self.action_gain = action_gain
         self.actor_mean = SimBaNet(
             n=actor_n, 
             in_size=self.num_observations, 
@@ -166,30 +167,29 @@ class SimBaActor(GaussianMixin, Model):
         )
 
     def act(self, inputs, role):
-        #print(inputs, role)
+        #print("policy act:", inputs, role)
         return GaussianMixin.act(self, inputs, role)
 
     def compute(self, inputs, role):
-        #print(inputs, role)
-        action_mean = self.actor_mean(inputs['states'])
+        #print("Policy compute:", role, inputs['states'].size(), inputs['states'][:,:self.num_observations].size())
+        action_mean = self.actor_mean(inputs['states'][:,:self.num_observations])
         return action_mean, self.actor_logstd.expand_as(action_mean), {}
         
 
 class SimBaCritic(DeterministicMixin, Model):
     def __init__(self, 
-            observation_space,
-            action_space,
+            state_space_size,
             device, 
             critic_output_init_mean = 0.0,
             critic_n = 1, 
             critic_latent=128,
             clip_actions=False,
         ):
-        Model.__init__(self, observation_space, action_space, device)
+        Model.__init__(self, state_space_size, 1, device)
         DeterministicMixin.__init__(self, clip_actions)
 
         in_size = self.num_observations
-        
+        #print("state space size:", state_space_size)
         self.critic = SimBaNet(
             n=critic_n, 
             in_size=in_size, 
@@ -199,13 +199,13 @@ class SimBaCritic(DeterministicMixin, Model):
             device=device
         )
 
-        he_layer_init(self.critic.output[-1], bias_const=critic_output_init_mean) # 2.5 is about average return for random policy w/curriculum
+        he_layer_init(self.critic.output[-1], bias_const=critic_output_init_mean) 
         
 
     def act(self, inputs, role):
-        #print(inputs, role)
+        #print("critic act:", inputs, role)
         return DeterministicMixin.act(self, inputs, role)
 
     def compute(self, inputs, role):
-        #print(inputs, role)
-        return self.critic(inputs['states']), {}
+        #print("critic compute:", role, inputs['states'].size(), inputs['states'][:,-self.num_observations:].size())
+        return self.critic(inputs['states'][:,-self.num_observations:]), {}

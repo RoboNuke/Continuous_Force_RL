@@ -7,14 +7,14 @@ break_force: -1
 # this is the parameters for the BroNet shared model
 models:
   force_encoding: None
-  act_init_std: 0.16 # this is in approx meters now!
-  critic_output_init_mean: 1.0
+  act_init_std: 5.0 
+  critic_output_init_mean: 16.5
   critic:
     n: 2
     latent_size: 1024
   actor:
     n: 1
-    latent_size: 128 # default should be 128 but it doesn't feel right to be so small
+    latent_size: 256 # default should be 128 but it doesn't feel right to be so small
 
 agent:
   class: PPO
@@ -24,9 +24,9 @@ agent:
   discount_factor: 0.99
   lambda: 0.99
   learning_rate: 1.0e-5
-  learning_rate_scheduler: KLAdaptiveLR
+  #learning_rate_scheduler: KLAdaptiveLR
   learning_rate_scheduler_kwargs:
-    kl_threshold: 0.01
+    kl_threshold: 0.0005
     min_lr: 1.0e-6
   # below are not args
   random_timesteps: 0
@@ -51,8 +51,8 @@ agent:
     experiment_name: "OG_Baseline"
     write_interval: 50 #75
     checkpoint_interval: 2000
-    tags: ['debug_apr21','og_envs','rl_update']
-    group: 'og_env_tests'
+    tags: ['debug_apr22','og_envs','rl_update']
+    group: 'og_env_wandb_tests'
     project: "DMP_Observation_Testing" #'DMP_Observation_Testing'
   
   logging_tags:

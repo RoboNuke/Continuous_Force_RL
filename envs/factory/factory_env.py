@@ -147,6 +147,9 @@ class FactoryEnv(DirectRLEnv):
 
         self.ep_succeeded = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.ep_success_times = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
+        self.ep_engaged = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
+        self.ep_engaged_times = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
+        self.ep_engaged_length = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
 
     def _get_keypoint_offsets(self, num_keypoints):
         """Get uniformly-spaced keypoints along a line of unit length, centered at 0."""
@@ -292,6 +295,10 @@ class FactoryEnv(DirectRLEnv):
     def _reset_buffers(self, env_ids):
         """Reset buffers."""
         self.ep_succeeded[env_ids] = 0
+        self.ep_success_times[env_ids] = 0
+        self.ep_engaged[env_ids] = 0
+        self.ep_engaged_times[env_ids] = 0
+        self.ep_engaged_length[env_ids] = 0
 
     def _pre_physics_step(self, action):
         """Apply policy actions with smoothing."""
@@ -425,7 +432,7 @@ class FactoryEnv(DirectRLEnv):
     def _get_dones(self):
         """Update intermediate values used for rewards and observations."""
         self._compute_intermediate_values(dt=self.physics_dt)
-        time_out = self.episode_length_buf >= self.max_episode_length - 1
+        time_out = self.episode_length_buf >= self.max_episode_length #- 1
         return time_out, time_out
 
     def _get_curr_successes(self, success_threshold, check_rot=False):
@@ -466,16 +473,16 @@ class FactoryEnv(DirectRLEnv):
         rew_buf = self._update_rew_buf(curr_successes)
 
         # Only log episode success rates at the end of an episode.
-        if torch.any(self.reset_buf):
-            #self.extras["successes"] = torch.count_nonzero(curr_successes) / self.num_envs
-            self.extras['successes'] = curr_successes
+        #if torch.any(self.reset_buf):
+        #    #self.extras["successes"] = torch.count_nonzero(curr_successes) / self.num_envs
+        #    self.extras['successes'] = curr_successes
 
         # Get the time at which an episode first succeeds.
         first_success = torch.logical_and(curr_successes, torch.logical_not(self.ep_succeeded))
         self.ep_succeeded[curr_successes] = 1
 
         first_success_ids = first_success.nonzero(as_tuple=False).squeeze(-1)
-        self.ep_success_times[first_success_ids] = self.episode_length_buf[first_success_ids]
+        self.ep_success_times[first_success_ids] = self.episode_length_buf[first_success_ids].clone()
         nonzero_success_ids = self.ep_success_times.nonzero(as_tuple=False).squeeze(-1)
 
         #if len(nonzero_success_ids) > 0:  # Only log for successful episodes.
@@ -483,6 +490,14 @@ class FactoryEnv(DirectRLEnv):
         #    self.extras["success_times"] = self.ep_success_times
 
         self.prev_actions = self.actions.clone()
+
+        if torch.any(self.reset_buf): # only log when reset
+            self.extras['Episode / successes'] = self.ep_succeeded
+            self.extras['Episode / success_times'] = self.ep_success_times
+            self.extras['Episode / engaged'] = self.ep_engaged
+            self.extras['Episode / engage_times'] = self.ep_engaged_times
+            self.extras['Episode / engage_lengths'] = self.ep_engaged_length
+
         return rew_buf
 
     def _update_rew_buf(self, curr_successes):
@@ -505,9 +520,19 @@ class FactoryEnv(DirectRLEnv):
         # Action penalties.
         rew_dict["action_penalty"] = torch.norm(self.actions, p=2)
         rew_dict["action_grad_penalty"] = torch.norm(self.actions - self.prev_actions, p=2, dim=-1)
-        rew_dict["curr_engaged"] = (
-            self._get_curr_successes(success_threshold=self.cfg_task.engage_threshold, check_rot=False).clone().float()
+        curr_engaged = (
+            self._get_curr_successes(success_threshold=self.cfg_task.engage_threshold, check_rot=False)
         )
+        # update ep counts for engaed
+        first_engaged = torch.logical_and(curr_engaged, torch.logical_not(self.ep_engaged))
+        
+        first_engaged_ids = first_engaged.nonzero(as_tuple=False).squeeze(-1)
+        self.ep_engaged_times[first_engaged_ids] = self.episode_length_buf[first_engaged_ids].clone()
+
+        self.ep_engaged[curr_engaged] = 1
+        self.ep_engaged_length[curr_engaged] += 1
+        rew_dict['curr_engaged'] = curr_engaged.clone().float()
+
         rew_dict["curr_successes"] = curr_successes.clone().float()
 
         rew_buf = (
@@ -521,9 +546,9 @@ class FactoryEnv(DirectRLEnv):
         )
 
         for rew_name, rew in rew_dict.items():
-            if 'action' in rew_name:
+            if 'action' in rew_name or 'engaged' in rew_name or 'successes' in rew_name:
                 continue
-            self.extras[f"logs_rew_{rew_name}"] = rew #.mean()
+            self.extras[f"Reward / {rew_name}"] = rew #.mean()
 
         return rew_buf
 

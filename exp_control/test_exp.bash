@@ -1,5 +1,5 @@
-names=( "Std_Obs" "Hist_Obs" )
-envs=( "TB2-Factor-PiH-v0" "TB2-Factor-PiH-ObsHist-v0" )
+names=( "PiH" "GearMesh" )
+envs=( "Isaac-Factory-PegInsert-Local-v0" "Isaac-Factory-GearMesh-Local-v0" )
 
 exp_idx=$1
 if [ "$exp_idx" -gt 4 ]; then
@@ -9,7 +9,7 @@ fi
 echo "Exp: ${names[$exp_idx]}"
 
 #CUDA_LAUNCH_BLOCKING=1 
-HYDRA_FULL_ERROR=1 python -m learning.single_agent_train \
+HYDRA_FULL_ERROR=1 python -m learning.ppo_factory_trainer \
     --task=${envs[$exp_idx]} \
     --max_steps=50000000 \
     --num_envs=256 \
@@ -17,19 +17,18 @@ HYDRA_FULL_ERROR=1 python -m learning.single_agent_train \
     --exp_name=$2  \
     --seed=1 \
     --init_eval \
-    --log_smoothness_metrics \
-    --learning_method="ppo" \
-    --headless \
     --no_vids 
 
     #
     #
     #
+    #--init_eval \
+    #--log_smoothness_metrics \
     #
     #
     #
     # 
-    #--no_log_wandb \
+    #
     #
     #
     #

@@ -87,6 +87,8 @@ class ExtSequentialTrainer(Trainer):
         # reset env 
         states, infos = self.env.unwrapped.reset() # reseting unwrapped seems to ensure full reset idk
         states, infos = self.env.reset()
+        states = self.env.unwrapped._get_observations()
+        states = torch.cat( (states['policy'], states['critic']),dim=1)
         
         self.abs_agent._rollout = 0
 
@@ -109,7 +111,7 @@ class ExtSequentialTrainer(Trainer):
                 )[0] # we take only the sampled action
                 
                 next_states, rewards, terminated, truncated, infos = self.env.step(actions.clone())
-                
+                next_states = torch.cat( (self.env.unwrapped.obs_buf['policy'], self.env.unwrapped.obs_buf['critic']),dim=1)
                 if vid_env is not None and vid_env.is_recording():
                     self.env.cfg.recording = True
                     
@@ -120,6 +122,7 @@ class ExtSequentialTrainer(Trainer):
                     self.env.render()
 
                 # record the environments' transitions
+                #print("pre record:", states.size(), next_states.size())
                 self.abs_agent.record_transition(
                     states=states,
                     actions=actions,
@@ -148,6 +151,7 @@ class ExtSequentialTrainer(Trainer):
 
             # reset environments
             if self.env.num_envs > 1:
+                #print("pre-share", states.size(), next_states.size())
                 states = next_states
             else:
                 if terminated.any() or truncated.any():
@@ -180,14 +184,16 @@ class ExtSequentialTrainer(Trainer):
         # reset env - unwrapped required because skrl does not call reset functions above it
         states, infos = self.env.unwrapped.reset()
         states, infos = self.env.reset()
+        states = self.env.unwrapped._get_observations()
+        states = torch.cat( (states['policy'], states['critic']),dim=1)
 
         self.env.unwrapped.evaluating = True
 
-        ep_length = self.env.env.max_episode_length - 1
+        ep_length = self.env.env.max_episode_length #- 1
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            alive_mask = torch.ones(size=(states.shape[0], 1), device=states.device, dtype=bool)
+            alive_mask = torch.ones(size=(states.shape[0], ), device=states.device, dtype=bool)
             for timestep in tqdm.tqdm(range(self.initial_timestep, ep_length), disable=self.disable_progressbar, file=sys.stdout):
                 
                 # compute actions
@@ -198,9 +204,11 @@ class ExtSequentialTrainer(Trainer):
                         timesteps=self.timesteps
                     )[-1]['mean_actions'] # this makes the policy deterministic (no sampling)
                     
-                    actions[~alive_mask[:,0], :] *= 0.0
+                    actions[~alive_mask, :] *= 0.0
                     # step the environments
                     next_states, rewards, terminated, truncated, infos = self.env.step(actions)
+                    
+                    next_states = torch.cat( (self.env.unwrapped.obs_buf['policy'], self.env.unwrapped.obs_buf['critic']), dim=1)
                     
                     if vid_env is not None and vid_env.is_recording():
                         self.env.cfg.recording = True

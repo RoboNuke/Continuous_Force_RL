@@ -60,6 +60,8 @@ simulation_app = app_launcher.app
 
 
 import gymnasium as gym
+
+import itertools
 #from wrappers.video_recoder_wrapper import ExtRecordVideo
 import os
 import random
@@ -275,11 +277,12 @@ def main(
     device = env.device
 
     memory = RandomMemory( #AdaptiveRandomMemory( #
-            memory_size=agent_cfg['agent']["rollouts"], 
-            num_envs=env.num_envs // args_cli.num_agents, 
-            device=device,
-            replacement=True
-        )
+        memory_size=agent_cfg['agent']["rollouts"], 
+        num_envs=env.num_envs // args_cli.num_agents, 
+        device=device,
+        replacement=True
+    )
+    
     # instantiate the agent's models (function approximators).
     # PPO requires 2 models, visit its documentation for more details
     # https://skrl.readthedocs.io/en/latest/api/agents/ppo.html#models
@@ -306,16 +309,16 @@ def main(
     agent_list = None
     
     models['policy'] = SimBaActor( #BroAgent(
-        observation_space=env.observation_space, 
+        observation_space=env.cfg.observation_space, 
         action_space=env.action_space,
+        #action_gain=0.05,
         device=device,
         act_init_std = agent_cfg['models']['act_init_std'],
         actor_n = agent_cfg['models']['actor']['n'],
         actor_latent = agent_cfg['models']['actor']['latent_size']
     ) 
     models["value"] = SimBaCritic( #BroAgent(
-        observation_space=env.observation_space, 
-        action_space=env.action_space,
+        state_space_size=env.cfg.state_space, 
         device=device,
         critic_output_init_mean = agent_cfg['models']['critic_output_init_mean'],
         critic_n = agent_cfg['models']['critic']['n'],
@@ -331,12 +334,13 @@ def main(
             observation_space=env.observation_space,
             action_space=env.action_space,
             num_envs=args_cli.num_envs // args_cli.num_agents,
+            state_size=env.cfg.observation_space+env.cfg.state_space,
             device=device
         ) for i in range(args_cli.num_agents)
     ]
     for i, agent in enumerate(agent_list):
         agent.optimizer = torch.optim.Adam(
-            agent.policy.parameters(), 
+            itertools.chain(agent.policy.parameters(), agent.value.parameters()), 
             lr=agent_cfgs[i]['agent']['learning_rate'],
             betas=(0.999, 0.999)
         )
