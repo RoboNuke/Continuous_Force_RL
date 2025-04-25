@@ -286,7 +286,7 @@ def main(
     #models["policy"] = Shared(env.observation_space, env.action_space, device)
     
     # set wandb parameters
-    for a_cfg in agent_cfgs:
+    for a_idx, a_cfg in enumerate(agent_cfgs):
         a_cfg['agent']['experiment']['wandb'] = args_cli.no_log_wandb
         wandb_kwargs = {
             "project":a_cfg['agent']['experiment']['project'], #args_cli.wandb_project,
@@ -296,7 +296,7 @@ def main(
             "group":a_cfg['agent']['experiment']['group'] + env_cfg.task_name,
             #"tags":args_cli.wandb_tags,
             #"group":args_cli.wandb_group,
-            "run_name":a_cfg["agent"]["experiment"]["experiment_name"]
+            "run_name":a_cfg["agent"]["experiment"]["experiment_name"] + f"_{a_idx}"
         }
 
         a_cfg["agent"]["experiment"]["wandb_kwargs"] = wandb_kwargs

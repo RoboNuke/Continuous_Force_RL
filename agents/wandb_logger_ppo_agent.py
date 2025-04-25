@@ -17,6 +17,7 @@ from data_processing.data_manager import DataManager
 import wandb
 
 import collections
+import subprocess
 class WandbLoggerPPO(PPO):
     def __del__(self):
         self.data_manager.finish()
@@ -192,15 +193,22 @@ class WandbLoggerPPO(PPO):
             #self.data_manager.add_save(os.path.join(self.experiment_dir, "checkpoints"))
             for k, v in self.tracking_data.items():
                 if k.endswith("_video"):
-                    try:
-                        self.data_manager.add_mp4(
-                            v[0], # path
-                            k[:-6], #tag
-                            timestep * self.num_envs, # step
-                            f"At timestep {v[1]}" # caption
-                        )
-                    except FileNotFoundError:
-                        keep[k] = v
+                    for i in range(len(v)):
+                        try:
+                            wandb.log(
+                                { 
+                                    f'ckpt_{v[i][0]}':wandb.Video(
+                                        data_or_path=v[i][1],
+                                        caption=f'Agent at Checkpoint {v[i][0]}',
+                                        fps=15,
+                                        format='gif'
+                                    ),
+                                    "video_step":v[i][0]
+                                }
+                            )
+                        except FileNotFoundError:
+                            keep[k] = v[i:] # ensure we push the videos in the order they are sent
+                            break
                 elif k.endswith("(min)"):
                     self.data_manager.add_scalar({k:np.min(v)}, timestep * self.num_envs)
                 elif k.endswith("(max)"):
@@ -277,6 +285,18 @@ class WandbLoggerPPO(PPO):
         for memory in self.secondary_memories:
                 memory.add_samples( **tensors )
 
+    def write_checkpoint(self, timestep: int, timesteps: int):
+        super().write_checkpoint(timestep, timesteps)
+        ckpt_path = os.path.join(self.experiment_dir, "checkpoints", f"agent_{timestep}.pt")
+        vid_path = os.path.join(self.experiment_dir, "eval_videos", f"agent_{timestep* self.num_envs}.gif")
+        self.track_data("ckpt_video", (timestep, vid_path) )
+        subprocess.run(
+            [
+                f"bash exp_control/record_ckpts/queue_ckpt_for_video.bash {ckpt_path} {timestep * self.num_envs} Isaac-Factory-PegInsert-Local-v0 {vid_path}"
+            ], shell=True
+        )
+        #import time
+        #time.sleep(100)
 
     def record_transition(self,
                         states: torch.Tensor,
