@@ -296,7 +296,7 @@ class WandbLoggerPPO(PPO):
         vid_path = os.path.join(self.experiment_dir, "eval_videos", f"agent_{timestep* self.num_envs}.gif")
         self.track_data("ckpt_video", (timestep, vid_path) )
         print("\n\nQueuing:", timestep)
-        print("Current Track data size:", len(self.track_data["ckpt_video"]), "\n\n")
+        print("Current Track data size:", len(self.tracking_data["ckpt_video"]), "\n\n")
         subprocess.run(
             [
                 f"bash ~/hpc-share/Continuous_Force_RL/exp_control/record_ckpts/queue_ckpt_for_video.bash {ckpt_path} {timestep * self.num_envs} Isaac-Factory-PegInsert-Local-v0 {vid_path}"
