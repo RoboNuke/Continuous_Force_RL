@@ -19,9 +19,10 @@
 eval "$(command conda 'shell.bash' 'hook' 2> /dev/null)"
 conda activate env_isaaclab
 
+
 python -m exp_control.record_ckpts.single_ckpt_video \
     --headless \
-    --ckpt_filepath=$1 \
-    --ckpt_step=$2 \
-    --task=$3 \
-    --output_path=$4
+    --ckpt_filepath=/nfs/hpc/share/brownhun/Continuous_Force_RL/logs/Factory_Baseline_1/vid_tests_2025-04-25_17-45-31/checkpoints/agent_0.pt \
+    --ckpt_step=0 \
+    --task=Isaac-Factory-PegInsert-Local-v0 \
+    --output_path=/nfs/hpc/share/brownhun/Continuous_Force_RL/logs/Factory_Baseline_1/vid_tests_2025-04-25_17-45-31/eval_videos/agent_0.gif
