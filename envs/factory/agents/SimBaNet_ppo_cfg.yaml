@@ -8,7 +8,7 @@ break_force: -1
 models:
   force_encoding: None
   act_init_std: 5.0 
-  critic_output_init_mean: 33
+  critic_output_init_mean: 21
   critic:
     n: 2
     latent_size: 1024

@@ -193,8 +193,10 @@ class WandbLoggerPPO(PPO):
             #self.data_manager.add_save(os.path.join(self.experiment_dir, "checkpoints"))
             for k, v in self.tracking_data.items():
                 if k.endswith("_video"):
+                    print("\n\n")
                     for i in range(len(v)):
                         try:
+                            print("\t\ttrying video:", v[i][0])
                             wandb.log(
                                 { 
                                     f'ckpt_{v[i][0]}':wandb.Video(
@@ -209,6 +211,8 @@ class WandbLoggerPPO(PPO):
                         except FileNotFoundError:
                             keep[k] = v[i:] # ensure we push the videos in the order they are sent
                             break
+                    
+                    print("\n\n")
                 elif k.endswith("(min)"):
                     self.data_manager.add_scalar({k:np.min(v)}, timestep * self.num_envs)
                 elif k.endswith("(max)"):
@@ -257,6 +261,7 @@ class WandbLoggerPPO(PPO):
         #print(f'Rollouts-Count {self._rollout}\t{self._rollouts}\t{not self._rollout % self._rollouts}\t{timestep >= self._learning_starts}')
         if not self._rollout % self._rollouts and timestep >= self._learning_starts:
             self.set_mode("train")
+            #print("Return:", np.mean(np.array(self._track_rewards)))
             self._update(timestep, timesteps)
             self.set_mode("eval")
 
@@ -290,9 +295,11 @@ class WandbLoggerPPO(PPO):
         ckpt_path = os.path.join(self.experiment_dir, "checkpoints", f"agent_{timestep}.pt")
         vid_path = os.path.join(self.experiment_dir, "eval_videos", f"agent_{timestep* self.num_envs}.gif")
         self.track_data("ckpt_video", (timestep, vid_path) )
+        print("\n\nQueuing:", timestep)
+        print("Current Track data size:", len(self.track_data["ckpt_video"]), "\n\n")
         subprocess.run(
             [
-                f"bash exp_control/record_ckpts/queue_ckpt_for_video.bash {ckpt_path} {timestep * self.num_envs} Isaac-Factory-PegInsert-Local-v0 {vid_path}"
+                f"bash ~/hpc-share/Continuous_Force_RL/exp_control/record_ckpts/queue_ckpt_for_video.bash {ckpt_path} {timestep * self.num_envs} Isaac-Factory-PegInsert-Local-v0 {vid_path}"
             ], shell=True
         )
         #import time
