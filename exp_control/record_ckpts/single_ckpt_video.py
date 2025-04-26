@@ -18,7 +18,7 @@ AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli, hydra_args = parser.parse_known_args()
 
-#args_cli.video = True
+args_cli.video = True
 args_cli.enable_cameras = True
 
 
