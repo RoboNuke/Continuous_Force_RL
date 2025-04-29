@@ -18,6 +18,8 @@ import wandb
 
 import collections
 import subprocess
+from filelock import FileLock
+
 class WandbLoggerPPO(PPO):
     def __del__(self):
         self.data_manager.finish()
@@ -36,7 +38,15 @@ class WandbLoggerPPO(PPO):
         super().__init__(models, memory, observation_space, action_space, device, cfg)
         self.global_step = 0
         self.num_envs = num_envs
-        
+
+        self.tracker_path = cfg.ckpt_tracker_path
+
+        lock = FileLock(self.tracker_path + ".lock")
+        with lock:
+            if not os.path.exists(self.tracker_path):
+                with open(self.tracker_path, "w") as f:
+                    f.write("")
+
         self._track_rewards = collections.deque(maxlen=1000)
         self._track_timesteps = collections.deque(maxlen=1000)
         if state_size == -1:
@@ -295,6 +305,12 @@ class WandbLoggerPPO(PPO):
         ckpt_path = os.path.join(self.experiment_dir, "checkpoints", f"agent_{timestep}.pt")
         vid_path = os.path.join(self.experiment_dir, "eval_videos", f"agent_{timestep* self.num_envs}.gif")
         self.track_data("ckpt_video", (timestep, vid_path) )
+
+        lock = FileLock(self.tracker_path + ".lock")
+        with lock:
+            with open(self.tracker_path, "a") as f:
+                f.write(f'{ckpt_path} Isaac-Factory-PegInsert-Local-v0 {vid_path}\n')
+        """
         print("\n\nQueuing:", timestep)
         print(f"{ckpt_path} {timestep * self.num_envs} Isaac-Factory-PegInsert-Local-v0 {vid_path}")
         print("Current Track data size:", len(self.tracking_data["ckpt_video"]), "\n\n")
@@ -303,6 +319,7 @@ class WandbLoggerPPO(PPO):
                 f"bash ~/hpc-share/Continuous_Force_RL/exp_control/record_ckpts/queue_ckpt_for_video.bash {ckpt_path} {timestep * self.num_envs} Isaac-Factory-PegInsert-Local-v0 {vid_path}"
             ], shell=True
         )
+        """
         #import time
         #time.sleep(100)
 

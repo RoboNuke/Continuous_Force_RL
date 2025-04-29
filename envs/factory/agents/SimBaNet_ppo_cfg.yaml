@@ -60,6 +60,7 @@ agent:
     obs_type: "basic" # "basic", "policy_history", "history", "DMP"
     act_type: "basic" # "basic", "predict_action", "DMP"
 
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_tracker.txt"
 video_tracking:
   # note to use this must run with --video --enable_cameras
   record_training: True

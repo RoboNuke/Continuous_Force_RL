@@ -1,17 +1,12 @@
 import argparse
 import sys
-
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with skrl.")
 
 # exp
-parser.add_argument("--task", type=str, default="Isaac-Factory-PegInsert-Local-v0", help="Name of the task.")
 parser.add_argument("--seed", type=int, default=-1, help="Seed used for the environment")
-parser.add_argument("--ckpt_filepath", type=str, default=None, help="The full path to the checkpoint file")
-parser.add_argument("--output_path", type=str, default=None, help="The full path to the checkpoint file")
-parser.add_argument("--ckpt_step", type=int, default=-1, help="The step the checkpoint was taken at")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -75,6 +70,111 @@ import matplotlib.pyplot as plt
 from PIL import Image
 from PIL import ImageFont
 from PIL import ImageDraw 
+
+import paramiko
+
+def getCkpt(
+        hostname="submit.hpc.engr.oregonstate.edu", 
+        port=22, 
+        username="brownhun", 
+        password="12345", 
+        remote_file_path="/nfs/stak/users/brownhun/ckpt_queue.txt", 
+        local_download_path="/home/hunter/tmp_ckpt.ckpt"
+    ):
+    ssh_client = paramiko.SSHClient()
+    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    remote_file = None
+    args = None
+    sftp_client = None
+    try:
+        ssh_client.connect(hostname=hostname, port=port, username=username, password=password)
+        sftp_client = ssh_client.open_sftp()
+        print("Everything Connected")
+
+        """
+        outstd = ''
+        while len(outstd) == 0:
+            stdin, stdout, stderr = ssh_client.exec_command(f"lsof | grep {remote_file_path}")
+            print(stdout.readline())
+            print(stderr.read().decode())
+            print("in:", stdin.read().decode())
+            print("out:", stdout.read().decode())
+            outstd = stdout.readline()
+            print(stdout.readline())
+            print("waiting...")
+            time.sleep(2)
+        """
+        remote_file = sftp_client.open(remote_file_path, 'r+')
+        print("Opened queue")
+        args = remote_file.readline().strip().split()
+        data = remote_file.read()
+        remote_file.truncate(0)
+        remote_file.seek(0)
+        remote_file.write(data)
+        remote_file.close()
+
+        ckpt_fp = args[0]
+        #ckpt_step = int(args[1])
+        task = args[2]
+        save_fp = args[3]
+        print(f"Parsed data:\n\tckpt_fp:{ckpt_fp}\n\ttask:{task}\n\tsave_fp:{save_fp}")
+        sftp_client.get(ckpt_fp, local_download_path)
+        print("Downloaded ckpt")
+        #remote_upload_path = f"/tmp/{local_upload_path.split('/')[-1]}"
+        #sftp_client.put(local_upload_path, remote_upload_path)
+
+        sftp_client.close()
+        ssh_client.close()
+        print("File operations completed successfully.")
+        return ckpt_step, task, save_fp, local_download_path
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        if not args == None: # we successfully read the file but failed to get ckpt
+            remote_file = sftp_client.open(remote_file_path, "r+")
+            content = remote_file.read()
+            print("pre content:", content.decode())
+            remote_file.seek(0, 0)
+            args = [str(k) for k in args]
+            out = " ".join(args)
+            out += '\n' + content.decode()
+            remote_file.write(out)
+            remote_file.close()
+        if ssh_client:
+            ssh_client.close()
+        return False, False, False, False
+
+def saveCkptGIF(
+        hostname="submit.hpc.engr.oregonstate.edu", 
+        port=22, 
+        username="brownhun", 
+        password="12345", 
+        gif_local="/home/hunter/test.gif",
+        gif_server="/nfs/stak/users/brownhun/test.gif"
+):
+    
+    ssh_client = paramiko.SSHClient()
+    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    try:
+        ssh_client.connect(hostname=hostname, port=port, username=username, password=password)
+        sftp_client = ssh_client.open_sftp()
+        print("Everything Connected")
+        print(f"\tLocal GIF Path:{gif_local}")
+        print(f"\tServer GIF Path:{gif_server}")
+        sftp_client.put(gif_local, gif_server)
+        print("GIF Saved!")
+        #remote_upload_path = f"/tmp/{local_upload_path.split('/')[-1]}"
+        #sftp_client.put(local_upload_path, remote_upload_path)
+
+        sftp_client.close()
+        ssh_client.close()
+        print("File operations completed successfully.")
+        return True
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        if ssh_client:
+            ssh_client.close()
+        return False
 
 def save_tensor_as_gif(tensor_list, filename, vals, succ_step, duration=100, loop=0):
     """
@@ -144,7 +244,55 @@ class Img2InfoWrapperclass(gym.Wrapper):
         info['img'] = self.unwrapped.scene['tiled_camera'].data.output['rgb'] #observations['info']['img']
         return observations, info
 
+def getEnv(env_cfg, task):
+    env = gym.make(
+            task, 
+            cfg=env_cfg, 
+            render_mode="rgb_array"
+        )
+    
+    env = Img2InfoWrapperclass(env)
 
+    env = SkrlVecEnvWrapper(
+        env, 
+        ml_framework="torch"
+    )  # same as: `wrap_env(env, wrapper="auto")    
+    #env._reset_once = False
+    env = GripperCloseEnv(env)
+    return env
+
+def getAgent(env, agent_cfg, device):
+    models = {}
+
+    models['policy'] = SimBaActor( #BroAgent(
+        observation_space=env.cfg.observation_space, 
+        action_space=env.action_space,
+        #action_gain=0.05,
+        device=device,
+        act_init_std = agent_cfg['models']['act_init_std'],
+        actor_n = agent_cfg['models']['actor']['n'],
+        actor_latent = agent_cfg['models']['actor']['latent_size']
+    ) 
+
+    models["value"] = SimBaCritic( #BroAgent(
+        state_space_size=env.cfg.state_space, 
+        device=device,
+        critic_output_init_mean = agent_cfg['models']['critic_output_init_mean'],
+        critic_n = agent_cfg['models']['critic']['n'],
+        critic_latent = agent_cfg['models']['critic']['latent_size']
+    )
+
+    agent_cfg['agent']['experiment']['wandb'] = False
+    agent = WandbLoggerPPO(
+        models=models,
+        memory=None,
+        cfg=agent_cfg['agent'],
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        num_envs=env.num_envs,
+        device=device
+    )
+    return agent
 if args_cli.seed == -1:
     args_cli.seed = random.randint(0, 10000)
 seed = args_cli.seed
@@ -153,15 +301,14 @@ set_seed(seed)
 
 from isaaclab.sensors import TiledCameraCfg, ImuCfg
 import isaaclab.sim as sim_utils
-@hydra_task_config(args_cli.task, agent_cfg_entry_point)
+import time
+@hydra_task_config("Isaac-Factory-PegInsert-Local-v0", agent_cfg_entry_point)
 def main(
     env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, 
     agent_cfg: dict
 ):    
     print("initialize single ckpt video")
-    ckpt_fp = args_cli.ckpt_filepath
-    ckpt_step = args_cli.ckpt_step
-    
+    server_password = "orb2:imM102013Hl%" #input("Input Server Password...")
     # create env
     num_envs = 8
     """Train with skrl agent."""
@@ -193,139 +340,104 @@ def main(
         height=180,
         debug_vis = False,
     )
-    
+    old_task = None
+    env = None
     print("configured...")
-    # create env
-    env = gym.make(
-        args_cli.task, 
-        cfg=env_cfg, 
-        render_mode="rgb_array"
-    )
-    
-    env = Img2InfoWrapperclass(env)
-
-    env = SkrlVecEnvWrapper(
-        env, 
-        ml_framework="torch"
-    )  # same as: `wrap_env(env, wrapper="auto")    
-    #env._reset_once = False
-    env = GripperCloseEnv(env)
-    
-    print("env ready...")
-    env.cfg.recording = True
-    device = env.device
-    
-    models = {}
-
-    models['policy'] = SimBaActor( #BroAgent(
-        observation_space=env.cfg.observation_space, 
-        action_space=env.action_space,
-        #action_gain=0.05,
-        device=device,
-        act_init_std = agent_cfg['models']['act_init_std'],
-        actor_n = agent_cfg['models']['actor']['n'],
-        actor_latent = agent_cfg['models']['actor']['latent_size']
-    ) 
-
-    models["value"] = SimBaCritic( #BroAgent(
-        state_space_size=env.cfg.state_space, 
-        device=device,
-        critic_output_init_mean = agent_cfg['models']['critic_output_init_mean'],
-        critic_n = agent_cfg['models']['critic']['n'],
-        critic_latent = agent_cfg['models']['critic']['latent_size']
-    )
-
-    agent_cfg['agent']['experiment']['wandb'] = False
-    agent = WandbLoggerPPO(
-        models=models,
-        memory=None,
-        cfg=agent_cfg['agent'],
-        observation_space=env.observation_space,
-        action_space=env.action_space,
-        num_envs=env.num_envs,
-        device=device
-    )
-    
-    images = torch.zeros((max_rollout_steps, 2*180, 4*240, 3), device = env.device)
-    print("starting main loop...")
-    print(f"Filming {ckpt_fp}")
-    with torch.no_grad():
-        #   load agent
-        agent.load(ckpt_fp)
-        print("agent loaded")
-        # reset env
-        
-        states, infos = env.reset()
-        states = env.unwrapped._get_observations()
-        states = torch.cat( (states['policy'], states['critic']),dim=1)
-        
-        alive_mask = torch.ones(size=(states.shape[0], 1), device=states.device, dtype=bool)
-        vals = []
-        success_mask = torch.zeros(size=(states.shape[0], 1), device=states.device, dtype=bool)
-        succ_step = torch.ones(size=(states.shape[0],), device=states.device, dtype=torch.int32) * max_rollout_steps
-
-        for i in tqdm.tqdm(range(max_rollout_steps), file=sys.stdout):
-            # get action
-            actions = agent.act(
-                states, 
-                timestep=1000, 
-                timesteps=1000
-            )[-1]['mean_actions']
-
-            vals.append(agent.value.act({"states": states}, role="value")[0])
-            actions[~alive_mask[:,0],:] *= 0.0
-            actions[success_mask[:,0],:] *= 0.0
+    while True:
+        ckpt_step, task, gif_server_fp, local_ckpt_fp = getCkpt(password=server_password)
+        if task == False:
+            print("Error waiting 5 minutes")
+            time.sleep(5*60) # wait 5 min
+            continue # try again
+        if not old_task == task:
+            print("Making new env")
+            if not env == None:
+                print("Closing old env")
+                env.close()
+            # create env
+            env = getEnv(env_cfg, args_cli.task)
             
-            # take action
-            next_states, _, terminated, truncated, infos = env.step(actions)
-            next_states = torch.cat( (env.unwrapped.obs_buf['policy'], env.unwrapped.obs_buf['critic']),dim=1)
-    
-            for k in range(env.num_envs):
-                y = k // 4
-                x = k % 4
-                images[i, y*180:(y+1)*180, x*240:(x+1)*240, :] = infos['img'][k,:,:,:]
+            print("env ready...")
+            env.cfg.recording = True
+            device = env.device
+            images = torch.zeros((max_rollout_steps, 2*180, 4*240, 3), device = env.device)
 
-            mask_update = ~torch.logical_or(terminated, truncated)
-            alive_mask *= mask_update
-            curr_successes = env.unwrapped._get_curr_successes(
-                success_threshold=env.cfg_task.success_threshold, 
-                check_rot = env.cfg_task.name == "nut_thread"
+            agent = getAgent(env, agent_cfg, device)
+            old_task = task
+    
+        print(f"Filming {local_ckpt_fp}")
+        with torch.no_grad():
+            #   load agent
+            agent.load(local_ckpt_fp)
+            print("agent loaded")
+            # reset env
+    
+            states, infos = env.reset()
+            states = env.unwrapped._get_observations()
+            states = torch.cat( (states['policy'], states['critic']),dim=1)
+            
+            alive_mask = torch.ones(size=(states.shape[0], 1), device=states.device, dtype=bool)
+            vals = []
+            success_mask = torch.zeros(size=(states.shape[0], 1), device=states.device, dtype=bool)
+            succ_step = torch.ones(size=(states.shape[0],), device=states.device, dtype=torch.int32) * max_rollout_steps
+
+            for i in tqdm.tqdm(range(max_rollout_steps), file=sys.stdout):
+                # get action
+                actions = agent.act(
+                    states, 
+                    timestep=1000, 
+                    timesteps=1000
+                )[-1]['mean_actions']
+
+                vals.append(agent.value.act({"states": states}, role="value")[0])
+                actions[~alive_mask[:,0],:] *= 0.0
+                actions[success_mask[:,0],:] *= 0.0
+                
+                # take action
+                next_states, _, terminated, truncated, infos = env.step(actions)
+                next_states = torch.cat( (env.unwrapped.obs_buf['policy'], env.unwrapped.obs_buf['critic']),dim=1)
+        
+                for k in range(env.num_envs):
+                    y = k // 4
+                    x = k % 4
+                    images[i, y*180:(y+1)*180, x*240:(x+1)*240, :] = infos['img'][k,:,:,:]
+
+                mask_update = ~torch.logical_or(terminated, truncated)
+                alive_mask *= mask_update
+                curr_successes = env.unwrapped._get_curr_successes(
+                    success_threshold=env.cfg_task.success_threshold, 
+                    check_rot = env.cfg_task.name == "nut_thread"
+                )
+
+                if (curr_successes).any():
+                    succ_step[
+                        torch.logical_and(
+                            succ_step == max_rollout_steps,
+                            curr_successes
+                        )
+                    ] = i
+                    success_mask[curr_successes,0] = True
+
+                # reset environments
+                if env.num_envs > 1:
+                    states = next_states
+                else:
+                    if terminated.any() or truncated.any():
+                        with torch.no_grad():
+                            states, infos = env.reset()
+                    else:
+                        states = next_states
+            # draw eval est + actions on image
+            # make imgs into gif
+            
+            img_path = f'{local_ckpt_fp[:-3]}.gif'
+            save_tensor_as_gif(images, img_path, vals, succ_step)
+            saveCkptGIF(
+                gif_local=img_path, 
+                gif_server=gif_server_fp,
+                password=server_password
             )
 
-            if (curr_successes).any():
-                succ_step[
-                    torch.logical_and(
-                        succ_step == max_rollout_steps,
-                        curr_successes
-                    )
-                ] = i
-                success_mask[curr_successes,0] = True
-
-            # reset environments
-            if env.num_envs > 1:
-                states = next_states
-            else:
-                if terminated.any() or truncated.any():
-                    with torch.no_grad():
-                        states, infos = env.reset()
-                else:
-                    states = next_states
-        # draw eval est + actions on image
-        # make imgs into gif
-        
-        #img_path = f'{ckpt_fp[:-3]}.gif'
-        save_tensor_as_gif(images, args_cli.output_path, vals, succ_step)
-        
-        # add gif to wandb 
-        #wandb.log({
-        #    "eval_video":wandb.Video(
-        #        data_or_path=img_path,
-        #        caption=f'Checkpoint at step {ckpt_step}',
-        #        #fps=10,
-        #        format='gif'
-        #    ),
-        #    "video_step": int(ckpt_step)
-        #})
 
 if __name__ == "__main__":
     main()
