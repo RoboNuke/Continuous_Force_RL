@@ -17,7 +17,6 @@ HYDRA_FULL_ERROR=1 python -m learning.ppo_factory_trainer \
     --num_agents=2 \
     --exp_name=$2  \
     --seed=1 \
-    --init_eval \
     --no_vids 
 
     #

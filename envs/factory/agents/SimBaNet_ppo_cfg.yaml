@@ -52,7 +52,7 @@ agent:
     experiment_name: "Factory_Env_Baseline"
     write_interval: 150 #75 # set by env
     checkpoint_interval: 1500 # set by env
-    tags: ['debug_apr22','og_envs','rl_update']
+    tags: ['debug_apr29','og_envs','recorder_tests']
     group: 'video_' # task name is added to this
     project: "DMP_Observation_Testing" 
   
