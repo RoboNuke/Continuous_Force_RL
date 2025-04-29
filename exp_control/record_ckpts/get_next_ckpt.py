@@ -17,6 +17,7 @@ if __name__=="__main__":
             raw_args = f.readline().strip().split()
             data = f.read()
             f.truncate(0)
+            f.seek(0)
             f.write(data)
         print("got new data")
         output = f"{raw_args[0]} {raw_args[1]} {raw_args[2]}"
