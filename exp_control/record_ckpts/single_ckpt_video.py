@@ -91,9 +91,8 @@ def getCkpt(
         ssh_client.connect(hostname=hostname, port=port, username=username, password=password)
         sftp_client = ssh_client.open_sftp()
         print("Everything Connected")
-        print("calling:\n", f"python {remote_file_path} {hpc_arg_storage}")
         stdin, stdout, stderr = ssh_client.exec_command(f"bash {remote_file_path} {hpc_arg_storage}")
-        exit_status = stdout.channel.recv_exit_status()
+        """exit_status = stdout.channel.recv_exit_status()
         if exit_status == 0:
             print("Script executed successfully:")
         for line in stdout:
@@ -101,43 +100,29 @@ def getCkpt(
         else:
             print(f"Script failed with exit status {exit_status}:")
             for line in stderr:
-                print(line.strip())
-        print("Called cmd")
+                print(line.strip())"""
         remote_file = sftp_client.open(hpc_arg_storage, 'r+')
-        print("opened remote file")
-        args = remote_file.readline().strip().split()
         #data = remote_file.read()
-        #remote_file.truncate(0)
-        #remote_file.seek(0)
-        #print("seek")
+        remote_file.truncate(0)
+        #f.seek(0)
         #remote_file.write(data)
-        print("continued")
+        args = remote_file.readline().strip().split()
         ckpt_fp = args[0]
         task = args[1]
         save_fp = args[2]
-        print(f"Parsed data:\n\tckpt_fp:{ckpt_fp}\n\ttask:{task}\n\tsave_fp:{save_fp}")
-        #ckpt_fp = ckpt_fp.replace("/nfs/hpc/share/brownhun/", "/nfs/stak/users/brownhun/hpc-share/")
-        #print("new ckpt:", ckpt_fp)
-        #ckpt_fp = "/nfs/stak/users/brownhun/test_hold_agent.pt"
-        #tmp_agent = "/nfs/stak/users/brownhun/tmp_holder.pt"
-        #print("calling cmd:", f"cp {ckpt_fp} {tmp_agent}")
-        #ssh_client.exec_command(f"cp {ckpt_fp} {tmp_agent}")
-        sftp_client.get(str(ckpt_fp), local_download_path)
-        print("Downloaded ckpt")
-        #remote_upload_path = f"/tmp/{local_upload_path.split('/')[-1]}"
-        #sftp_client.put(local_upload_path, remote_upload_path)
+        print(f"\tParsed data:\n\t\tckpt_fp:{ckpt_fp}\n\t\ttask:{task}\n\t\tsave_fp:{save_fp}")
 
-        #remote_file.close()
+        sftp_client.get(str(ckpt_fp), local_download_path)
+        print("\tDownloaded ckpt")
         sftp_client.close()
         ssh_client.close()
         print("File operations completed successfully.")
         return task, save_fp, local_download_path
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print(f"\tAn error occurred: {e}")
         if not args == None: # we successfully read the file but failed to get ckpt
             remote_file = sftp_client.open(remote_file_path, "r+")
             content = remote_file.read()
-            print("pre content:", content.decode())
             remote_file.seek(0, 0)
             args = [str(k) for k in args]
             out = " ".join(args)
@@ -146,7 +131,7 @@ def getCkpt(
             remote_file.close()
         if ssh_client:
             ssh_client.close()
-        return False, False, False, False
+        return False, False, False
 
 def saveCkptGIF(
         hostname="submit.hpc.engr.oregonstate.edu", 
@@ -164,17 +149,20 @@ def saveCkptGIF(
     try:
         ssh_client.connect(hostname=hostname, port=port, username=username, password=password)
         sftp_client = ssh_client.open_sftp()
-        print("Everything Connected")
-        print(f"\tLocal GIF Path:{gif_local}")
-        print(f"\tServer GIF Path:{gif_server}")
+        print("\tSave ckpt connected")
+        print(f"\t\tLocal GIF Path:{gif_local}")
+        print(f"\t\tServer GIF Path:{gif_server}")
+        try:
+            sftp_client.chdir(os.path.dirname(gif_server))  # Test if remote_path exists
+        except IOError:
+            sftp_client.mkdir(os.path.dirname(gif_server))  # Create remote_path
         sftp_client.put(gif_local, gif_server)
-        print("GIF Saved!")
         #remote_upload_path = f"/tmp/{local_upload_path.split('/')[-1]}"
         #sftp_client.put(local_upload_path, remote_upload_path)
 
         sftp_client.close()
         ssh_client.close()
-        print("File operations completed successfully.")
+        print("\tGif saved successfully")
         return True
     except Exception as e:
         print(f"An error occurred: {e}")
@@ -269,7 +257,7 @@ def getEnv(env_cfg, task):
 
 def getAgent(env, agent_cfg, device):
     models = {}
-
+    agent_cfg['track_ckpts'] = False
     models['policy'] = SimBaActor( #BroAgent(
         observation_space=env.cfg.observation_space, 
         action_space=env.action_space,

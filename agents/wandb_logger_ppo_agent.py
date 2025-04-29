@@ -205,13 +205,12 @@ class WandbLoggerPPO(PPO):
             #self.data_manager.add_save(os.path.join(self.experiment_dir, "checkpoints"))
             for k, v in self.tracking_data.items():
                 if k.endswith("_video"):
-                    print("\n\n")
                     for i in range(len(v)):
                         try:
-                            print("\t\ttrying video:", v[i][0])
+                            print("\ttrying video:", v[i][0])
                             wandb.log(
                                 { 
-                                    f'ckpt_{v[i][0]}':wandb.Video(
+                                    prefix + ' ckpt videos':wandb.Video(
                                         data_or_path=v[i][1],
                                         caption=f'Agent at Checkpoint {v[i][0]}',
                                         fps=15,
