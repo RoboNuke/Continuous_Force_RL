@@ -91,6 +91,8 @@ def getCkpt(
         ssh_client.connect(hostname=hostname, port=port, username=username, password=password)
         sftp_client = ssh_client.open_sftp()
         print("Everything Connected")
+        print("hpc path:", hpc_arg_storage)
+        print("remote fp:", remote_file_path)
         stdin, stdout, stderr = ssh_client.exec_command(f"bash {remote_file_path} {hpc_arg_storage}")
         exit_status = stdout.channel.recv_exit_status()
         if exit_status == 0:
