@@ -172,7 +172,7 @@ class SimBaActor(GaussianMixin, Model):
 
     def compute(self, inputs, role):
         #print("Policy compute:", role, inputs['states'].size(), inputs['states'][:,:self.num_observations].size())
-        action_mean = self.actor_mean(inputs['states'][:,:self.num_observations])
+        action_mean = self.action_gain * self.actor_mean(inputs['states'][:,:self.num_observations])
         return action_mean, self.actor_logstd.expand_as(action_mean), {}
         
 

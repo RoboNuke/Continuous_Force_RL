@@ -78,7 +78,8 @@ def getCkpt(
         port=22, 
         username="brownhun", 
         password="12345", 
-        remote_file_path="/nfs/stak/users/brownhun/ckpt_queue.txt", 
+        remote_file_path="/nfs/stak/users/brownhun/hpc-share/Continuous_Force_RL/exp_control/record_ckpts/get_next_ckpt.py", # path to get_next_ckpt script
+        hpc_arg_storage="/nfs/stak/users/brownhun/next_ckpt_holder.txt", # path on hpc to tmp file with only args in it
         local_download_path="/home/hunter/tmp_ckpt.ckpt"
     ):
     ssh_client = paramiko.SSHClient()
@@ -90,43 +91,37 @@ def getCkpt(
         ssh_client.connect(hostname=hostname, port=port, username=username, password=password)
         sftp_client = ssh_client.open_sftp()
         print("Everything Connected")
-
-        """
-        outstd = ''
-        while len(outstd) == 0:
-            stdin, stdout, stderr = ssh_client.exec_command(f"lsof | grep {remote_file_path}")
-            print(stdout.readline())
-            print(stderr.read().decode())
-            print("in:", stdin.read().decode())
-            print("out:", stdout.read().decode())
-            outstd = stdout.readline()
-            print(stdout.readline())
-            print("waiting...")
-            time.sleep(2)
-        """
-        remote_file = sftp_client.open(remote_file_path, 'r+')
-        print("Opened queue")
+        
+        ssh_client.exec_command(f"python -m {remote_file_path} {hpc_arg_storage}")
+        
+        remote_file = sftp_client.open(hpc_arg_storage, 'r+')
         args = remote_file.readline().strip().split()
-        data = remote_file.read()
-        remote_file.truncate(0)
-        remote_file.seek(0)
-        remote_file.write(data)
-        remote_file.close()
+        #data = remote_file.read()
+        #remote_file.truncate(0)
+        #remote_file.seek(0)
+        #print("seek")
+        #remote_file.write(data)
 
         ckpt_fp = args[0]
-        #ckpt_step = int(args[1])
-        task = args[2]
-        save_fp = args[3]
+        task = args[1]
+        save_fp = args[2]
         print(f"Parsed data:\n\tckpt_fp:{ckpt_fp}\n\ttask:{task}\n\tsave_fp:{save_fp}")
-        sftp_client.get(ckpt_fp, local_download_path)
+        #ckpt_fp = ckpt_fp.replace("/nfs/hpc/share/brownhun/", "/nfs/stak/users/brownhun/hpc-share/")
+        #print("new ckpt:", ckpt_fp)
+        ckpt_fp = "/nfs/stak/users/brownhun/test_hold_agent.pt"
+        #tmp_agent = "/nfs/stak/users/brownhun/tmp_holder.pt"
+        #print("calling cmd:", f"cp {ckpt_fp} {tmp_agent}")
+        #ssh_client.exec_command(f"cp {ckpt_fp} {tmp_agent}")
+        sftp_client.get(str(ckpt_fp), local_download_path)
         print("Downloaded ckpt")
         #remote_upload_path = f"/tmp/{local_upload_path.split('/')[-1]}"
         #sftp_client.put(local_upload_path, remote_upload_path)
 
+        #remote_file.close()
         sftp_client.close()
         ssh_client.close()
         print("File operations completed successfully.")
-        return ckpt_step, task, save_fp, local_download_path
+        return task, save_fp, local_download_path
     except Exception as e:
         print(f"An error occurred: {e}")
         if not args == None: # we successfully read the file but failed to get ckpt
@@ -149,7 +144,8 @@ def saveCkptGIF(
         username="brownhun", 
         password="12345", 
         gif_local="/home/hunter/test.gif",
-        gif_server="/nfs/stak/users/brownhun/test.gif"
+        gif_server="/nfs/stak/users/brownhun/test.gif",
+        cc_path="/home/hunter/last_gif.gif"
 ):
     
     ssh_client = paramiko.SSHClient()
@@ -290,7 +286,9 @@ def getAgent(env, agent_cfg, device):
         observation_space=env.observation_space,
         action_space=env.action_space,
         num_envs=env.num_envs,
-        device=device
+        device=device,
+        state_size=env.cfg.observation_space+env.cfg.state_space,
+        track_ckpt_paths=False
     )
     return agent
 if args_cli.seed == -1:
@@ -308,12 +306,15 @@ def main(
     agent_cfg: dict
 ):    
     print("initialize single ckpt video")
-    server_password = "orb2:imM102013Hl%" #input("Input Server Password...")
+    server_password = input("Input Server Password...")
     # create env
     num_envs = 8
     """Train with skrl agent."""
     max_rollout_steps = int((1/env_cfg.sim.dt) / env_cfg.decimation * env_cfg.episode_length_s)
     agent_cfg['agent']['rollouts'] = max_rollout_steps
+    agent_cfg['agent']['experiment']['write_interval'] = max_rollout_steps
+    agent_cfg['agent']['experiment']['checkpoint_interval'] = max_rollout_steps * 10
+    agent_cfg['agent']['experiment']['tags'].append(env_cfg.task_name)
 
     # override configurations with non-hydra CLI arguments
     env_cfg.scene.num_envs = num_envs 
@@ -344,7 +345,7 @@ def main(
     env = None
     print("configured...")
     while True:
-        ckpt_step, task, gif_server_fp, local_ckpt_fp = getCkpt(password=server_password)
+        task, gif_server_fp, local_ckpt_fp = getCkpt(password=server_password)
         if task == False:
             print("Error waiting 5 minutes")
             time.sleep(5*60) # wait 5 min
@@ -355,7 +356,7 @@ def main(
                 print("Closing old env")
                 env.close()
             # create env
-            env = getEnv(env_cfg, args_cli.task)
+            env = getEnv(env_cfg, task)
             
             print("env ready...")
             env.cfg.recording = True
@@ -371,11 +372,13 @@ def main(
             agent.load(local_ckpt_fp)
             print("agent loaded")
             # reset env
-    
+            agent.set_running_mode("eval")
+            states, infos = env.unwrapped.reset()
             states, infos = env.reset()
             states = env.unwrapped._get_observations()
             states = torch.cat( (states['policy'], states['critic']),dim=1)
             
+            env.unwrapped.evaluating = True
             alive_mask = torch.ones(size=(states.shape[0], 1), device=states.device, dtype=bool)
             vals = []
             success_mask = torch.zeros(size=(states.shape[0], 1), device=states.device, dtype=bool)
@@ -385,8 +388,8 @@ def main(
                 # get action
                 actions = agent.act(
                     states, 
-                    timestep=1000, 
-                    timesteps=1000
+                    timestep=i, 
+                    timesteps=max_rollout_steps
                 )[-1]['mean_actions']
 
                 vals.append(agent.value.act({"states": states}, role="value")[0])
@@ -396,7 +399,8 @@ def main(
                 # take action
                 next_states, _, terminated, truncated, infos = env.step(actions)
                 next_states = torch.cat( (env.unwrapped.obs_buf['policy'], env.unwrapped.obs_buf['critic']),dim=1)
-        
+                env.cfg.recording = True
+
                 for k in range(env.num_envs):
                     y = k // 4
                     x = k % 4
@@ -430,7 +434,7 @@ def main(
             # draw eval est + actions on image
             # make imgs into gif
             
-            img_path = f'{local_ckpt_fp[:-3]}.gif'
+            img_path = f'{local_ckpt_fp[:-5]}.gif'
             save_tensor_as_gif(images, img_path, vals, succ_step)
             saveCkptGIF(
                 gif_local=img_path, 

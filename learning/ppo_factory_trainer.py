@@ -130,7 +130,7 @@ def main(
     agent_cfg['agent']['experiment']['write_interval'] = max_rollout_steps
     agent_cfg['agent']['experiment']['checkpoint_interval'] = max_rollout_steps * 10
     agent_cfg['agent']['experiment']['tags'].append(env_cfg.task_name)
-
+    print("max rollout steps:", max_rollout_steps)
     assert args_cli.num_envs % args_cli.num_agents == 0, f'Number of agents {args_cli.num_agents} does not even divide into number of envs {args_cli.num_envs}'
     env_per_agent = args_cli.num_envs // args_cli.num_agents
     

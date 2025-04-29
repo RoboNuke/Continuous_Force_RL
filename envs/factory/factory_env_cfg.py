@@ -69,7 +69,7 @@ class CtrlCfg:
 
 @configclass
 class FactoryEnvCfg(DirectRLEnvCfg):
-    decimation = 2
+    decimation = 8 #2
     action_space = 6
     # num_*: will be overwritten to correspond to obs_order, state_order.
     observation_space = 21
@@ -96,7 +96,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     episode_length_s = 10.0  # Probably need to override.
     sim: SimulationCfg = SimulationCfg(
         device="cuda:0",
-        dt=1/30, #1 / 120,
+        dt=1 / 120,
         gravity=(0.0, 0.0, -9.81),
         physx=PhysxCfg(
             solver_type=1,

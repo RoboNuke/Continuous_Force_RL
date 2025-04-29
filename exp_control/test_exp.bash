@@ -12,11 +12,12 @@ echo "Exp: ${names[$exp_idx]}"
 HYDRA_FULL_ERROR=1 python -m learning.ppo_factory_trainer \
     --task=${envs[$exp_idx]} \
     --max_steps=50000000 \
-    --num_envs=512 \
-    --num_agents=2 \
+    --num_envs=256 \
+    --num_agents=1 \
     --exp_name=$2  \
     --seed=1 \
-    --headless \
+    --no_log_wandb \
+    --init_eval \
     --no_vids 
 
     #

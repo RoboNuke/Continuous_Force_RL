@@ -7,8 +7,8 @@ break_force: -1
 # this is the parameters for the BroNet shared model
 models:
   force_encoding: None
-  act_init_std: 5.0 
-  critic_output_init_mean: 21
+  act_init_std: 0.025 # max linear motion is 0.05 => 99.6 will be in that range
+  critic_output_init_mean: 0
   critic:
     n: 2
     latent_size: 1024
@@ -60,6 +60,7 @@ agent:
     obs_type: "basic" # "basic", "policy_history", "history", "DMP"
     act_type: "basic" # "basic", "predict_action", "DMP"
 
+  track_ckpts: False
   ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_tracker.txt"
 video_tracking:
   # note to use this must run with --video --enable_cameras

@@ -356,24 +356,27 @@ class FactoryEnv(DirectRLEnv):
         # Check if we need to re-compute velocities within the decimation loop.
         if self.last_update_timestamp < self._robot._data._sim_timestamp:
             self._compute_intermediate_values(dt=self.physics_dt)
-
+            
         # Interpret actions as target pos displacements and set pos target
         pos_actions = self.actions[:, 0:3] * self.pos_threshold
-
+        
         # Interpret actions as target rot (axis-angle) displacements
         rot_actions = self.actions[:, 3:6]
         if self.cfg_task.unidirectional_rot:
             rot_actions[:, 2] = -(rot_actions[:, 2] + 1.0) * 0.5  # [-1, 0]
         rot_actions = rot_actions * self.rot_threshold
-
+        
         self.ctrl_target_fingertip_midpoint_pos = self.fingertip_midpoint_pos + pos_actions
         # To speed up learning, never allow the policy to move more than 5cm away from the base.
+        
         delta_pos = self.ctrl_target_fingertip_midpoint_pos - self.fixed_pos_action_frame
+        
         pos_error_clipped = torch.clip(
             delta_pos, -self.cfg.ctrl.pos_action_bounds[0], self.cfg.ctrl.pos_action_bounds[1]
         )
+        
         self.ctrl_target_fingertip_midpoint_pos = self.fixed_pos_action_frame + pos_error_clipped
-
+        
         # Convert to quat and set rot target
         angle = torch.norm(rot_actions, p=2, dim=-1)
         axis = rot_actions / angle.unsqueeze(-1)
