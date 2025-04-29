@@ -92,7 +92,7 @@ def getCkpt(
         sftp_client = ssh_client.open_sftp()
         print("Everything Connected")
         stdin, stdout, stderr = ssh_client.exec_command(f"bash {remote_file_path} {hpc_arg_storage}")
-        """exit_status = stdout.channel.recv_exit_status()
+        exit_status = stdout.channel.recv_exit_status()
         if exit_status == 0:
             print("Script executed successfully:")
         for line in stdout:
@@ -100,7 +100,7 @@ def getCkpt(
         else:
             print(f"Script failed with exit status {exit_status}:")
             for line in stderr:
-                print(line.strip())"""
+                print(line.strip())
         remote_file = sftp_client.open(hpc_arg_storage, 'r+')
         #data = remote_file.read()
         remote_file.truncate(0)

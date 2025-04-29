@@ -223,7 +223,6 @@ class WandbLoggerPPO(PPO):
                             keep[k] = v[i:] # ensure we push the videos in the order they are sent
                             break
                     
-                    print("\n\n")
                 elif k.endswith("(min)"):
                     self.data_manager.add_scalar({k:np.min(v)}, timestep * self.num_envs)
                 elif k.endswith("(max)"):
