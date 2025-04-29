@@ -38,8 +38,8 @@ class WandbLoggerPPO(PPO):
         super().__init__(models, memory, observation_space, action_space, device, cfg)
         self.global_step = 0
         self.num_envs = num_envs
-
-        self.tracker_path = cfg.ckpt_tracker_path
+        print(cfg)
+        self.tracker_path = cfg['ckpt_tracker_path']
 
         lock = FileLock(self.tracker_path + ".lock")
         with lock:
