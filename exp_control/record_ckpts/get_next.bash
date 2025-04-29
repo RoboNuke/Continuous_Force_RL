@@ -12,9 +12,9 @@ else
 fi
 unset __conda_setup
 
-if [ -f "/nfs/hpc/share/brownhun/miniforge/etc/profile.d/mamba.sh" ]; then
-    . "/nfs/hpc/share/brownhun/miniforge/etc/profile.d/mamba.sh"
-fi
+#if [ -f "/nfs/hpc/share/brownhun/miniforge/etc/profile.d/mamba.sh" ]; then
+#    . "/nfs/hpc/share/brownhun/miniforge/etc/profile.d/mamba.sh"
+#fi
 # <<< conda initialize <<<
 
 
