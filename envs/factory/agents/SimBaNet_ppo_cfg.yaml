@@ -7,8 +7,8 @@ break_force: -1
 # this is the parameters for the BroNet shared model
 models:
   force_encoding: None
-  act_init_std: 0.025 # max linear motion is 0.05 => 99.6 will be in that range
-  critic_output_init_mean: 0
+  act_init_std: 1.0 # note this is paired with tanh on action mean and scaled by env ##0.025 # max linear motion is 0.05 => 99.6 will be in that range
+  critic_output_init_mean: 20 # seemed to be early value policy drives to
   critic:
     n: 2
     latent_size: 1024
@@ -26,7 +26,7 @@ agent:
   learning_rate: 1.0e-5
   learning_rate_scheduler: KLAdaptiveLR
   learning_rate_scheduler_kwargs:
-    kl_threshold: 0.0005
+    kl_threshold: 0.01
     min_lr: 1.0e-6
   # below are not args
   random_timesteps: 0

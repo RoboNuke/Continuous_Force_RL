@@ -330,7 +330,8 @@ def main(
             action_space=env.action_space,
             num_envs=args_cli.num_envs // args_cli.num_agents,
             state_size=env.cfg.observation_space+env.cfg.state_space,
-            device=device
+            device=device,
+            task = args_cli.task
         ) for i in range(args_cli.num_agents)
     ]
     for i, agent in enumerate(agent_list):

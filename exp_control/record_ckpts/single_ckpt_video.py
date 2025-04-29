@@ -91,10 +91,8 @@ def getCkpt(
         ssh_client.connect(hostname=hostname, port=port, username=username, password=password)
         sftp_client = ssh_client.open_sftp()
         print("Everything Connected")
-        print("hpc path:", hpc_arg_storage)
-        print("remote fp:", remote_file_path)
         stdin, stdout, stderr = ssh_client.exec_command(f"bash {remote_file_path} {hpc_arg_storage}")
-        exit_status = stdout.channel.recv_exit_status()
+        """exit_status = stdout.channel.recv_exit_status()
         if exit_status == 0:
             print("Script executed successfully:")
         for line in stdout:
@@ -102,13 +100,11 @@ def getCkpt(
         else:
             print(f"Script failed with exit status {exit_status}:")
             for line in stderr:
-                print(line.strip())
+                print(line.strip())"""
         remote_file = sftp_client.open(hpc_arg_storage, 'r+')
-        #data = remote_file.read()
-        remote_file.truncate(0)
-        #f.seek(0)
-        #remote_file.write(data)
+        
         args = remote_file.readline().strip().split()
+        remote_file.truncate(0)
         ckpt_fp = args[0]
         task = args[1]
         save_fp = args[2]
@@ -118,7 +114,7 @@ def getCkpt(
         print("\tDownloaded ckpt")
         sftp_client.close()
         ssh_client.close()
-        print("File operations completed successfully.")
+        print("\tFile operations completed successfully.")
         return task, save_fp, local_download_path
     except Exception as e:
         print(f"\tAn error occurred: {e}")
@@ -167,7 +163,7 @@ def saveCkptGIF(
         print("\tGif saved successfully")
         return True
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print(f"\tAn error occurred: {e}")
         if ssh_client:
             ssh_client.close()
         return False
@@ -257,9 +253,9 @@ def getEnv(env_cfg, task):
     env = GripperCloseEnv(env)
     return env
 
-def getAgent(env, agent_cfg, device):
+def getAgent(env, agent_cfg, task_name, device):
     models = {}
-    agent_cfg['track_ckpts'] = False
+    agent_cfg['agent']['track_ckpts'] = False
     models['policy'] = SimBaActor( #BroAgent(
         observation_space=env.cfg.observation_space, 
         action_space=env.action_space,
@@ -288,7 +284,8 @@ def getAgent(env, agent_cfg, device):
         num_envs=env.num_envs,
         device=device,
         state_size=env.cfg.observation_space+env.cfg.state_space,
-        track_ckpt_paths=False
+        track_ckpt_paths=False,
+        task=task_name
     )
     return agent
 if args_cli.seed == -1:
@@ -363,7 +360,7 @@ def main(
             device = env.device
             images = torch.zeros((max_rollout_steps, 2*180, 4*240, 3), device = env.device)
 
-            agent = getAgent(env, agent_cfg, device)
+            agent = getAgent(env, agent_cfg, task, device)
             old_task = task
     
         print(f"Filming {local_ckpt_fp}")

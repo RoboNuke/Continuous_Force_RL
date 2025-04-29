@@ -17,6 +17,4 @@ unset __conda_setup
 #fi
 # <<< conda initialize <<<
 
-
-
 python /nfs/stak/users/brownhun/hpc-share/Continuous_Force_RL/exp_control/record_ckpts/get_next_ckpt.py $1

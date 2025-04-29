@@ -34,7 +34,8 @@ class WandbLoggerPPO(PPO):
             device: Optional[Union[str, torch.device]] = None,
             state_size=-1,
             cfg: Optional[dict] = None,
-            track_ckpt_paths = False
+            track_ckpt_paths = False,
+            task="Isaac-Factory-PegInsert-Local-v0"
     ) -> None:
         super().__init__(models, memory, observation_space, action_space, device, cfg)
         self.global_step = 0
@@ -48,7 +49,7 @@ class WandbLoggerPPO(PPO):
                 if not os.path.exists(self.tracker_path):
                     with open(self.tracker_path, "w") as f:
                         f.write("")
-
+        self.task_name = task
         self._track_rewards = collections.deque(maxlen=1000)
         self._track_timesteps = collections.deque(maxlen=1000)
         if state_size == -1:
@@ -288,7 +289,7 @@ class WandbLoggerPPO(PPO):
                 self.checkpoint_best_modules["saved"] = False
                 self.checkpoint_best_modules["modules"] = {k: copy.deepcopy(self._get_internal_value(v)) for k, v in self.checkpoint_modules.items()}
             # write checkpoints
-            self.write_checkpoint(timestep, timesteps)
+            self.write_checkpoint(timestep * self.num_envs, timesteps)
 
         # write wandb
         if timestep > 1 and self.write_interval > 0 and not timestep % self.write_interval:
@@ -309,7 +310,7 @@ class WandbLoggerPPO(PPO):
             lock = FileLock(self.tracker_path + ".lock")
             with lock:
                 with open(self.tracker_path, "a") as f:
-                    f.write(f'{ckpt_path} Isaac-Factory-PegInsert-Local-v0 {vid_path}\n')
+                    f.write(f'{ckpt_path} {self.task_name} {vid_path}\n')
         """
         print("\n\nQueuing:", timestep)
         print(f"{ckpt_path} {timestep * self.num_envs} Isaac-Factory-PegInsert-Local-v0 {vid_path}")
