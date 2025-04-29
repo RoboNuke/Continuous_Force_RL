@@ -11,6 +11,7 @@ echo "Exp: ${names[$exp_idx]}"
 #CUDA_LAUNCH_BLOCKING=1 
 HYDRA_FULL_ERROR=1 python -m learning.ppo_factory_trainer \
     --task=${envs[$exp_idx]} \
+    --headless \
     --max_steps=50000000 \
     --num_envs=512 \
     --num_agents=2 \
