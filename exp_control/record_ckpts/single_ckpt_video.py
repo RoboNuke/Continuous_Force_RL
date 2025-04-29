@@ -78,7 +78,7 @@ def getCkpt(
         port=22, 
         username="brownhun", 
         password="12345", 
-        remote_file_path="/nfs/stak/users/brownhun/hpc-share/Continuous_Force_RL/exp_control/record_ckpts/get_next_ckpt.py", # path to get_next_ckpt script
+        remote_file_path="/nfs/stak/users/brownhun/hpc-share/Continuous_Force_RL/exp_control/record_ckpts/get_next.bash", # path to get_next_ckpt script
         hpc_arg_storage="/nfs/stak/users/brownhun/next_ckpt_holder.txt", # path on hpc to tmp file with only args in it
         local_download_path="/home/hunter/tmp_ckpt.ckpt"
     ):
@@ -91,24 +91,34 @@ def getCkpt(
         ssh_client.connect(hostname=hostname, port=port, username=username, password=password)
         sftp_client = ssh_client.open_sftp()
         print("Everything Connected")
-        
-        ssh_client.exec_command(f"python -m {remote_file_path} {hpc_arg_storage}")
-        
+        print("calling:\n", f"python {remote_file_path} {hpc_arg_storage}")
+        stdin, stdout, stderr = ssh_client.exec_command(f"bash {remote_file_path} {hpc_arg_storage}")
+        exit_status = stdout.channel.recv_exit_status()
+        if exit_status == 0:
+            print("Script executed successfully:")
+        for line in stdout:
+            print(line.strip())
+        else:
+            print(f"Script failed with exit status {exit_status}:")
+            for line in stderr:
+                print(line.strip())
+        print("Called cmd")
         remote_file = sftp_client.open(hpc_arg_storage, 'r+')
+        print("opened remote file")
         args = remote_file.readline().strip().split()
         #data = remote_file.read()
         #remote_file.truncate(0)
         #remote_file.seek(0)
         #print("seek")
         #remote_file.write(data)
-
+        print("continued")
         ckpt_fp = args[0]
         task = args[1]
         save_fp = args[2]
         print(f"Parsed data:\n\tckpt_fp:{ckpt_fp}\n\ttask:{task}\n\tsave_fp:{save_fp}")
         #ckpt_fp = ckpt_fp.replace("/nfs/hpc/share/brownhun/", "/nfs/stak/users/brownhun/hpc-share/")
         #print("new ckpt:", ckpt_fp)
-        ckpt_fp = "/nfs/stak/users/brownhun/test_hold_agent.pt"
+        #ckpt_fp = "/nfs/stak/users/brownhun/test_hold_agent.pt"
         #tmp_agent = "/nfs/stak/users/brownhun/tmp_holder.pt"
         #print("calling cmd:", f"cp {ckpt_fp} {tmp_agent}")
         #ssh_client.exec_command(f"cp {ckpt_fp} {tmp_agent}")
