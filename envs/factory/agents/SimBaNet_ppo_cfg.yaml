@@ -48,12 +48,12 @@ agent:
   # logging and checkpoint
   track_layernorms: True
   experiment:
-    directory: "Factory_Baseline"
-    experiment_name: "Factory_Env_Baseline"
+    directory: "Factory_Visual"
+    experiment_name: "Factory_Visual_Baseline"
     write_interval: 150 #75 # set by env
     checkpoint_interval: 1500 # set by env
-    tags: ['debug_apr29','og_envs','recorder_tests']
-    group: 'video_' # task name is added to this
+    tags: ['og_envs','factory','adaptive_LR']
+    group: 'Fac_Baseline_' # task name is added to this
     project: "DMP_Observation_Testing" 
   
   logging_tags:

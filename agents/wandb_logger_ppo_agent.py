@@ -510,7 +510,6 @@ class WandbLoggerPPO(PPO):
     
 
     def _update(self, timestep: int, timesteps: int):
-        print("called wandb update")
         super()._update(timestep, timesteps)
         # reset optimizer step
         self.resetAdamOptimizerTime(self.optimizer)

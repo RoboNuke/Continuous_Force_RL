@@ -168,7 +168,7 @@ def saveCkptGIF(
             ssh_client.close()
         return False
 
-def save_tensor_as_gif(tensor_list, filename, vals, succ_step, duration=100, loop=0):
+def save_tensor_as_gif(tensor_list, filename, vals, succ_step, engaged_mask, duration=100, loop=0):
     """
     Saves a list of PyTorch tensors as a GIF image.
 
@@ -183,7 +183,7 @@ def save_tensor_as_gif(tensor_list, filename, vals, succ_step, duration=100, loo
     tensor_list = 1.0 - tensor_list
     images = []
     #print(torch.max(tensor_list), torch.min(tensor_list))
-    for i in range(50):#tensor_list:
+    for i in range(engaged_mask.size()[1]):#tensor_list:
         # Ensure the tensor is in CPU and convert it to a PIL Image
         tensor = tensor_list[i,:,:,:] 
         img = F.to_pil_image(tensor.to("cpu"))
@@ -194,6 +194,16 @@ def save_tensor_as_gif(tensor_list, filename, vals, succ_step, duration=100, loo
             #font = ImageFont.truetype("sans-serif.ttf", 16)
             #font = ImageFont.truetype("UbuntuMono-R.ttf", 20)            
             font = ImageFont.truetype("DejaVuSans.ttf",20)
+            if engaged_mask[img_idx, i]:
+                draw.rectangle( 
+                    (
+                        (x*240, y*180),
+                        ((x+1)*240, (y+1)*180)
+                    ), 
+                    outline="orange", 
+                    width=3
+                )
+
             if i >= succ_step[img_idx]:
                 draw.rectangle( 
                     (
@@ -344,8 +354,8 @@ def main(
     while True:
         task, gif_server_fp, local_ckpt_fp = getCkpt(password=server_password)
         if task == False:
-            print("Error waiting 5 minutes")
-            time.sleep(5*60) # wait 5 min
+            print("Error waiting a minute")
+            time.sleep(60) # wait 5 min
             continue # try again
         if not old_task == task:
             print("Making new env")
@@ -381,6 +391,7 @@ def main(
             success_mask = torch.zeros(size=(states.shape[0], 1), device=states.device, dtype=bool)
             succ_step = torch.ones(size=(states.shape[0],), device=states.device, dtype=torch.int32) * max_rollout_steps
 
+            engaged_mask = torch.zeros(size=(states.shape[0], max_rollout_steps), dtype=bool, device=device)
             for i in tqdm.tqdm(range(max_rollout_steps), file=sys.stdout):
                 # get action
                 actions = agent.act(
@@ -409,6 +420,11 @@ def main(
                     success_threshold=env.cfg_task.success_threshold, 
                     check_rot = env.cfg_task.name == "nut_thread"
                 )
+                engaged_mask[:,i] = env.unwrapped._get_curr_successes(
+                    success_threshold=env.cfg_task.engage_threshold,
+                    check_rot= env.cfg_task.name == "nut_thread"
+                )
+
 
                 if (curr_successes).any():
                     succ_step[
@@ -432,7 +448,7 @@ def main(
             # make imgs into gif
             
             img_path = f'{local_ckpt_fp[:-5]}.gif'
-            save_tensor_as_gif(images, img_path, vals, succ_step)
+            save_tensor_as_gif(images, img_path, vals, succ_step, engaged_mask)
             saveCkptGIF(
                 gif_local=img_path, 
                 gif_server=gif_server_fp,
