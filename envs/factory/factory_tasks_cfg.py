@@ -3,11 +3,17 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-import isaaclab.sim as sim_utils
-from isaaclab.assets import ArticulationCfg
-from isaaclab.utils import configclass
-from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
-
+try:
+    import isaaclab.sim as sim_utils
+    from isaaclab.assets import ArticulationCfg
+    from isaaclab.utils import configclass
+    from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
+except:
+    import omni.isaac.lab.sim as sim_utils
+    from omni.isaac.lab.assets import ArticulationCfg
+    from omni.isaac.lab.utils import configclass
+    from omni.isaac.lab.utils.assets import ISAACLAB_NUCLEUS_DIR
+    
 ASSET_DIR = f"{ISAACLAB_NUCLEUS_DIR}/Factory"
 
 

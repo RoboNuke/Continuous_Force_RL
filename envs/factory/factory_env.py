@@ -7,15 +7,28 @@ import numpy as np
 import torch
 
 import carb
-import isaacsim.core.utils.torch as torch_utils
 
-import isaaclab.sim as sim_utils
-from isaaclab.assets import Articulation
-from isaaclab.envs import DirectRLEnv
-from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
-from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
-from isaaclab.utils.math import axis_angle_from_quat
+# different isaac sim versions
+try:
+    import isaacsim.core.utils.torch as torch_utils
+except:
+    import omni.isaac.core.utils.torch as torch_utils
 
+# isaaclab versions
+try:
+    import isaaclab.sim as sim_utils
+    from isaaclab.assets import Articulation
+    from isaaclab.envs import DirectRLEnv
+    from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
+    from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
+    from isaaclab.utils.math import axis_angle_from_quat
+except:
+    import omni.isaac.lab.sim as sim_utils
+    from omni.isaac.lab.assets import Articulation
+    from omni.isaac.lab.envs import DirectRLEnv
+    from omni.isaac.lab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
+    from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
+    from omni.isaac.lab.utils.math import axis_angle_from_quat
 from . import factory_control as fc
 from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
 
@@ -494,7 +507,7 @@ class FactoryEnv(DirectRLEnv):
 
         self.prev_actions = self.actions.clone()
 
-        if torch.any(self.reset_buf): # only log when reset
+        if torch.any(self._get_dones()[0]): #self.reset_buf): # only log when reset from termination steps
             self.extras['Episode / successes'] = self.ep_succeeded
             self.extras['Episode / success_times'] = self.ep_success_times
             self.extras['Episode / engaged'] = self.ep_engaged

@@ -357,6 +357,9 @@ def main(
             print("Error waiting a minute")
             time.sleep(60) # wait 5 min
             continue # try again
+        if not task == "Isaac-Factory-PegInsert-Local-v0":
+            print("Skipping")
+            continue
         if not old_task == task:
             print("Making new env")
             if not env == None:
