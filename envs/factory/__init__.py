@@ -8,7 +8,7 @@ import gymnasium as gym
 from . import agents
 from .factory_env import FactoryEnv
 from .factory_env_cfg import FactoryTaskGearMeshCfg, FactoryTaskNutThreadCfg, FactoryTaskPegInsertCfg
-
+from .obs_factory_env import HistoryObsFactoryEnv
 ##
 # Register Gym environments.
 ##
@@ -23,6 +23,18 @@ gym.register(
         "SimBaNet_ppo_cfg_entry_point": f"{agents.__name__}:SimBaNet_ppo_cfg.yaml",
     },
 )
+
+gym.register(
+    id="Isaac-Factory-PegInsert-HistoryObs-v0",
+    entry_point="envs.factory:HistoryObsFactoryEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": FactoryTaskPegInsertCfg,
+        "BroNet_cfg_entry_point": f"{agents.__name__}:BroNet_ppo_cfg.yaml",
+        "SimBaNet_ppo_cfg_entry_point": f"{agents.__name__}:SimBaNet_ppo_cfg.yaml",
+    },
+)
+
 
 gym.register(
     id="Isaac-Factory-GearMesh-Local-v0",

@@ -11,9 +11,15 @@ Imported by base, environment, and task classes. Not directly executed.
 import math
 import torch
 
-import isaacsim.core.utils.torch as torch_utils
+try:
+    import isaacsim.core.utils.torch as torch_utils
+except:
+    import omni.isaac.core.utils.torch as torch_utils
 
-from isaaclab.utils.math import axis_angle_from_quat
+try:
+    from isaaclab.utils.math import axis_angle_from_quat
+except:
+    from omni.isaac.lab.utils.math import axis_angle_from_quat
 
 
 def compute_dof_torque(

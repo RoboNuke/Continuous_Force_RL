@@ -1,7 +1,10 @@
 import argparse
 import sys
 
-from isaaclab.app import AppLauncher
+try:
+    from isaaclab.app import AppLauncher
+except:
+    from omni.isaac.lab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with skrl.")
@@ -87,21 +90,36 @@ from agents.agent_list import AgentList
 #import envs.FPiH.config.franka
 import envs.factory
 
-from isaaclab.envs import (
-    DirectMARLEnv,
-    DirectMARLEnvCfg,
-    DirectRLEnvCfg,
-    ManagerBasedRLEnvCfg,
-)
-from isaaclab.utils.dict import print_dict
-from isaaclab.utils.io import dump_pickle, dump_yaml
+try:
+    from isaaclab.envs import (
+        DirectMARLEnv,
+        DirectMARLEnvCfg,
+        DirectRLEnvCfg,
+        ManagerBasedRLEnvCfg,
+    )
+    from isaaclab.utils.dict import print_dict
+    from isaaclab.utils.io import dump_pickle, dump_yaml
 
-import isaaclab_tasks  # noqa: F401
-from isaaclab_tasks.utils.hydra import hydra_task_config
-from isaaclab_rl.skrl import SkrlVecEnvWrapper
-from agents.wandb_logger_ppo_agent import WandbLoggerPPO
+    import isaaclab_tasks  # noqa: F401
+    from isaaclab_tasks.utils.hydra import hydra_task_config
+    from isaaclab_rl.skrl import SkrlVecEnvWrapper
+except:
+    from omni.isaac.lab.envs import (
+        DirectMARLEnv,
+        DirectMARLEnvCfg,
+        DirectRLEnvCfg,
+        ManagerBasedRLEnvCfg,
+    )
+    from omni.isaac.lab.utils.dict import print_dict
+    from omni.isaac.lab.utils.io import dump_pickle, dump_yaml
+
+    import omni.isaac.lab_tasks  # noqa: F401
+    from omni.isaac.lab_tasks.utils.hydra import hydra_task_config
+    from omni.isaac.lab_tasks.utils.wrappers.skrl import SkrlVecEnvWrapper
+
 
 #from wrappers.info_video_recorder_wrapper import InfoRecordVideo
+from agents.wandb_logger_ppo_agent import WandbLoggerPPO
 from agents.mp_agent import MPAgent
 import copy
 import torch

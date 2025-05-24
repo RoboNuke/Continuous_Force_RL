@@ -160,7 +160,7 @@ class SimBaActor(GaussianMixin, Model):
             tan_out=True
         )
         with torch.no_grad():
-            self.actor_mean.output[-2].weight *= 0.01
+            self.actor_mean.output[-2].weight *= 1.0 #TODO FIX THIS TO 0.01
 
         self.actor_logstd = nn.Parameter(
             torch.ones(1, self.num_actions) * math.log(act_init_std)

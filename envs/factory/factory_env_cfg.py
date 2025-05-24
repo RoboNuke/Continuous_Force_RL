@@ -3,14 +3,25 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-import isaaclab.sim as sim_utils
-from isaaclab.actuators.actuator_cfg import ImplicitActuatorCfg
-from isaaclab.assets import ArticulationCfg
-from isaaclab.envs import DirectRLEnvCfg
-from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sim import PhysxCfg, SimulationCfg
-from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
-from isaaclab.utils import configclass
+try:
+    import isaaclab.sim as sim_utils
+    from isaaclab.actuators.actuator_cfg import ImplicitActuatorCfg
+    from isaaclab.assets import ArticulationCfg
+    from isaaclab.envs import DirectRLEnvCfg
+    from isaaclab.scene import InteractiveSceneCfg
+    from isaaclab.sim import PhysxCfg, SimulationCfg
+    from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
+    from isaaclab.utils import configclass
+except:
+    import omni.isaac.lab.sim as sim_utils
+    from omni.isaac.lab.actuators.actuator_cfg import ImplicitActuatorCfg
+    from omni.isaac.lab.assets import ArticulationCfg
+    from omni.isaac.lab.envs import DirectRLEnvCfg
+    from omni.isaac.lab.scene import InteractiveSceneCfg
+    from omni.isaac.lab.sim import PhysxCfg, SimulationCfg
+    from omni.isaac.lab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
+    from omni.isaac.lab.utils import configclass
+
 
 from .factory_tasks_cfg import ASSET_DIR, FactoryTask, GearMesh, NutThread, PegInsert
 
@@ -163,8 +174,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
                 damping=0.0,
                 friction=0.0,
                 armature=0.0,
-                effort_limit_sim=87,
-                velocity_limit_sim=124.6,
+                effort_limit=87,
+                velocity_limit=124.6,
             ),
             "panda_arm2": ImplicitActuatorCfg(
                 joint_names_expr=["panda_joint[5-7]"],
@@ -172,13 +183,13 @@ class FactoryEnvCfg(DirectRLEnvCfg):
                 damping=0.0,
                 friction=0.0,
                 armature=0.0,
-                effort_limit_sim=12,
-                velocity_limit_sim=149.5,
+                effort_limit=12,
+                velocity_limit=149.5,
             ),
             "panda_hand": ImplicitActuatorCfg(
                 joint_names_expr=["panda_finger_joint[1-2]"],
-                effort_limit_sim=40.0,
-                velocity_limit_sim=0.04,
+                effort_limit=40.0,
+                velocity_limit=0.04,
                 stiffness=7500.0,
                 damping=173.0,
                 friction=0.1,
