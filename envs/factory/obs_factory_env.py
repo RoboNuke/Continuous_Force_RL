@@ -47,9 +47,9 @@ class HistoryObsFactoryEnv(FactoryEnv):
             render_mode: str | None = None, 
             **kwargs
         ):
-        self.h_len = cfg.decimation
-        print("\n\n\n", self.h_len, "\n\n\n")
-        assert 1==0
+
+        self.h_len = cfg.decimation #define before __init__ because super calls _init_tensors()
+        
         super().__init__(cfg, render_mode, **kwargs)
         # Update number of obs/states
         cfg.observation_space = sum([OBS_DIM_CFG[obs] for obs in cfg.obs_order]) * self.h_len
@@ -60,12 +60,8 @@ class HistoryObsFactoryEnv(FactoryEnv):
         cfg.state_space += cfg.action_space
         self.cfg_task = cfg.task
 
+        # need to reset env observation space size for vectorization
         self._configure_gym_env_spaces()
-
-        self._set_body_inertias()
-        self._init_tensors()
-        self._set_default_dynamics_parameters()
-        self._compute_intermediate_values(dt=self.physics_dt)
 
     def _init_tensors(self):
         super()._init_tensors()
