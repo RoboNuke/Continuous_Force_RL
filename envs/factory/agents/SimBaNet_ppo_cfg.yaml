@@ -1,6 +1,7 @@
 seed: -1
 num_envs: 256
 break_force: -1
+
 #replicate_physics: False
 #scene:
 #  replicate_physics: False

@@ -232,7 +232,8 @@ def main(
                 print("Video not implemented")
                 eval_vid=False
                 train_vid=False
-        
+
+
     # create env
     env = gym.make(
         args_cli.task, 

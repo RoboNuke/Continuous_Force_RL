@@ -45,10 +45,11 @@ class HistoryObsFactoryEnv(FactoryEnv):
             self, 
             cfg: FactoryEnvCfg, 
             render_mode: str | None = None, 
-            history_length=10,
             **kwargs
         ):
-        self.h_len = history_length
+        self.h_len = cfg.decimation
+        print("\n\n\n", self.h_len, "\n\n\n")
+        assert 1==0
         super().__init__(cfg, render_mode, **kwargs)
         # Update number of obs/states
         cfg.observation_space = sum([OBS_DIM_CFG[obs] for obs in cfg.obs_order]) * self.h_len
@@ -58,7 +59,7 @@ class HistoryObsFactoryEnv(FactoryEnv):
         cfg.observation_space += cfg.action_space
         cfg.state_space += cfg.action_space
         self.cfg_task = cfg.task
-        
+
         self._configure_gym_env_spaces()
 
         self._set_body_inertias()
