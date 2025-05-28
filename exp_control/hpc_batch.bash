@@ -17,7 +17,7 @@
 #echo "Array:" $SLURM_ARRAY_TASK_COUNT
 ##module load cuda/10.1
 eval "$(command conda 'shell.bash' 'hook' 2> /dev/null)"
-conda activate env_isaaclab
+conda activate isaaclab_24
 
 free_memory=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits)
 numeric_string="${free_memory//[^0-9]/}"
