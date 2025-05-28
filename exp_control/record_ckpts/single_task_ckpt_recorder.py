@@ -297,7 +297,7 @@ def main(
     print("initialize single ckpt video")
     
     # create env
-    num_envs = 26
+    num_envs = 100
     env_cfg.decimation = args_cli.decimation
     env_cfg.sim.dt = (1/args_cli.policy_hz) / args_cli.decimation
     print(f"Time scale config parameters\n\tDec: {env_cfg.decimation}\n\tSim_dt:{1/env_cfg.sim.dt}\n\tPolicy_Hz:{args_cli.policy_hz}")
