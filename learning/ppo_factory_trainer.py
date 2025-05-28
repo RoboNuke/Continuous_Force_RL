@@ -141,7 +141,7 @@ def main(
 ):
     global evaluating
     global mp_agent
-
+    env_cfg.filter_collisions = True
     """ set up time scales """
     env_cfg.decimation = args_cli.decimation
     env_cfg.sim.dt = (1/args_cli.policy_hz) / args_cli.decimation
@@ -427,7 +427,7 @@ def main(
 
 if __name__ == "__main__":
     # run the main function
-    
+
     main()
 
     # close sim app

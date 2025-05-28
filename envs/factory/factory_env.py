@@ -31,7 +31,7 @@ except:
     from omni.isaac.lab.utils.math import axis_angle_from_quat
 from . import factory_control as fc
 from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
-
+from omni.isaac.lab.sensors import TiledCamera
 
 class FactoryEnv(DirectRLEnv):
     cfg: FactoryEnvCfg
@@ -184,12 +184,14 @@ class FactoryEnv(DirectRLEnv):
         self._robot = Articulation(self.cfg.robot)
         self._fixed_asset = Articulation(self.cfg_task.fixed_asset)
         self._held_asset = Articulation(self.cfg_task.held_asset)
+        
         if self.cfg_task.name == "gear_mesh":
             self._small_gear_asset = Articulation(self.cfg_task.small_gear_cfg)
             self._large_gear_asset = Articulation(self.cfg_task.large_gear_cfg)
 
         self.scene.clone_environments(copy_from_source=False)
-        self.scene.filter_collisions()
+        if self.cfg.filter_collisions:
+            self.scene.filter_collisions()
 
         self.scene.articulations["robot"] = self._robot
         self.scene.articulations["fixed_asset"] = self._fixed_asset
