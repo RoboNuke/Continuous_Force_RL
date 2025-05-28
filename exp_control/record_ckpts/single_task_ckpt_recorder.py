@@ -438,8 +438,8 @@ def main(
                         states = next_states
             # draw eval est + actions on image
             # make imgs into gif
-            step_num = int(ckpt_path.split("/")[-1][6:-5])
             save_tensor_as_gif(images, gif_path, tot_rew, torch.cat(vals, dim=1), succ_step, engaged_mask)
+            step_num = int(ckpt_path.split("/")[-1][6:-3])
             
             wandb.init(
                 project=wandb_project,  # Specify your project
