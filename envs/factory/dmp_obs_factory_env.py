@@ -25,7 +25,7 @@ class DMPObsFactoryEnv(HistoryObsFactoryEnv):
             cfg: FactoryEnvCfg, 
             render_mode: str | None = None, 
             calc_accel = True,
-            num_weights=5,
+            num_weights=10,
             fit_force_data=False,
             **kwargs
         ):

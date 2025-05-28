@@ -28,7 +28,8 @@ python -m learning.ppo_factory_trainer \
     --num_envs=$((256 * $num_agents)) \
     --num_agents=$num_agents \
     --exp_name=$4 \
-    --no_vids 
+    --no_vids \
+    --decimation=16
 
 
 

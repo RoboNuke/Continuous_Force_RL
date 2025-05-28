@@ -205,7 +205,7 @@ class WandbLoggerPPO(PPO):
             keep = {}
             #self.data_manager.add_save(os.path.join(self.experiment_dir, "checkpoints"))
             for k, v in self.tracking_data.items():
-                if k.endswith("_video"):
+                """if k.endswith("_video"):
                     for i in range(len(v)):
                         try:
                             print("\ttrying video:", v[i][0])
@@ -223,13 +223,28 @@ class WandbLoggerPPO(PPO):
                         except FileNotFoundError:
                             keep[k] = v[i:] # ensure we push the videos in the order they are sent
                             break
-                    
-                elif k.endswith("(min)"):
-                    self.data_manager.add_scalar({k:np.min(v)}, timestep * self.num_envs)
+                """    
+                if k.endswith("(min)"):
+                    self.data_manager.add_scalar(
+                        {
+                            k:np.min(v), 
+                            "env_step":timestep*self.num_envs, 
+                            "exp_step":timestep
+                        }, timestep * self.num_envs)
                 elif k.endswith("(max)"):
-                    self.data_manager.add_scalar({k:np.max(v)}, timestep * self.num_envs)
+                    self.data_manager.add_scalar(
+                        {
+                            k:np.max(v), 
+                            "env_step":timestep*self.num_envs, 
+                            "exp_step":timestep
+                        }, timestep * self.num_envs)
                 else:
-                    self.data_manager.add_scalar({k:np.mean(v)}, timestep * self.num_envs)
+                    self.data_manager.add_scalar(
+                        {
+                            k:np.mean(v), 
+                            "env_step":timestep*self.num_envs, 
+                            "exp_step":timestep
+                        }, timestep * self.num_envs)
                 """
                 elif k.endswith("_ckpt"):
                 #    print(k,v)
@@ -305,7 +320,7 @@ class WandbLoggerPPO(PPO):
         super().write_checkpoint(timestep, timesteps)
         ckpt_path = os.path.join(self.experiment_dir, "checkpoints", f"agent_{timestep}.pt")
         vid_path = os.path.join(self.experiment_dir, "eval_videos", f"agent_{timestep* self.num_envs}.gif")
-        self.track_data("ckpt_video", (timestep, vid_path) )
+        #self.track_data("ckpt_video", (timestep, vid_path) )
         if self.track_ckpt_paths:
             lock = FileLock(self.tracker_path + ".lock")
             with lock:
