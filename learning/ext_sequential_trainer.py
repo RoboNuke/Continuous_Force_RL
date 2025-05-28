@@ -186,7 +186,7 @@ class ExtSequentialTrainer(Trainer):
         states, infos = self.env.reset()
         states = self.env.unwrapped._get_observations()
         states = torch.cat( (states['policy'], states['critic']),dim=1)
-
+        
         self.env.unwrapped.evaluating = True
 
         ep_length = self.env.env.max_episode_length #- 1

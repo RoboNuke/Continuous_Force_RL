@@ -9,6 +9,7 @@ from . import agents
 from .factory_env import FactoryEnv
 from .factory_env_cfg import FactoryTaskGearMeshCfg, FactoryTaskNutThreadCfg, FactoryTaskPegInsertCfg
 from .obs_factory_env import HistoryObsFactoryEnv
+from .dmp_obs_factory_env import DMPObsFactoryEnv
 ##
 # Register Gym environments.
 ##
@@ -35,6 +36,16 @@ gym.register(
     },
 )
 
+gym.register(
+    id="Isaac-Factory-PegInsert-DMPObs-v0",
+    entry_point="envs.factory:DMPObsFactoryEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": FactoryTaskPegInsertCfg,
+        "BroNet_cfg_entry_point": f"{agents.__name__}:BroNet_ppo_cfg.yaml",
+        "SimBaNet_ppo_cfg_entry_point": f"{agents.__name__}:SimBaNet_ppo_cfg.yaml",
+    },
+)
 
 gym.register(
     id="Isaac-Factory-GearMesh-Local-v0",

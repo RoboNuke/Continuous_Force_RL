@@ -17,7 +17,11 @@ class DataManager():
         self.login_wandb()
         self.api = wandb.Api()
 
-    def __del__():
+    @property
+    def run_id(self):
+        return wandb.run.id
+    
+    def __del__(self):
         print("deleted")
 
     def login_wandb(self):

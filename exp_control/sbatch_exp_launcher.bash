@@ -1,12 +1,21 @@
 #!/bin/bash
 
 num_agents=4
-num_exp_per_env=2
-num_exp_env=3
-nick_names=("PiH" "Gear_Mesh" "Nut_Thread")
+num_exp_per=2
 
-for env_idx in $(seq 1 $((num_exp_env - 1)))
+num_tasks=1
+num_obs=3
+
+nick_names=("PiH" "Gear" "Nut")
+
+for task_idx in $(seq 1 $((num_tasks - 1)))
 do
-    sbatch -J "${nick_names[$env_idx]}_$1" -a 1-$num_exp_per_env exp_control/hpc_batch.bash $env_idx $num_agents "$1_${nick_names[$env_idx]}"
-    #sbatch -a 1-$num_exp_per_env exp_control/hpc_batch.bash $env_idx $num_agents "$1_$env_idx"
+    for obs_idx in $(seq 1 $((num_obs - 1)))
+    do
+        sbatch -J "${nick_names[$task_idx]}_$1" -a 1-$num_exp_per exp_control/hpc_batch.bash \
+                $task_idx \
+                $obs_idx \
+                $num_agents \
+                $1
+    done
 done

@@ -1,30 +1,30 @@
-names=( "PiH" "GearMesh" "PiH-History_Obs")
-envs=( "Isaac-Factory-PegInsert-Local-v0" "Isaac-Factory-GearMesh-Local-v0" "Isaac-Factory-PegInsert-HistoryObs-v0")
+#!/bin/bash
+tasks=( "PegInsert" "GearMesh")
+obs_modes=( "Local" "HistoryObs" "DMPObs")
 
-exp_idx=$1
+task_idx=$1
+obs_idx=$2
 #if [ "$exp_idx" -gt 4 ]; then
 #  exp_idx=0
 #fi
+task_name="Isaac-Factory-TaskType-ObsType-v0"
+echo "$task_name"
+echo "Task Type: ${tasks[$task_idx]}"
+echo "Obs Mode: ${obs_modes[$obs_idx]}"
 
-echo "Exp: ${names[$exp_idx]}"
 
+task_name="${task_name/ObsType/${obs_modes[obs_idx]}}" 
+task_name="${task_name/TaskType/${tasks[task_idx]}}"
+echo "Env name: $task_name"
 #CUDA_LAUNCH_BLOCKING=1 
 HYDRA_FULL_ERROR=1 python -m learning.ppo_factory_trainer \
-    --task=${envs[$exp_idx]} \
+    --task=$task_name \
     --max_steps=50000000 \
     --num_envs=4 \
     --num_agents=1 \
-    --exp_name=$2  \
+    --exp_name=$3  \
     --seed=1 \
     --no_log_wandb \
-    --no_vids
-
-    #
-    #
-    #
-    #--init_eval \
-    #--log_smoothness_metrics \
-    #--wandb_tags="debug_Apr11" \#
-    #
-    #-
-    #
+    --no_vids \
+    --init_eval \
+    --decimation=16

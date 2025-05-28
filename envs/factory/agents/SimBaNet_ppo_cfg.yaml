@@ -21,7 +21,7 @@ agent:
   class: PPO
   rollouts: 150 # set by env
   learning_epochs: 4
-  mini_batches: 100 #32 # 128 steps / minibatch (256 envs * 50 steps per update)
+  mini_batches: 128 #steps / minibatch (256 envs * 50 steps per update)
   discount_factor: 0.99
   lambda: 0.99
   learning_rate: 1.0e-5
@@ -49,19 +49,19 @@ agent:
   # logging and checkpoint
   track_layernorms: True
   experiment:
-    directory: "Factory_Visual"
-    experiment_name: "Factory_Visual_Baseline"
+    directory: "Observation_Pose_Factory"
+    experiment_name: "Obs_Pose_Factory_Baseline"
     write_interval: 150 #75 # set by env
     checkpoint_interval: 1500 # set by env
-    tags: ['og_envs','factory','adaptive_LR']
+    tags: ['may27_exps','factory','adaptive_LR', 'no_force']
     group: 'Fac_Baseline_' # task name is added to this
-    project: "DMP_Observation_Testing" 
+    project: "Continuous_Force_RL" 
   
   logging_tags:
     obs_type: "basic" # "basic", "policy_history", "history", "DMP"
     act_type: "basic" # "basic", "predict_action", "DMP"
 
-  track_ckpts: False
+  track_ckpts: True
   ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_tracker.txt"
 video_tracking:
   # note to use this must run with --video --enable_cameras

@@ -424,10 +424,11 @@ class FactoryEnv(DirectRLEnv):
 
     def generate_ctrl_signals(self):
         """Get Jacobian. Set Franka DOF position targets (fingers) or DOF torques (arm)."""
+        #print(self.arm_mass_matrix)
         self.joint_torque, self.applied_wrench = fc.compute_dof_torque(
             cfg=self.cfg,
             dof_pos=self.joint_pos,
-            dof_vel=self.joint_vel,  # _fd,
+            dof_vel=self.joint_vel_fd,
             fingertip_midpoint_pos=self.fingertip_midpoint_pos,
             fingertip_midpoint_quat=self.fingertip_midpoint_quat,
             fingertip_midpoint_linvel=self.ee_linvel_fd,

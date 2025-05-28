@@ -19,7 +19,9 @@ class GripperCloseEnv(gym.ActionWrapper):
         #self.new_action[:,:6] = action.clone()
         #self.new_action[:,6] = -1.0
         #return self.new_action
+        print(action)
         action[:,-1] = -1.0
+        print("Post:", action)
         return action
 
     def step(self, action):

@@ -18,7 +18,8 @@ parser.add_argument("--force_encoding", type=str, default=None, help="Which type
 parser.add_argument("--num_agents", type=int, default=1, help="How many agents to train in parallel")
 parser.add_argument("--dmp_obs", default=False, action="store_true", help="Should we use dmps for the observation space")
 parser.add_argument("--init_eval", default=True, action="store_false", help="When added, we will not perform an eval before any training has happened")
-
+parser.add_argument("--decimation", type=int, default=8, help="How many simulation steps between policy observations")
+parser.add_argument("--policy_hz", type=int, default=15, help="Rate in hz that the policy should get new observations")
 # logging
 parser.add_argument("--exp_name", type=str, default=None, help="What to name the experiment on WandB")
 parser.add_argument("--exp_dir", type=str, default=None, help="Directory to store the experiment in")
@@ -85,7 +86,7 @@ from wrappers.close_gripper_action_wrapper import GripperCloseEnv
 from models.default_mixin import Shared
 from models.bro_model import BroAgent, BroActor, BroCritic
 from models.SimBa import SimBaAgent, SimBaActor, SimBaCritic
-#from wrappers.DMP_observation_wrapper import DMPObservationWrapper
+from envs.factory.dmp_obs_factory_env import DMPObsFactoryEnv
 from agents.agent_list import AgentList
 #import envs.FPiH.config.franka
 import envs.factory
@@ -141,6 +142,11 @@ def main(
     global evaluating
     global mp_agent
 
+    """ set up time scales """
+    env_cfg.decimation = args_cli.decimation
+    env_cfg.sim.dt = (1/args_cli.policy_hz) / args_cli.decimation
+    print(f"Time scale config parameters\n\tDec: {env_cfg.decimation}\n\tSim_dt:{1/env_cfg.sim.dt}\n\tPolicy_Hz:{args_cli.policy_hz}")
+    
     """Train with skrl agent."""
     #max_rollout_steps = agent_cfg['agent']['rollouts']
     max_rollout_steps = int((1/env_cfg.sim.dt) / env_cfg.decimation * env_cfg.episode_length_s)
@@ -234,13 +240,16 @@ def main(
                 train_vid=False
 
 
-    # create env
     env = gym.make(
         args_cli.task, 
         cfg=env_cfg, 
         render_mode="rgb_array" if vid else None
     )
     
+
+    #if args_cli.dmp_obs:
+    #    env = DMPObservationWrapper(env)
+
     if vid:
         vid_fps = int(1.0 / (env.cfg.sim.dt * env.cfg.sim.render_interval ))
 
@@ -286,7 +295,8 @@ def main(
         ml_framework="torch"
     )  # same as: `wrap_env(env, wrapper="auto")    
     #env._reset_once = False
-    env = GripperCloseEnv(env)
+    # default factory env sets gripper to zero on line 445
+    #env = GripperCloseEnv(env)
     
     device = env.device
 

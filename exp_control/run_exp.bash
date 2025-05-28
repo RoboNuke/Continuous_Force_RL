@@ -1,31 +1,38 @@
+#!/bin/bash
+tasks=( "PegInsert" "GearMesh")
+obs_modes=( "Local" "HistoryObs" "DMPObs")
 
-names=("Std_Obs" "DMP_Obs" "Hist_Obs" "Force_only_DMP" "Force_only_Hist")
-envs=("Isaac-Factory-PegInsert-Local-v0" "Isaac-Factory-GearMesh-Local-v0" "Isaac-Factory-NutThread-Local-v0" )
-
-# default num_agents is 2
-if [ -z "$2" ]; then
-    num_agents=2
-else
-    num_agents=$2
-fi
-
-exp_idx=$1
+task_idx=$1
+obs_idx=$2
+num_agents=$3
 #if [ "$exp_idx" -gt 4 ]; then
 #  exp_idx=0
 #fi
+task_name="Isaac-Factory-TaskType-ObsType-v0"
+echo "Task Type: ${tasks[$task_idx]}"
+echo "Obs Mode: ${obs_modes[$obs_idx]}"
 
 
-echo "Exp: ${names[$exp_idx]}"
+task_name="${task_name/ObsType/${obs_modes[obs_idx]}}" 
+task_name="${task_name/TaskType/${tasks[task_idx]}}"
+echo "Env name: $task_name"
+
 echo "Num Agents: $num_agents"
-echo "Learning Method: $learning_method"
+
+
+exp_name="$4_${tasks[task_idx]}_${obs_modes[obs_idx]}
 python -m learning.ppo_factory_trainer \
     --headless \
     --task=${envs[$exp_idx]} \
     --max_steps=50000000 \
     --num_envs=$((256 * $num_agents)) \
-    --num_agents $num_agents \
-    --exp_name=$3 \
+    --num_agents=$num_agents \
+    --exp_name=$4 \
     --no_vids 
+
+
+
+
 # "DMP_Observation_Testing" \
 #python -m learning.single_agent_train --task TB2-Factor-PiH-v0 --exp_name basic_PiH_baseline --headless --max_steps 50000000 --no_vids --num_agents 5 --num_envs 1280 --wandb_tags multi_agent_tests basic_obs
 ## "${names[$exp_idx]}"  \
