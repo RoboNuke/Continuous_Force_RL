@@ -21,10 +21,10 @@ echo "Num Agents: $num_agents"
 
 
 exp_name="$4_${tasks[task_idx]}_${obs_modes[obs_idx]}"
-
+echo $task_name
 python -m learning.ppo_factory_trainer \
     --headless \
-    --task=${envs[$exp_idx]} \
+    --task=$task_name \
     --max_steps=50000000 \
     --num_envs=$((256 * $num_agents)) \
     --num_agents=$num_agents \
