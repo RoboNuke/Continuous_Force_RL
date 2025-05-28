@@ -202,6 +202,9 @@ def save_tensor_as_gif(tensor_list, filename, tot_rew, vals, succ_step, engaged_
         #plt.show()
 
     # Save the list of PIL Images as a GIF
+    folder_path = os.path.dirname(filename)
+    if folder_path and not os.path.exists(folder_path):
+        os.makedirs(folder_path, exist_ok=True)
     images[0].save(filename, save_all=True, append_images=images[1:], duration=duration, loop=loop)
 
 agent_cfg_entry_point = f"SimBaNet_ppo_cfg_entry_point"
