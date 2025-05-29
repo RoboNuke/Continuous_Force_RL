@@ -159,7 +159,7 @@ def save_tensor_as_gif(tensor_list, filename, tot_rew, vals, succ_step, engaged_
     engaged_mask = engaged_mask[img_idxs_display,:]
 
     # edit tensor_list down
-    new_tensor_list = torch.zeros((engaged_mask.size()[1], 180 * 3, 240 * 3, 3))
+    new_tensor_list = torch.zeros((engaged_mask.size()[1], 180 * 3, 240 * 4, 3))
     for i, idx in enumerate(img_idxs_display):
         y = i // 4
         x = i % 4
