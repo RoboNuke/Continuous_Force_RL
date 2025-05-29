@@ -112,18 +112,22 @@ def getNextCkpt(
     lock = FileLock(ckpt_tracker_path + ".lock")
     with lock:
         try:
-            found_next = False
+            #found_next = False
             with open(ckpt_tracker_path, 'r') as file:
                 lines = file.readlines()
 
             next_line = None
             with open(ckpt_tracker_path, 'w+') as file:
-                for line in lines:
-                    if not found_next and task in line:
+                for line in reversed(lines): # get last example
+                    if task in line:
                         next_line = line
-                        found_next = True
+                        break
+                for line in lines: # rewrite file
+                    if line == next_line:
+                        continue
                     else:
                         file.write(line)
+
             ckpt_path, task, gif_path, wandb_project, run_id = next_line.split() # order: ckpt_path, task, gif_path, wandb_project, run_id
             return ckpt_path, gif_path, wandb_project, run_id
         except FileNotFoundError:
