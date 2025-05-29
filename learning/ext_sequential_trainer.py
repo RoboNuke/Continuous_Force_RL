@@ -246,5 +246,5 @@ class ExtSequentialTrainer(Trainer):
                         else:
                             states = next_states
         self.env.unwrapped.common_step_counter -= ep_length      
-        self.abs_agent.write_checkpoint(self.env.unwrapped.common_step_counter * self.env.num_envs, self.timesteps)
+        self.abs_agent.write_checkpoint(self.training_timestep, self.timesteps)
         self.abs_agent.write_tracking_data(self.training_timestep, self.timesteps, eval=True)
