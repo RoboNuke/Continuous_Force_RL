@@ -5,6 +5,7 @@ obs_modes=( "Local" "HistoryObs" "DMPObs")
 task_idx=$1
 obs_idx=$2
 num_agents=$3
+num_history_samples=$5
 #if [ "$exp_idx" -gt 4 ]; then
 #  exp_idx=0
 #fi
@@ -28,9 +29,12 @@ python -m learning.ppo_factory_trainer \
     --max_steps=50000000 \
     --num_envs=$((256 * $num_agents)) \
     --num_agents=$num_agents \
-    --exp_name="$4_${obs_modes[obs_idx]}" \
+    --exp_name="$4_$num_history_samples" \
     --no_vids \
-    --decimation=16
+    --decimation=16 \
+    --history_sample_size=$num_history_samples \
+    --use_ft_sensor
+    
 
 
 

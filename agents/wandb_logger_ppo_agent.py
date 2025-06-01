@@ -371,6 +371,7 @@ class WandbLoggerPPO(PPO):
         :param timesteps: Number of timesteps
         :type timesteps: int
         """
+
         # note this is where I can add tracking stuff
         eval_mode = alive_mask is not None
         #print("Logger eval mode:", eval_mode)
@@ -411,6 +412,7 @@ class WandbLoggerPPO(PPO):
 
         #print('eval mode:', 'on' if eval_mode else 'off')
         if self.write_interval > 0 or eval_mode:
+
             # compute the cumulative sum of the rewards and timesteps
             if self._cumulative_rewards is None:
                 self._cumulative_rewards = torch.zeros_like(rewards, dtype=torch.float32)
@@ -425,7 +427,7 @@ class WandbLoggerPPO(PPO):
 
             # handle reward 
             prefix = "Eval " if eval_mode else "Training "
-
+            """
             if 'smoothness' in infos.keys():
                 for skey in infos['smoothness']:
                     self.track_data(
@@ -436,7 +438,7 @@ class WandbLoggerPPO(PPO):
                         prefix + skey + " (max)", 
                         torch.max( infos['smoothness'][skey] ).item()
                     )
-
+            """
             # record step reward data
             self.tracking_data[prefix + "Reward / Instantaneous reward (max)"].append(torch.max(rewards).item())
             self.tracking_data[prefix + "Reward / Instantaneous reward (min)"].append(torch.min(rewards).item())
@@ -446,15 +448,15 @@ class WandbLoggerPPO(PPO):
                 self._cumulative_rewards += alive_mask[:,None] * rewards
                 self._cumulative_timesteps[alive_mask] += 1
                 
-                mask_update = torch.logical_or(terminated, truncated) # one that didn't term
+                mask_update = torch.logical_or(terminated, truncated).view((self.num_envs,)) # one that didn't term
                 
-                finished_episodes = torch.logical_and(mask_update, alive_mask[:,None]).nonzero(as_tuple=False)
+                finished_episodes = torch.logical_and(mask_update, alive_mask).nonzero(as_tuple=False).view(-1,)
                 # term this step and alive overall
                 for key in infos:
-                    if not ('success' in key or 'engage' in key): # we only update these on resetting 
+                    if not ('success' in key or 'engage' in key or 'smoothness' in key): # we only update these on resetting 
                         self._comp_rews[key][alive_mask,0] = infos[key][alive_mask]
 
-                alive_mask[mask_update[:,0]] = False
+                alive_mask[mask_update] = False
 
             else:
                 self._cumulative_rewards.add_(rewards)
@@ -462,12 +464,12 @@ class WandbLoggerPPO(PPO):
 
                 finished_episodes = (terminated + truncated).nonzero(as_tuple=False)
                 for key in infos:
-                    if not ('success' in key or 'engage' in key): # we only update these on resetting 
+                    if not ('success' in key or 'engage' in key or 'smoothness' in key): # we only update these on resetting 
                         self._comp_rews[key][:,0].add_(infos[key])
 
             # track instantaneous rewards
             for key, rew in infos.items():
-                if 'success' in key or 'engage' in key:
+                if 'success' in key or 'engage' in key or 'smoothness' in key:
                     continue
 
                 self.track_data(prefix + key + " (mean)", torch.mean(rew).item())
@@ -485,9 +487,31 @@ class WandbLoggerPPO(PPO):
                 self._cumulative_timesteps[finished_episodes] = 0
 
                 for key, rew in infos.items():
-                    if 'success' in key or 'engage' in key:
+                    if 'smoothness' in key:
+                        for skey in infos['smoothness']:
+                            if 'Avg' in skey:
+                                self.track_data(
+                                    prefix + skey, 
+                                    torch.mean( infos['smoothness'][skey] ).item()
+                                )
+                            elif 'Max' in skey:
+                                self.track_data(
+                                    prefix + skey,
+                                    torch.max( infos['smoothness'][skey]).item()
+                                )
+                            elif 'Sum Square Velocity' in skey:
+                                self.track_data(
+                                    prefix + skey + " (Avg)",
+                                    torch.mean( infos['smoothness'][skey]).item()
+                                )
+                                self.track_data(
+                                    prefix + skey + " (Maximum)",
+                                    torch.max( infos['smoothness'][skey]).item()
+                                )                        
+                    elif 'success' in key or 'engage' in key:
                         if key not in self._track_comp_rews:
                             self._track_comp_rews[key] = collections.deque(maxlen=1000)
+                            
                         self._track_comp_rews[key].extend(
                             infos[key][finished_episodes].reshape(-1).tolist()
                         )

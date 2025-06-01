@@ -16,6 +16,7 @@ do
                 $task_idx \
                 $obs_idx \
                 $num_agents \
-                $1
+                $1 \
+                16
     done
 done

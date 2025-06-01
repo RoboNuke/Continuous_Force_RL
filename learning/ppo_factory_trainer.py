@@ -15,11 +15,15 @@ parser.add_argument("--num_envs", type=int, default=256, help="Number of environ
 parser.add_argument("--seed", type=int, default=-1, help="Seed used for the environment")
 parser.add_argument("--max_steps", type=int, default=10240000, help="RL Policy training iterations.")
 parser.add_argument("--force_encoding", type=str, default=None, help="Which type of force encoding to use if force is included")
+parser.add_argument("--ckpt_path", type=str, default=None, help="Absolute path to cp file to begin run from")
 parser.add_argument("--num_agents", type=int, default=1, help="How many agents to train in parallel")
 parser.add_argument("--dmp_obs", default=False, action="store_true", help="Should we use dmps for the observation space")
 parser.add_argument("--init_eval", default=True, action="store_false", help="When added, we will not perform an eval before any training has happened")
 parser.add_argument("--decimation", type=int, default=8, help="How many simulation steps between policy observations")
+parser.add_argument("--history_sample_size", type=int, default=8, help="How many samples to keep from sim steps, spread evenly from zero to decimation-1")
 parser.add_argument("--policy_hz", type=int, default=15, help="Rate in hz that the policy should get new observations")
+parser.add_argument("--use_ft_sensor", default=False, action="store_true", help="Addes force sensor data to the observation space")
+
 # logging
 parser.add_argument("--exp_name", type=str, default=None, help="What to name the experiment on WandB")
 parser.add_argument("--exp_dir", type=str, default=None, help="Directory to store the experiment in")
@@ -142,8 +146,16 @@ def main(
     global evaluating
     global mp_agent
     env_cfg.filter_collisions = True
+
+    if args_cli.use_ft_sensor:
+        env_cfg.use_force_sensor = True
+        env_cfg.obs_order.append("force_torque")
+        env_cfg.state_order.append("force_torque")
+
+
     """ set up time scales """
     env_cfg.decimation = args_cli.decimation
+    env_cfg.history_samples = args_cli.history_sample_size
     env_cfg.sim.dt = (1/args_cli.policy_hz) / args_cli.decimation
     print(f"Time scale config parameters\n\tDec: {env_cfg.decimation}\n\tSim_dt:{1/env_cfg.sim.dt}\n\tPolicy_Hz:{args_cli.policy_hz}")
     
@@ -247,7 +259,6 @@ def main(
         cfg=env_cfg, 
         render_mode="rgb_array" if vid else None
     )
-    
 
     #if args_cli.dmp_obs:
     #    env = DMPObservationWrapper(env)
@@ -296,6 +307,10 @@ def main(
         env, 
         ml_framework="torch"
     )  # same as: `wrap_env(env, wrapper="auto")    
+    print("Obs space:", env.cfg.observation_space)
+    print("State Space:", env.cfg.state_space)
+    
+    #assert 1 == 0
     #env._reset_once = False
     # default factory env sets gripper to zero on line 445
     #env = GripperCloseEnv(env)
@@ -378,6 +393,9 @@ def main(
         agents = mp_agent
     else:
         agents = agent_list[0]
+        if args_cli.ckpt_path != None:
+            print("Loading: ", args_cli.ckpt_path)
+            agents.load(args_cli.ckpt_path)
 
     #TODO undo for vids later   
     if vid:

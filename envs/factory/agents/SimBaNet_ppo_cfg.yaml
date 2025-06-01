@@ -48,11 +48,11 @@ agent:
   # logging and checkpoint
   track_layernorms: True
   experiment:
-    directory: "Observation_Pose_Factory"
-    experiment_name: "Obs_Pose_Factory_Baseline"
+    directory: "Tween_PiH_Tests"
+    experiment_name: "Tween_PiH"
     write_interval: 150 #75 # set by env
     checkpoint_interval: 1500 # set by env
-    tags: ['may27_exps','factory','adaptive_LR', 'no_force']
+    tags: ['tween_PiH_Jun1_exps','factory','force']
     group: 'Fac_Baseline_' # task name is added to this
     project: "Continuous_Force_RL" 
   
@@ -60,8 +60,8 @@ agent:
     obs_type: "basic" # "basic", "policy_history", "history", "DMP"
     act_type: "basic" # "basic", "predict_action", "DMP"
 
-  track_ckpts: True
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_tracker.txt"
+  track_ckpts: False
+  ckpt_tracker_path: "" #"/nfs/stak/users/brownhun/ckpt_tracker.txt"
 video_tracking:
   # note to use this must run with --video --enable_cameras
   record_training: True

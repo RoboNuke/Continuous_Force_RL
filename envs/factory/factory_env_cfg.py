@@ -31,6 +31,7 @@ OBS_DIM_CFG = {
     "fingertip_quat": 4,
     "ee_linvel": 3,
     "ee_angvel": 3,
+    "force_torque": 6
 }
 
 STATE_DIM_CFG = {
@@ -49,6 +50,7 @@ STATE_DIM_CFG = {
     "ema_factor": 1,
     "pos_threshold": 3,
     "rot_threshold": 3,
+    "force_torque": 6
 }
 
 
@@ -81,11 +83,19 @@ class CtrlCfg:
 @configclass
 class FactoryEnvCfg(DirectRLEnvCfg):
     decimation = 8 #2
+    use_force_sensor = False
+    history_samples = 8
     action_space = 6
     # num_*: will be overwritten to correspond to obs_order, state_order.
     observation_space = 21
     state_space = 72
-    obs_order: list = ["fingertip_pos_rel_fixed", "fingertip_quat", "ee_linvel", "ee_angvel"]
+    obs_order: list = [
+        "fingertip_pos_rel_fixed", 
+        "fingertip_quat", 
+        "ee_linvel", 
+        "ee_angvel"
+    ]
+
     state_order: list = [
         "fingertip_pos",
         "fingertip_quat",

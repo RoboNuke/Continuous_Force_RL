@@ -22,6 +22,7 @@ try:
     from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
     from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
     from isaaclab.utils.math import axis_angle_from_quat
+    # TODO get ArticulationView equivalent (robotView?)
 except:
     import omni.isaac.lab.sim as sim_utils
     from omni.isaac.lab.assets import Articulation
@@ -29,6 +30,7 @@ except:
     from omni.isaac.lab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
     from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
     from omni.isaac.lab.utils.math import axis_angle_from_quat
+    from omni.isaac.core.articulations import ArticulationView
 from . import factory_control as fc
 from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
 from omni.isaac.lab.sensors import TiledCamera
@@ -36,19 +38,25 @@ from omni.isaac.lab.sensors import TiledCamera
 class FactoryEnv(DirectRLEnv):
     cfg: FactoryEnvCfg
 
-    def __init__(self, cfg: FactoryEnvCfg, render_mode: str | None = None, **kwargs):
+    def __init__(
+            self, 
+            cfg: FactoryEnvCfg, 
+            render_mode: str | None = None, 
+            **kwargs):
         # Update number of obs/states
         cfg.observation_space = sum([OBS_DIM_CFG[obs] for obs in cfg.obs_order])
         cfg.state_space = sum([STATE_DIM_CFG[state] for state in cfg.state_order])
         cfg.observation_space += cfg.action_space
         cfg.state_space += cfg.action_space
         self.cfg_task = cfg.task
-
+        self.use_ft = cfg.use_force_sensor
         super().__init__(cfg, render_mode, **kwargs)
 
         self._set_body_inertias()
         self._init_tensors()
         self._set_default_dynamics_parameters()
+        if self.use_ft:
+            self._init_force_torque_sensor()
         self._compute_intermediate_values(dt=self.physics_dt)
 
     def _set_body_inertias(self):
@@ -76,6 +84,10 @@ class FactoryEnv(DirectRLEnv):
         self._set_friction(self._held_asset, self.cfg_task.held_asset_cfg.friction)
         self._set_friction(self._fixed_asset, self.cfg_task.fixed_asset_cfg.friction)
         self._set_friction(self._robot, self.cfg_task.robot_cfg.friction)
+
+    def _init_force_torque_sensor(self):
+        self._robot_av = ArticulationView(prim_paths_expr="/World/envs/env_.*/Robot")
+        self._robot_av.initialize()
 
     def _set_friction(self, asset, value):
         """Update material properties for a given asset."""
@@ -158,11 +170,22 @@ class FactoryEnv(DirectRLEnv):
         else:
             raise NotImplementedError("Task not implemented")
 
-        self.ep_succeeded = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
+        # force-torque sensor data
+        if self.use_ft:
+            self.robot_force_torque = torch.zeros((self.num_envs, 6), dtype=torch.float32, device=self.device)
+
+        self.ep_succeeded = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
         self.ep_success_times = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
-        self.ep_engaged = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
+        self.ep_engaged = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
         self.ep_engaged_times = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.ep_engaged_length = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
+
+        self.ep_ssv = torch.zeros( (self.num_envs,), device=self.device)
+        if self.use_ft:
+            self.ep_max_force = torch.zeros_like(self.ep_ssv)
+            self.ep_max_torque = torch.zeros_like(self.ep_ssv)
+            self.ep_sum_torque = torch.zeros_like(self.ep_ssv)
+            self.ep_sum_force = torch.zeros_like(self.ep_ssv) # we keep the sum and then normalize on reset
 
     def _get_keypoint_offsets(self, num_keypoints):
         """Get uniformly-spaced keypoints along a line of unit length, centered at 0."""
@@ -233,7 +256,9 @@ class FactoryEnv(DirectRLEnv):
         self.joint_vel = self._robot.data.joint_vel.clone()
 
         # Finite-differencing results in more reliable velocity estimates.
-        self.ee_linvel_fd = (self.fingertip_midpoint_pos - self.prev_fingertip_pos) / dt
+        # actually due to small timestep this goes to zero!
+        self.ee_linvel_fd = self._robot.data.body_link_vel_w[:, self.fingertip_body_idx,:3] #(self.fingertip_midpoint_pos - self.prev_fingertip_pos) / dt
+
         self.prev_fingertip_pos = self.fingertip_midpoint_pos.clone()
 
         # Add state differences if velocity isn't being added.
@@ -242,11 +267,11 @@ class FactoryEnv(DirectRLEnv):
         )
         rot_diff_quat *= torch.sign(rot_diff_quat[:, 0]).unsqueeze(-1)
         rot_diff_aa = axis_angle_from_quat(rot_diff_quat)
-        self.ee_angvel_fd = rot_diff_aa / dt
+        self.ee_angvel_fd = self._robot.data.body_link_vel_w[:, self.fingertip_body_idx,3:] #rot_diff_aa / dt
         self.prev_fingertip_quat = self.fingertip_midpoint_quat.clone()
 
         joint_diff = self.joint_pos[:, 0:7] - self.prev_joint_pos
-        self.joint_vel_fd = joint_diff / dt
+        self.joint_vel_fd = self._robot.data.joint_vel.clone() #joint_diff / dt
         self.prev_joint_pos = self.joint_pos[:, 0:7].clone()
 
         # Keypoint tensors.
@@ -270,6 +295,12 @@ class FactoryEnv(DirectRLEnv):
             )[1]
 
         self.keypoint_dist = torch.norm(self.keypoints_held - self.keypoints_fixed, p=2, dim=-1).mean(-1)
+
+        # get forcetorque data
+        if self.use_ft:
+            self.robot_force_torque = self._robot_av.get_measured_joint_forces()[:,8,:]
+
+        # reset update timestamp
         self.last_update_timestamp = self._robot._data._sim_timestamp
 
     def _get_observations(self):
@@ -304,6 +335,11 @@ class FactoryEnv(DirectRLEnv):
             "rot_threshold": self.rot_threshold,
             "prev_actions": prev_actions,
         }
+
+        if self.use_ft:
+            obs_dict["force_torque"] = self.robot_force_torque
+            state_dict["force_torque"] = self.robot_force_torque
+        
         obs_tensors = [obs_dict[obs_name] for obs_name in self.cfg.obs_order + ["prev_actions"]]
         obs_tensors = torch.cat(obs_tensors, dim=-1)
         state_tensors = [state_dict[state_name] for state_name in self.cfg.state_order + ["prev_actions"]]
@@ -312,11 +348,18 @@ class FactoryEnv(DirectRLEnv):
 
     def _reset_buffers(self, env_ids):
         """Reset buffers."""
-        self.ep_succeeded[env_ids] = 0
+        self.ep_succeeded[env_ids] = False
         self.ep_success_times[env_ids] = 0
-        self.ep_engaged[env_ids] = 0
+        self.ep_engaged[env_ids] = False
         self.ep_engaged_times[env_ids] = 0
-        self.ep_engaged_length[env_ids] = 0
+        self.ep_engaged_length[env_ids] = False
+
+        self.ep_ssv *= 0
+        if self.use_ft:
+            self.ep_max_force *= 0
+            self.ep_max_torque *= 0
+            self.ep_sum_force *= 0
+            self.ep_sum_torque *= 0
 
     def _pre_physics_step(self, action):
         """Apply policy actions with smoothing."""
@@ -327,6 +370,18 @@ class FactoryEnv(DirectRLEnv):
         self.actions = (
             self.cfg.ctrl.ema_factor * action.clone().to(self.device) + (1 - self.cfg.ctrl.ema_factor) * self.actions
         )
+
+        # update current values
+        #self._compute_intermediate_values(dt=self.physics_dt) 
+
+        # smoothness metrics
+        self.ep_ssv += (torch.linalg.norm(self.ee_linvel_fd, axis=1))
+        if self.use_ft:
+            self.ep_sum_force += torch.linalg.norm(self.robot_force_torque[:,:3], axis=1)
+            self.ep_sum_torque += torch.linalg.norm(self.robot_force_torque[:,3:], axis=1)
+            self.ep_max_force = torch.max(self.ep_max_force, torch.linalg.norm(self.robot_force_torque[:,:3], axis=1 ))
+            self.ep_max_torque = torch.max(self.ep_max_torque, torch.linalg.norm(self.robot_force_torque[:,3:]))
+
 
     def close_gripper_in_place(self):
         """Keep gripper in current position as gripper closes."""
@@ -460,10 +515,8 @@ class FactoryEnv(DirectRLEnv):
     def _get_curr_successes(self, success_threshold, check_rot=False):
         """Get success mask at current timestep."""
         curr_successes = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
-
         xy_dist = torch.linalg.vector_norm(self.target_held_base_pos[:, 0:2] - self.held_base_pos[:, 0:2], dim=1)
         z_disp = self.held_base_pos[:, 2] - self.target_held_base_pos[:, 2]
-
         is_centered = torch.where(xy_dist < 0.0025, torch.ones_like(curr_successes), torch.zeros_like(curr_successes))
         # Height threshold to target
         fixed_cfg = self.cfg_task.fixed_asset_cfg
@@ -477,11 +530,9 @@ class FactoryEnv(DirectRLEnv):
             z_disp < height_threshold, torch.ones_like(curr_successes), torch.zeros_like(curr_successes)
         )
         curr_successes = torch.logical_and(is_centered, is_close_or_below)
-
         if check_rot:
             is_rotated = self.curr_yaw < self.cfg_task.ee_success_yaw
             curr_successes = torch.logical_and(curr_successes, is_rotated)
-
         return curr_successes
 
     def _get_rewards(self):
@@ -501,8 +552,7 @@ class FactoryEnv(DirectRLEnv):
 
         # Get the time at which an episode first succeeds.
         first_success = torch.logical_and(curr_successes, torch.logical_not(self.ep_succeeded))
-        self.ep_succeeded[curr_successes] = 1
-
+        self.ep_succeeded[curr_successes] = True
         first_success_ids = first_success.nonzero(as_tuple=False).squeeze(-1)
         self.ep_success_times[first_success_ids] = self.episode_length_buf[first_success_ids].clone()
         nonzero_success_ids = self.ep_success_times.nonzero(as_tuple=False).squeeze(-1)
@@ -519,6 +569,14 @@ class FactoryEnv(DirectRLEnv):
             self.extras['Episode / engaged'] = self.ep_engaged
             self.extras['Episode / engage_times'] = self.ep_engaged_times
             self.extras['Episode / engage_lengths'] = self.ep_engaged_length
+            self.extras['smoothness'] = {}
+            if self.use_ft:
+                self.extras['smoothness']['Smoothness / Avg Force'] = self.ep_sum_force / (self.cfg.decimation * self.max_episode_length)
+                self.extras['smoothness']['Smoothness / Max Force'] = self.ep_max_force
+                self.extras['smoothness']['Smoothness / Avg Torque'] = self.ep_sum_torque / (self.cfg.decimation * self.max_episode_length)
+                self.extras['smoothness']['Smoothness / Max Torque'] = self.ep_max_torque 
+            self.extras['smoothness']['Smoothness / Sum Square Velocity'] = self.ep_ssv
+
 
         return rew_buf
 

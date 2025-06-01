@@ -19,10 +19,15 @@ echo "Env name: $task_name"
 #CUDA_LAUNCH_BLOCKING=1 
 HYDRA_FULL_ERROR=1 python -m learning.ppo_factory_trainer \
     --task=$task_name \
-    --max_steps=50000000 \
+    --max_steps=6000 \
     --num_envs=4 \
     --num_agents=1 \
     --exp_name=$3  \
     --seed=1 \
     --no_vids \
-    --decimation=16
+    --no_log_wandb \
+    --decimation=16 \
+    --history_sample_size=8 \
+    --use_ft_sensor
+
+#--ckpt_path="/home/hunter/good_hist_agent.pt" \

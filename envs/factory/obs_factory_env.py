@@ -1,33 +1,8 @@
 from .factory_env import FactoryEnv
-from .factory_env_cfg import FactoryEnvCfg
+from .factory_env_cfg import FactoryEnvCfg, OBS_DIM_CFG, STATE_DIM_CFG
 
 import torch
 
-OBS_DIM_CFG = {
-    "fingertip_pos": 3,
-    "fingertip_pos_rel_fixed": 3,
-    "fingertip_quat": 4,
-    "ee_linvel": 3,
-    "ee_angvel": 3,
-}
-
-STATE_DIM_CFG = {
-    "fingertip_pos": 3,
-    "fingertip_pos_rel_fixed": 3,
-    "fingertip_quat": 4,
-    "ee_linvel": 3,
-    "ee_angvel": 3,
-    "joint_pos": 7,
-    "held_pos": 3,
-    "held_pos_rel_fixed": 3,
-    "held_quat": 4,
-    "fixed_pos": 3,
-    "fixed_quat": 4,
-    "task_prop_gains": 6,
-    "ema_factor": 1,
-    "pos_threshold": 3,
-    "rot_threshold": 3,
-}
 
 HISTORY_STATE_CFG = [
     "fingertip_pos",
@@ -39,7 +14,8 @@ HISTORY_STATE_CFG = [
     "held_pos_rel_fixed",
     "held_quat",
     "ee_linacc",
-    "ee_angacc"
+    "ee_angacc",
+    "force_torque"
 ]
 class HistoryObsFactoryEnv(FactoryEnv):
     def __init__(
@@ -65,12 +41,27 @@ class HistoryObsFactoryEnv(FactoryEnv):
             cfg.obs_order.append("ee_linacc")
             cfg.obs_order.append("ee_angacc")
 
+        if self.calc_accel and cfg.use_force_sensor:
+            OBS_DIM_CFG['force_jerk'] = 6
+            OBS_DIM_CFG['force_snap'] = 6
+            cfg.obs_order.append('force_jerk')
+            cfg.obs_order.append('force_snap')
+
+        self.num_samples = self.cfg.history_samples
+        if self.num_samples == -1:
+            self.num_samples = self.h_len
+        
+        self.keep_idxs = torch.linspace(0.0, self.h_len - 1.0, self.num_samples).type(torch.int32)
+        if self.num_samples == 1: # special case where linspace gives first value but we always want to include last value
+            self.keep_idxs[0] = self.h_len - 1
+        print("Keep idxs:", self.keep_idxs)
+
         # Update number of obs/states
-        cfg.observation_space = sum([OBS_DIM_CFG[obs] for obs in cfg.obs_order]) * self.h_len
+        cfg.observation_space = sum([OBS_DIM_CFG[obs] for obs in cfg.obs_order]) * self.num_samples #self.h_len
         #if self.calc_accel:
         #    cfg.observation_space += 6 * self.h_len
         cfg.state_space = sum(
-            [STATE_DIM_CFG[state] * self.h_len if state in HISTORY_STATE_CFG else STATE_DIM_CFG[state] for state in cfg.state_order]
+            [STATE_DIM_CFG[state] * self.num_samples if state in HISTORY_STATE_CFG else STATE_DIM_CFG[state] for state in cfg.state_order]
         )
         #if self.calc_accel:
         #    cfg.state_space += 6 * self.h_len
@@ -95,6 +86,13 @@ class HistoryObsFactoryEnv(FactoryEnv):
             self.ee_linacc_history = torch.zeros_like(self.fingertip_midpoint_history)
             self.ee_angacc_history = torch.zeros_like(self.fingertip_midpoint_history)
 
+        if self.cfg.use_force_sensor:
+            self.force_history = torch.zeros((self.num_envs, self.h_len, 6), device=self.device)
+
+        if self.calc_accel and self.cfg.use_force_sensor:
+            self.force_jerk_history = torch.zeros((self.num_envs, self.h_len, 6), device=self.device)
+            self.force_snap_history = torch.zeros_like(self.force_jerk_history)
+
         # required for critic
         self.held_pos_history = torch.zeros_like(self.fingertip_midpoint_history)
         self.held_quat_history = torch.zeros_like(self.fingertip_quat_history)
@@ -111,6 +109,12 @@ class HistoryObsFactoryEnv(FactoryEnv):
             if self.calc_accel:
                 self.ee_linacc_history[:,:,:] = 0
                 self.ee_angacc_history[:,:,:] = 0
+            if self.cfg.use_force_sensor:
+                self.force_history[:,:,:] = self.robot_force_torque[:,None,:]
+            
+            if self.cfg.use_force_sensor and self.calc_accel:
+                self.force_jerk_history[:,:,:] = 0
+                self.force_snap_history[:,:,:] = 0
         else:
             self.fingertip_midpoint_history = torch.roll(self.fingertip_midpoint_history, -1, 1)
             self.fingertip_midpoint_history[:,-1,:] = self.fingertip_midpoint_pos
@@ -130,8 +134,22 @@ class HistoryObsFactoryEnv(FactoryEnv):
                 self.ee_linacc_history = torch.roll(self.ee_linacc_history, -1, 1)
                 self.ee_angacc_history = torch.roll(self.ee_angacc_history, -1, 1)
                 
-                self.ee_linacc_history[:,-1,:] = (self.ee_linvel_history[:,-2,:] - self.ee_linvel_history[:,-1,:]) / self.cfg.sim.dt
-                self.ee_angacc_history[:,-1,:] = (self.ee_angvel_history[:,-2,:] - self.ee_angvel_history[:,-1,:]) / self.cfg.sim.dt
+                self.ee_linacc_history[:,-1,:] = self.fd_last_vals(self.ee_linacc_history)
+                self.ee_angacc_history[:,-1,:] = self.fd_last_vals(self.ee_angacc_history)
+            
+            if self.cfg.use_force_sensor:
+                self.force_history = torch.roll(self.force_history, -1, 1)
+                self.force_history[:,-1,:] = self.robot_force_torque
+            
+            if self.cfg.use_force_sensor and self.calc_accel:
+                self.force_jerk_history = torch.roll(self.force_jerk_history, -1, 1)
+                self.force_snap_history = torch.roll(self.force_snap_history, -1, 1)
+
+                self.force_jerk_history[:,-1,:] = self.fd_last_vals(self.force_jerk_history)
+                self.force_snap_history[:,-1,:] = self.fd_last_vals(self.force_snap_history)
+
+    def fd_last_vals(self, history):
+        return (history[:,-2,:] - history[:,-1,:]) / self.cfg.sim.dt
 
     def _reset_idx(self, env_ids):
         super()._reset_idx(env_ids)
@@ -141,8 +159,6 @@ class HistoryObsFactoryEnv(FactoryEnv):
 
     def _pre_physics_step(self, action):
         super()._pre_physics_step(action)
-        # update current values
-        self._compute_intermediate_values(dt=self.physics_dt) 
         
         self._update_history(reset=False)
     
@@ -154,24 +170,24 @@ class HistoryObsFactoryEnv(FactoryEnv):
         prev_actions = self.actions.clone()
         
         obs_dict = {
-            "fingertip_pos": self.fingertip_midpoint_history.view( (self.num_envs, -1)),
-            "fingertip_pos_rel_fixed": (self.fingertip_midpoint_history - noisy_fixed_pos[:,None,:]).view( (self.num_envs, -1)),
-            "fingertip_quat": self.fingertip_quat_history.view( (self.num_envs, -1)),
-            "ee_linvel": self.ee_linvel_history.view( (self.num_envs, -1)),
-            "ee_angvel": self.ee_angvel_history.view( (self.num_envs, -1)),
+            "fingertip_pos": self.fingertip_midpoint_history[:, self.keep_idxs, :].view( (self.num_envs, -1)),
+            "fingertip_pos_rel_fixed": (self.fingertip_midpoint_history - noisy_fixed_pos[:,None,:])[:, self.keep_idxs, :].view( (self.num_envs, -1)),
+            "fingertip_quat": self.fingertip_quat_history[:, self.keep_idxs, :].view( (self.num_envs, -1)),
+            "ee_linvel": self.ee_linvel_history[:, self.keep_idxs, :].view( (self.num_envs, -1)),
+            "ee_angvel": self.ee_angvel_history[:, self.keep_idxs, :].view( (self.num_envs, -1)),
             "prev_actions": prev_actions,
         }
         
         state_dict = {
-            "fingertip_pos": self.fingertip_midpoint_history.view( (self.num_envs, -1)),
-            "fingertip_pos_rel_fixed": (self.fingertip_midpoint_history - self.fixed_pos_obs_frame[:,None,:]).view( (self.num_envs, -1)),
-            "fingertip_quat": self.fingertip_quat_history.view( (self.num_envs, -1)),
-            "ee_linvel": self.ee_linvel_history.view( (self.num_envs, -1)),
-            "ee_angvel": self.ee_angvel_history.view( (self.num_envs, -1)),
+            "fingertip_pos": self.fingertip_midpoint_history[:, self.keep_idxs, :].view( (self.num_envs, -1)),
+            "fingertip_pos_rel_fixed": (self.fingertip_midpoint_history - self.fixed_pos_obs_frame[:,None,:])[:, self.keep_idxs, :].view( (self.num_envs, -1)),
+            "fingertip_quat": self.fingertip_quat_history[:, self.keep_idxs, :].view( (self.num_envs, -1)),
+            "ee_linvel": self.ee_linvel_history[:, self.keep_idxs, :].view( (self.num_envs, -1)),
+            "ee_angvel": self.ee_angvel_history[:, self.keep_idxs, :].view( (self.num_envs, -1)),
             "joint_pos": self.joint_pos[:, 0:7],
-            "held_pos": self.held_pos_history.view ( (self.num_envs, -1) ),
-            "held_pos_rel_fixed": (self.held_pos_history - self.fixed_pos_obs_frame[:,None,:]).view( (self.num_envs, -1)),
-            "held_quat": self.held_quat_history.view( (self.num_envs, -1 )),
+            "held_pos": self.held_pos_history[:, self.keep_idxs, :].view ( (self.num_envs, -1) ),
+            "held_pos_rel_fixed": (self.held_pos_history - self.fixed_pos_obs_frame[:,None,:])[:, self.keep_idxs, :].view( (self.num_envs, -1)),
+            "held_quat": self.held_quat_history[:, self.keep_idxs, :].view( (self.num_envs, -1 )),
             "fixed_pos": self.fixed_pos,
             "fixed_quat": self.fixed_quat,
             "task_prop_gains": self.task_prop_gains,
@@ -181,11 +197,22 @@ class HistoryObsFactoryEnv(FactoryEnv):
         }
 
         if self.calc_accel:
-            obs_dict['ee_linacc'] = self.ee_linacc_history.view( (self.num_envs, -1 ))
-            obs_dict['ee_angacc'] = self.ee_angacc_history.view( (self.num_envs, -1 ))
+            obs_dict['ee_linacc'] = self.ee_linacc_history[:, self.keep_idxs, :].view( (self.num_envs, -1))
+            obs_dict['ee_angacc'] = self.ee_angacc_history[:, self.keep_idxs, :].view( (self.num_envs, -1))
 
-            state_dict['ee_linacc'] = self.ee_linacc_history.view( (self.num_envs, -1 ))
-            state_dict['ee_angacc'] = self.ee_angacc_history.view( (self.num_envs, -1 ))
+            state_dict['ee_linacc'] = self.ee_linacc_history[:, self.keep_idxs, :].view( (self.num_envs, -1))
+            state_dict['ee_angacc'] = self.ee_angacc_history[:, self.keep_idxs, :].view( (self.num_envs, -1))
+
+        if self.cfg.use_force_sensor:
+            obs_dict["force_torque"] = self.force_history[:, self.keep_idxs, :].view( (self.num_envs, -1))
+            state_dict["force_torque"] = self.force_history[:, self.keep_idxs, :].view( (self.num_envs, -1))
+
+        if self.cfg.use_force_sensor and self.calc_accel:
+            obs_dict["force_jerk"] = self.force_jerk_history[:, self.keep_idxs, :].view( (self.num_envs, -1))
+            obs_dict["force_snap"] = self.force_snap_history[:, self.keep_idxs, :].view( (self.num_envs, -1))
+            state_dict["force_jerk"] = self.force_jerk_history[:, self.keep_idxs, :].view( (self.num_envs, -1))
+            state_dict["force_snap"] = self.force_snap_history[:, self.keep_idxs, :].view( (self.num_envs, -1))
+
 
         if self.calc_accel:
             return {"policy": obs_dict, "critic": state_dict}

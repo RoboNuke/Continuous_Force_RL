@@ -111,6 +111,7 @@ class ExtSequentialTrainer(Trainer):
                 )[0] # we take only the sampled action
                 
                 next_states, rewards, terminated, truncated, infos = self.env.step(actions.clone())
+                
                 next_states = torch.cat( (self.env.unwrapped.obs_buf['policy'], self.env.unwrapped.obs_buf['critic']),dim=1)
                 if vid_env is not None and vid_env.is_recording():
                     self.env.cfg.recording = True
