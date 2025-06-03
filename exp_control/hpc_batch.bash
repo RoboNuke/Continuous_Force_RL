@@ -16,7 +16,7 @@
 #echo "Job Name:" $SLURM_JOB_NAME
 #echo "Array:" $SLURM_ARRAY_TASK_COUNT
 ##module load cuda/10.1
-source ~/.bashrc
+#source ~/.bashrc
 eval "$(command conda 'shell.bash' 'hook' 2> /dev/null)"
 conda activate isaaclab_24
 
