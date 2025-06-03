@@ -28,7 +28,7 @@ python -m learning.ppo_factory_trainer \
     --headless \
     --task=$task_name \
     --max_steps=50000000 \
-    --num_envs=$((256 * $num_agents)) \
+    --num_envs=$((24 * $num_agents)) \
     --num_agents=$num_agents \
     --exp_name="$4_$num_history_samples" \
     --no_vids \

@@ -47,18 +47,16 @@ agent:
 
   # logging and checkpoint
   track_layernorms: True
+
   experiment:
-    directory: "Tween_PiH_Tests"
-    experiment_name: "Tween_PiH"
+    directory: "Fragile_Tests"
+    experiment_name: "Fragile_PiH"
     write_interval: 150 #75 # set by env
     checkpoint_interval: 1500 # set by env
-    tags: ['fragile_PiH_Jun2_exps','factory','force']
-    group: 'Fragile_' # task name is added to this
+    tags: ['fragile_PiH_Jun2_exps','factory']
+    group: 'Fragile_' # the following is added: task-type_Obs-type_break-force_history-sample-size
     project: "Continuous_Force_RL" 
   
-  logging_tags:
-    obs_type: "basic" # "basic", "policy_history", "history", "DMP"
-    act_type: "basic" # "basic", "predict_action", "DMP"
 
   track_ckpts: True
   ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_tracker2.txt"

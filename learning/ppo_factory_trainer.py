@@ -60,7 +60,7 @@ if args_cli.num_agents > 1:
     n = args_cli.num_envs // args_cli.num_agents
     agents_scope = [[i * n, (i+1) * n] for i in range(args_cli.num_agents)]
 
-    #mp.set_start_method("spawn")
+    #mp.set_start_method('forkserver', force=True) #"spawn")
     mp_agent = MPAgent(args_cli.num_agents, agents_scope=agents_scope )
 
 # launch omniverse app
@@ -172,10 +172,26 @@ def main(
     agent_cfg['agent']['rollouts'] = max_rollout_steps
     agent_cfg['agent']['experiment']['write_interval'] = max_rollout_steps
     agent_cfg['agent']['experiment']['checkpoint_interval'] = max_rollout_steps * 10
+
+    # things below are just important to have in wandb config file
     agent_cfg['agent']['experiment']['tags'].append(env_cfg.task_name)
+    if args_cli.use_ft_sensor:
+        agent_cfg['agent']['experiment']['tags'].append("force")
+    else:
+        agent_cfg['agent']['experiment']['tags'].append("no-force")
+    agent_cfg['agent']['break_force'] = args_cli.break_force
     obs_type = args_cli.task.split("-")[3]
+    agent_cfg['agent']['obs_type'] = obs_type
     agent_cfg['agent']['experiment']['tags'].append(obs_type)
-    agent_cfg['agent']['experiment']['group'] += args_cli.task + "_" + str(args_cli.break_force)
+    task_type = args_cli.task.split("-")[2]
+    agent_cfg['agent']['experiment']['group'] += task_type + "_" + obs_type + "_" + str(args_cli.break_force) + "_" + str(args_cli.history_sample_size)
+    agent_cfg['agent']['history_sample_size'] = args_cli.history_sample_size
+    agent_cfg['agent']['decimation'] = args_cli.decimation
+    agent_cfg['agent']['sim_hz'] = 1 / env_cfg.sim.dt
+    agent_cfg['agent']['policy_hz'] = args_cli.policy_hz
+
+    agent_cfg['agent']['model_params'] = agent_cfg['models']
+    agent_cfg['agent']['num_envs'] = args_cli.num_envs
     print("max rollout steps:", max_rollout_steps)
     assert args_cli.num_envs % args_cli.num_agents == 0, f'Number of agents {args_cli.num_agents} does not even divide into number of envs {args_cli.num_envs}'
     env_per_agent = args_cli.num_envs // args_cli.num_agents
@@ -203,7 +219,7 @@ def main(
         agent_cfg['agent']['learning_rate_scheduler'] = KLAdaptiveLR
 
     #print("Decimation:", dec)
-    agent_cfg['agent']['env_cfg'] = env_cfg
+    #agent_cfg['agent']['env_cfg'] = env_cfg
     agent_cfgs = [copy.deepcopy(agent_cfg) for _ in range(args_cli.num_agents)]
     # randomly sample a seed if seed = -1
     for agent_idx, a_cfg in enumerate(agent_cfgs):
@@ -348,7 +364,7 @@ def main(
             "entity":args_cli.wandb_entity,
             "api_key":args_cli.wandb_api_key,
             "tags":a_cfg['agent']['experiment']['tags'],
-            "group":a_cfg['agent']['experiment']['group'] + env_cfg.task_name,
+            "group":a_cfg['agent']['experiment']['group'],
             #"tags":args_cli.wandb_tags,
             #"group":args_cli.wandb_group,
             "run_name":a_cfg["agent"]["experiment"]["experiment_name"] + f"_{a_idx}"
@@ -395,7 +411,7 @@ def main(
             lr=agent_cfgs[i]['agent']['learning_rate'],
             betas=(0.999, 0.999)
         )
-
+    print("Agents generated")
     agents = None
     if args_cli.num_agents > 1:
         mp_agent.set_agents(agent_list)
@@ -405,6 +421,7 @@ def main(
         if args_cli.ckpt_path != None:
             print("Loading: ", args_cli.ckpt_path)
             agents.load(args_cli.ckpt_path)
+    print("Agents set")
 
     #TODO undo for vids later   
     if vid:

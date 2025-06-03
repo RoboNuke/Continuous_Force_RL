@@ -1,6 +1,7 @@
 import torch
 import torch.multiprocessing as mp
 from typing import List, Optional, Union, Any
+
 def fn_processor(process_index, *args):
     #print(f"[INFO] Processor {process_index}: started")
 
@@ -23,7 +24,7 @@ def fn_processor(process_index, *args):
     while True:
         msg = pipe.recv()
         task = msg["task"]
-
+        
         # terminate process
         if task == "terminate":
             break
@@ -153,6 +154,7 @@ def fn_processor(process_index, *args):
         elif task == "reset_tracking":
             agent.reset_tracking()
             barrier.wait()
+        
         #queue.get()
 
 
@@ -180,7 +182,6 @@ class MPAgent():
             self.producer_pipes.append(pipe_write)
             self.consumer_pipes.append(pipe_read)
             self.queues.append(mp.Queue())
-
 
         # spawn and wait for all processes to start
         for i in range(self.num_agents):
