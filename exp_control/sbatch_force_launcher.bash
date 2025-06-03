@@ -19,6 +19,6 @@ do
                 $num_agents \
                 $1 \
                 16 \
-                "${forces[$force_idx]}"
+                ${forces[$force_idx]}
     done
 done
