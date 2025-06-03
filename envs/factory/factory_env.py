@@ -9,12 +9,13 @@ import torch
 import carb
 
 # different isaac sim versions
-try:
-    import isaacsim.core.utils.torch as torch_utils
-except:
-    import omni.isaac.core.utils.torch as torch_utils
+#try:
+#    import isaacsim.core.utils.torch as torch_utils
+#except:
+import omni.isaac.core.utils.torch as torch_utils
 
 # isaaclab versions
+"""
 try:
     import isaaclab.sim as sim_utils
     from isaaclab.assets import Articulation
@@ -24,13 +25,14 @@ try:
     from isaaclab.utils.math import axis_angle_from_quat
     # TODO get ArticulationView equivalent (robotView?)
 except:
-    import omni.isaac.lab.sim as sim_utils
-    from omni.isaac.lab.assets import Articulation
-    from omni.isaac.lab.envs import DirectRLEnv
-    from omni.isaac.lab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
-    from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
-    from omni.isaac.lab.utils.math import axis_angle_from_quat
-    from omni.isaac.core.articulations import ArticulationView
+"""
+import omni.isaac.lab.sim as sim_utils
+from omni.isaac.lab.assets import Articulation
+from omni.isaac.lab.envs import DirectRLEnv
+from omni.isaac.lab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
+from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
+from omni.isaac.lab.utils.math import axis_angle_from_quat
+from omni.isaac.core.articulations import ArticulationView
 from . import factory_control as fc
 from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
 from omni.isaac.lab.sensors import TiledCamera
