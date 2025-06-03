@@ -61,7 +61,7 @@ agent:
     act_type: "basic" # "basic", "predict_action", "DMP"
 
   track_ckpts: False
-  ckpt_tracker_path: "" #"/nfs/stak/users/brownhun/ckpt_tracker.txt"
+  ckpt_tracker_path: "" #"/nfs/stak/users/brownhun/ckpt_tracker2.txt"
 video_tracking:
   # note to use this must run with --video --enable_cameras
   record_training: True
