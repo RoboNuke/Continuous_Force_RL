@@ -22,7 +22,8 @@ from filelock import FileLock
 
 class WandbLoggerPPO(PPO):
     def __del__(self):
-        self.data_manager.finish()
+        if self.log_wandb:
+            self.data_manager.finish()
 
     def __init__(
             self,
