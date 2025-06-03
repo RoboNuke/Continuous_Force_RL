@@ -21,9 +21,9 @@ import subprocess
 from filelock import FileLock
 
 class WandbLoggerPPO(PPO):
-    def __del__(self):
-        if self.log_wandb:
-            self.data_manager.finish()
+    #def __del__(self):
+    #    if self.log_wandb:
+    #        self.data_manager.finish()
 
     def __init__(
             self,
