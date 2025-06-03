@@ -28,7 +28,7 @@ HYDRA_FULL_ERROR=1 python -m learning.ppo_factory_trainer \
     --no_log_wandb \
     --decimation=16 \
     --history_sample_size=16 \
-    --break_force=1.0 \
-    --ckpt_path="/home/hunter/good_hist_agent.pt" 
+    --break_force=1.0 #\
+    #--ckpt_path="/home/hunter/good_hist_agent.pt" 
 
 

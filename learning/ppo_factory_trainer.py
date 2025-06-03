@@ -163,6 +163,7 @@ def main(
     env_cfg.decimation = args_cli.decimation
     env_cfg.history_samples = args_cli.history_sample_size
     env_cfg.sim.dt = (1/args_cli.policy_hz) / args_cli.decimation
+    env_cfg.sim.render_interval=args_cli.decimation
     print(f"Time scale config parameters\n\tDec: {env_cfg.decimation}\n\tSim_dt:{1/env_cfg.sim.dt}\n\tPolicy_Hz:{args_cli.policy_hz}")
     
     """Train with skrl agent."""
