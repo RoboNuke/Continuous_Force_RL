@@ -50,12 +50,17 @@ class FactoryEnv(DirectRLEnv):
         cfg.state_space += cfg.action_space
         self.cfg_task = cfg.task
         self.use_ft = cfg.use_force_sensor
+        self.break_force = cfg.break_force
+        self.fragile =  (self.break_force > 0)
+        
         super().__init__(cfg, render_mode, **kwargs)
+
+
 
         self._set_body_inertias()
         self._init_tensors()
         self._set_default_dynamics_parameters()
-        if self.use_ft:
+        if self.use_ft or self.fragile:
             self._init_force_torque_sensor()
         self._compute_intermediate_values(dt=self.physics_dt)
 
@@ -171,7 +176,7 @@ class FactoryEnv(DirectRLEnv):
             raise NotImplementedError("Task not implemented")
 
         # force-torque sensor data
-        if self.use_ft:
+        if self.use_ft or self.fragile:
             self.robot_force_torque = torch.zeros((self.num_envs, 6), dtype=torch.float32, device=self.device)
 
         self.ep_succeeded = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
@@ -181,7 +186,7 @@ class FactoryEnv(DirectRLEnv):
         self.ep_engaged_length = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
 
         self.ep_ssv = torch.zeros( (self.num_envs,), device=self.device)
-        if self.use_ft:
+        if self.use_ft or self.fragile:
             self.ep_max_force = torch.zeros_like(self.ep_ssv)
             self.ep_max_torque = torch.zeros_like(self.ep_ssv)
             self.ep_sum_torque = torch.zeros_like(self.ep_ssv)
@@ -297,7 +302,7 @@ class FactoryEnv(DirectRLEnv):
         self.keypoint_dist = torch.norm(self.keypoints_held - self.keypoints_fixed, p=2, dim=-1).mean(-1)
 
         # get forcetorque data
-        if self.use_ft:
+        if self.use_ft or self.fragile:
             self.robot_force_torque = self._robot_av.get_measured_joint_forces()[:,8,:]
 
         # reset update timestamp
@@ -354,12 +359,12 @@ class FactoryEnv(DirectRLEnv):
         self.ep_engaged_times[env_ids] = 0
         self.ep_engaged_length[env_ids] = False
 
-        self.ep_ssv *= 0
-        if self.use_ft:
-            self.ep_max_force *= 0
-            self.ep_max_torque *= 0
-            self.ep_sum_force *= 0
-            self.ep_sum_torque *= 0
+        self.ep_ssv[env_ids] = 0
+        if self.use_ft or self.fragile:
+            self.ep_max_force[env_ids] = 0
+            self.ep_max_torque[env_ids] = 0
+            self.ep_sum_force[env_ids] = 0
+            self.ep_sum_torque[env_ids] = 0
 
     def _pre_physics_step(self, action):
         """Apply policy actions with smoothing."""
@@ -376,7 +381,7 @@ class FactoryEnv(DirectRLEnv):
 
         # smoothness metrics
         self.ep_ssv += (torch.linalg.norm(self.ee_linvel_fd, axis=1))
-        if self.use_ft:
+        if self.use_ft or self.fragile:
             self.ep_sum_force += torch.linalg.norm(self.robot_force_torque[:,:3], axis=1)
             self.ep_sum_torque += torch.linalg.norm(self.robot_force_torque[:,3:], axis=1)
             self.ep_max_force = torch.max(self.ep_max_force, torch.linalg.norm(self.robot_force_torque[:,:3], axis=1 ))
@@ -509,8 +514,28 @@ class FactoryEnv(DirectRLEnv):
     def _get_dones(self):
         """Update intermediate values used for rewards and observations."""
         self._compute_intermediate_values(dt=self.physics_dt)
-        time_out = self.episode_length_buf >= self.max_episode_length #- 1
-        return time_out, time_out
+        #time_out = self.episode_length_buf >= self.max_episode_length #- 1
+        if self.common_step_counter % self.max_episode_length == 0:
+            time_out = torch.ones_like(self.ep_succeeded)
+        else:
+            time_out = torch.zeros_like(self.ep_succeeded)
+
+        terminated = torch.zeros_like(self.ep_succeeded)
+
+        if self.fragile:
+            # check for force violation here
+            force_mag = torch.linalg.norm(self.robot_force_torque[:,:3], axis=1)
+            terminated[force_mag >= self.break_force] = True
+
+        # check for successes
+        terminated[
+            self._get_curr_successes(
+                success_threshold=self.cfg_task.success_threshold, 
+                check_rot=self.cfg_task.name == "nut_thread"
+            )
+        ] = True
+        
+        return terminated, time_out
 
     def _get_curr_successes(self, success_threshold, check_rot=False):
         """Get success mask at current timestep."""
@@ -563,14 +588,14 @@ class FactoryEnv(DirectRLEnv):
 
         self.prev_actions = self.actions.clone()
 
-        if torch.any(self._get_dones()[0]): #self.reset_buf): # only log when reset from termination steps
+        if torch.any(self._get_dones()[1]): #self.reset_buf): # only log when reset from termination steps
             self.extras['Episode / successes'] = self.ep_succeeded
             self.extras['Episode / success_times'] = self.ep_success_times
             self.extras['Episode / engaged'] = self.ep_engaged
             self.extras['Episode / engage_times'] = self.ep_engaged_times
             self.extras['Episode / engage_lengths'] = self.ep_engaged_length
             self.extras['smoothness'] = {}
-            if self.use_ft:
+            if self.use_ft or self.fragile:
                 self.extras['smoothness']['Smoothness / Avg Force'] = self.ep_sum_force / (self.cfg.decimation * self.max_episode_length)
                 self.extras['smoothness']['Smoothness / Max Force'] = self.ep_max_force
                 self.extras['smoothness']['Smoothness / Avg Torque'] = self.ep_sum_torque / (self.cfg.decimation * self.max_episode_length)
@@ -638,11 +663,34 @@ class FactoryEnv(DirectRLEnv):
         """
         super()._reset_idx(env_ids)
 
-        self._set_assets_to_default_pose(env_ids)
-        self._set_franka_to_default_pose(joints=self.cfg.ctrl.reset_joints, env_ids=env_ids)
-        self.step_sim_no_action()
+        if env_ids is None:
+            env_ids = torch.tensor(range(self.num_envs), device=self.device)
+        if env_ids.size()[0] == self.num_envs:
 
-        self.randomize_initial_state(env_ids)
+            self._set_assets_to_default_pose(env_ids)
+            self._set_franka_to_default_pose(joints=self.cfg.ctrl.reset_joints, env_ids=env_ids)
+            self.step_sim_no_action()
+
+            self.randomize_initial_state(env_ids)
+
+            self.start_state = self.scene.get_state()
+
+        else:
+            # partial reset, reset indexes to fixed state
+            # this shuffles the tensors
+            new_idxs = torch.randint(self.num_envs, (env_ids.size()[0],), device=self.device)
+            for art_name in self.scene.articulations.keys():
+                #print("Articulation Name:", art_name)
+                pose = self.start_state['articulation'][art_name]['root_pose'][new_idxs,:]
+                pose[:,:3] = pose[:,:3] - self.scene.env_origins[new_idxs] + self.scene.env_origins[env_ids]
+                vel = self.start_state['articulation'][art_name]['root_velocity'][new_idxs,:]
+                jnt_pos = self.start_state['articulation'][art_name]['joint_position'][new_idxs,:]
+                jnt_vel = self.start_state['articulation'][art_name]['joint_velocity'][new_idxs,:]
+                self.scene[art_name].write_root_pose_to_sim(pose, env_ids=env_ids)
+                self.scene[art_name].write_root_velocity_to_sim(vel, env_ids=env_ids)
+                self.scene[art_name].write_joint_state_to_sim(jnt_pos, jnt_vel, env_ids=env_ids)
+                self.scene[art_name].reset(env_ids)
+
 
     def _get_target_gear_base_offset(self):
         """Get offset of target gear from the gear base asset."""

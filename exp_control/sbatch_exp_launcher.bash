@@ -7,7 +7,7 @@ num_tasks=1
 num_obs=3
 
 nick_names=("PiH" "Gear" "Nut")
-
+break_force="-1.0"
 for task_idx in $(seq 0 $((num_tasks - 1)))
 do
     for obs_idx in $(seq 0 $((num_obs - 1)))
@@ -17,6 +17,7 @@ do
                 $obs_idx \
                 $num_agents \
                 $1 \
-                16
+                16 \
+                $break_force
     done
 done

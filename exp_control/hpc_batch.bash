@@ -9,8 +9,8 @@
 #SBATCH --gres=gpu:1            # number of GPUs to request (default 0)
 #SBATCH --mem=32G               # request 10 gigabytes memory (per node, default depends on node)
 #SBATCH -c 8                   # number of cores/threads per task (default 1)
-#SBATCH -o ../factory_outs/%A_%a.out		# name of output file for this submission script
-#SBATCH -e ../factory_outs/%A_%a.err		# name of error file for this submission script
+#SBATCH -o ../tween_outs/%A_%a.out		# name of output file for this submission script
+#SBATCH -e ../tween_outs/%A_%a.err		# name of error file for this submission script
 # load any software environment module required for app (e.g. matlab, gcc, cuda)
 
 #echo "Job Name:" $SLURM_JOB_NAME
@@ -33,4 +33,4 @@ echo "Free memory:$int_free"
 #fi
 
 #echo "call run_exp.bash"
-bash "exp_control/run_exp.bash" $1 $2 $3 "$4_$SLURM_ARRAY_TASK_ID" $5
+bash "exp_control/run_exp.bash" $1 $2 $3 "$4_$SLURM_ARRAY_TASK_ID" $5 $6

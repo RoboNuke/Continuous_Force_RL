@@ -23,6 +23,7 @@ parser.add_argument("--decimation", type=int, default=8, help="How many simulati
 parser.add_argument("--history_sample_size", type=int, default=8, help="How many samples to keep from sim steps, spread evenly from zero to decimation-1")
 parser.add_argument("--policy_hz", type=int, default=15, help="Rate in hz that the policy should get new observations")
 parser.add_argument("--use_ft_sensor", default=False, action="store_true", help="Addes force sensor data to the observation space")
+parser.add_argument("--break_force", type=float, default=-1.0, help="Force at which the held object breaks (peg, gear or nut)")
 
 # logging
 parser.add_argument("--exp_name", type=str, default=None, help="What to name the experiment on WandB")
@@ -147,6 +148,9 @@ def main(
     global mp_agent
     env_cfg.filter_collisions = True
 
+    """ Set up fragileness """
+    env_cfg.break_force = args_cli.break_force
+
     if args_cli.use_ft_sensor:
         env_cfg.use_force_sensor = True
         env_cfg.obs_order.append("force_torque")
@@ -195,6 +199,7 @@ def main(
         agent_cfg['agent']['learning_rate_scheduler'] = KLAdaptiveLR
 
     #print("Decimation:", dec)
+    agent_cfg['agent']['env_cfg'] = env_cfg
     agent_cfgs = [copy.deepcopy(agent_cfg) for _ in range(args_cli.num_agents)]
     # randomly sample a seed if seed = -1
     for agent_idx, a_cfg in enumerate(agent_cfgs):

@@ -208,7 +208,8 @@ class ExtSequentialTrainer(Trainer):
                     actions[~alive_mask, :] *= 0.0
                     # step the environments
                     next_states, rewards, terminated, truncated, infos = self.env.step(actions)
-                    
+                    if torch.any(truncated):
+                        print("Truncated" )
                     next_states = torch.cat( (self.env.unwrapped.obs_buf['policy'], self.env.unwrapped.obs_buf['critic']), dim=1)
                     
                     if vid_env is not None and vid_env.is_recording():

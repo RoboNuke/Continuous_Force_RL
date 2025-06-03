@@ -6,6 +6,7 @@ task_idx=$1
 obs_idx=$2
 num_agents=$3
 num_history_samples=$5
+break_force=$6
 #if [ "$exp_idx" -gt 4 ]; then
 #  exp_idx=0
 #fi
@@ -33,7 +34,8 @@ python -m learning.ppo_factory_trainer \
     --no_vids \
     --decimation=16 \
     --history_sample_size=$num_history_samples \
-    --use_ft_sensor
+    --use_ft_sensor \
+    --break_force=$break_force
     
 
 
