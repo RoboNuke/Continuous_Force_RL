@@ -19,7 +19,7 @@
 source ~/.bashrc
 eval "$(command conda 'shell.bash' 'hook' 2> /dev/null)"
 conda activate isaaclab_24
-
+echo $CONDA_DEFAULT_ENV
 free_memory=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits)
 numeric_string="${free_memory//[^0-9]/}"
 int_free=$((numeric_string))
