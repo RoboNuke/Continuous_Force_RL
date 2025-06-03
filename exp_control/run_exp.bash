@@ -20,7 +20,7 @@ task_name="${task_name/TaskType/${tasks[task_idx]}}"
 echo "Env name: $task_name"
 
 echo "Num Agents: $num_agents"
-
+echo "Break force: $break_force"
 
 exp_name="$4_${tasks[task_idx]}_${obs_modes[obs_idx]}"
 echo $task_name
