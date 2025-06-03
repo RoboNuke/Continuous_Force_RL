@@ -172,7 +172,7 @@ def main(
     agent_cfg['agent']['experiment']['tags'].append(env_cfg.task_name)
     obs_type = args_cli.task.split("-")[3]
     agent_cfg['agent']['experiment']['tags'].append(obs_type)
-    agent_cfg['agent']['experiment']['group'] += args_cli.task + "_" + args_cli.break_force
+    agent_cfg['agent']['experiment']['group'] += args_cli.task + "_" + str(args_cli.break_force)
     print("max rollout steps:", max_rollout_steps)
     assert args_cli.num_envs % args_cli.num_agents == 0, f'Number of agents {args_cli.num_agents} does not even divide into number of envs {args_cli.num_envs}'
     env_per_agent = args_cli.num_envs // args_cli.num_agents
