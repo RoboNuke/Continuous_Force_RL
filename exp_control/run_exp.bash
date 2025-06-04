@@ -34,7 +34,6 @@ python -m learning.ppo_factory_trainer \
     --no_vids \
     --decimation=16 \
     --history_sample_size=$num_history_samples \
-    --use_ft_sensor \
     --break_force=$break_force
     
 
