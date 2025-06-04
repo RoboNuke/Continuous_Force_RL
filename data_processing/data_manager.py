@@ -103,7 +103,7 @@ class DataManager():
             }, step=step)
 
     def add_histogram(self, name, data, step):
-        wandb.log({name: wandb.Histogram(data)}, step=step)
+        wandb.log({name: wandb.Histogram(data), "env_step": step})
 
     def add_ckpt(self, name, ckpt_path):
         """

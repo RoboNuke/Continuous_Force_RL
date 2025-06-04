@@ -57,6 +57,8 @@ class WandbLoggerPPO(PPO):
             state_size=observation_space
         self.state_size = state_size
 
+        self.track_input_histogram = cfg['track_input']
+
     def init(self, trainer_cfg: Optional[Mapping[str, Any]] = None) -> None:
         """Initialize the agent
 
@@ -440,6 +442,14 @@ class WandbLoggerPPO(PPO):
                         torch.max( infos['smoothness'][skey] ).item()
                     )
             """
+            if self.track_input_histogram:
+                #self.data_manager.add_histogram(prefix + "Histograms / Input", states.view(-1).detach().cpu().numpy(), timestep+150)
+                self.track_data("Observation / " + prefix + " Input (max)", torch.max(states).item())
+                self.track_data("Observation / " + prefix + " Input (mean)", torch.mean(states).item())
+                self.track_data("Observation / " + prefix + " Input (min)", torch.min(states).item())
+                #self.track_data("Observation / " + prefix + " Critic (max)")
+                #self.track_data("Observation / " + prefix + " Critic (mean)")
+                #self.track_data("Observation / " + prefix + " Critic (min)")
             # record step reward data
             self.tracking_data[prefix + "Reward / Instantaneous reward (max)"].append(torch.max(rewards).item())
             self.tracking_data[prefix + "Reward / Instantaneous reward (min)"].append(torch.min(rewards).item())

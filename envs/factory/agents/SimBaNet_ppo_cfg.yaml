@@ -47,14 +47,14 @@ agent:
 
   # logging and checkpoint
   track_layernorms: True
-
+  track_input: True
   experiment:
-    directory: "Fragile_Tests"
-    experiment_name: "Fragile_PiH"
+    directory: "DMP_test"
+    experiment_name: "DMP_test"
     write_interval: 150 #75 # set by env
     checkpoint_interval: 1500 # set by env
-    tags: ['fragile_PiH_Jun2_exps','factory']
-    group: 'Fragile_' # the following is added: task-type_Obs-type_break-force_history-sample-size
+    tags: ['DMP_PiH_Jun4_exps','factory']
+    group: 'DMP_Test' # the following is added: task-type_Obs-type_break-force_history-sample-size
     project: "Continuous_Force_RL" 
   
 
