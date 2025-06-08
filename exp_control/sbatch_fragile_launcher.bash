@@ -23,7 +23,7 @@ do
                 $num_agents \
                 $1 \
                 16 \
-                ${forces[$force_idx]} \
+                "${forces[$force_idx]}" \
                 $use_ft_sensor \
                 $exp_tag \
                 $wandb_group_prefix
