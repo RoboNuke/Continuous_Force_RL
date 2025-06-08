@@ -54,6 +54,8 @@ agent:
     write_interval: 150 #75 # set by env
     checkpoint_interval: 1500 # set by env
     project: "OVERRIDE_WITH_ARG" 
+    tags: []
+    group: ""
   
 
   track_ckpts: False
