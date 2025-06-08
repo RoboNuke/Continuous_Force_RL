@@ -38,4 +38,4 @@ echo "Free memory:$int_free"
 
 #echo "call run_exp.bash"
 echo $6
-bash "exp_control/run_exp.bash" $1 $2 $3 "$4_$SLURM_ARRAY_TASK_ID" $5 $6
+bash "exp_control/run_exp.bash" $1 $2 $3 "$4_$SLURM_ARRAY_TASK_ID" $5 $6 $7 $8 $9

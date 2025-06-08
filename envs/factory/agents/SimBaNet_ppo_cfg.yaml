@@ -49,16 +49,14 @@ agent:
   track_layernorms: True
   track_input: True
   experiment:
-    directory: "DMP_test"
-    experiment_name: "DMP_test"
+    directory: "DEFAULT_DIRECTORY" # pass arg to change this!
+    experiment_name: "DEFAULT_EXP_NAME" # pass arg to change this
     write_interval: 150 #75 # set by env
     checkpoint_interval: 1500 # set by env
-    tags: ['DMP_PiH_Jun4_exps','factory']
-    group: 'DMP_Test' # the following is added: task-type_Obs-type_break-force_history-sample-size
-    project: "Continuous_Force_RL" 
+    project: "OVERRIDE_WITH_ARG" 
   
 
-  track_ckpts: True
+  track_ckpts: False
   ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_tracker2.txt"
 video_tracking:
   # note to use this must run with --video --enable_cameras

@@ -217,6 +217,11 @@ class HistoryObsFactoryEnv(FactoryEnv):
         if self.calc_accel:
             return {"policy": obs_dict, "critic": state_dict}
         
+        # scale force readings
+        if self.cfg.use_force_sensor:
+            obs_dict['force_torque'] = torch.tanh( 0.0011 * obs_dict['force_torque'])
+            state_dict['force_torque'] = torch.tanh( 0.0011 * state_dict['force_torque'])
+
         obs_tensors = [obs_dict[obs_name] for obs_name in self.cfg.obs_order + ["prev_actions"]]
         
         obs_tensors = torch.cat(obs_tensors, dim=-1)

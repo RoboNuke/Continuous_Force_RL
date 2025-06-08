@@ -5,8 +5,13 @@ obs_modes=( "Local" "HistoryObs" "DMPObs")
 task_idx=$1
 obs_idx=$2
 num_agents=$3
+# 4 is exp name
 num_history_samples=$5
 break_force=$6
+use_ft_sensor=$7
+exp_tag=$8
+prefix=$9
+
 #if [ "$exp_idx" -gt 4 ]; then
 #  exp_idx=0
 #fi
@@ -24,13 +29,19 @@ echo "Break force: $break_force"
 
 exp_name="$4_${tasks[task_idx]}_${obs_modes[obs_idx]}"
 echo $task_name
+current_datetime=$(date +"%Y-%m-%d %H:%M:%S")
 python -m learning.ppo_factory_trainer \
     --headless \
     --task=$task_name \
+    --wandb_project="Continuous_Force_RL"\
+    --use_ft_sensor=$use_ft_sensor \
+    --exp_tag=$exp_tag \
+    --wandb_group_prefix=$prefix \
     --max_steps=50000000 \
     --num_envs=$((256 * $num_agents)) \
     --num_agents=$num_agents \
-    --exp_name="$4_$break_force" \
+    --exp_name="$4_${obs_modes[$obs_idx]}_$break_force_$current_datetime" \
+    --exp_dir="$4_$current_datetime" \
     --no_vids \
     --decimation=16 \
     --history_sample_size=$num_history_samples \

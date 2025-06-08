@@ -202,15 +202,15 @@ class DMPObsFactoryEnv(HistoryObsFactoryEnv):
                     if 'pos' in key:
                         self.y = old_obs[obs_type][key].detach().clone().view(self.num_envs, self.dec, 3)
                         self.pos_dmp.learnWeightsCSDT(self.y, self.dy, self.ddy, self.t)
-                        self.new_obs[obs_type][key] = self.pos_dmp.ws.view(self.num_envs, 3 * self.num_weights) / 1500
+                        self.new_obs[obs_type][key] = self.pos_dmp.ws.view(self.num_envs, 3 * self.num_weights) #/ 1500
                     elif 'quat' in key:
                         self.ay = old_obs[obs_type][key].detach().clone().view(self.num_envs, self.dec, 4)
                         self.ang_dmp.learnWeightsCSDT(self.ay, self.day, self.dday, self.t)
-                        self.new_obs[obs_type][key] = self.ang_dmp.ws[:,:,1:].reshape(self.num_envs, 3 * self.num_weights) / 1500
+                        self.new_obs[obs_type][key] = self.ang_dmp.ws[:,:,1:].reshape(self.num_envs, 3 * self.num_weights) #/ 1500
                     elif 'force' in key:
                         self.f = old_obs[obs_type][key].detach().clone().view(self.num_envs, self.dec, 6)
                         self.force_dmp.learnWeightsCSDT(self.f, self.df, self.ddf, self.t)
-                        self.new_obs[obs_type][key] = self.force_dmp.ws.view(self.num_envs, 6 * self.num_weights) / 1500
+                        self.new_obs[obs_type][key] = self.force_dmp.ws.view(self.num_envs, 6 * self.num_weights) #/ 1500
         
         
         obs_tensors = [self.new_obs['policy'][obs_name].view( (self.num_envs, -1 )) for obs_name in self.dmp_obs_order ]

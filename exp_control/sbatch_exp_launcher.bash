@@ -8,6 +8,10 @@ num_obs=3
 
 nick_names=("PiH" "Gear" "Nut")
 break_force=-1
+use_ft_sensor=1
+exp_tag="jun8_tests"
+wandb_group_prefix="NoForce"
+
 for task_idx in $(seq 0 $((num_tasks - 1)))
 do
     for obs_idx in $(seq 2 $((num_obs - 1)))
@@ -18,6 +22,9 @@ do
                 $num_agents \
                 $1 \
                 16 \
-                $break_force
+                $break_force \
+                $use_ft_sensor \
+                $exp_tag \
+                $wandb_group_prefix
     done
 done

@@ -10,6 +10,10 @@ obs_idx=1
 
 break_force="-1.0"
 samples=(1 4 8 12 16)
+use_ft_sensor=1
+exp_tag="jun8_tests"
+wandb_group_prefix="NoForce"
+
 for sample_idx in $(seq 0 $((5 - 1)))
 do
     sbatch -J "${nick_names[$task_idx]}_$1_${samples[$sample_idx]}" -a 1-$num_exp_per exp_control/hpc_batch.bash \
@@ -18,5 +22,8 @@ do
             $num_agents \
             $1 \
             "${samples[$sample_idx]}" \
-            $break_force
+            $break_force \
+            $use_ft_sensor \
+            $exp_tag \
+            $wandb_group_prefix
 done

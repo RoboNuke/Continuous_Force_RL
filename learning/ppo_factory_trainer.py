@@ -24,7 +24,8 @@ parser.add_argument("--history_sample_size", type=int, default=8, help="How many
 parser.add_argument("--policy_hz", type=int, default=15, help="Rate in hz that the policy should get new observations")
 parser.add_argument("--use_ft_sensor", default=False, action="store_true", help="Addes force sensor data to the observation space")
 parser.add_argument("--break_force", type=float, default=-1.0, help="Force at which the held object breaks (peg, gear or nut)")
-
+parser.add_argument("--exp_tag", type=str, default="debug", help="Tag to apply to exp in wandb")
+parser.add_argument("--wandb_group_prefix", type=str, default="", help="Prefix of wandb group to add this to")
 # logging
 parser.add_argument("--exp_name", type=str, default=None, help="What to name the experiment on WandB")
 parser.add_argument("--exp_dir", type=str, default=None, help="Directory to store the experiment in")
@@ -36,6 +37,7 @@ parser.add_argument("--no_vids", action="store_true", default=False, help="Set u
 parser.add_argument("--no_log_wandb", action="store_false", default=True, help="Disables the wandb logger")
 parser.add_argument("--wandb_entity", type=str, default="hur", help="Name of wandb entity")
 parser.add_argument("--wandb_api_key", type=str, default="-1", help="API key for WandB")
+parser.add_argument("--wandb_project", type=str, default="Continuous_Force_RL", help="Wandb project to save logging to")
 
 
 # append AppLauncher cli args
@@ -153,6 +155,7 @@ def main(
     """ Set up fragileness """
     env_cfg.break_force = args_cli.break_force
 
+    env_cfg.use_force_sensor = False
     if args_cli.use_ft_sensor:
         env_cfg.use_force_sensor = True
         env_cfg.obs_order.append("force_torque")
@@ -175,6 +178,7 @@ def main(
 
     # things below are just important to have in wandb config file
     agent_cfg['agent']['experiment']['tags'].append(env_cfg.task_name)
+    agent_cfg['agent']['experiment']['project'] = args_cli.wandb_project
     if args_cli.use_ft_sensor:
         agent_cfg['agent']['experiment']['tags'].append("force")
     else:
@@ -184,7 +188,7 @@ def main(
     agent_cfg['agent']['obs_type'] = obs_type
     agent_cfg['agent']['experiment']['tags'].append(obs_type)
     task_type = args_cli.task.split("-")[2]
-    agent_cfg['agent']['experiment']['group'] += task_type + "_" + obs_type + "_" + str(args_cli.break_force) + "_" + str(args_cli.history_sample_size)
+    agent_cfg['agent']['experiment']['group'] += args_cli.wandb_group_prefix + "_" + task_type + "_" + obs_type + "_" + str(args_cli.break_force) + "_" + str(args_cli.history_sample_size)
     agent_cfg['agent']['history_sample_size'] = args_cli.history_sample_size
     agent_cfg['agent']['decimation'] = args_cli.decimation
     agent_cfg['agent']['sim_hz'] = 1 / env_cfg.sim.dt
