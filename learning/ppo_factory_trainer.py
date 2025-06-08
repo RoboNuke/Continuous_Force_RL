@@ -22,7 +22,7 @@ parser.add_argument("--init_eval", default=True, action="store_false", help="Whe
 parser.add_argument("--decimation", type=int, default=8, help="How many simulation steps between policy observations")
 parser.add_argument("--history_sample_size", type=int, default=8, help="How many samples to keep from sim steps, spread evenly from zero to decimation-1")
 parser.add_argument("--policy_hz", type=int, default=15, help="Rate in hz that the policy should get new observations")
-parser.add_argument("--use_ft_sensor", default=False, action="store_true", help="Addes force sensor data to the observation space")
+parser.add_argument("--use_ft_sensor", type=int, default=0, help="Addes force sensor data to the observation space")
 parser.add_argument("--break_force", type=float, default=-1.0, help="Force at which the held object breaks (peg, gear or nut)")
 parser.add_argument("--exp_tag", type=str, default="debug", help="Tag to apply to exp in wandb")
 parser.add_argument("--wandb_group_prefix", type=str, default="", help="Prefix of wandb group to add this to")
@@ -156,7 +156,7 @@ def main(
     env_cfg.break_force = args_cli.break_force
 
     env_cfg.use_force_sensor = False
-    if args_cli.use_ft_sensor:
+    if args_cli.use_ft_sensor > 0:
         env_cfg.use_force_sensor = True
         env_cfg.obs_order.append("force_torque")
         env_cfg.state_order.append("force_torque")
@@ -179,7 +179,7 @@ def main(
     # things below are just important to have in wandb config file
     agent_cfg['agent']['experiment']['tags'].append(env_cfg.task_name)
     agent_cfg['agent']['experiment']['project'] = args_cli.wandb_project
-    if args_cli.use_ft_sensor:
+    if args_cli.use_ft_sensor > 0:
         agent_cfg['agent']['experiment']['tags'].append("force")
     else:
         agent_cfg['agent']['experiment']['tags'].append("no-force")

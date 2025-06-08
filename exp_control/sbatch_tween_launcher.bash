@@ -10,9 +10,9 @@ obs_idx=1
 
 break_force="-1.0"
 samples=(1 4 8 12 16)
-use_ft_sensor=1
-exp_tag="jun8_tests"
-wandb_group_prefix="NoForce"
+use_ft_sensor=0
+exp_tag="jun8_noforce_tween"
+wandb_group_prefix="No-Force_Tween"
 
 for sample_idx in $(seq 0 $((5 - 1)))
 do
