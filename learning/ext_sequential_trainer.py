@@ -190,7 +190,7 @@ class ExtSequentialTrainer(Trainer):
         
         self.env.unwrapped.evaluating = True
 
-        ep_length = self.env.env.max_episode_length #- 1
+        ep_length = self.env.unwrapped.max_episode_length #- 1
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")

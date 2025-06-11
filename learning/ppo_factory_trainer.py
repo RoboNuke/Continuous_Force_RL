@@ -19,13 +19,14 @@ parser.add_argument("--ckpt_path", type=str, default=None, help="Absolute path t
 parser.add_argument("--num_agents", type=int, default=1, help="How many agents to train in parallel")
 parser.add_argument("--dmp_obs", default=False, action="store_true", help="Should we use dmps for the observation space")
 parser.add_argument("--init_eval", default=True, action="store_false", help="When added, we will not perform an eval before any training has happened")
-parser.add_argument("--decimation", type=int, default=8, help="How many simulation steps between policy observations")
-parser.add_argument("--history_sample_size", type=int, default=8, help="How many samples to keep from sim steps, spread evenly from zero to decimation-1")
+parser.add_argument("--decimation", type=int, default=16, help="How many simulation steps between policy observations")
+parser.add_argument("--history_sample_size", type=int, default=16, help="How many samples to keep from sim steps, spread evenly from zero to decimation-1")
 parser.add_argument("--policy_hz", type=int, default=15, help="Rate in hz that the policy should get new observations")
 parser.add_argument("--use_ft_sensor", type=int, default=0, help="Addes force sensor data to the observation space")
 parser.add_argument("--break_force", type=float, default=-1.0, help="Force at which the held object breaks (peg, gear or nut)")
 parser.add_argument("--exp_tag", type=str, default="debug", help="Tag to apply to exp in wandb")
 parser.add_argument("--wandb_group_prefix", type=str, default="", help="Prefix of wandb group to add this to")
+parser.add_argument("--hybrid_control", action="store_true", default=False, help="Switches to hybrid control as the action space")
 # logging
 parser.add_argument("--exp_name", type=str, default=None, help="What to name the experiment on WandB")
 parser.add_argument("--exp_dir", type=str, default=None, help="Directory to store the experiment in")
@@ -129,6 +130,7 @@ from omni.isaac.lab_tasks.utils.wrappers.skrl import SkrlVecEnvWrapper
 
 
 #from wrappers.info_video_recorder_wrapper import InfoRecordVideo
+from wrappers.hybrid_control_action_wrapper import HybridControlActionWrapper
 from agents.wandb_logger_ppo_agent import WandbLoggerPPO
 from agents.mp_agent import MPAgent
 import copy
@@ -171,7 +173,7 @@ def main(
     
     """Train with skrl agent."""
     #max_rollout_steps = agent_cfg['agent']['rollouts']
-    max_rollout_steps = int((1/env_cfg.sim.dt) / env_cfg.decimation * env_cfg.episode_length_s)
+    max_rollout_steps = int((1/env_cfg.sim.dt) / env_cfg.decimation * env_cfg.episode_length_s)#TODO
     agent_cfg['agent']['rollouts'] = max_rollout_steps
     agent_cfg['agent']['experiment']['write_interval'] = max_rollout_steps
     agent_cfg['agent']['experiment']['checkpoint_interval'] = max_rollout_steps * 10
@@ -325,7 +327,11 @@ def main(
         vid_env = env
     else:
         vid_env = None
-        
+
+    if args_cli.hybrid_control:
+        print("\n\n[INFO] Using Hybrid Control Wrapper.\n\n")
+        env = HybridControlActionWrapper(env)
+
 
     if args_cli.log_smoothness_metrics:
         print("\n\n[INFO] Recording Smoothness Metrics in info.\n\n")
@@ -335,10 +341,10 @@ def main(
     env = SkrlVecEnvWrapper(
         env, 
         ml_framework="torch"
-    )  # same as: `wrap_env(env, wrapper="auto")    
+    )  # same as: `wrap_env(env, wrapper="auto")   
     print("Obs space:", env.cfg.observation_space)
     print("State Space:", env.cfg.state_space)
-    
+    print("Action Space:", env.action_space)
     #assert 1 == 0
     #env._reset_once = False
     # default factory env sets gripper to zero on line 445

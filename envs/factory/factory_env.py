@@ -48,13 +48,13 @@ class FactoryEnv(DirectRLEnv):
         # Update number of obs/states
         cfg.observation_space = sum([OBS_DIM_CFG[obs] for obs in cfg.obs_order])
         cfg.state_space = sum([STATE_DIM_CFG[state] for state in cfg.state_order])
-        cfg.observation_space += cfg.action_space
-        cfg.state_space += cfg.action_space
+        #cfg.observation_space += cfg.action_space
+        #cfg.state_space += cfg.action_space
         self.cfg_task = cfg.task
         self.use_ft = cfg.use_force_sensor
         self.break_force = cfg.break_force
         self.fragile =  (self.break_force > 0)
-        
+            
         super().__init__(cfg, render_mode, **kwargs)
 
 
@@ -263,7 +263,7 @@ class FactoryEnv(DirectRLEnv):
         self.joint_vel = self._robot.data.joint_vel.clone()
 
         # Finite-differencing results in more reliable velocity estimates.
-        # actually due to small timestep this goes to zero!
+        # don't use FD because due to small timestep this goes to zero!
         self.ee_linvel_fd = self._robot.data.body_link_vel_w[:, self.fingertip_body_idx,:3] #(self.fingertip_midpoint_pos - self.prev_fingertip_pos) / dt
 
         self.prev_fingertip_pos = self.fingertip_midpoint_pos.clone()
@@ -314,7 +314,7 @@ class FactoryEnv(DirectRLEnv):
         """Get actor/critic inputs using asymmetric critic."""
         noisy_fixed_pos = self.fixed_pos_obs_frame + self.init_fixed_pos_obs_noise
 
-        prev_actions = self.actions.clone()
+        #prev_actions = self.actions.clone()
 
         obs_dict = {
             "fingertip_pos": self.fingertip_midpoint_pos,
@@ -322,7 +322,7 @@ class FactoryEnv(DirectRLEnv):
             "fingertip_quat": self.fingertip_midpoint_quat,
             "ee_linvel": self.ee_linvel_fd,
             "ee_angvel": self.ee_angvel_fd,
-            "prev_actions": prev_actions,
+            #"prev_actions": prev_actions,
         }
 
         state_dict = {
@@ -340,16 +340,16 @@ class FactoryEnv(DirectRLEnv):
             "task_prop_gains": self.task_prop_gains,
             "pos_threshold": self.pos_threshold,
             "rot_threshold": self.rot_threshold,
-            "prev_actions": prev_actions,
+            #"prev_actions": prev_actions,
         }
 
         if self.use_ft:
             obs_dict["force_torque"] = torch.tanh( 0.0011 * self.robot_force_torque )
             state_dict["force_torque"] = torch.tanh( 0.0011 * self.robot_force_torque )
         
-        obs_tensors = [obs_dict[obs_name] for obs_name in self.cfg.obs_order + ["prev_actions"]]
+        obs_tensors = [obs_dict[obs_name] for obs_name in self.cfg.obs_order]# + ["prev_actions"]]
         obs_tensors = torch.cat(obs_tensors, dim=-1)
-        state_tensors = [state_dict[state_name] for state_name in self.cfg.state_order + ["prev_actions"]]
+        state_tensors = [state_dict[state_name] for state_name in self.cfg.state_order]# + ["prev_actions"]]
         state_tensors = torch.cat(state_tensors, dim=-1)
         return {"policy": obs_tensors, "critic": state_tensors}
 
@@ -377,6 +377,10 @@ class FactoryEnv(DirectRLEnv):
         self.actions = (
             self.cfg.ctrl.ema_factor * action.clone().to(self.device) + (1 - self.cfg.ctrl.ema_factor) * self.actions
         )
+        
+        # set goal 1 time
+        self._calc_ctrl_pos()
+        self._calc_ctrl_quat()
 
         # update current values
         #self._compute_intermediate_values(dt=self.physics_dt) 
@@ -388,7 +392,6 @@ class FactoryEnv(DirectRLEnv):
             self.ep_sum_torque += torch.linalg.norm(self.robot_force_torque[:,3:], axis=1)
             self.ep_max_force = torch.max(self.ep_max_force, torch.linalg.norm(self.robot_force_torque[:,:3], axis=1 ))
             self.ep_max_torque = torch.max(self.ep_max_torque, torch.linalg.norm(self.robot_force_torque[:,3:]))
-
 
     def close_gripper_in_place(self):
         """Keep gripper in current position as gripper closes."""
@@ -426,25 +429,10 @@ class FactoryEnv(DirectRLEnv):
         self.ctrl_target_gripper_dof_pos = ctrl_target_gripper_dof_pos
         self.generate_ctrl_signals()
 
-    def _apply_action(self):
-        """Apply actions for policy as delta targets from current position."""
-        # Get current yaw for success checking.
-        _, _, curr_yaw = torch_utils.get_euler_xyz(self.fingertip_midpoint_quat)
-        self.curr_yaw = torch.where(curr_yaw > np.deg2rad(235), curr_yaw - 2 * np.pi, curr_yaw)
 
-        # Note: We use finite-differenced velocities for control and observations.
-        # Check if we need to re-compute velocities within the decimation loop.
-        if self.last_update_timestamp < self._robot._data._sim_timestamp:
-            self._compute_intermediate_values(dt=self.physics_dt)
-            
+    def _calc_ctrl_pos(self):            
         # Interpret actions as target pos displacements and set pos target
         pos_actions = self.actions[:, 0:3] * self.pos_threshold
-        
-        # Interpret actions as target rot (axis-angle) displacements
-        rot_actions = self.actions[:, 3:6]
-        if self.cfg_task.unidirectional_rot:
-            rot_actions[:, 2] = -(rot_actions[:, 2] + 1.0) * 0.5  # [-1, 0]
-        rot_actions = rot_actions * self.rot_threshold
         
         self.ctrl_target_fingertip_midpoint_pos = self.fingertip_midpoint_pos + pos_actions
         # To speed up learning, never allow the policy to move more than 5cm away from the base.
@@ -456,7 +444,14 @@ class FactoryEnv(DirectRLEnv):
         )
         
         self.ctrl_target_fingertip_midpoint_pos = self.fixed_pos_action_frame + pos_error_clipped
-        
+
+    def _calc_ctrl_quat(self):        
+        # Interpret actions as target rot (axis-angle) displacements
+        rot_actions = self.actions[:, 3:6]
+        if self.cfg_task.unidirectional_rot:
+            rot_actions[:, 2] = -(rot_actions[:, 2] + 1.0) * 0.5  # [-1, 0]
+        rot_actions = rot_actions * self.rot_threshold
+
         # Convert to quat and set rot target
         angle = torch.norm(rot_actions, p=2, dim=-1)
         axis = rot_actions / angle.unsqueeze(-1)
@@ -476,6 +471,17 @@ class FactoryEnv(DirectRLEnv):
         self.ctrl_target_fingertip_midpoint_quat = torch_utils.quat_from_euler_xyz(
             roll=target_euler_xyz[:, 0], pitch=target_euler_xyz[:, 1], yaw=target_euler_xyz[:, 2]
         )
+
+    def _apply_action(self):
+        """Apply actions for policy as delta targets from current position."""
+        # Get current yaw for success checking.
+        _, _, curr_yaw = torch_utils.get_euler_xyz(self.fingertip_midpoint_quat)
+        self.curr_yaw = torch.where(curr_yaw > np.deg2rad(235), curr_yaw - 2 * np.pi, curr_yaw)
+
+        # Note: We use finite-differenced velocities for control and observations.
+        # Check if we need to re-compute velocities within the decimation loop.
+        if self.last_update_timestamp < self._robot._data._sim_timestamp:
+            self._compute_intermediate_values(dt=self.physics_dt)
 
         self.ctrl_target_gripper_dof_pos = 0.0
         self.generate_ctrl_signals()
@@ -626,7 +632,7 @@ class FactoryEnv(DirectRLEnv):
 
         # Action penalties.
         rew_dict["action_penalty"] = torch.norm(self.actions, p=2)
-        rew_dict["action_grad_penalty"] = torch.norm(self.actions - self.prev_actions, p=2, dim=-1)
+        rew_dict["action_grad_penalty"] = 0 #torch.norm(self.actions - self.prev_actions, p=2, dim=-1)
         curr_engaged = (
             self._get_curr_successes(success_threshold=self.cfg_task.engage_threshold, check_rot=False)
         )

@@ -57,12 +57,14 @@ class HistoryObsFactoryEnv(FactoryEnv):
         print("Keep idxs:", self.keep_idxs)
 
         # Update number of obs/states
-        cfg.observation_space = sum([OBS_DIM_CFG[obs] for obs in cfg.obs_order]) * self.num_samples #self.h_len
+        self.cfg.observation_space = sum([OBS_DIM_CFG[obs] for obs in cfg.obs_order]) * self.num_samples #self.h_len
+        #print("new obs:", cfg.observation_space, self.cfg.observation_space)
         #if self.calc_accel:
         #    cfg.observation_space += 6 * self.h_len
-        cfg.state_space = sum(
+        self.cfg.state_space = sum(
             [STATE_DIM_CFG[state] * self.num_samples if state in HISTORY_STATE_CFG else STATE_DIM_CFG[state] for state in cfg.state_order]
         )
+        #print("\tnew state:", self.cfg.state_space)
         #if self.calc_accel:
         #    cfg.state_space += 6 * self.h_len
 
