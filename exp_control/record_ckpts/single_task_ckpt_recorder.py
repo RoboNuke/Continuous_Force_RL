@@ -12,6 +12,7 @@ parser.add_argument("--seed", type=int, default=-1, help="Seed used for the envi
 parser.add_argument("--decimation", type=int, default=8, help="How many simulation steps between policy observations")
 parser.add_argument("--policy_hz", type=int, default=15, help="Rate in hz that the policy should get new observations")
 parser.add_argument("--task", type=str, default="Isaac-Factory-PegInsert-Local-v0")
+parser.add_argument("--ckpt_record_path", type=str, default="/nfs/stak/users/brownhun/ckpt_tracker.txt")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -48,6 +49,8 @@ from skrl.resources.preprocessors.torch import RunningStandardScaler
 #from wrappers.smoothness_obs_wrapper import SmoothnessObservationWrapper
 from wrappers.close_gripper_action_wrapper import GripperCloseEnv
 from models.default_mixin import Shared
+from wrappers.smoothness_obs_wrapper import SmoothnessObservationWrapper
+from wrappers.hybrid_control_action_wrapper import HybridControlActionWrapper
 #from models.bro_model import BroAgent
 #from wrappers.DMP_observation_wrapper import DMPObservationWrapper
 
@@ -229,6 +232,7 @@ class Img2InfoWrapperclass(gym.Wrapper):
         ) = self.env.step(action)
         infos['img'] = self.unwrapped.scene['tiled_camera'].data.output['rgb']
         return observations, rewards, terminateds, truncateds, infos 
+    
     def reset(self, **kwargs):
         """Reset the environment using kwargs and then starts recording if video enabled."""
         observations, info = super().reset(**kwargs)
@@ -352,6 +356,15 @@ def main(
     
     env = Img2InfoWrapperclass(env)
 
+    if args_cli.hybrid_control:
+        print("\n\n[INFO] Using Hybrid Control Wrapper.\n\n")
+        env = HybridControlActionWrapper(env)
+
+
+    if args_cli.log_smoothness_metrics:
+        print("\n\n[INFO] Recording Smoothness Metrics in info.\n\n")
+        env = SmoothnessObservationWrapper(env)
+
     env = SkrlVecEnvWrapper(
         env, 
         ml_framework="torch"
@@ -366,10 +379,10 @@ def main(
 
     print("configured...")
     while True:
-        ckpt_path, gif_path, wandb_project, run_id = getNextCkpt(args_cli.task)
+        ckpt_path, gif_path, wandb_project, run_id = getNextCkpt(args_cli.task, ckpt_tracker_path=args_cli.ckpt_record_path)
         if ckpt_path == False:
-            print("Error waiting a minute")
-            time.sleep(60) # wait 5 min
+            print("Waiting 2 minutes")
+            time.sleep(120) # wait 5 min
             continue # try again
         print(f"Filming {ckpt_path}")
         # load wandb run
