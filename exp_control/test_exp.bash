@@ -17,9 +17,9 @@ task_name="${task_name/ObsType/${obs_modes[obs_idx]}}"
 task_name="${task_name/TaskType/${tasks[task_idx]}}"
 echo "Env name: $task_name"
 
-use_ft_sensor=1
+use_ft_sensor=0
 exp_tag="debug"
-prefix="debug_hybrid-force"
+prefix="debug_rates"
 num_agents=1
 break_force=-1
 current_datetime=$(date +"%Y-%m-%d %H:%M:%S")
@@ -33,7 +33,7 @@ HYDRA_FULL_ERROR=1 python -m learning.ppo_factory_trainer \
     --use_ft_sensor=$use_ft_sensor \
     --exp_tag=$exp_tag \
     --wandb_group_prefix=$prefix \
-    --max_steps=50000000 \
+    --max_steps=5000 \
     --num_envs=$((128 * $num_agents)) \
     --num_agents=$num_agents \
     --exp_name="$4_${obs_modes[$obs_idx]}_$break_force_$current_datetime" \
@@ -42,7 +42,9 @@ HYDRA_FULL_ERROR=1 python -m learning.ppo_factory_trainer \
     --decimation=16 \
     --history_sample_size=$num_history_samples \
     --break_force=$break_force \
-    --hybrid_control 
-    #--ckpt_path="/home/hunter/good_hist_agent.pt" 
+    --no_log_wandb \
+    --headless \
+    --ckpt_path="/home/hunter/good_hist_agent.pt" 
+    #--hybrid_control 
 
 

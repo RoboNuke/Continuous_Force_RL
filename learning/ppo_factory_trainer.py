@@ -177,7 +177,7 @@ def main(
     agent_cfg['agent']['rollouts'] = max_rollout_steps
     agent_cfg['agent']['experiment']['write_interval'] = max_rollout_steps
     agent_cfg['agent']['experiment']['checkpoint_interval'] = max_rollout_steps * 10
-
+    env_cfg.episode_length_s = float(max_rollout_steps * env_cfg.sim.dt * env_cfg.decimation)
     # things below are just important to have in wandb config file
     agent_cfg['agent']['experiment']['tags'].append(env_cfg.task_name)
     agent_cfg['agent']['experiment']['project'] = args_cli.wandb_project

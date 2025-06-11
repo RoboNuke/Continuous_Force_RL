@@ -588,7 +588,7 @@ class FactoryEnv(DirectRLEnv):
         self.ep_succeeded[curr_successes] = True
         first_success_ids = first_success.nonzero(as_tuple=False).squeeze(-1)
         self.ep_success_times[first_success_ids] = self.episode_length_buf[first_success_ids].clone()
-        nonzero_success_ids = self.ep_success_times.nonzero(as_tuple=False).squeeze(-1)
+        #nonzero_success_ids = self.ep_success_times.nonzero(as_tuple=False).squeeze(-1)
 
         #if len(nonzero_success_ids) > 0:  # Only log for successful episodes.
         #    #success_times = self.ep_success_times[nonzero_success_ids].sum() / len(nonzero_success_ids)
@@ -596,7 +596,7 @@ class FactoryEnv(DirectRLEnv):
 
         self.prev_actions = self.actions.clone()
 
-        if torch.any(self._get_dones()[1]): #self.reset_buf): # only log when reset from termination steps
+        if torch.any(self._get_dones()[1]): # only log when reset from truncation (timeout)
             self.extras['Episode / successes'] = self.ep_succeeded
             self.extras['Episode / success_times'] = self.ep_success_times
             self.extras['Episode / engaged'] = self.ep_engaged

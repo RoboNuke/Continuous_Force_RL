@@ -1,6 +1,6 @@
 #!/bin/bash
 
-num_agents=4
+num_agents=8
 num_exp_per=1
 
 num_tasks=1

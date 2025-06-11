@@ -178,35 +178,40 @@ class WandbLoggerPPO(PPO):
         :param timesteps: Number of timesteps
         :type timesteps: int
         """
-        if self.log_wandb:
-            prefix = "Eval " if eval else "Training "
+        prefix = "Eval " if eval else "Training "
 
-            # handle cumulative rewards
-            if len(self._track_rewards):
-                track_rewards = np.array(self._track_rewards)
-                track_timesteps = np.array(self._track_timesteps)
-                
-                #self.tracking_data[prefix + "Reward / Return (max)"].append(np.max(track_rewards))
-                #self.tracking_data[prefix + "Reward / Return (min)"].append(np.min(track_rewards))
-                self.tracking_data[prefix + "Reward / Return (mean)"].append(np.mean(track_rewards))
-
-                self.tracking_data[prefix + "Episode / Total timesteps (max)"].append(np.max(track_timesteps))
-                self.tracking_data[prefix + "Episode / Total timesteps (min)"].append(np.min(track_timesteps))
-                self.tracking_data[prefix + "Episode / Total timesteps (mean)"].append(np.mean(track_timesteps))
+        # handle cumulative rewards
+        if len(self._track_rewards):
+            track_rewards = np.array(self._track_rewards)
+            track_timesteps = np.array(self._track_timesteps)
             
-            for name, rew in self._track_comp_rews.items():
-                if len(rew):
-                    track_rew = np.array(rew)
-                    if 'successes' in name or 'engaged' in name:
-                        self.track_data( prefix + name + " rate", np.sum(rew)/self.num_envs)
-                    else:
-                        self.track_data( prefix+name+" (mean)", np.mean(track_rew))
-                        if 'times' in name or 'lengths' in name:
-                            self.track_data( prefix+name+" (min)", np.min(track_rew))
-                            self.track_data( prefix+name+" (max)", np.max(track_rew))
+            #self.tracking_data[prefix + "Reward / Return (max)"].append(np.max(track_rewards))
+            #self.tracking_data[prefix + "Reward / Return (min)"].append(np.min(track_rewards))
+            self.tracking_data[prefix + "Reward / Return (mean)"].append(np.mean(track_rewards))
 
-            keep = {}
-            #self.data_manager.add_save(os.path.join(self.experiment_dir, "checkpoints"))
+            self.tracking_data[prefix + "Episode / Total timesteps (max)"].append(np.max(track_timesteps))
+            self.tracking_data[prefix + "Episode / Total timesteps (min)"].append(np.min(track_timesteps))
+            self.tracking_data[prefix + "Episode / Total timesteps (mean)"].append(np.mean(track_timesteps))
+        
+        for name, rew in self._track_comp_rews.items():
+            if len(rew):
+                track_rew = np.array(rew)
+                if 'successes' in name or 'engaged' in name:
+                    if eval:
+                        print(f"{prefix + name}:", np.sum(rew)/self.num_envs)
+                    self.track_data( prefix + name + " rate", np.sum(rew)/self.num_envs)
+                else:
+                    if eval:
+                        print(f"{prefix + name}(mean):", np.mean(track_rew))
+                    self.track_data( prefix+name+" (mean)", np.mean(track_rew))
+                    if 'times' in name or 'lengths' in name:
+                        self.track_data( prefix+name+" (min)", np.min(track_rew))
+                        self.track_data( prefix+name+" (max)", np.max(track_rew))
+
+        keep = {}
+        #self.data_manager.add_save(os.path.join(self.experiment_dir, "checkpoints"))
+
+        if self.log_wandb:
             for k, v in self.tracking_data.items():
                 """if k.endswith("_video"):
                     for i in range(len(v)):
@@ -415,7 +420,7 @@ class WandbLoggerPPO(PPO):
 
         #print('eval mode:', 'on' if eval_mode else 'off')
         if self.write_interval > 0 or eval_mode:
-
+            
             # compute the cumulative sum of the rewards and timesteps
             if self._cumulative_rewards is None:
                 self._cumulative_rewards = torch.zeros_like(rewards, dtype=torch.float32)
@@ -461,7 +466,7 @@ class WandbLoggerPPO(PPO):
                 
                 mask_update = torch.logical_or(terminated, truncated).view((self.num_envs,)) # one that didn't term
                 
-                finished_episodes = torch.logical_and(mask_update, alive_mask).nonzero(as_tuple=False).view(-1,)
+                finished_episodes = torch.logical_and(mask_update, alive_mask).view(-1,)
                 # term this step and alive overall
                 for key in infos:
                     if not ('success' in key or 'engage' in key or 'smoothness' in key): # we only update these on resetting 
@@ -472,8 +477,9 @@ class WandbLoggerPPO(PPO):
             else:
                 self._cumulative_rewards.add_(rewards)
                 self._cumulative_timesteps.add_(1)
-
-                finished_episodes = (terminated + truncated).nonzero(as_tuple=False)
+                #print(f"termed:", terminated.T)
+                #print("truc:", truncated.T)
+                finished_episodes = torch.logical_or(terminated, truncated).view(-1,)
                 for key in infos:
                     if not ('success' in key or 'engage' in key or 'smoothness' in key): # we only update these on resetting 
                         self._comp_rews[key][:,0].add_(infos[key])
@@ -488,10 +494,11 @@ class WandbLoggerPPO(PPO):
                     self.track_data( prefix+key+" (min)", np.min(rew))
                     self.track_data( prefix+key+" (max)", np.max(rew))
 
-            if finished_episodes.numel(): 
+            #print("Finished eps:", finished_episodes.T)
+            if torch.any(finished_episodes):#.numel(): 
                 # storage cumulative rewards and timesteps
-                self._track_rewards.extend(self._cumulative_rewards[finished_episodes][:, 0].reshape(-1).tolist())
-                self._track_timesteps.extend(self._cumulative_timesteps[finished_episodes][:, 0].reshape(-1).tolist())
+                self._track_rewards.extend(self._cumulative_rewards[finished_episodes].reshape(-1).tolist())
+                self._track_timesteps.extend(self._cumulative_timesteps[finished_episodes].reshape(-1).tolist())
 
                 # reset the cumulative rewards and timesteps
                 self._cumulative_rewards[finished_episodes] = 0
@@ -522,10 +529,11 @@ class WandbLoggerPPO(PPO):
                     elif 'success' in key or 'engage' in key:
                         if key not in self._track_comp_rews:
                             self._track_comp_rews[key] = collections.deque(maxlen=1000)
-                            
                         self._track_comp_rews[key].extend(
                             infos[key][finished_episodes].reshape(-1).tolist()
                         )
+                        #if 'successes' in key:
+                        #    print(f"{'Eval' if eval_mode else 'Training'} Extended:", self._track_comp_rews[key])
                     #else:
                     #    pass
                     #    #self._track_comp_rews[key].extend(
