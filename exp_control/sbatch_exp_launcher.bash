@@ -1,20 +1,20 @@
 #!/bin/bash
 
 num_agents=4
-num_exp_per=2
+num_exp_per=1
 
 num_tasks=1
-num_obs=3
+num_obs=1
 
 nick_names=("PiH" "Gear" "Nut")
 break_force=-1
 use_ft_sensor=1
-exp_tag="jun8_tests"
-wandb_group_prefix="NoForce"
+exp_tag="debug"
+wandb_group_prefix="SizeProblems"
 
 for task_idx in $(seq 0 $((num_tasks - 1)))
 do
-    for obs_idx in $(seq 2 $((num_obs - 1)))
+    for obs_idx in $(seq 0 $((num_obs - 1)))
     do
         sbatch -J "${nick_names[$task_idx]}_$1" -a 1-$num_exp_per exp_control/hpc_batch.bash \
                 $task_idx \
