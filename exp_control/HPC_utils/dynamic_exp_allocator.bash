@@ -56,9 +56,7 @@ for WIN_NUM in $(seq 1 $((exps_to_launch - 1))); do
     # Exit if no data returned
     if [ -z "$RAW_OUTPUT" ] || [[ "$RAW_OUTPUT" == *"File is empty."* ]]; then
         echo "No experimental conditions found."
-        tmux select-layout even-vertical
-        tmux attach-session -t "EXP_TEST"
-        exit 0
+        break
     fi
 
     echo "Loaded config: $RAW_OUTPUT"
@@ -97,5 +95,6 @@ done
 
 
 tmux select-layout even-vertical
+echo "Attaching to tmux"
 tmux attach-session -t "EXP_TEST"
 echo "Script complete"
