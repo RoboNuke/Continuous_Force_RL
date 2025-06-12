@@ -32,7 +32,8 @@ for use_ft_sensor in $(seq 0 1); do
             # Submit job and capture job ID
             JOB_OUTPUT=$( sbatch -J "${NICK_NAMES[$task_idx]}_$1" exp_control/HPC_utils/dynamic_hpc_batch.bash )
             echo "    Job output:$JOB_OUTPUT"
-            JOB_ID=$(echo "$JOB_OUTPUT" | cut -d';' -f1) #$((JOB_ID+1)) #
+            #JOB_ID=$(echo "$JOB_OUTPUT" | cut -d';' -f1) #$((JOB_ID+1)) #
+            JOB_ID=$(echo "$JOB_OUTPUT" | tr -d '[:alpha:][:space:]')
             echo "    Job id:$JOB_ID"
             if [[ "$JOB_ID" =~ ^[0-9]+$ ]]; then
                 echo "    Submitted job with ID $JOB_ID (task=$task_name)"
