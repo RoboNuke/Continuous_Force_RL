@@ -5,7 +5,7 @@ MIN_FREE_MEMORY_MIB=10300
 #LOGFILE="/home/hunter/hpc_share/current_jobs.json"
 LOGFILE="/nfs/stak/users/brownhun/hpc_share/current_jobs.json"
 # Specify the path to the script you want to run
-EXPERIMENT_SCRIPT="exp_control/test_exp.bash"
+EXPERIMENT_SCRIPT="exp_control/run_exp.bash"
 
 # --- Function to get free GPU memory ---
 get_free_gpu_memory() {

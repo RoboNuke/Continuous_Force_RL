@@ -22,4 +22,4 @@ conda activate isaaclab_242
 
 echo "Conda env: $CONDA_DEFAULT_ENV"
 
-bash "exp_control/dynamic_exp_allocator.bash $SLURM_JOB_ID"
+bash "exp_control//HPC_utils/dynamic_exp_allocator.bash $SLURM_JOB_ID"
