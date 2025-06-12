@@ -50,8 +50,14 @@ main() {
 }
 
 tmux new-session -d -s "EXP_TEST"
-tmux attach-session -t "EXP_TEST"
-
+#tmux attach-session -t "EXP_TEST"
+sleep 10
 
 # Run the main function
+main
+ehco "Sleeping"
+sleep 5
+main
+sleep 5
+echo "Sleeping"
 main
