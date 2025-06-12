@@ -3,7 +3,7 @@
 # Define the minimum free memory threshold in MiB
 MIN_FREE_MEMORY_MIB=10300
 #LOGFILE="/home/hunter/hpc_share/current_jobs.json"
-LOGFILE="/nfs/stak/users/brownhun/hpc_share/current_jobs.json"
+LOGFILE="/nfs/stak/users/brownhun/hpc-share/current_jobs.json"
 # Specify the path to the script you want to run
 EXPERIMENT_SCRIPT="exp_control/run_exp.bash"
 

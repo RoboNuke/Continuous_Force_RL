@@ -2,7 +2,7 @@
 
 # Configuration]
 #LOGFILE="/home/hunter/hpc_share/current_jobs.json"
-LOGFILE="/nfs/stak/users/brownhun/hpc_share/current_jobs.json"
+LOGFILE="/nfs/stak/users/brownhun/hpc-share/current_jobs.json"
 
 NUM_AGENTS=10
 
