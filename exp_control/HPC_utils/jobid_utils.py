@@ -107,7 +107,8 @@ if __name__ == "__main__":
 
     elif mode == "pop":
         result = pop_last_dict_from_json_file(file_path)
-        print(f"Popped from {file_path}")#: {result}")
+        #print(f"Popped from {file_path}")#: {result}")
+        print(result)
 
     elif mode == "pop_by_id":
         if len(sys.argv) < 4:
