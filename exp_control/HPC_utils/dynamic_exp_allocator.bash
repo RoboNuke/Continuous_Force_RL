@@ -50,7 +50,7 @@ print(result)
 
 echo "Args: $ARGS"
 # --- Launch args for current job ---
-tmux send-keys -t $WIN_NUM "conda activate isaaclab_242" C-m
+tmux send-keys -t $WIN_NUM "source /nfs/stak/users/brownhun/.bashrc && conda activate isaaclab_242" C-m
 tmux send-keys -t $WIN_NUM "bash $EXPERIMENT_SCRIPT $ARGS && echo $WAIT_KEYWORD" C-m
 
 # --- Main script logic ---
@@ -88,7 +88,7 @@ for WIN_NUM in $(seq 1 $((exps_to_launch - 1))); do
     #tmux select-pane -t $WIN_NUM
     tmux split-window -v #-d "$SCRIPT_TO_RUN"  # Splits the current window horizontally and runs the script in the new pane
 
-    tmux send-keys -t $WIN_NUM "conda activate isaaclab_242" C-m
+    tmux send-keys -t $WIN_NUM "source /nfs/stak/users/brownhun/.bashrc && conda activate isaaclab_242" C-m
     echo "Running: python3 $EXPERIMENT_SCRIPT $ARGS"
     tmux send-keys -t $WIN_NUM "bash $EXPERIMENT_SCRIPT $ARGS && echo $WAIT_KEYWORD" C-m
     echo "Script executed in a new tmux pane."
