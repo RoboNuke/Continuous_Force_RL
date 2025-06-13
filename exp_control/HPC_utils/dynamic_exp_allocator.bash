@@ -48,6 +48,7 @@ result=base_arg.replace(\" '' \", \" \")
 print(result)
 ")
 
+echo "Args: $ARGS"
 # --- Launch args for current job ---
 tmux send-keys -t $WIN_NUM "conda activate isaaclab_242" C-m
 tmux send-keys -t $WIN_NUM "bash $EXPERIMENT_SCRIPT $ARGS && echo $WAIT_KEYWORD" C-m
@@ -73,6 +74,7 @@ for WIN_NUM in $(seq 1 $((exps_to_launch - 1))); do
     result=base_arg.replace(\" '' \", \" \")
     print(result)
     ")
+    echo "Args: $ARGS"
 
     JOB_ID=$(python3 -c "import json; print(json.loads('$DICT_JSON').get('job_id', 'UNKNOWN'))")
 

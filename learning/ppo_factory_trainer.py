@@ -22,7 +22,7 @@ parser.add_argument("--init_eval", default=True, action="store_false", help="Whe
 parser.add_argument("--decimation", type=int, default=16, help="How many simulation steps between policy observations")
 parser.add_argument("--history_sample_size", type=int, default=16, help="How many samples to keep from sim steps, spread evenly from zero to decimation-1")
 parser.add_argument("--policy_hz", type=int, default=15, help="Rate in hz that the policy should get new observations")
-parser.add_argument("--use_ft_sensor", type=int, default=0, help="Addes force sensor data to the observation space")
+parser.add_argument("--use_ft_sensor", type=int, default=0, help="Adds force sensor data to the observation space")
 parser.add_argument("--break_force", type=float, default=-1.0, help="Force at which the held object breaks (peg, gear or nut)")
 parser.add_argument("--exp_tag", type=str, default="debug", help="Tag to apply to exp in wandb")
 parser.add_argument("--wandb_group_prefix", type=str, default="", help="Prefix of wandb group to add this to")
