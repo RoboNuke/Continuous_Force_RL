@@ -536,12 +536,12 @@ class FactoryEnv(DirectRLEnv):
             terminated[force_mag >= self.break_force] = True
 
         # check for successes
-        terminated[
-            self._get_curr_successes(
-                success_threshold=self.cfg_task.success_threshold, 
-                check_rot=self.cfg_task.name == "nut_thread"
-            )
-        ] = True
+        #terminated[
+        #    self._get_curr_successes(
+        #        success_threshold=self.cfg_task.success_threshold, 
+        #        check_rot=self.cfg_task.name == "nut_thread"
+        #    )
+        #] = True
         
         return terminated, time_out
 

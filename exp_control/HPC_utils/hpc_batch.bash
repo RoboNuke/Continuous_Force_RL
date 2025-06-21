@@ -3,7 +3,8 @@
 #SBATCH -J RLUPDATE			    # name of job
 #SBATCH -A virl-grp	            # name of my sponsored account, e.g. class or research group, NOT ONID!
 ##SBATCH -p gpu,eecs2,tiamat,dgxh,dgx2,ampere		# name of partition or queue
-#SBATCH -p tiamat,eecs2,gpu,dgx2,dgxh
+##SBATCH -p tiamat,eecs2,gpu,dgx2,dgxh
+#SBATCH -p tiamat
 #SBATCH --time=1-23:59:59        # time limit on job: 2 days, 12 hours, 30 minutes (default 12 hours)
 ##SBATCH -N 1                   # number of nodes (default 1)
 #SBATCH --gres=gpu:1            # number of GPUs to request (default 0)

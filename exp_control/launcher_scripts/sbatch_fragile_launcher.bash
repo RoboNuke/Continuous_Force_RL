@@ -1,23 +1,23 @@
 #!/bin/bash
 
-num_agents=4
-num_exp_per=2
+num_agents=10
+num_exp_per=1
 
 nick_names=("PiH" "Gear" "Nut")
 
 task_idx=0
 
-num_forces=5
+num_forces=6
 forces=(1 5 10 25 50 -1)
 use_ft_sensor=0
-exp_tag="jun8_fragile_exps"
-wandb_group_prefix="No-Force-Fragile"
+exp_tag="jun21_fragile_exps"
+wandb_group_prefix="No-Force-SuccCont"
 
 for force_idx in $(seq 0 $((num_forces - 1)))
 do
     for obs_idx in $(seq 0 1) # only doing local and history
     do 
-        sbatch -J "${nick_names[$task_idx]}_$1_${samples[$sample_idx]}" -a 1-$num_exp_per exp_control/hpc_batch.bash \
+        sbatch -J "${nick_names[$task_idx]}_$1_${samples[$sample_idx]}" -a 1-$num_exp_per exp_control/HPC_utils/hpc_batch.bash \
                 $task_idx \
                 $obs_idx \
                 $num_agents \
