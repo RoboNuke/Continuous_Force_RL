@@ -75,7 +75,7 @@ result=base_arg.replace(\" '' \", \" \")
 print(result)")
     echo "Args: $ARGS"
 
-    JOB_ID=$(python3 -c "import json; print($RAW_OUTPUT).get('job_id', 'UNKNOWN'))")
+    JOB_ID=$(python3 -c "import json; print($RAW_OUTPUT.get('job_id', 'UNKNOWN'))")
     echo "JOB_ID: $JOB_ID"
     # Run the experiment
     echo "Creating a new tmux pane and running: $EXPERIMENT_SCRIPT"
