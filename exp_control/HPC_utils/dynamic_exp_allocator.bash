@@ -51,7 +51,7 @@ print(result)
 echo "Args: $ARGS"
 # --- Launch args for current job ---
 tmux send-keys -t $WIN_NUM "source /nfs/stak/users/brownhun/.bashrc && conda activate isaaclab_242" C-m
-tmux send-keys -t $WIN_NUM "python -m $EXPERIMENT_SCRIPT $ARGS && echo $WAIT_KEYWORD" C-m
+tmux send-keys -t $WIN_NUM "python -m $EXPERIMENT_SCRIPT $ARGS && exit" C-m
 
 # --- Main script logic ---
 for WIN_NUM in $(seq 1 $((exps_to_launch - 1))); do
@@ -85,12 +85,12 @@ print(result)")
     # tmux new-window -d -n "gpu_task" "$SCRIPT_TO_RUN" # Option to create a new window
     # tmux split-window -d "$SCRIPT_TO_RUN" # Option to split the current window vertically and run in the new pane
     #tmux select-pane -t $WIN_NUM
-    tmux split-window -v #-d "$SCRIPT_TO_RUN"  # Splits the current window horizontally and runs the script in the new pane
-
-    tmux send-keys -t $WIN_NUM "source /nfs/stak/users/brownhun/.bashrc && conda activate isaaclab_242" C-m
+    #tmux split-window -v #-d "$SCRIPT_TO_RUN"  # Splits the current window horizontally and runs the script in the new pane
+    tmux new-window -t "$SESSION_NAME:$WIN_NUM" 
+    tmux send-keys -t "$SESSION_NAME:$WIN_NUM" "source /nfs/stak/users/brownhun/.bashrc && conda activate isaaclab_242" C-m
     echo "Running: python -m $EXPERIMENT_SCRIPT $ARGS"
-    tmux send-keys -t $WIN_NUM "python -m $EXPERIMENT_SCRIPT $ARGS && echo $WAIT_KEYWORD" C-m
-    echo "Script executed in a new tmux pane."
+    tmux send-keys -t "$SESSION_NAME:$WIN_NUM" "python -m $EXPERIMENT_SCRIPT $ARGS && exit" C-m
+    echo "Script executed in a new tmux window."
 
     echo "Canceling $JOB_ID"
     scancel $JOB_ID
@@ -103,11 +103,20 @@ tmux select-layout even-vertical
 echo "Waiting for all tmux panes to finish..."
 
 while true; do
-    LIVE_PANES=$(tmux list-panes -t $SESSION_NAME -F '#{pane_pid}' 2>/dev/null | wc -l)
-    if [ "$LIVE_PANES" -eq 0 ]; then
-        echo "All tmux panes closed. Done."
-        break
+    if [ "$num_windows" -eq 0 ]; then
+      echo "Tmux session '$TMUX_SESSION_NAME' has no windows. Exiting loop."
+      break  # Exit the while loop
+    else
+      echo "Tmux session '$TMUX_SESSION_NAME' is active with $num_windows window(s)."
+      sleep 60
     fi
-    sleep 300 # check every 5 minutes
 done
+
+#    LIVE_PANES=$(tmux list-panes -t $SESSION_NAME -F '#{pane_pid}' 2>/dev/null | wc -l)
+#    if [ "$LIVE_PANES" -eq 0 ]; then
+#        echo "All tmux panes closed. Done."
+#        break
+#    fi
+#    sleep 300 # check every 5 minutes
+#done
 echo "Script complete"
