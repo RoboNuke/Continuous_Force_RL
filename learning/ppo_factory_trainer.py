@@ -462,7 +462,7 @@ def main(
 
     if args_cli.init_eval:
         trainer.eval(0, vid_env)
-    assert 1 == 0
+        
     for i in range(num_evals):
         print(f"Beginning epoch {i+1}/{num_evals}")
         print("Training")

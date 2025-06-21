@@ -45,7 +45,7 @@ for use_ft_sensor in $(seq 0 1); do
                     \"no_vids\": \"\", \
                     \"max_steps\": \"50000000\", \
                     \"decimation\": \"16\", \
-                    \"num_envs\": \"$((16 * $NUM_AGENTS))\", \
+                    \"num_envs\": \"$((256 * $NUM_AGENTS))\", \
                     \"wandb_project\": \"Continuous_Force_RL\", \
                     \"num_agents\": \"$NUM_AGENTS\", \
                     \"exp_name\": \"$1\", \
