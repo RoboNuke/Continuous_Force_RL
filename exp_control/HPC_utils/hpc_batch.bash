@@ -19,7 +19,7 @@
 ##module load cuda/10.1
 #source ~/.bashrc
 eval "$(command conda 'shell.bash' 'hook' 2> /dev/null)"
-conda activate isaaclab_24
+conda activate isaaclab_242
 
 echo "Conda env: $CONDA_DEFAULT_ENV"
 
