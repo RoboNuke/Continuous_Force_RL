@@ -181,6 +181,7 @@ def main(
     # things below are just important to have in wandb config file
     agent_cfg['agent']['experiment']['tags'].append(env_cfg.task_name)
     agent_cfg['agent']['experiment']['project'] = args_cli.wandb_project
+    agent_cfg['agent']['experiment']['tags'].append(args_cli.exp_tag)
     if args_cli.use_ft_sensor > 0:
         agent_cfg['agent']['experiment']['tags'].append("force")
     else:
@@ -461,7 +462,7 @@ def main(
 
     if args_cli.init_eval:
         trainer.eval(0, vid_env)
-
+    assert 1 == 0
     for i in range(num_evals):
         print(f"Beginning epoch {i+1}/{num_evals}")
         print("Training")

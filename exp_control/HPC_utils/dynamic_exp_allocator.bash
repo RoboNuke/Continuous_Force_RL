@@ -26,7 +26,7 @@ get_free_gpu_memory() {
 
 free_gpu_memory=$(get_free_gpu_memory)
 exps_to_launch=$((free_gpu_memory / MIN_FREE_MEMORY_MIB))
-echo "Launching $exps_to_launch exps"
+echo "Launching $exps_to_launch exps for $free_gpu_memory"
 job_id=$1
 WIN_NUM=0
 
@@ -75,8 +75,8 @@ result=base_arg.replace(\" '' \", \" \")
 print(result)")
     echo "Args: $ARGS"
 
-    JOB_ID=$(python3 -c "import json; print(json.loads('$DICT_JSON').get('job_id', 'UNKNOWN'))")
-
+    JOB_ID=$(python3 -c "import json; print($RAW_OUTPUT).get('job_id', 'UNKNOWN'))")
+    echo "JOB_ID: $JOB_ID"
     # Run the experiment
     echo "Creating a new tmux pane and running: $EXPERIMENT_SCRIPT"
 
