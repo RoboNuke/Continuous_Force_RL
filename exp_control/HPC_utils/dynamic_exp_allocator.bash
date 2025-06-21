@@ -103,11 +103,12 @@ tmux select-layout even-vertical
 echo "Waiting for all tmux panes to finish..."
 
 while true; do
+    num_windows=$(tmux list-windows -t "$SESSION_NAME" -F "#{window_id}" 2>/dev/null | wc -l)
     if [ "$num_windows" -eq 0 ]; then
-      echo "Tmux session '$TMUX_SESSION_NAME' has no windows. Exiting loop."
+      echo "Tmux session '$SESSION_NAME' has no windows. Exiting loop."
       break  # Exit the while loop
     else
-      echo "Tmux session '$TMUX_SESSION_NAME' is active with $num_windows window(s)."
+      echo "Tmux session '$SESSION_NAME' is active with $num_windows window(s)."
       sleep 60
     fi
 done
