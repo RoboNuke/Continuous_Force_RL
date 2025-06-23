@@ -11,6 +11,8 @@ parser = argparse.ArgumentParser(description="Train an RL agent with skrl.")
 
 # exp
 parser.add_argument("--task", type=str, default="Isaac-Factory-PegInsert-Local-v0", help="Name of the task.")
+parser.add_argument("--log_ckpt_data", type=int, default=0, help="Value of 1 turns on logging checkpoint data for replay")
+parser.add_argument("--ckpt_tracker_path", type=str, default="/nfs/stak/users/brownhun/ckpt_tracker2.txt", help="Path the ckpt recording data")
 parser.add_argument("--num_envs", type=int, default=256, help="Number of environments to simulate.")
 parser.add_argument("--seed", type=int, default=-1, help="Seed used for the environment")
 parser.add_argument("--max_steps", type=int, default=10240000, help="RL Policy training iterations.")
@@ -199,6 +201,9 @@ def main(
 
     agent_cfg['agent']['model_params'] = agent_cfg['models']
     agent_cfg['agent']['num_envs'] = args_cli.num_envs
+
+    agent_cfg['agent']['track_ckpts'] = (args_cli.log_ckpt_data==1)
+    agent_cfg['agent']['ckpt_tracker_path'] = args_cli.ckpt_tracker_path
     print("max rollout steps:", max_rollout_steps)
     assert args_cli.num_envs % args_cli.num_agents == 0, f'Number of agents {args_cli.num_agents} does not even divide into number of envs {args_cli.num_envs}'
     env_per_agent = args_cli.num_envs // args_cli.num_agents

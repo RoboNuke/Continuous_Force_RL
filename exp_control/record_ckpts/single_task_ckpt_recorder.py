@@ -13,6 +13,11 @@ parser.add_argument("--decimation", type=int, default=8, help="How many simulati
 parser.add_argument("--policy_hz", type=int, default=15, help="Rate in hz that the policy should get new observations")
 parser.add_argument("--task", type=str, default="Isaac-Factory-PegInsert-Local-v0")
 parser.add_argument("--ckpt_record_path", type=str, default="/nfs/stak/users/brownhun/ckpt_tracker.txt")
+parser.add_argument("--break_force", type=float, default=-1.0, help="Force at which the held object breaks (peg, gear or nut)")
+parser.add_argument("--use_ft_sensor", type=int, default=0, help="Adds force sensor data to the observation space")
+parser.add_argument("--hybrid_control", action="store_true", default=False, help="Switches to hybrid control as the action space")
+parser.add_argument("--log_smoothness_metrics", action="store_true", default=False, help="Log the sum squared velocity, jerk and force metrics")
+
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -133,7 +138,7 @@ def getNextCkpt(
 
             ckpt_path, task, gif_path, wandb_project, run_id = next_line.split() # order: ckpt_path, task, gif_path, wandb_project, run_id
             return ckpt_path, gif_path, wandb_project, run_id
-        except FileNotFoundError:
+        except:
             return False, False, False, False
 
 
@@ -321,12 +326,23 @@ def main(
     agent_cfg['agent']['experiment']['checkpoint_interval'] = max_rollout_steps * 10
     agent_cfg['agent']['experiment']['tags'].append(env_cfg.task_name)
 
+    agent_cfg['agent']['break_force'] = args_cli.break_force
+
     # override configurations with non-hydra CLI arguments
     env_cfg.scene.num_envs = num_envs 
     #env_cfg.scene.replicate_physics = True
     env_cfg.sim.device = env_cfg.sim.device
 
     env_cfg.num_agents = 1
+
+    """ Set up fragileness """
+    env_cfg.break_force = args_cli.break_force
+
+    env_cfg.use_force_sensor = False
+    if args_cli.use_ft_sensor > 0:
+        env_cfg.use_force_sensor = True
+        env_cfg.obs_order.append("force_torque")
+        env_cfg.state_order.append("force_torque")
     if 'learning_rate_scheduler' in agent_cfg['agent'].keys():
         # yaml doesn't read it as a class, but as a string idk
         agent_cfg['agent']['learning_rate_scheduler'] = KLAdaptiveLR
@@ -382,7 +398,7 @@ def main(
         ckpt_path, gif_path, wandb_project, run_id = getNextCkpt(args_cli.task, ckpt_tracker_path=args_cli.ckpt_record_path)
         if ckpt_path == False:
             print("Waiting 2 minutes")
-            time.sleep(120) # wait 5 min
+            time.sleep(120) 
             continue # try again
         print(f"Filming {ckpt_path}")
         # load wandb run

@@ -9,9 +9,9 @@ task_idx=0
 
 num_forces=6
 forces=(1 5 10 25 50 -1)
-use_ft_sensor=0
-exp_tag="jun21_fragile_exps"
-wandb_group_prefix="No-Force-SuccCont"
+use_ft_sensor=1
+exp_tag="jun23_force_fragile_exps"
+wandb_group_prefix="Force-SuccCont"
 
 for force_idx in $(seq 0 $((num_forces - 1)))
 do
@@ -26,6 +26,7 @@ do
                 "${forces[$force_idx]}" \
                 $use_ft_sensor \
                 $exp_tag \
-                $wandb_group_prefix
+                $wandb_group_prefix \
+                "/nfs/stak/users/brownhun/ckpt_trackers"
     done
 done
