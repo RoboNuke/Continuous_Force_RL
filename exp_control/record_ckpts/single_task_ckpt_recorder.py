@@ -15,7 +15,7 @@ parser.add_argument("--task", type=str, default="Isaac-Factory-PegInsert-Local-v
 parser.add_argument("--ckpt_record_path", type=str, default="/nfs/stak/users/brownhun/ckpt_tracker.txt")
 parser.add_argument("--break_force", type=float, default=-1.0, help="Force at which the held object breaks (peg, gear or nut)")
 parser.add_argument("--use_ft_sensor", type=int, default=0, help="Adds force sensor data to the observation space")
-parser.add_argument("--hybrid_control", action="store_true", default=False, help="Switches to hybrid control as the action space")
+parser.add_argument("--hybrid_control", type=int, default=0, help="Switches to hybrid control as the action space")
 parser.add_argument("--log_smoothness_metrics", action="store_true", default=False, help="Log the sum squared velocity, jerk and force metrics")
 
 # append AppLauncher cli args
@@ -372,7 +372,7 @@ def main(
     
     env = Img2InfoWrapperclass(env)
 
-    if args_cli.hybrid_control:
+    if args_cli.hybrid_control==1:
         print("\n\n[INFO] Using Hybrid Control Wrapper.\n\n")
         env = HybridControlActionWrapper(env)
 

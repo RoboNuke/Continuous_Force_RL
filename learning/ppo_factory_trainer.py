@@ -28,7 +28,7 @@ parser.add_argument("--use_ft_sensor", type=int, default=0, help="Adds force sen
 parser.add_argument("--break_force", type=float, default=-1.0, help="Force at which the held object breaks (peg, gear or nut)")
 parser.add_argument("--exp_tag", type=str, default="debug", help="Tag to apply to exp in wandb")
 parser.add_argument("--wandb_group_prefix", type=str, default="", help="Prefix of wandb group to add this to")
-parser.add_argument("--hybrid_control", action="store_true", default=False, help="Switches to hybrid control as the action space")
+parser.add_argument("--hybrid_control", type=int, default=0, help="Switches to hybrid control as the action space")
 # logging
 parser.add_argument("--exp_name", type=str, default=None, help="What to name the experiment on WandB")
 parser.add_argument("--exp_dir", type=str, default=None, help="Directory to store the experiment in")
@@ -334,7 +334,7 @@ def main(
     else:
         vid_env = None
 
-    if args_cli.hybrid_control:
+    if args_cli.hybrid_control==1:
         print("\n\n[INFO] Using Hybrid Control Wrapper.\n\n")
         env = HybridControlActionWrapper(env)
 

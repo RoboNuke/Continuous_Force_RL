@@ -12,6 +12,7 @@ use_ft_sensor=$7
 exp_tag=$8
 prefix=$9
 ckpt_filepath=${10}
+action_idx=${11}
 
 #if [ "$exp_idx" -gt 4 ]; then
 #  exp_idx=0
@@ -42,6 +43,7 @@ python -m exp_control.record_ckpts.single_task_ckpt_recorder \
     --decimation=16 \
     --ckpt_record_path=$ckpt_record_path \
     --use_ft_sensor=$use_ft_sensor \
+    --hybrid_control=$action_idx \
     > "$ckpt_filepath/$exp_name-$current_datetime-recorder_output.log" 2>&1 &
 
 python -m learning.ppo_factory_trainer \
@@ -61,6 +63,7 @@ python -m learning.ppo_factory_trainer \
     --history_sample_size=$num_history_samples \
     --break_force=$break_force \
     --log_ckpt_data=1 \
+    --hybrid_control=$action_idx \
     --ckpt_tracker_path=$ckpt_record_path
 
 
