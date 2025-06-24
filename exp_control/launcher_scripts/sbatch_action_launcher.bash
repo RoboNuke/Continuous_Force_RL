@@ -10,8 +10,8 @@ task_idx=0
 num_forces=6
 forces=(1 5 10 25 50 -1)
 obs_idx=0
-exp_tag="jun23_hybrid_control"
-wandb_group_prefix="Hybrid_Control"
+exp_tag="jun24_hybrid_control"
+wandb_group_prefix="Hybrid_Control_JUN24"
 
 for force_idx in $(seq 0 $((num_forces - 1)))
 do
