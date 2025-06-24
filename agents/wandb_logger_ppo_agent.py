@@ -212,64 +212,18 @@ class WandbLoggerPPO(PPO):
         #self.data_manager.add_save(os.path.join(self.experiment_dir, "checkpoints"))
 
         if self.log_wandb:
-            for k, v in self.tracking_data.items():
-                """if k.endswith("_video"):
-                    for i in range(len(v)):
-                        try:
-                            print("\ttrying video:", v[i][0])
-                            wandb.log(
-                                { 
-                                    prefix + ' ckpt videos':wandb.Video(
-                                        data_or_path=v[i][1],
-                                        caption=f'Agent at Checkpoint {v[i][0]}',
-                                        fps=15,
-                                        format='gif'
-                                    ),
-                                    "video_step":v[i][0]
-                                }
-                            )
-                        except FileNotFoundError:
-                            keep[k] = v[i:] # ensure we push the videos in the order they are sent
-                            break
-                """    
+            data_to_log = {
+                "env_step":timestep*self.num_envs, 
+                "exp_step":timestep
+            }
+            for k, v in self.tracking_data.items():  
                 if k.endswith("(min)"):
-                    self.data_manager.add_scalar(
-                        {
-                            k:np.min(v), 
-                            "env_step":timestep*self.num_envs, 
-                            "exp_step":timestep
-                        }, timestep * self.num_envs)
+                    data_to_log[k] = np.min(v)
                 elif k.endswith("(max)"):
-                    self.data_manager.add_scalar(
-                        {
-                            k:np.max(v), 
-                            "env_step":timestep*self.num_envs, 
-                            "exp_step":timestep
-                        }, timestep * self.num_envs)
+                    data_to_log[k] = np.max(v)
                 else:
-                    self.data_manager.add_scalar(
-                        {
-                            k:np.mean(v), 
-                            "env_step":timestep*self.num_envs, 
-                            "exp_step":timestep
-                        }, timestep * self.num_envs)
-                """
-                elif k.endswith("_ckpt"):
-                #    print(k,v)
-                    try:
-                        import shutil
-                        shutil.copyfile(
-                            os.path.join(self.experiment_dir, "checkpoints", v[0]),
-                            os.path.join(wandb.run.dir, "checkpoints", v[0])
-                        )  
-                        print("Saving:", os.path.join(self.experiment_dir, "checkpoints", v[0]))
-                        self.data_manager.add_save(
-                            os.path.join(wandb.run.dir, "checkpoints", v[0]),
-                            "checkpoints/"
-                        )
-                    except FileNotFoundError:
-                        keep[k]=v"""
-            
+                    data_to_log[k]=np.mean(v)
+            self.data_manager.add_scalar(data_to_log, timestep * self.num_envs)
             #self.data_manager.add_scalar({prefix + 'Termination / Engaged':torch.sum(self.engaged_once).item()}, timestep * self.num_envs)
         # reset data containers for next iteration
         self._track_rewards.clear()
