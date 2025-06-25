@@ -37,14 +37,14 @@ ckpt_record_path="$ckpt_filepath/$exp_name-$current_datetime.txt"
 echo $ckpt_record_path
 #touch $ckpt_record_path
 #touch "$ckpt_filepath/$exp_name-$current_datetime-recorder_output.log"
-python -m exp_control.record_ckpts.single_task_ckpt_recorder \
-    --headless \
-    --task=$task_name \
-    --decimation=16 \
-    --ckpt_record_path=$ckpt_record_path \
-    --use_ft_sensor=$use_ft_sensor \
-    --hybrid_control=$action_idx \
-    > "$ckpt_filepath/$exp_name-$current_datetime-recorder_output.log" 2>&1 &
+#python -m exp_control.record_ckpts.single_task_ckpt_recorder \
+#    --headless \
+#    --task=$task_name \
+#    --decimation=16 \
+#    --ckpt_record_path=$ckpt_record_path \
+#    --use_ft_sensor=$use_ft_sensor \
+#    --hybrid_control=$action_idx \
+#    > "$ckpt_filepath/$exp_name-$current_datetime-recorder_output.log" 2>&1 &
 
 python -m learning.ppo_factory_trainer \
     --headless \
@@ -54,7 +54,7 @@ python -m learning.ppo_factory_trainer \
     --exp_tag=$exp_tag \
     --wandb_group_prefix=$prefix \
     --max_steps=50000000 \
-    --num_envs=$((4 * $num_agents)) \
+    --num_envs=$((256 * $num_agents)) \
     --num_agents=$num_agents \
     --exp_name="$4_${obs_modes[$obs_idx]}_$break_force_$current_datetime" \
     --exp_dir="$4_$current_datetime" \
