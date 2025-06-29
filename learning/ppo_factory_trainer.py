@@ -96,6 +96,7 @@ from wrappers.close_gripper_action_wrapper import GripperCloseEnv
 from models.default_mixin import Shared
 from models.bro_model import BroAgent, BroActor, BroCritic
 from models.SimBa import SimBaAgent, SimBaActor, SimBaCritic
+from models.SimBa_hybrid_control import HybridControlSimBaActor
 from envs.factory.dmp_obs_factory_env import DMPObsFactoryEnv
 from agents.agent_list import AgentList
 #import envs.FPiH.config.franka
@@ -164,7 +165,7 @@ def main(
         env_cfg.use_force_sensor = True
         env_cfg.obs_order.append("force_torque")
         env_cfg.state_order.append("force_torque")
-
+    #env_cfg.episode_length_s = 1.0
 
     """ set up time scales """
     env_cfg.decimation = args_cli.decimation
@@ -389,16 +390,29 @@ def main(
         a_cfg["agent"]["experiment"]["wandb_kwargs"] = wandb_kwargs
     
     agent_list = None
-    
-    models['policy'] = SimBaActor( #BroAgent(
-        observation_space=env.cfg.observation_space, 
-        action_space=env.action_space,
-        #action_gain=0.05,
-        device=device,
-        act_init_std = agent_cfg['models']['act_init_std'],
-        actor_n = agent_cfg['models']['actor']['n'],
-        actor_latent = agent_cfg['models']['actor']['latent_size']
-    ) 
+    if args_cli.hybrid_control==1:
+
+        models['policy'] = HybridControlSimBaActor( 
+            observation_space=env.cfg.observation_space, 
+            action_space=env.action_space,
+            #action_gain=0.05,
+            device=device,
+            act_init_std = agent_cfg['models']['act_init_std'],
+            actor_n = agent_cfg['models']['actor']['n'],
+            actor_latent = agent_cfg['models']['actor']['latent_size'],
+            force_scale= env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]
+        )
+    else:
+        models['policy'] = SimBaActor( #BroAgent(
+            observation_space=env.cfg.observation_space, 
+            action_space=env.action_space,
+            #action_gain=0.05,
+            device=device,
+            act_init_std = agent_cfg['models']['act_init_std'],
+            actor_n = agent_cfg['models']['actor']['n'],
+            actor_latent = agent_cfg['models']['actor']['latent_size']
+        ) 
+
     models["value"] = SimBaCritic( #BroAgent(
         state_space_size=env.cfg.state_space, 
         device=device,

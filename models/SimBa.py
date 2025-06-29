@@ -1,10 +1,11 @@
 import torch
 import torch.nn as nn
 import numpy as np
-
+from typing import Any, Mapping, Tuple, Union
 from skrl.models.torch import DeterministicMixin, GaussianMixin, Model
 import math
 from models.feature_net import NatureCNN, layer_init, he_layer_init
+from torch.distributions import MixtureSameFamily, Normal, Bernoulli, Independent, Categorical
 
 class SimBaLayer(nn.Module):
     def __init__(self, size, device):
@@ -161,7 +162,7 @@ class SimBaActor(GaussianMixin, Model):
         )
         with torch.no_grad():
             self.actor_mean.output[-2].weight *= 1.0 #TODO FIX THIS TO 0.01
-
+        
         self.actor_logstd = nn.Parameter(
             torch.ones(1, self.num_actions) * math.log(act_init_std)
         )
@@ -174,7 +175,7 @@ class SimBaActor(GaussianMixin, Model):
         #print("Policy compute:", role, inputs['states'].size(), inputs['states'][:,:self.num_observations].size())
         action_mean = self.action_gain * self.actor_mean(inputs['states'][:,:self.num_observations])
         return action_mean, self.actor_logstd.expand_as(action_mean), {}
-        
+           
 
 class SimBaCritic(DeterministicMixin, Model):
     def __init__(self, 

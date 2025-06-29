@@ -7,7 +7,7 @@ nick_names=("PiH" "Gear" "Nut")
 
 task_idx=0
 
-num_forces=6
+num_forces=2
 forces=(-1 10 1 25 50)
 obs_idx=0
 exp_tag="jun25_hybrid_control"

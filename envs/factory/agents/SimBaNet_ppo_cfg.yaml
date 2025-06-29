@@ -23,7 +23,7 @@ agent:
   mini_batches: 128 #steps / minibatch (256 envs * 50 steps per update)
   discount_factor: 0.99
   lambda: 0.99
-  learning_rate: 1.0e-5
+  learning_rate: 1.0e-6
   learning_rate_scheduler: KLAdaptiveLR
   learning_rate_scheduler_kwargs:
     kl_threshold: 0.01
