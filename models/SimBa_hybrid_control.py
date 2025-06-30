@@ -48,7 +48,7 @@ class ActionGMM(MixtureSameFamily):
                 (   
                     mix_sample_r[:,:3,0], 
                     comp_samples[:,:,0], 
-                    (comp_samples[:,:,1] - self.component_distribution.mean[:,:,1])[:,:3] / self.f_w
+                    (comp_samples[:,:,1] - self.component_distribution.mean[:,:,0])[:,:3] / self.f_w
                 ), dim=1 
             )
             return out_samples
