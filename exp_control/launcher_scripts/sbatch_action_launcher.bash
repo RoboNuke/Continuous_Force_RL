@@ -11,11 +11,11 @@ num_forces=1
 forces=(-1 10 1 25 50)
 obs_idx=0
 exp_tag="jun29_hybrid_control"
-wandb_group_prefix="Hybrid_Control_JUN24"
+wandb_group_prefix="Hybrid_Control_JUN29"
 
 for force_idx in $(seq 0 $((num_forces - 1)))
 do
-    for use_ft in $(seq 0 1) # only doing local and history
+    for use_ft in $(seq 0 0) # only doing local and history
     do 
         sbatch -J "${nick_names[$task_idx]}_$1_${samples[$sample_idx]}" -a 1-$num_exp_per exp_control/HPC_utils/hpc_batch.bash \
                 $task_idx \
