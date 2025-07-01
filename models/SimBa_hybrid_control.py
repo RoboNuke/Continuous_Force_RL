@@ -8,6 +8,7 @@ from models.feature_net import NatureCNN, layer_init, he_layer_init
 from torch.distributions import MixtureSameFamily, Normal, Bernoulli, Independent, Categorical
 from models.SimBa import SimBaNet
 from torch.distributions.distribution import Distribution
+import torch.nn.functional as F
 
 class ActionGMM(MixtureSameFamily):
     def __init__(
@@ -21,6 +22,17 @@ class ActionGMM(MixtureSameFamily):
         self.f_w = force_weight
               
 
+    def sample_gumbel_softmax(self,logits, tau=1.0, eps=1e-10):
+        """
+        logits: (batch, num_components)
+        Returns: differentiable soft one-hot (batch, num_components)
+        """
+        U = torch.rand_like(logits)
+        gumbel_noise = -torch.log(-torch.log(U + eps) + eps)
+        y = F.softmax((logits + gumbel_noise) / tau, dim=-1)
+        return y
+
+
     def sample(self, sample_shape=torch.Size()):
         # samples except moves to format consistant for action selection
         with torch.no_grad():
@@ -30,38 +42,59 @@ class ActionGMM(MixtureSameFamily):
             es = self.event_shape
 
             # mixture samples [n, B]
-            #print("Sample Shape:", sample_shape, self.f_w)
-            mix_sample = self.mixture_distribution.sample(sample_shape)
-            mix_shape = mix_sample.shape
+            probs = self.mixture_distribution.probs[:,:3,:]
+            weights = self.sample_gumbel_softmax(probs)
 
             # component samples [n, B, k, E]
-            comp_samples = self.component_distribution.sample(sample_shape)
-            
-            mix_sample_r = mix_sample.reshape(
-                mix_shape + torch.Size([1] * (len(es) + 1))
-            )
-            mix_sample_r = mix_sample_r.repeat(
-                torch.Size([1] * len(mix_shape)) + torch.Size([1]) + es
-            )
+            comp_samples = self.component_distribution.rsample(sample_shape)
+            #print(weights.size(), comp_samples.size())
+            #pos_sample = torch.sum(weights * comp_samples, dim=-1)
             #samples = torch.gather(comp_samples, gather_dim, mix_sample_r).squeeze(gather_dim)
+
             out_samples = torch.cat( 
                 (   
-                    mix_sample_r[:,:3,0], 
+                    weights[:,:,0], 
                     comp_samples[:,:,0], 
                     (comp_samples[:,:,1] - self.component_distribution.mean[:,:,0])[:,:3] / self.f_w
                 ), dim=1 
             )
+            #print(out_samples[0,:])
             return out_samples
 
     def log_prob(self, action):
+        """
         #  convert to GMM format
-        sel_matrix = torch.where(action[:,:3] > 0, True, False)
+        #print(action[0,:])
+        sel_matrix = action[:,:3] #torch.where(action[:,:3]>0.9, True, False)
         pose_action = action[:,3:9]
         force_action = action[:,9:] * self.f_w
 
         x = pose_action 
-        x[:,0:3] += ~sel_matrix * force_action
+        x[:,0:3] += (1.0-sel_matrix) * force_action
+        #print("Log Prob log_prob:", super().log_prob(x)[0,:].size())
         return super().log_prob(x)
+        """
+
+        #  convert to GMM format
+        #print(action[0,:])
+        batch_size = action.shape[0]
+        logits = torch.ones((batch_size,6,2), device=action.device)
+        logits[:,:3,0] = 1 - action[:,:3] 
+        logits[:,:3,1] = action[:,:3] 
+        mean1 = action[:, 3:9]             # (batch, 6)
+        offset = action[:, 9:12] * self.f_w   # (batch, 3)
+        mean2 = mean1.clone()
+        mean2[:,:3] += offset              # (batch, 6)
+
+        # Combine means and expand to component axis
+        means = torch.stack([mean1, mean2], dim=2)  # (batch, 3 dims, 2 components)
+
+        log_probs = self.component_distribution.log_prob(means)
+        
+        log_weights = F.log_softmax(logits, dim=-1)
+        
+        log_mix = torch.logsumexp(log_weights + log_probs, dim=-1)
+        return log_mix
 
 
 class HybridGMMMixin(GaussianMixin):
@@ -88,37 +121,35 @@ class HybridGMMMixin(GaussianMixin):
         # map from states/observations to mean actions and log standard deviations
         mean_actions, log_std, outputs = self.compute(inputs, role)
         
-        num_envs = mean_actions.size()[0]
+        batch_size = mean_actions.shape[0]
 
+        logits = torch.ones((batch_size,6), device=mean_actions.device)
+        logits[:,:3] = mean_actions[:,:3]            # (batch, 6) – one logit per dim for 2 components
+        mean1 = mean_actions[:, 3:9]             # (batch, 6)
+        offset = mean_actions[:, 9:12] * self.force_scale    # (batch, 3)
+        mean2 = mean1.clone()
+        mean2[:,:3] += offset              # (batch, 6)
 
-        new_log_std = torch.zeros((num_envs,6,2), device=log_std.device)
-        new_log_std[:,:,0] = log_std[:,:6].view((num_envs,6))
-        new_log_std[:,:3,1] = log_std[:,6:].view((num_envs,3))
-        new_log_std[:,3:,1] = log_std[:,3:6].view(num_envs,3)
-        log_std = new_log_std + 1e-6
-        
-        # clamp log standard deviations
-        if self._g_clip_log_std:
-            log_std = torch.clamp(log_std, self._g_log_std_min, self._g_log_std_max)
+        # Combine means and expand to component axis
+        means = torch.stack([mean1, mean2], dim=2)  # (batch, 3 dims, 2 components)
 
-        self._g_log_std = log_std
-        self._g_num_samples = mean_actions.shape[0]
+        # std
+        std = torch.ones_like(means)
+        std[:,:,0] = log_std[:,:6]
+        std[:,:3,1] = log_std[:,6:9]
+        std[:,3:,1] = log_std[:,3:6]
+
+        # Create component Gaussians: Normal(loc, scale)
+        components = Normal(loc=means, scale=std.exp())  # (batch, 6, 2)
+
+        # Categorical logits need to be expanded to match components
+        mix_logits = torch.zeros((batch_size, 6, 2), device=mean_actions.device)
+        mix_logits[:,:,0] = 1-logits[:,:]
+        mix_logits[:,:,1] = logits[:,:]
         
-        # distribution
-        holder=torch.zeros((num_envs,6,2), device=log_std.device) # batch size, action dim, distribution
-        holder[:,:,0] = mean_actions[:,:3].repeat(1,2)
-        holder[:,:,1] = (1-mean_actions[:,:3]).repeat(1,2)
-        #print("Holder:", holder)
-        b_dist = Categorical(holder)
+        mix_dist = Categorical(probs=mix_logits)
         
-        dist_means = torch.zeros((num_envs,6,2), device=log_std.device) # batch size, action dim, distributions
-        dist_means[:,:,0] = mean_actions[:,3:9]
-        dist_means[:,:3,1] = self.force_scale * mean_actions[:,3:6] + mean_actions[:,9:]
-        dist_means[:,3:,1] = mean_actions[:, 6:9]
-        
-        error_dist = Normal(dist_means, log_std)
-        
-        self._g_distribution = ActionGMM(b_dist, error_dist, force_weight=self.force_scale)
+        self._g_distribution = ActionGMM(mix_dist, components, force_weight=self.force_scale)
 
         actions = self._g_distribution.sample()
 
@@ -128,11 +159,13 @@ class HybridGMMMixin(GaussianMixin):
 
         # log of the probability density function
         log_prob = self._g_distribution.log_prob(inputs.get("taken_actions", actions))
+        #print("Act log prob:", log_prob.size())
         if self._g_reduction is not None:
             log_prob = self._g_reduction(log_prob, dim=-1)
         if log_prob.dim() != actions.dim():
             log_prob = log_prob.unsqueeze(-1)
-
+        #print("Act log prob redux:", log_prob.size())
+        
         outputs["mean_actions"] = mean_actions
         return actions, log_prob, outputs
     

@@ -165,7 +165,7 @@ def main(
         env_cfg.use_force_sensor = True
         env_cfg.obs_order.append("force_torque")
         env_cfg.state_order.append("force_torque")
-    #env_cfg.episode_length_s = 1.0
+    #env_cfg.episode_length_s = 2.5
 
     """ set up time scales """
     env_cfg.decimation = args_cli.decimation

@@ -7,7 +7,7 @@ break_force: -1
 # this is the parameters for the BroNet shared model
 models:
   force_encoding: None
-  act_init_std: 2.0 # note this is paired with tanh on action mean and scaled by env ##0.025 # max linear motion is 0.05 => 99.6 will be in that range
+  act_init_std: 1.0 # note this is paired with tanh on action mean and scaled by env ##0.025 # max linear motion is 0.05 => 99.6 will be in that range
   critic_output_init_mean: 20 # seemed to be early value policy drives to
   critic:
     n: 2
@@ -23,11 +23,11 @@ agent:
   mini_batches: 128 #steps / minibatch (256 envs * 50 steps per update)
   discount_factor: 0.99
   lambda: 0.99
-  learning_rate: 1.0e-7
+  learning_rate: 1.0e-4
   learning_rate_scheduler: KLAdaptiveLR
   learning_rate_scheduler_kwargs:
     kl_threshold: 0.01
-    min_lr: 1.0e-9
+    min_lr: 1.0e-6
   # below are not args
   random_timesteps: 0
   learning_starts: 0
@@ -39,7 +39,7 @@ agent:
 
   entropy_loss_scale: 0.0 #0.000005
   value_loss_scale: 1.0
-  kl_threshold: 1.0 #0.05
+  kl_threshold: 0.05
   rewards_shaper_scale: 1.0
   time_limit_bootstrap: True
 
