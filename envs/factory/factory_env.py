@@ -430,9 +430,9 @@ class FactoryEnv(DirectRLEnv):
         self.generate_ctrl_signals()
 
 
-    def _calc_ctrl_pos(self):            
+    def _calc_ctrl_pos(self, min_idx=0, max_idx=3):            
         # Interpret actions as target pos displacements and set pos target
-        pos_actions = self.actions[:, 0:3] * self.pos_threshold
+        pos_actions = self.actions[:, min_idx:max_idx] * self.pos_threshold
         
         self.ctrl_target_fingertip_midpoint_pos = self.fingertip_midpoint_pos + pos_actions
         # To speed up learning, never allow the policy to move more than 5cm away from the base.
@@ -445,9 +445,9 @@ class FactoryEnv(DirectRLEnv):
         
         self.ctrl_target_fingertip_midpoint_pos = self.fixed_pos_action_frame + pos_error_clipped
 
-    def _calc_ctrl_quat(self):        
+    def _calc_ctrl_quat(self, min_idx=0, max_idx=3):        
         # Interpret actions as target rot (axis-angle) displacements
-        rot_actions = self.actions[:, 3:6]
+        rot_actions = self.actions[:, min_idx:max_idx]
         if self.cfg_task.unidirectional_rot:
             rot_actions[:, 2] = -(rot_actions[:, 2] + 1.0) * 0.5  # [-1, 0]
         rot_actions = rot_actions * self.rot_threshold

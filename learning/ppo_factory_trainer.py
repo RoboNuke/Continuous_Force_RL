@@ -160,7 +160,7 @@ def main(
     """ Set up fragileness """
     env_cfg.break_force = args_cli.break_force
 
-    env_cfg.use_force_sensor = False
+    env_cfg.use_force_sensor = False or args_cli.hybrid_control==1
     if args_cli.use_ft_sensor > 0:
         env_cfg.use_force_sensor = True
         env_cfg.obs_order.append("force_torque")
