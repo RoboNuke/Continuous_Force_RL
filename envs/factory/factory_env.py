@@ -495,6 +495,7 @@ class FactoryEnv(DirectRLEnv):
     def generate_ctrl_signals(self):
         """Get Jacobian. Set Franka DOF position targets (fingers) or DOF torques (arm)."""
         #print(self.arm_mass_matrix)
+        # joint_torque is the null space control terms
         self.joint_torque, self.applied_wrench = fc.compute_dof_torque(
             cfg=self.cfg,
             dof_pos=self.joint_pos,
@@ -510,13 +511,13 @@ class FactoryEnv(DirectRLEnv):
             task_prop_gains=self.task_prop_gains,
             task_deriv_gains=self.task_deriv_gains,
             device=self.device,
-        )
+        ) # this calculates osc on goal pose and biases with null space
 
         # set target for gripper joints to use physx's PD controller
         self.ctrl_target_joint_pos[:, 7:9] = self.ctrl_target_gripper_dof_pos
         self.joint_torque[:, 7:9] = 0.0
 
-        self._robot.set_joint_position_target(self.ctrl_target_joint_pos)
+        self._robot.set_joint_position_target(self.ctrl_target_joint_pos) # this is not used since actuator gains = 0
         self._robot.set_joint_effort_target(self.joint_torque)
 
     def _get_dones(self):
@@ -647,7 +648,7 @@ class FactoryEnv(DirectRLEnv):
         rew_dict['curr_engaged'] = curr_engaged.clone().float()
 
         rew_dict["curr_successes"] = curr_successes.clone().float()
-
+        
         rew_buf = (
             rew_dict["kp_coarse"]
             + rew_dict["kp_baseline"]

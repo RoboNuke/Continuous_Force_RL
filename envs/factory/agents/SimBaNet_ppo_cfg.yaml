@@ -58,7 +58,7 @@ agent:
     group: ""
   
 
-  track_ckpts: False
+  track_ckpts: True
   ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_tracker2.txt"
 video_tracking:
   # note to use this must run with --video --enable_cameras

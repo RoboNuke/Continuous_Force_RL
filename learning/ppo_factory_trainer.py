@@ -28,7 +28,7 @@ parser.add_argument("--use_ft_sensor", type=int, default=0, help="Adds force sen
 parser.add_argument("--break_force", type=float, default=-1.0, help="Force at which the held object breaks (peg, gear or nut)")
 parser.add_argument("--exp_tag", type=str, default="debug", help="Tag to apply to exp in wandb")
 parser.add_argument("--wandb_group_prefix", type=str, default="", help="Prefix of wandb group to add this to")
-parser.add_argument("--hybrid_control", type=int, default=0, help="Switches to hybrid control as the action space")
+parser.add_argument("--parallel_control", type=int, default=0, help="Switches to parallel force position control as the action space")
 # logging
 parser.add_argument("--exp_name", type=str, default=None, help="What to name the experiment on WandB")
 parser.add_argument("--exp_dir", type=str, default=None, help="Directory to store the experiment in")
@@ -96,7 +96,7 @@ from wrappers.close_gripper_action_wrapper import GripperCloseEnv
 from models.default_mixin import Shared
 from models.bro_model import BroAgent, BroActor, BroCritic
 from models.SimBa import SimBaAgent, SimBaActor, SimBaCritic
-from models.SimBa_hybrid_control import HybridControlSimBaActor
+from models.SimBa_parallel_control import ParallelControlSimBaActor
 from envs.factory.dmp_obs_factory_env import DMPObsFactoryEnv
 from agents.agent_list import AgentList
 #import envs.FPiH.config.franka
@@ -133,7 +133,7 @@ from omni.isaac.lab_tasks.utils.wrappers.skrl import SkrlVecEnvWrapper
 
 
 #from wrappers.info_video_recorder_wrapper import InfoRecordVideo
-from wrappers.hybrid_control_action_wrapper import HybridControlActionWrapper
+from wrappers.parallel_force_pos_action_wrapper import ParallelForcePosActionWrapper
 from agents.wandb_logger_ppo_agent import WandbLoggerPPO
 from agents.mp_agent import MPAgent
 import copy
@@ -156,11 +156,12 @@ def main(
     global evaluating
     global mp_agent
     env_cfg.filter_collisions = True
+    print("Ckpt Path:", args_cli.ckpt_tracker_path)
 
     """ Set up fragileness """
     env_cfg.break_force = args_cli.break_force
 
-    env_cfg.use_force_sensor = False or args_cli.hybrid_control==1
+    env_cfg.use_force_sensor = False or args_cli.parallel_control==1
     if args_cli.use_ft_sensor > 0:
         env_cfg.use_force_sensor = True
         env_cfg.obs_order.append("force_torque")
@@ -335,9 +336,9 @@ def main(
     else:
         vid_env = None
 
-    if args_cli.hybrid_control==1:
-        print("\n\n[INFO] Using Hybrid Control Wrapper.\n\n")
-        env = HybridControlActionWrapper(env)
+    if args_cli.parallel_control==1:
+        print("\n\n[INFO] Using Parallel Control Wrapper.\n\n")
+        env = ParallelForcePosActionWrapper(env)
 
 
     if args_cli.log_smoothness_metrics:
@@ -390,9 +391,9 @@ def main(
         a_cfg["agent"]["experiment"]["wandb_kwargs"] = wandb_kwargs
     
     agent_list = None
-    if args_cli.hybrid_control==1:
+    if args_cli.parallel_control==1:
 
-        models['policy'] = HybridControlSimBaActor( 
+        models['policy'] = ParallelControlSimBaActor( 
             observation_space=env.cfg.observation_space, 
             action_space=env.action_space,
             #action_gain=0.05,

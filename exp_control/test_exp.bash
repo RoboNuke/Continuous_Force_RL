@@ -17,15 +17,15 @@ task_name="${task_name/ObsType/${obs_modes[obs_idx]}}"
 task_name="${task_name/TaskType/${tasks[task_idx]}}"
 echo "Env name: $task_name"
 
-use_ft_sensor=0
+use_ft_sensor=1
 exp_tag="debug"
-prefix="debug_hybrid_model"
-num_agents=1
+prefix="stab_rew_bias_fixes"
+num_agents=5
 break_force=-1
 current_datetime=$(date +"%Y-%m-%d %H:%M:%S")
-num_history_samples=16
-num_envs_per_agent=128
-hybrid_control=1
+num_history_samples=8
+num_envs_per_agent=256
+parallel_control=1
 
 #CUDA_LAUNCH_BLOCKING=1 
 HYDRA_FULL_ERROR=1 python -m learning.ppo_factory_trainer \
@@ -40,12 +40,13 @@ HYDRA_FULL_ERROR=1 python -m learning.ppo_factory_trainer \
     --exp_name="$3_${obs_modes[$obs_idx]}_$break_force_$current_datetime" \
     --exp_dir="$3_$current_datetime" \
     --no_vids \
-    --decimation=16 \
+    --decimation=8 \
     --history_sample_size=$num_history_samples \
     --break_force=$break_force \
     --headless \
-    --hybrid_control=$hybrid_control \
-    --init_eval
+    --parallel_control=$parallel_control \
+    --log_ckpt_data=1 \
+    --ckpt_tracker_path="/nfs/stak/users/brownhun/ckpt_trackers/$3_$current_datetime_ckpt_tracker.txt"
     #--ckpt_path="/home/hunter/good_hist_agent.pt" 
     #--hybrid_control 
 

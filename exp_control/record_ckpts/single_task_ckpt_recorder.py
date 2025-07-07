@@ -15,7 +15,7 @@ parser.add_argument("--task", type=str, default="Isaac-Factory-PegInsert-Local-v
 parser.add_argument("--ckpt_record_path", type=str, default="/nfs/stak/users/brownhun/ckpt_tracker.txt")
 parser.add_argument("--break_force", type=float, default=-1.0, help="Force at which the held object breaks (peg, gear or nut)")
 parser.add_argument("--use_ft_sensor", type=int, default=0, help="Adds force sensor data to the observation space")
-parser.add_argument("--hybrid_control", type=int, default=0, help="Switches to hybrid control as the action space")
+parser.add_argument("--parallel_control", type=int, default=0, help="Switches to parallel control as the action space")
 parser.add_argument("--log_smoothness_metrics", action="store_true", default=False, help="Log the sum squared velocity, jerk and force metrics")
 
 # append AppLauncher cli args
@@ -54,8 +54,9 @@ from skrl.resources.preprocessors.torch import RunningStandardScaler
 #from wrappers.smoothness_obs_wrapper import SmoothnessObservationWrapper
 from wrappers.close_gripper_action_wrapper import GripperCloseEnv
 from models.default_mixin import Shared
+from models.SimBa_parallel_control import ParallelControlSimBaActor
 from wrappers.smoothness_obs_wrapper import SmoothnessObservationWrapper
-from wrappers.hybrid_control_action_wrapper import HybridControlActionWrapper
+from wrappers.parallel_force_pos_action_wrapper import ParallelForcePosActionWrapper
 #from models.bro_model import BroAgent
 #from wrappers.DMP_observation_wrapper import DMPObservationWrapper
 
@@ -261,18 +262,30 @@ def getEnv(env_cfg, task):
     #env = GripperCloseEnv(env)
     return env
 
-def getAgent(env, agent_cfg, task_name, device):
+def getAgent(env, agent_cfg, task_name, device, args_cli, env_cfg):
     models = {}
     agent_cfg['agent']['track_ckpts'] = False
-    models['policy'] = SimBaActor( #BroAgent(
-        observation_space=env.cfg.observation_space, 
-        action_space=env.action_space,
-        #action_gain=0.05,
-        device=device,
-        act_init_std = agent_cfg['models']['act_init_std'],
-        actor_n = agent_cfg['models']['actor']['n'],
-        actor_latent = agent_cfg['models']['actor']['latent_size']
-    ) 
+    if args_cli.parallel_control==1:
+        models['policy'] = ParallelControlSimBaActor(
+            observation_space=env.cfg.observation_space,
+            action_space=env.action_space,
+            #action_gain=0.05,                                                                                                                                                              
+            device=device,
+            act_init_std = agent_cfg['models']['act_init_std'],
+            actor_n = agent_cfg['models']['actor']['n'],
+            actor_latent = agent_cfg['models']['actor']['latent_size'],
+            force_scale= env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]
+        )
+    else:
+        models['policy'] = SimBaActor( #BroAgent(
+            observation_space=env.cfg.observation_space, 
+            action_space=env.action_space,
+            #action_gain=0.05,
+            device=device,
+            act_init_std = agent_cfg['models']['act_init_std'],
+            actor_n = agent_cfg['models']['actor']['n'],
+            actor_latent = agent_cfg['models']['actor']['latent_size']
+        ) 
 
     models["value"] = SimBaCritic( #BroAgent(
         state_space_size=env.cfg.state_space, 
@@ -338,7 +351,7 @@ def main(
     """ Set up fragileness """
     env_cfg.break_force = args_cli.break_force
 
-    env_cfg.use_force_sensor = False
+    env_cfg.use_force_sensor = False or args_cli.parallel_control==1
     if args_cli.use_ft_sensor > 0:
         env_cfg.use_force_sensor = True
         env_cfg.obs_order.append("force_torque")
@@ -372,9 +385,9 @@ def main(
     
     env = Img2InfoWrapperclass(env)
 
-    if args_cli.hybrid_control==1:
-        print("\n\n[INFO] Using Hybrid Control Wrapper.\n\n")
-        env = HybridControlActionWrapper(env)
+    if args_cli.parallel_control==1:
+        print("\n\n[INFO] Using Parallel Control Wrapper.\n\n")
+        env = ParallelForcePosActionWrapper(env)
 
 
     if args_cli.log_smoothness_metrics:
@@ -391,7 +404,7 @@ def main(
     device = env.device
     images = torch.zeros((max_rollout_steps, num_envs*180, 240, 3), device = env.device)
 
-    agent = getAgent(env, agent_cfg, task, device)
+    agent = getAgent(env, agent_cfg, task, device, args_cli, env_cfg)
 
     print("configured...")
     while True:

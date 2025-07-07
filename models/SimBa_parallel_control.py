@@ -30,15 +30,18 @@ class ActionGMM(MixtureSameFamily):
         U = torch.rand_like(logits)
         gumbel_noise = -torch.log(-torch.log(U + eps) + eps)
         y_gumble = (logits + gumbel_noise) / tau
-
+        #print("Gumm:", F.softmax(y_gumble[0,:,0],dim=-1)>0.5)
         # sample from uniform distribution
-        U = torch.rand_like(logits[:,0]) # one per batch
-        y_uniform = torch.rand_like(y_gumble)
-
-        y = torch.where(U <= 0.01, y_uniform, y_gumble)
+        U = torch.rand_like(logits[:,:,0]) # one per batch
+        y_uniform = torch.rand_like(y_gumble[:,:,0])
+        y = torch.zeros_like(y_gumble)
+        gumble_idxs = U > 0.01
+        y[gumble_idxs, ...] = y_gumble[gumble_idxs, ...]
+        y[~gumble_idxs][:,0] = y_uniform[~gumble_idxs]
+        y[~gumble_idxs][:,1] = 1.0 - y_uniform[~gumble_idxs]
         y = F.softmax(y, dim=-1)
-        print(y, F.softmax(y_gumble,dim=-1))
-        return y
+        #print("Uni:", F.softmax(y_uniform[0,:],dim=-1)> 0.5)
+        return torch.where(y>0.5, 1.0, 0.0)
 
 
     def sample(self, sample_shape=torch.Size()):
@@ -66,7 +69,7 @@ class ActionGMM(MixtureSameFamily):
                     (comp_samples[:,:,1] - self.component_distribution.mean[:,:,0])[:,:3] / self.f_w
                 ), dim=1 
             )
-            print(out_samples[0,:])
+            #print(out_samples[0,:])
             return out_samples
 
     def log_prob(self, action):
@@ -86,9 +89,9 @@ class ActionGMM(MixtureSameFamily):
         #  convert to GMM format
         #print(action[0,:])
         batch_size = action.shape[0]
-        logits = torch.ones((batch_size,6,2), device=action.device)
-        logits[:,:3,0] = 1 - action[:,:3] 
-        logits[:,:3,1] = action[:,:3] 
+        logits = torch.ones((batch_size,6), device=action.device)
+        logits[:,:3] = action[:,:3] 
+        #logits[:,:3,1] = 1.0 - action[:,:3] 
         mean1 = action[:, 3:9]             # (batch, 6)
         offset = action[:, 9:12] * self.f_w   # (batch, 3)
         mean2 = mean1.clone()
@@ -99,8 +102,10 @@ class ActionGMM(MixtureSameFamily):
 
         log_probs = self.component_distribution.log_prob(means)
         
-        log_weights = F.log_softmax(logits, dim=-1)
-        
+        log_weights = self.mixture_distribution.log_prob(logits)#F.log_softmax(logits, dim=-1)
+
+        log_weights = torch.stack([log_weights, (1-log_weights.exp()).log()], dim=2)
+        #print(log_weights[0,:].exp())
         log_mix = torch.logsumexp(log_weights + log_probs, dim=-1)
         return log_mix
 
@@ -152,15 +157,15 @@ class ParallelGMMMixin(GaussianMixin):
 
         # Categorical logits need to be expanded to match components
         mix_logits = torch.zeros((batch_size, 6, 2), device=mean_actions.device)
-        mix_logits[:,:,0] = 1-logits[:,:]
-        mix_logits[:,:,1] = logits[:,:]
+        mix_logits[:,:,0] = logits[:,:]
+        mix_logits[:,:,1] = 1-logits[:,:]
         
         mix_dist = Categorical(probs=mix_logits)
         
         self._g_distribution = ActionGMM(mix_dist, components, force_weight=self.force_scale)
 
         actions = self._g_distribution.sample()
-
+        #print("Act:", actions[0,:])
         # clip actions
         if self._g_clip_actions:
             actions = torch.clamp(actions, min=self._g_clip_actions_min, max=self._g_clip_actions_max)
@@ -177,7 +182,7 @@ class ParallelGMMMixin(GaussianMixin):
         outputs["mean_actions"] = mean_actions
         return actions, log_prob, outputs
     
-class ParallelControlSimBaActor(HybridGMMMixin, Model):
+class ParallelControlSimBaActor(ParallelGMMMixin, Model):
     def __init__(
         self,
         observation_space,
@@ -208,6 +213,7 @@ class ParallelControlSimBaActor(HybridGMMMixin, Model):
         )
         with torch.no_grad():
             self.actor_mean.output[-2].weight *= 1.0 #TODO FIX THIS TO 0.01
+            self.actor_mean.output[-2].bias[:3] = -1.1
             
         self.actor_logstd = nn.Parameter(
             torch.ones(1, 9) * math.log(act_init_std)
@@ -224,7 +230,7 @@ class ParallelControlSimBaActor(HybridGMMMixin, Model):
         action_mean = self.action_gain * self.actor_mean(inputs['states'][:,:self.num_observations])
         #print("raw action mean:", action_mean)
         action_mean[:,:3] = (action_mean[:,:3] + 1.0) / 2.0
-        #print("final:", action_mean)
+        #print("final:", action_mean[:,:3])
         return action_mean, self.actor_logstd.expand(action_mean.size()[0],-1), {}
     
 

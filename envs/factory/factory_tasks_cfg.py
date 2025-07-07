@@ -75,6 +75,10 @@ class FactoryTask:
     ee_success_yaw: float = 0.0  # nut_thread task only.
     action_penalty_scale: float = 0.0
     action_grad_penalty_scale: float = 0.0
+
+    force_active_threshold: float = 1.0
+    bad_force_cmd_rew: float = -1.0
+    good_force_cmd_rew: float = 1.0
     # Reward function details can be found in Appendix B of https://arxiv.org/pdf/2408.04587.
     # Multi-scale keypoints are used to capture different phases of the task.
     # Each reward passes the keypoint distance, x, through a squashing function:
@@ -89,6 +93,7 @@ class FactoryTask:
     success_threshold: float = 0.04
     engage_threshold: float = 0.9
 
+    
 
 @configclass
 class Peg8mm(HeldAssetCfg):

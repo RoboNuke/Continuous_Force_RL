@@ -11,13 +11,13 @@ import numpy as np
 
 class ParallelForcePosActionWrapper(gym.ActionWrapper):
     """
-    Use this wrapper changes the task to using a hybrid control env
+    Use this wrapper changes the task to using a parallel control env
         in order to do this within the IsaacLab + Factory framework
         we override the _apply_action function which is called by IsaacLab
         env at each physics step and we overwrite (if we want to) generate_ctrl_signals
         which is called in factory env 
 
-        This is simple hybrid control, we take the error in force and multiply it by a gain
+        This is simple parallel control, we take the error in force and multiply it by a gain
         that theoretically converts it to the equivalent of pose error. This is then added 
         to the change in pose and fed to the initial env.  The logical inverse of the selection
         "matrix" (really a vector) is used to select between force control and pose control in 
@@ -32,6 +32,8 @@ class ParallelForcePosActionWrapper(gym.ActionWrapper):
         # get these for factory env
         self.old_randomize_initial_state = self.env.unwrapped.randomize_initial_state
         self.env.unwrapped.randomize_initial_state = self.randomize_initial_state
+        self.old_update_rew = self.env.unwrapped._update_rew_buf
+        self.env.unwrapped._update_rew_buf = self._update_reward_buf
 
         #self.old_pre_physics_step = self.env.unwrapped._pre_physics_step
         self.env.unwrapped._pre_physics_step = self._pre_physics_step
@@ -46,7 +48,7 @@ class ParallelForcePosActionWrapper(gym.ActionWrapper):
 
         # reconfigure spaces to match
         self.unwrapped._configure_gym_env_spaces()
-
+        self.cfg_task = self.unwrapped.cfg_task
         self.new_action = torch.zeros((self.unwrapped.num_envs, 6), device = self.unwrapped.device)
         self.unwrapped.prev_actions = torch.zeros_like(self.new_action)
         self.unwrapped.actions = torch.zeros_like(self.new_action)
@@ -71,13 +73,46 @@ class ParallelForcePosActionWrapper(gym.ActionWrapper):
         # this is setup so if we want to vary the gain we can add it here
 
     def _calc_ctrl_force(self, min_idx=9, max_idx=12):
+        # we interpret the action as a change in current force reading
+        # threshold defines the maximum change allowed
         self.force_action = self.unwrapped.actions[:,min_idx:max_idx] * self.force_threshold
+        # adding force reading gives us a absolute goal
+        self.force_action += self.unwrapped.robot_force_torque[:,:3]
+        # clipping keeps in in bounds
         self.force_action = torch.clip(
             self.force_action, -self.force_action_bounds, self.force_action_bounds
         )  
 
+
+    def _update_reward_buf(self, curr_successes):
+        rew_buf = self.old_update_rew(curr_successes)
+        #print("Prio Rew:", rew_buf.T)
+        # reward when selection and force/pos match
+        #print(self.unwrapped.robot_force_torque[:2,:3])
+        active_force = torch.abs(self.unwrapped.robot_force_torque[:,:3]) > self.cfg_task.force_active_threshold
+        #print(active_force[:2,:])
+        force_ctrl = self.sel_matrix
+
+        bad_force_ctrl = torch.logical_and(force_ctrl, ~active_force)
+        good_force_ctrl = torch.logical_and(force_ctrl, active_force)
+        good_pos_ctrl = torch.logical_and(~force_ctrl, ~active_force)
+        bad_pos_ctrl = torch.logical_and(~force_ctrl, active_force)
+
+        # get n,3 bools for good and bad
+        good_dims = torch.logical_or(good_force_ctrl, good_pos_ctrl)
+        good_idxs = torch.any(good_dims, dim=1)
+        # get n,1 bools for adding reward
+        bad_dims = torch.logical_or(bad_force_ctrl, bad_pos_ctrl)
+        bad_idxs  = torch.any(bad_dims, dim=1)
+
+        #print(good_dims.size(), good_idxs.size())
+        rew_buf += self.cfg_task.good_force_cmd_rew * torch.sum(good_dims,dim=1)
+        rew_buf  += self.cfg_task.bad_force_cmd_rew  * torch.sum(bad_dims, dim=1)
+        #print("Final:", rew_buf.T)
+        return rew_buf
+    
     def _pre_physics_step(self, action):
-        self.sel_matrix = action[:,:3] #torch.where(action[:,:3] > 0, True, False)
+        self.sel_matrix = action[:,:3] > 0.5
         
         self.unwrapped.extras[f'Hybrid Controller / Force Control X'] = action[:,0]#.mean()
         self.unwrapped.extras[f'Hybrid Controller / Force Control Y'] = action[:,1]#.mean()
@@ -104,7 +139,7 @@ class ParallelForcePosActionWrapper(gym.ActionWrapper):
         self._calc_ctrl_force()
 
         # update current values
-        self._compute_intermediate_values(dt=self.physics_dt) 
+        self.env.unwrapped._compute_intermediate_values(dt=self.env.unwrapped.physics_dt) 
 
         # smoothness metrics
         self.unwrapped.ep_ssv += (torch.linalg.norm(self.unwrapped.ee_linvel_fd, axis=1))
@@ -129,13 +164,13 @@ class ParallelForcePosActionWrapper(gym.ActionWrapper):
 
         self.unwrapped.ctrl_target_gripper_dof_pos = 0.0
         
-        force_error =  self.sel_matrix * ( self.unwrapped.robot_force_torque[:,:3] - self.force_action )
-        delta_pos = self.pos_action + self.kp * force_error - self.fixed_pos_action_frame
+        force_error =  self.sel_matrix * ( self.force_action - self.unwrapped.robot_force_torque[:,:3])
+        delta_pos = self.pos_action + self.kp * force_error - self.unwrapped.fixed_pos_action_frame
 
         pos_error_clipped = torch.clip(
             delta_pos,
-            -self.unwrapped.cfg.pos_action_bounds[0],
-            self.unwrapped.cfg.pos_action_bounds[0]
+            -self.unwrapped.cfg.ctrl.pos_action_bounds[0],
+            self.unwrapped.cfg.ctrl.pos_action_bounds[0]
         )
         
         # set control target
