@@ -15,7 +15,12 @@ parser.add_argument("--task", type=str, default="Isaac-Factory-PegInsert-Local-v
 parser.add_argument("--ckpt_record_path", type=str, default="/nfs/stak/users/brownhun/ckpt_tracker.txt")
 parser.add_argument("--break_force", type=float, default=-1.0, help="Force at which the held object breaks (peg, gear or nut)")
 parser.add_argument("--use_ft_sensor", type=int, default=0, help="Adds force sensor data to the observation space")
-parser.add_argument("--parallel_control", type=int, default=0, help="Switches to parallel control as the action space")
+# controller/agent params
+parser.add_argument("--parallel_control", type=int, default=0, help="Switches to parallel force position control as the action space")
+parser.add_argument("--parallel_agent", type=int, default=0, help="Switches to parallel force position agent using calculated log probs based on controller")
+parser.add_argument("--hybrid_control", type=int, default=0, help="Switches to hybrid force/position control as the action space")
+parser.add_argument("--hybrid_agent", type=int, default=0, help="Switches to hybrid force/position agent using calculated log probs based on controller")
+
 parser.add_argument("--log_smoothness_metrics", action="store_true", default=False, help="Log the sum squared velocity, jerk and force metrics")
 
 # append AppLauncher cli args
@@ -55,8 +60,10 @@ from skrl.resources.preprocessors.torch import RunningStandardScaler
 from wrappers.close_gripper_action_wrapper import GripperCloseEnv
 from models.default_mixin import Shared
 from models.SimBa_parallel_control import ParallelControlSimBaActor
+from models.SimBa_hybrid_control import HybridControlSimBaActor
 from wrappers.smoothness_obs_wrapper import SmoothnessObservationWrapper
 from wrappers.parallel_force_pos_action_wrapper import ParallelForcePosActionWrapper
+from wrappers.hybrid_control_action_wrapper import HybridForcePosActionWrapper
 #from models.bro_model import BroAgent
 #from wrappers.DMP_observation_wrapper import DMPObservationWrapper
 
@@ -136,10 +143,16 @@ def getNextCkpt(
                         continue
                     else:
                         file.write(line)
-
-            ckpt_path, task, gif_path, wandb_project, run_id = next_line.split() # order: ckpt_path, task, gif_path, wandb_project, run_id
+            if len(next_line.split()) == 5:
+                ckpt_path, task, gif_path, wandb_project, run_id = next_line.split()
+            else: # len(next_line.split()) == 7:
+                a, b, e, task, c, d,f, wandb_project, run_id = next_line.split()
+                ckpt_path = a + " " + b + " " + e
+                gif_path = c + " " + d + " " + f
+                
             return ckpt_path, gif_path, wandb_project, run_id
-        except:
+        except Exception as e:
+            print("Exception:", e)
             return False, False, False, False
 
 
@@ -265,16 +278,29 @@ def getEnv(env_cfg, task):
 def getAgent(env, agent_cfg, task_name, device, args_cli, env_cfg):
     models = {}
     agent_cfg['agent']['track_ckpts'] = False
-    if args_cli.parallel_control==1:
+    if args_cli.parallel_agent==1:
         models['policy'] = ParallelControlSimBaActor(
             observation_space=env.cfg.observation_space,
             action_space=env.action_space,
-            #action_gain=0.05,                                                                                                                                                              
+            #action_gain=0.05,                               
             device=device,
             act_init_std = agent_cfg['models']['act_init_std'],
             actor_n = agent_cfg['models']['actor']['n'],
             actor_latent = agent_cfg['models']['actor']['latent_size'],
             force_scale= env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]
+        )
+    elif args_cli.hybrid_agent==1:
+        models['policy'] = HybridControlSimBaActor(
+            observation_space=env.cfg.observation_space, 
+            action_space=env.action_space,
+            #action_gain=0.05,
+            device=device,
+            act_init_std = agent_cfg['models']['act_init_std'],
+            actor_n = agent_cfg['models']['actor']['n'],
+            actor_latent = agent_cfg['models']['actor']['latent_size'],
+            force_scale= env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0], # 1    => 1
+            pos_scale = env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0],     # 2    => 4
+            rot_scale = env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]     # 2.91 => 8.4681
         )
     else:
         models['policy'] = SimBaActor( #BroAgent(
@@ -351,7 +377,7 @@ def main(
     """ Set up fragileness """
     env_cfg.break_force = args_cli.break_force
 
-    env_cfg.use_force_sensor = False or args_cli.parallel_control==1
+    env_cfg.use_force_sensor = False or args_cli.parallel_control==1 or args_cli.hybrid_control==1
     if args_cli.use_ft_sensor > 0:
         env_cfg.use_force_sensor = True
         env_cfg.obs_order.append("force_torque")
@@ -388,7 +414,10 @@ def main(
     if args_cli.parallel_control==1:
         print("\n\n[INFO] Using Parallel Control Wrapper.\n\n")
         env = ParallelForcePosActionWrapper(env)
-
+        
+    if args_cli.hybrid_control==1:
+        print("\n\n[INFO]: Using Hybrid Control Wrapper.\n\n")
+        env = HybridForcePosActionWrapper(env)
 
     if args_cli.log_smoothness_metrics:
         print("\n\n[INFO] Recording Smoothness Metrics in info.\n\n")
@@ -408,10 +437,12 @@ def main(
 
     print("configured...")
     while True:
+        print("Ckpt Record Path:", args_cli.ckpt_record_path)
         ckpt_path, gif_path, wandb_project, run_id = getNextCkpt(args_cli.task, ckpt_tracker_path=args_cli.ckpt_record_path)
         if ckpt_path == False:
             print("Waiting 2 minutes")
-            time.sleep(120) 
+            for i in tqdm.tqdm(range(120), file=sys.stdout):
+                time.sleep(1) 
             continue # try again
         print(f"Filming {ckpt_path}")
         # load wandb run

@@ -5,9 +5,10 @@ import torch
 import envs.factory.factory_control as fc
 try:
     import isaacsim.core.utils.torch as torch_utils
-except:
+except ImportError:
     import omni.isaac.core.utils.torch as torch_utils
 import numpy as np
+
 
 class ParallelForcePosActionWrapper(gym.ActionWrapper):
     """
@@ -30,6 +31,7 @@ class ParallelForcePosActionWrapper(gym.ActionWrapper):
             history=1):
         super().__init__(env)
         # get these for factory env
+        
         self.old_randomize_initial_state = self.env.unwrapped.randomize_initial_state
         self.env.unwrapped.randomize_initial_state = self.randomize_initial_state
         self.old_update_rew = self.env.unwrapped._update_rew_buf
@@ -49,9 +51,6 @@ class ParallelForcePosActionWrapper(gym.ActionWrapper):
         # reconfigure spaces to match
         self.unwrapped._configure_gym_env_spaces()
         self.cfg_task = self.unwrapped.cfg_task
-        self.new_action = torch.zeros((self.unwrapped.num_envs, 6), device = self.unwrapped.device)
-        self.unwrapped.prev_actions = torch.zeros_like(self.new_action)
-        self.unwrapped.actions = torch.zeros_like(self.new_action)
         self.sel_matrix = torch.zeros((self.unwrapped.num_envs, 3), dtype=bool, device=self.unwrapped.device)
         self.force_action = torch.zeros((self.unwrapped.num_envs, 3), device=self.unwrapped.device)
         self.pos_action = torch.zeros_like(self.force_action)
@@ -81,8 +80,7 @@ class ParallelForcePosActionWrapper(gym.ActionWrapper):
         # clipping keeps in in bounds
         self.force_action = torch.clip(
             self.force_action, -self.force_action_bounds, self.force_action_bounds
-        )  
-
+        )
 
     def _update_reward_buf(self, curr_successes):
         rew_buf = self.old_update_rew(curr_successes)
@@ -117,13 +115,6 @@ class ParallelForcePosActionWrapper(gym.ActionWrapper):
         self.unwrapped.extras[f'Hybrid Controller / Force Control X'] = action[:,0]#.mean()
         self.unwrapped.extras[f'Hybrid Controller / Force Control Y'] = action[:,1]#.mean()
         self.unwrapped.extras[f'Hybrid Controller / Force Control Z'] = action[:,2]#.mean()
-        #new_action = self.pose_action 
-        # we inturrpret force action as a difference in force from current force reading
-        # this means that goal_force = force_action + current_force
-        # the error term is error = goal_force - current_force => error = force_action
-        #new_action[:,0:3] += self.kp * ~self.sel_matrix * self.force_action
-        self.unwrapped.prev_action = self.unwrapped.actions
-        self.unwrapped.actions = action
 
         env_ids = self.unwrapped.reset_buf.nonzero(as_tuple=False).squeeze(-1)
         if len(env_ids) > 0:
@@ -131,6 +122,7 @@ class ParallelForcePosActionWrapper(gym.ActionWrapper):
         self.unwrapped.actions = (
             self.unwrapped.cfg.ctrl.ema_factor * action.clone().to(self.unwrapped.device) + (1 - self.unwrapped.cfg.ctrl.ema_factor) * self.unwrapped.actions
         )
+        #self.unwrapped.actions[:,:3] = action[:,:3] # set the selector variables to fixed values
         
         # set goal 1 time
         self.env.unwrapped._calc_ctrl_pos(min_idx=3, max_idx=6)
@@ -172,8 +164,6 @@ class ParallelForcePosActionWrapper(gym.ActionWrapper):
             -self.unwrapped.cfg.ctrl.pos_action_bounds[0],
             self.unwrapped.cfg.ctrl.pos_action_bounds[0]
         )
-        
         # set control target
         self.unwrapped.ctrl_target_fingertip_midpoint_pos = pos_error_clipped + self.unwrapped.fixed_pos_action_frame
-        
         self.env.unwrapped.generate_ctrl_signals()

@@ -55,7 +55,8 @@ class SimBaNet(nn.Module):
 
 
 class SimBaAgent(GaussianMixin, DeterministicMixin, Model):
-    def __init__(self, 
+    def __init__(
+            self, 
             observation_space,
             action_space,
             device, 
@@ -71,7 +72,8 @@ class SimBaAgent(GaussianMixin, DeterministicMixin, Model):
             clip_log_std=True, 
             min_log_std=-20, 
             max_log_std=2, 
-            reduction="sum"
+            reduction="sum",
+            sigma_idx=0
         ):
         Model.__init__(self, observation_space, action_space, device)
         GaussianMixin.__init__(self, clip_actions, clip_log_std, min_log_std, max_log_std, reduction)
@@ -93,7 +95,7 @@ class SimBaAgent(GaussianMixin, DeterministicMixin, Model):
             tan_out=False,
             device=device
         )
-        
+        self.sigma_idx = sigma_idx
         #self.actors = [BroNet(actor_n, in_size, self.act_size, actor_latent, device, tanh_out=True) for i in range(tot_actors)]
         self.actor_mean = SimBaNet(
             n=actor_n, 
@@ -122,8 +124,8 @@ class SimBaAgent(GaussianMixin, DeterministicMixin, Model):
         if role == "policy":
             self._shared_output = self.feature_net(inputs)
             action_mean = self.actor_mean(self._shared_output)
-            #print("Action:", action_mean[0,:].T)
-            #print("Computed:", self.actor_logstd[0,0].item())
+            if self.sigma_idx > 0:
+                action_mean[:,:self.sigma_idx] = (action_mean[:,:self.sigma_idx] + 1)/2.0
             return action_mean, self.actor_logstd.expand_as(action_mean), {}
         elif role == "value":
             shared_output = self.feature_net(inputs) if self._shared_output is None else self._shared_output
@@ -134,20 +136,21 @@ class SimBaAgent(GaussianMixin, DeterministicMixin, Model):
 
 class SimBaActor(GaussianMixin, Model):
     def __init__(
-        self,
-        observation_space,
-        action_space,
-        device, 
-        act_init_std = 0.60653066, # -0.5 value used in maniskill 
-        actor_n = 2,
-        actor_latent=512,
-        action_gain=1.0,
+            self,
+            observation_space,
+            action_space,
+            device, 
+            act_init_std = 0.60653066, # -0.5 value used in maniskill 
+            actor_n = 2,
+            actor_latent=512,
+            action_gain=1.0,
 
-        clip_actions=False,
-        clip_log_std=True, 
-        min_log_std=-20, 
-        max_log_std=2, 
-        reduction="sum"
+            clip_actions=False,
+            clip_log_std=True, 
+            min_log_std=-20, 
+            max_log_std=2, 
+            reduction="sum",
+            sigma_idx=0
         ):
         Model.__init__(self, observation_space, action_space, device)
         GaussianMixin.__init__(self, clip_actions, clip_log_std, min_log_std, max_log_std, reduction)
@@ -162,10 +165,13 @@ class SimBaActor(GaussianMixin, Model):
         )
         with torch.no_grad():
             self.actor_mean.output[-2].weight *= 1.0 #TODO FIX THIS TO 0.01
+            if sigma_idx > 0:
+                self.actor_mean.output[-2].bias[:sigma_idx] = -1.1
         
         self.actor_logstd = nn.Parameter(
             torch.ones(1, self.num_actions) * math.log(act_init_std)
         )
+        self.sigma_idx = sigma_idx
 
     def act(self, inputs, role):
         #print("policy act:", inputs, role)
@@ -174,6 +180,9 @@ class SimBaActor(GaussianMixin, Model):
     def compute(self, inputs, role):
         #print("Policy compute:", role, inputs['states'].size(), inputs['states'][:,:self.num_observations].size())
         action_mean = self.action_gain * self.actor_mean(inputs['states'][:,:self.num_observations])
+        if self.sigma_idx > 0:
+            action_mean[:,:self.sigma_idx] = (action_mean[:,:self.sigma_idx] + 1)/2.0
+        #print(action_mean[0,:self.sigma_idx])
         return action_mean, self.actor_logstd.expand_as(action_mean), {}
            
 

@@ -16,7 +16,7 @@ class ActionGMM(MixtureSameFamily):
         mixture_distribution: Categorical,
         component_distribution: Distribution,
         validate_args: Optional[bool] = None,
-        force_weight: int = 1.0,
+        force_weight: float = 1.0,
     ) -> None:
         super().__init__(mixture_distribution, component_distribution, validate_args)
         self.f_w = force_weight
@@ -149,8 +149,8 @@ class ParallelGMMMixin(GaussianMixin):
         # std
         std = torch.ones_like(means)
         std[:,:,0] = log_std[:,:6]
-        std[:,:3,1] = log_std[:,6:9]
-        std[:,3:,1] = (log_std[:,3:6]**2) * (self.force_scale**4) + (log_std[:,:3]**2)
+        std[:,3:,1] = log_std[:,3:6]
+        std[:,:3,1] = (log_std[:,6:9]**2) * (self.force_scale**4) + (log_std[:,:3]**2)
 
         # Create component Gaussians: Normal(loc, scale)
         components = Normal(loc=means, scale=std.exp())  # (batch, 6, 2)

@@ -370,10 +370,12 @@ class FactoryEnv(DirectRLEnv):
 
     def _pre_physics_step(self, action):
         """Apply policy actions with smoothing."""
+        print("base pre physics")
         env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
         if len(env_ids) > 0:
             self._reset_buffers(env_ids)
 
+        self.prev_actions = self.actions
         self.actions = (
             self.cfg.ctrl.ema_factor * action.clone().to(self.device) + (1 - self.cfg.ctrl.ema_factor) * self.actions
         )
@@ -595,7 +597,7 @@ class FactoryEnv(DirectRLEnv):
         #    #success_times = self.ep_success_times[nonzero_success_ids].sum() / len(nonzero_success_ids)
         #    self.extras["success_times"] = self.ep_success_times
 
-        self.prev_actions = self.actions.clone()
+        #self.prev_actions = self.actions.clone()
 
         if torch.any(self._get_dones()[1]): # only log when reset from truncation (timeout)
             self.extras['Episode / successes'] = self.ep_succeeded

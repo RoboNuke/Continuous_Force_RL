@@ -28,7 +28,16 @@ parser.add_argument("--use_ft_sensor", type=int, default=0, help="Adds force sen
 parser.add_argument("--break_force", type=float, default=-1.0, help="Force at which the held object breaks (peg, gear or nut)")
 parser.add_argument("--exp_tag", type=str, default="debug", help="Tag to apply to exp in wandb")
 parser.add_argument("--wandb_group_prefix", type=str, default="", help="Prefix of wandb group to add this to")
+
+# controller/agent params
 parser.add_argument("--parallel_control", type=int, default=0, help="Switches to parallel force position control as the action space")
+parser.add_argument("--parallel_agent", type=int, default=0, help="Switches to parallel force position agent using calculated log probs based on controller")
+parser.add_argument("--hybrid_control", type=int, default=0, help="Switches to hybrid force/position control as the action space")
+parser.add_argument("--hybrid_agent", type=int, default=0, help="Switches to hybrid force/position agent using calculated log probs based on controller")
+parser.add_argument("--hybrid_selection_reward", type=str, default="simp", help="Allows different rewards on the force/position selection: options are [simp, dirs, delta]")
+parser.add_argument("--control_torques", type=int, default=0, help="Allows hybrid control to effect torques not just forces")
+
+
 # logging
 parser.add_argument("--exp_name", type=str, default=None, help="What to name the experiment on WandB")
 parser.add_argument("--exp_dir", type=str, default=None, help="Directory to store the experiment in")
@@ -97,6 +106,7 @@ from models.default_mixin import Shared
 from models.bro_model import BroAgent, BroActor, BroCritic
 from models.SimBa import SimBaAgent, SimBaActor, SimBaCritic
 from models.SimBa_parallel_control import ParallelControlSimBaActor
+from models.SimBa_hybrid_control import HybridControlSimBaActor
 from envs.factory.dmp_obs_factory_env import DMPObsFactoryEnv
 from agents.agent_list import AgentList
 #import envs.FPiH.config.franka
@@ -134,6 +144,7 @@ from omni.isaac.lab_tasks.utils.wrappers.skrl import SkrlVecEnvWrapper
 
 #from wrappers.info_video_recorder_wrapper import InfoRecordVideo
 from wrappers.parallel_force_pos_action_wrapper import ParallelForcePosActionWrapper
+from wrappers.hybrid_control_action_wrapper import HybridForcePosActionWrapper
 from agents.wandb_logger_ppo_agent import WandbLoggerPPO
 from agents.mp_agent import MPAgent
 import copy
@@ -161,7 +172,7 @@ def main(
     """ Set up fragileness """
     env_cfg.break_force = args_cli.break_force
 
-    env_cfg.use_force_sensor = False or args_cli.parallel_control==1
+    env_cfg.use_force_sensor = False or args_cli.parallel_control==1 or args_cli.hybrid_control==1
     if args_cli.use_ft_sensor > 0:
         env_cfg.use_force_sensor = True
         env_cfg.obs_order.append("force_torque")
@@ -184,6 +195,18 @@ def main(
     env_cfg.episode_length_s = float(max_rollout_steps * env_cfg.sim.dt * env_cfg.decimation)
     # things below are just important to have in wandb config file
     agent_cfg['agent']['experiment']['tags'].append(env_cfg.task_name)
+    
+    if args_cli.hybrid_control:
+        agent_cfg['agent']['experiment']['tags'].append('hybrid_ctrl')
+        agent_cfg['agent']['experiment']['tags'].append('hybrid_agent' if args_cli.hybrid_agent==1 else 'baseline_agent')
+        agent_cfg['agent']['experiment']['tags'].append('ctrl_torque' if args_cli.control_torques else 'no_torque')
+        agent_cfg['agent']['rew_type'] = args_cli.hybrid_selection_reward
+    elif args_cli.parallel_control:
+        agent_cfg['agent']['experiment']['tags'].append('parallel_ctrl')
+        agent_cfg['agent']['experiment']['tags'].append('parallel_agent' if args_cli.parallel_agent==1 else 'baseline_agent')
+    else:
+        agent_cfg['agent']['experiment']['tags'].append('baseline_agent')
+        
     agent_cfg['agent']['experiment']['project'] = args_cli.wandb_project
     agent_cfg['agent']['experiment']['tags'].append(args_cli.exp_tag)
     if args_cli.use_ft_sensor > 0:
@@ -337,9 +360,18 @@ def main(
         vid_env = None
 
     if args_cli.parallel_control==1:
-        print("\n\n[INFO] Using Parallel Control Wrapper.\n\n")
+        print("\n\n[INFO]: Using Parallel Control Wrapper.\n\n")
         env = ParallelForcePosActionWrapper(env)
 
+    if args_cli.hybrid_control==1:
+        print("\n\n[INFO]: Using Hybrid Control Wrapper.\n\n")
+        env = HybridForcePosActionWrapper(
+            env,
+            reward_type=args_cli.hybrid_selection_reward,
+            ctrl_torque = args_cli.control_torques
+        )
+        #env._pre_physics_step(None)
+        #assert 1 == 0
 
     if args_cli.log_smoothness_metrics:
         print("\n\n[INFO] Recording Smoothness Metrics in info.\n\n")
@@ -349,7 +381,12 @@ def main(
     env = SkrlVecEnvWrapper(
         env, 
         ml_framework="torch"
-    )  # same as: `wrap_env(env, wrapper="auto")   
+    )  # same as: `wrap_env(env, wrapper="auto")
+
+    #if args_cli.hybrid_control==1:
+    #    env._unwrapped = env._env
+    
+    
     print("Obs space:", env.cfg.observation_space)
     print("State Space:", env.cfg.state_space)
     print("Action Space:", env.action_space)
@@ -391,7 +428,7 @@ def main(
         a_cfg["agent"]["experiment"]["wandb_kwargs"] = wandb_kwargs
     
     agent_list = None
-    if args_cli.parallel_control==1:
+    if args_cli.parallel_agent==1:
 
         models['policy'] = ParallelControlSimBaActor( 
             observation_space=env.cfg.observation_space, 
@@ -403,7 +440,26 @@ def main(
             actor_latent = agent_cfg['models']['actor']['latent_size'],
             force_scale= env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]
         )
+    elif args_cli.hybrid_agent==1:
+        models['policy'] = HybridControlSimBaActor(
+            observation_space=env.cfg.observation_space, 
+            action_space=env.action_space,
+            #action_gain=0.05,
+            device=device,
+            act_init_std = agent_cfg['models']['act_init_std'],
+            actor_n = agent_cfg['models']['actor']['n'],
+            actor_latent = agent_cfg['models']['actor']['latent_size'],
+            force_scale= env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0], # 1    => 1
+            torque_scale = env_cfg.ctrl.default_task_force_gains[-1] * env_cfg.ctrl.torque_action_bounds[0],
+            pos_scale = env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0],     # 2    => 4
+            rot_scale = env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0],     # 2.91 => 8.4681
+            ctrl_torque=args_cli.control_torques
+        )
     else:
+        if args_cli.hybrid_control or args_cli.parallel_control:
+            sigma_idx = 6 if args_cli.control_torques else 3
+        else:
+            sigma_idx = 0
         models['policy'] = SimBaActor( #BroAgent(
             observation_space=env.cfg.observation_space, 
             action_space=env.action_space,
@@ -411,7 +467,8 @@ def main(
             device=device,
             act_init_std = agent_cfg['models']['act_init_std'],
             actor_n = agent_cfg['models']['actor']['n'],
-            actor_latent = agent_cfg['models']['actor']['latent_size']
+            actor_latent = agent_cfg['models']['actor']['latent_size'],
+            sigma_idx = sigma_idx
         ) 
 
     models["value"] = SimBaCritic( #BroAgent(

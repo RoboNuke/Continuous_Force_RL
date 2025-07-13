@@ -43,9 +43,47 @@ def compute_dof_torque(
     # 1) https://ethz.ch/content/dam/ethz/special-interest/mavt/robotics-n-intelligent-systems/rsl-dam/documents/RobotDynamics2018/RD_HS2018script.pdf
     # 2) Modern Robotics
 
-    num_envs = cfg.scene.num_envs
-    dof_torque = torch.zeros((num_envs, dof_pos.shape[1]), device=device)
-    task_wrench = torch.zeros((num_envs, 6), device=device)
+    task_wrench = compute_pose_task_wrench(
+        cfg,
+        dof_pos,
+        fingertip_midpoint_pos,
+        fingertip_midpoint_quat,
+        fingertip_midpoint_linvel,
+        fingertip_midpoint_angvel,
+        ctrl_target_fingertip_midpoint_pos,
+        ctrl_target_fingertip_midpoint_quat,
+        task_prop_gains,
+        task_deriv_gains,
+        device
+    )
+
+    return compute_dof_torque_from_wrench(
+        cfg,
+        dof_pos,
+        dof_vel,
+        task_wrench,
+        jacobian,
+        arm_mass_matrix,
+        device
+    )
+
+def compute_pose_task_wrench(
+    cfg,
+    dof_pos,
+    fingertip_midpoint_pos,
+    fingertip_midpoint_quat,
+    fingertip_midpoint_linvel,
+    fingertip_midpoint_angvel,
+    ctrl_target_fingertip_midpoint_pos,
+    ctrl_target_fingertip_midpoint_quat,
+    task_prop_gains,
+    task_deriv_gains,
+    device
+):
+    
+    # References:
+    # 1) https://ethz.ch/content/dam/ethz/special-interest/mavt/robotics-n-intelligent-systems/rsl-dam/documents/RobotDynamics2018/RD_HS2018script.pdf
+    # 2) Modern Robotics
 
     pos_error, axis_angle_error = get_pose_error(
         fingertip_midpoint_pos=fingertip_midpoint_pos,
@@ -65,8 +103,32 @@ def compute_dof_torque(
         task_prop_gains=task_prop_gains,
         task_deriv_gains=task_deriv_gains,
     )
-    task_wrench += task_wrench_motion
+    return task_wrench_motion
 
+def compute_force_task_wrench(
+        cfg,
+        dof_pos,
+        eef_force,
+        ctrl_target_force,
+        task_gains,
+        device
+):
+    return task_gains * (ctrl_target_force - eef_force)
+
+    
+        
+def compute_dof_torque_from_wrench(
+        cfg, #
+        dof_pos, #
+        dof_vel, #
+        task_wrench,
+        jacobian, #
+        arm_mass_matrix, #
+        device,#
+):
+    """ Computes the joint torque for given task wrench and includes null space compensation """
+    num_envs = cfg.scene.num_envs
+    dof_torque = torch.zeros((num_envs, dof_pos.shape[1]), device=device)
     # Set tau = J^T * tau, i.e., map tau into joint space as desired
     jacobian_T = torch.transpose(jacobian, dim0=1, dim1=2)
     dof_torque[:, 0:7] = (jacobian_T @ task_wrench.unsqueeze(-1)).squeeze(-1)
@@ -95,8 +157,7 @@ def compute_dof_torque(
     # TODO: Verify it's okay to no longer do gripper control here.
     dof_torque = torch.clamp(dof_torque, min=-100.0, max=100.0)
     return dof_torque, task_wrench
-
-
+        
 def get_pose_error(
     fingertip_midpoint_pos,
     fingertip_midpoint_quat,
@@ -182,7 +243,11 @@ def _get_delta_dof_pos(delta_pose, ik_method, jacobian, device):
 
 
 def _apply_task_space_gains(
-    delta_fingertip_pose, fingertip_midpoint_linvel, fingertip_midpoint_angvel, task_prop_gains, task_deriv_gains
+        delta_fingertip_pose,
+        fingertip_midpoint_linvel,
+        fingertip_midpoint_angvel,
+        task_prop_gains,
+        task_deriv_gains
 ):
     """Interpret PD gains as task-space gains. Apply to task-space error."""
 
