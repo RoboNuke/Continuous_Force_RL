@@ -25,7 +25,7 @@ echo "Env name: $task_name"
 
 use_ft_sensor=1
 num_agents=5
-current_datetime=$(date +"%Y-%m-%d %H:%M:%S")
+current_datetime=$(date +"%Y-%m-%d_%H:%M:%S")
 num_history_samples=8
 num_envs_per_agent=256
 hybrid_control=1
@@ -36,17 +36,30 @@ echo "Reward: $hybrid_selection_reward"
 echo "Ctrl Torques: $control_torques"
 #CUDA_LAUNCH_BLOCKING=1 
 #HYDRA_FULL_ERROR=1
+
+ckpt_path="/nfs/stak/users/brownhun/ckpt_trackers/$3_$current_datetime_ckpt_tracker.txt"
+
+#sbatch -J "$exp_tag_recorder_$current_datetime" exp_control/HPC_utils/hpc_batch_recorder.bash \
+#       $task_idx \
+#       $obs_idx \
+#       $break_force \
+#       $hybrid_agent \
+#       $ctrl_torque \
+#       $ckpt_path \
+#       $rew_type
+
+
 python -m learning.ppo_factory_trainer \
     --task=$task_name \
     --wandb_project="Continuous_Force_RL"\
     --use_ft_sensor=$use_ft_sensor \
     --exp_tag=$exp_tag \
-    --wandb_group_prefix="$3_${obs_modes[$obs_idx]}_$break_force_$current_datetime" \
+    --wandb_group_prefix="$3_${obs_modes[$obs_idx]}_$5_$8" \
     --max_steps=30000000 \
     --num_envs=$(($num_envs_per_agent * $num_agents)) \
     --num_agents=$num_agents \
-    --exp_name="$3_${obs_modes[$obs_idx]}_$break_force_$current_datetime" \
-    --exp_dir="$3_$current_datetime" \
+    --exp_name="$3_${obs_modes[$obs_idx]}_$8_$5_$current_datetime" \
+    --exp_dir="$3_$current_datetime_$8" \
     --no_vids \
     --decimation=8 \
     --history_sample_size=$num_history_samples \
@@ -57,4 +70,4 @@ python -m learning.ppo_factory_trainer \
     --log_ckpt_data=1 \
     --control_torques=$control_torques \
     --hybrid_selection_reward=$hybrid_selection_reward \
-    --ckpt_tracker_path="/nfs/stak/users/brownhun/ckpt_trackers/$3_$current_datetime_ckpt_tracker.txt"
+    --ckpt_tracker_path=$ckpt_path

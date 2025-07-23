@@ -36,6 +36,9 @@ parser.add_argument("--hybrid_control", type=int, default=0, help="Switches to h
 parser.add_argument("--hybrid_agent", type=int, default=0, help="Switches to hybrid force/position agent using calculated log probs based on controller")
 parser.add_argument("--hybrid_selection_reward", type=str, default="simp", help="Allows different rewards on the force/position selection: options are [simp, dirs, delta]")
 parser.add_argument("--control_torques", type=int, default=0, help="Allows hybrid control to effect torques not just forces")
+parser.add_argument("--impedance_control", type=int, default=0, help="Switches to impedance control as the action space")
+parser.add_argument("--impedance_agent", type=int, default=0, help="Switches to impedance agent using calculated log probs based on controller")
+parser.add_argument("--control_damping", type=int, default=0, help="Allows Impedance Controller Policy to predict the damping constants, else calculated with kd=2*sqrt(kp) (critically damped)")
 
 
 # logging
@@ -204,6 +207,11 @@ def main(
     elif args_cli.parallel_control:
         agent_cfg['agent']['experiment']['tags'].append('parallel_ctrl')
         agent_cfg['agent']['experiment']['tags'].append('parallel_agent' if args_cli.parallel_agent==1 else 'baseline_agent')
+    elif args_cli.impedance_control:
+        agent_cfg['agent']['experiment']['tags'].append('impedance_ctrl')
+        agent_cfg['agent']['experiment']['tags'].append('impedance_agent' if args_cli.impedance_agent==1 else 'baseline_agent')
+        agent_cfg['agent']['experiment']['tags'].append('ctrl_damping' if args_cli.control_damping else 'crit_damped')
+        
     else:
         agent_cfg['agent']['experiment']['tags'].append('baseline_agent')
         
@@ -362,13 +370,18 @@ def main(
     if args_cli.parallel_control==1:
         print("\n\n[INFO]: Using Parallel Control Wrapper.\n\n")
         env = ParallelForcePosActionWrapper(env)
-
-    if args_cli.hybrid_control==1:
+    elif args_cli.hybrid_control==1:
         print("\n\n[INFO]: Using Hybrid Control Wrapper.\n\n")
         env = HybridForcePosActionWrapper(
             env,
             reward_type=args_cli.hybrid_selection_reward,
             ctrl_torque = args_cli.control_torques
+        )
+    elif args_cli.impedance_control==1:
+        print("\n\n[Info]: Using Impedance Control Wrapper.\n\n")
+        env = ImpedanceActionWrapper(
+            env,
+            ctrl_damping=args_cli.control_damping
         )
         #env._pre_physics_step(None)
         #assert 1 == 0
@@ -454,6 +467,21 @@ def main(
             pos_scale = env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0],     # 2    => 4
             rot_scale = env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0],     # 2.91 => 8.4681
             ctrl_torque=args_cli.control_torques
+        )
+    elif args_cli.impedance_agent==1:
+        models['policy'] = ImpedanceControlSimBaActor(
+            observation_space=env.cfg.observation_space, 
+            action_space=env.action_space,
+            #action_gain=0.05,
+            device=device,
+            act_init_std = agent_cfg['models']['act_init_std'],
+            actor_n = agent_cfg['models']['actor']['n'],
+            actor_latent = agent_cfg['models']['actor']['latent_size'],
+            pos_scale = env_cfg.ctrl.pos_action_threshold[0],  
+            rot_scale = env_cfg.ctrl.rot_action_threshold[0],
+            prop_scale = env_cfg.ctrl.vic_prop_action_threshold[0],
+            damp_scale = env_cfg.ctrl.vic_damp_action_threshold[0],
+            ctrl_damping=args_cli.control_damping
         )
     else:
         if args_cli.hybrid_control or args_cli.parallel_control:

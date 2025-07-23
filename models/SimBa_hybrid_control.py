@@ -1,3 +1,4 @@
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -32,27 +33,33 @@ class HybridActionGMM(MixtureSameFamily):
         self.uniform_rate = uniform_rate
               
 
-    def sample_gumbel_softmax(self,logits, tau=1.0, eps=1e-10):
+    def sample_gumbel_softmax(self,logits, sample_shape=torch.Size(), tau=1.0, eps=1e-10):
         """
         logits: (batch, num_components)
         Returns: differentiable soft one-hot (batch, num_components)
         """
         # create sample with gumbel noise
-        U = torch.rand_like(logits)
+        #print("Sample Size:", sample_shape)
+        #print("comb:", (sample_shape + logits.size()))
+        U = torch.rand((sample_shape + logits.size()), device=logits.device)
+        #print("U size:", U.size())
+                       
         gumbel_noise = -torch.log(-torch.log(U + eps) + eps)
         y_gumble = F.softmax((logits + gumbel_noise) / tau,dim=-1)
-        
+        #print("gumble:", gumbel_noise.size(), y_gumble.size())
         # sample from uniform distribution
-        U = torch.rand_like(logits[:,:,0]) # one per batch
-        y_uniform = torch.rand_like(y_gumble[:,:,0])
+        U = torch.rand_like(gumbel_noise[...,0]) # one per batch
+        y_uniform = torch.rand_like(y_gumble[...,0])
         gumble_idxs = U > self.uniform_rate
+        #print(U.size(), y_uniform.size())
 
         # zip together final product
         y = torch.zeros_like(y_gumble)
-        y[:,:,0][gumble_idxs] = y_gumble[:,:,0][gumble_idxs]
-        y[:,:,1][gumble_idxs] = y_gumble[:,:,1][gumble_idxs]
-        y[:,:,0][~gumble_idxs] = y_uniform[~gumble_idxs]
-        y[:,:,1][~gumble_idxs] = 1.0 - y_uniform[~gumble_idxs]
+        #print("y:", y.size(), y_gumble.size(), gumble_idxs.size())
+        y[...,0][gumble_idxs] = y_gumble[...,0][gumble_idxs]
+        y[...,1][gumble_idxs] = y_gumble[...,1][gumble_idxs]
+        y[...,0][~gumble_idxs] = y_uniform[~gumble_idxs]
+        y[...,1][~gumble_idxs] = 1.0 - y_uniform[~gumble_idxs]
         return y
 
 
@@ -61,33 +68,24 @@ class HybridActionGMM(MixtureSameFamily):
         with torch.no_grad():
             # mixture samples [n, B]
             probs = self.mixture_distribution.probs.log()
-            weights = self.sample_gumbel_softmax(probs)
-
+            weights = self.sample_gumbel_softmax(probs, sample_shape=sample_shape)
+            
             # component samples [n, B, k, E]
             comp_samples = self.component_distribution.rsample(sample_shape)
-
+            #print(weights.size(), comp_samples.size())
+            #print(weights[...,0].size(), comp_samples[...,0:3,0].size(), comp_samples[...,3:6,0].size(), comp_samples[...,0:self.force_size,1].size())
+            out_samples = torch.cat( 
+                (   
+                    weights[...,:self.force_size,0], 
+                    comp_samples[...,0:6,0] / self.p_w,
+                    #comp_samples[...,3:6,0] / self.r_w,
+                    comp_samples[...,0:self.force_size,1] / self.f_w
+                ), dim=-1
+            )
+            out_samples[...,self.force_size+3:self.force_size+6] *= self.p_w / self.r_w
             if self.force_size > 3:
-                out_samples = torch.cat( 
-                    (   
-                        weights[:,:,0], 
-                        comp_samples[:,0:3,0] / self.p_w,
-                        comp_samples[:,3:6,0] / self.r_w,
-                        comp_samples[:,0:3,1] / self.f_w,
-                        comp_samples[:,3:6,1] / self.t_w
-                    ), dim=1 
-                )
-            else:
-                #print("weights:", weights.size())
-                out_samples = torch.cat( 
-                    (   
-                        weights[:,:3,0], 
-                        comp_samples[:,0:3,0] / self.p_w,
-                        comp_samples[:,3:6,0] / self.r_w,
-                        comp_samples[:,0:3,1] / self.f_w
-                    ), dim=1 
-                )
-                
-            
+                out_samples[...,3:6,1] * self.f_w / self.t_w
+            #print("Final:", out_samples.size())
             return out_samples
         
 
@@ -99,28 +97,50 @@ class HybridActionGMM(MixtureSameFamily):
         """
 
         #  convert to GMM format
-        batch_size = action.shape[0]
-        logits = torch.ones((batch_size,6), device=action.device)
-        logits[:,:self.force_size] = action[:,:self.force_size] 
-        #logits[:,:3,1] = 1.0 - action[:,:3] 
-        mean1 = action[:, self.force_size:self.force_size+6] * self.p_w         # (batch, 6)
-        mean1[:,3:] *= self.r_w / self.p_w
-        mean2 = torch.zeros_like(mean1)
-        mean2[:,:3] = action[:, self.force_size+6:6+2*self.force_size] * self.f_w
-        if self.force_size > 3:
-            mean2[:,3:] *= self.t_w / self.f_w
+        if len(action.shape) == 2:
+            batch_size = action.shape[0]
+            sample_size = 1
+        elif len(action.shape) == 3:
+            batch_size = action.shape[1]
+            sample_size = action.shape[0]
         else:
-            mean2[:,3:] = mean1[:,3:]
+            #print(action.shape)
+            batch_size = 0
+            sample_size = 0
+        #print("action size:", action.size())
+        #print(batch_size, sample_size)
+        logits = torch.ones((sample_size,batch_size,6), device=action.device)
+        logits[...,:self.force_size] = action[...,:self.force_size] 
+        #logits[:,:3,1] = 1.0 - action[:,:3] 
+        mean1 = action[..., self.force_size:self.force_size+6] * self.p_w         # (batch, 6)
+        mean1[...,3:] *= self.r_w / self.p_w
+        mean2 = torch.zeros_like(mean1)
+        mean2[...,:self.force_size] = action[..., self.force_size+6:6+2*self.force_size] * self.f_w
+        if self.force_size > 3:
+            mean2[...,3:] *= self.t_w / self.f_w
+        else:
+            mean2[...,3:] = mean1[...,3:]
 
         # Combine means and expand to component axis
-        means = torch.stack([mean1, mean2], dim=2)  # (batch, 6 dims, 2 components)
-
+        means = torch.stack([mean1, mean2], dim=-1)  # (batch, 6 dims, 2 components)
+        #print("mean sizes:", means.size(), means.unsqueeze(2).size())
+        #print("logit sizes:", logits.size())
+        #print(self.component_distribution.loc.size(), self.component_distribution.scale.size())
         log_probs = self.component_distribution.log_prob(means)
         log_weights = self.mixture_distribution.log_prob(logits)#F.log_softmax(logits, dim=-1)
 
-        log_weights = torch.stack([log_weights, (1-log_weights.exp()).log()], dim=2)
+        
+        log_weights = torch.stack([log_weights, (1-log_weights.exp()).log()], dim=-1)
+        #print(log_weights.size(), log_probs.size())
         log_mix = torch.logsumexp(log_weights + log_probs, dim=-1)
+        if sample_size == 1:
+            return torch.squeeze(log_mix, dim=0)
         return log_mix
+    
+    def entropy(self):
+        samples = self.sample(sample_shape=(10000,))
+        log_prob = self.log_prob(samples)
+        return -log_prob.mean(dim=0)
 
 
 class HybridGMMMixin(GaussianMixin):
@@ -165,7 +185,7 @@ class HybridGMMMixin(GaussianMixin):
 
         mean2 = torch.zeros_like(mean1)
         mean2[:,:self.force_size] = mean_actions[:, 6+self.force_size:6+2*self.force_size] * self.force_scale    # (batch, 6)
-        if self.force_size > 6:
+        if self.force_size > 3:
             mean2[:,3:6] *= self.torque_scale / self.force_scale
         else:
             mean2[:,3:6] = mean1[:,3:6] #set to position values to make mixture work
@@ -175,9 +195,9 @@ class HybridGMMMixin(GaussianMixin):
 
         # std
         std = torch.ones_like(means)
-        std[:,:3,0] = log_std[:,:3].exp() * self.pos_scale ** 2 #10000
-        std[:,3:,0] = log_std[:,3:6].exp() * self.rot_scale ** 2 #900
-        std[:,:3,1] = log_std[:,6:9].exp() * self.force_scale ** 2 #0.25
+        std[:,:3,0] = log_std[:,:3].exp() * self.pos_scale ** 2 #    36
+        std[:,3:,0] = log_std[:,3:6].exp() * self.rot_scale ** 2 #   8.5
+        std[:,:3,1] = log_std[:,6:9].exp() * self.force_scale ** 2 # 1
         if self.force_size > 3:
             std[:,3:,1] = log_std[:,9:].exp() * self.torque_scale ** 2 #0.25
         else:
@@ -266,7 +286,7 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
         )
         self.force_size = 6 if ctrl_torque else 3
         with torch.no_grad():
-            #self.actor_mean.output[-2].weight *= 0.1 #1.0 #TODO FIX THIS TO 0.01
+        #    #self.actor_mean.output[-2].weight *= 0.1 #1.0 #TODO FIX THIS TO 0.01
             self.actor_mean.output[-2].bias[:self.force_size] = -1.1
             
         self.actor_logstd = nn.Parameter(

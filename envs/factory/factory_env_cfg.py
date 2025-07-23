@@ -67,12 +67,19 @@ class CtrlCfg:
     rot_action_bounds = [1.0, 1.0, 1.0]
     force_action_bounds = [50.0, 50.0, 50.0]
     torque_action_bounds = [0.5, 0.5, 0.5]
-
+    
     pos_action_threshold = [0.02, 0.02, 0.02]
     rot_action_threshold = [0.097, 0.097, 0.097]
-    force_action_threshold = [10, 10, 10]
+    force_action_threshold = [100, 100, 100]
     torque_action_threshold = [0.1, 0.1, 0.1]
 
+    # gains for VIC (not used normally)
+    vic_prop_action_bounds = [1, 1, 1, 1, 1, 1]
+    vic_damp_action_bounds = [1, 1, 1, 1, 1, 1]
+
+    vic_prop_action_threshold = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+    vic_damp_action_threshold = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+    
     reset_joints = [1.5178e-03, -1.9651e-01, -1.4364e-03, -1.9761, -2.7717e-04, 1.7796, 7.8556e-01]
     reset_task_prop_gains = [300, 300, 300, 20, 20, 20]
     reset_rot_deriv_scale = 10.0

@@ -28,9 +28,9 @@ num_envs_per_agent=14
 parallel_control=0
 parallel_agent=0
 hybrid_control=1
-hybrid_agent=0
+hybrid_agent=1
 control_torques=0
-hybrid_selection_reward='delta'  #'simp' # 'dirs' 'delta'
+hybrid_selection_reward='simp'  #'simp' # 'dirs' 'delta'
 
 #CUDA_LAUNCH_BLOCKING=1 
 #HYDRA_FULL_ERROR=1
@@ -57,7 +57,7 @@ python -m learning.ppo_factory_trainer \
     --log_ckpt_data=1 \
     --control_torques=$control_torques \
     --hybrid_selection_reward=$hybrid_selection_reward \
-    --no_log_wandb \
+    --init_eval \
     --ckpt_tracker_path="/nfs/stak/users/brownhun/ckpt_trackers/$3_$current_datetime_ckpt_tracker.txt"
     #--ckpt_path="/home/hunter/good_hist_agent.pt" 
     #--hybrid_control 

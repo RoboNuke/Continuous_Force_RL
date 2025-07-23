@@ -1,0 +1,19 @@
+# Byte-compiled / optimized / compiled files
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+
+# C extensions
+*.so
+
+# emacs
+*~
+
+#vim
+*#
+
+# wandb + logging
+logs/
+wandb/
+outputs/

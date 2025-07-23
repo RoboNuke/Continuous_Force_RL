@@ -68,6 +68,8 @@ class HybridForcePosActionWrapper(gym.Wrapper):#FactoryWrapper):
         elif reward_type == "delta": # punish changing selection matrix
             self._old_sel_matrix = torch.zeros_like(self.sel_matrix)
             self._update_rew_buf = self._delta_update_rew_buf
+        elif reward_type == "base": # no rew for hybrid control
+            self._update_rew_buf = self.env.unwrapped._update_rew_buf
         else:
             raise NoImplementedError(f"Reward type {reward_type} is not implemented")
 
@@ -193,7 +195,7 @@ class HybridForcePosActionWrapper(gym.Wrapper):#FactoryWrapper):
         if self.force_size > 3:
             task_wrench[:,3:] = pos_wrench[:,3:]
 
-        task_wrench[:,3:5] = 0.0 # prevent rotating anywhere but parallel to tabletop
+        #task_wrench[:,3:5] = 0.0 # prevent rotating anywhere but parallel to tabletop
 
         self.unwrapped.joint_torque, task_wrench = fc.compute_dof_torque_from_wrench(
             cfg=self.unwrapped.cfg,
@@ -239,7 +241,7 @@ class HybridForcePosActionWrapper(gym.Wrapper):#FactoryWrapper):
 
         self.unwrapped.extras['Reward / Selection Matrix'] = sel_rew
         
-        return rew_buf + sel_rew
+        return rew_buf + sel_rew + self.force_size*torch.any(active_force, dim=1).float() * self.cfg_task.good_force_cmd_rew
     
     def _simp_update_rew_buf(self, curr_successes):
         #rew_buf = self.unwrapped._update_reward_buf(curr_successes)
@@ -259,7 +261,7 @@ class HybridForcePosActionWrapper(gym.Wrapper):#FactoryWrapper):
 
         self.unwrapped.extras['Reward / Selection Matrix'] = sel_rew
         
-        return rew_buf + sel_rew
+        return rew_buf + sel_rew + torch.any(active_force, dim=1).float() * self.cfg_task.good_force_cmd_rew
 
     def _delta_update_rew_buf(self, curr_successes):
         rew_buf = self.old_update_rew_buf(curr_successes)

@@ -20,8 +20,9 @@ parser.add_argument("--parallel_control", type=int, default=0, help="Switches to
 parser.add_argument("--parallel_agent", type=int, default=0, help="Switches to parallel force position agent using calculated log probs based on controller")
 parser.add_argument("--hybrid_control", type=int, default=0, help="Switches to hybrid force/position control as the action space")
 parser.add_argument("--hybrid_agent", type=int, default=0, help="Switches to hybrid force/position agent using calculated log probs based on controller")
-
+parser.add_argument("--control_torques", type=int, default=0, help="Allows hybrid control to effect torques not just forces")
 parser.add_argument("--log_smoothness_metrics", action="store_true", default=False, help="Log the sum squared velocity, jerk and force metrics")
+parser.add_argument("--hybrid_selection_reward", type=str, default="simp", help="Allows different rewards on the force/position selection: options are [simp, dirs, delta]")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -156,7 +157,7 @@ def getNextCkpt(
             return False, False, False, False
 
 
-def save_tensor_as_gif(tensor_list, filename, tot_rew, vals, succ_step, engaged_mask, duration=100, loop=0):
+def save_tensor_as_gif(tensor_list, filename, tot_rew, vals, succ_step, engaged_mask, force_control,duration=100, loop=0):
     """
     Saves a list of PyTorch tensors as a GIF image.
 
@@ -179,6 +180,7 @@ def save_tensor_as_gif(tensor_list, filename, tot_rew, vals, succ_step, engaged_
     vals = vals[img_idxs_display, :]
     succ_step = succ_step[img_idxs_display]
     engaged_mask = engaged_mask[img_idxs_display,:]
+    force_control = force_control[img_idxs_display,:,:]
 
     # edit tensor_list down
     new_tensor_list = torch.zeros((engaged_mask.size()[1], 180 * 3, 240 * 4, 3))
@@ -223,6 +225,12 @@ def save_tensor_as_gif(tensor_list, filename, tot_rew, vals, succ_step, engaged_
                 )
             # draw.text((x, y),"Sample Text",(r,g,b))
             draw.text((x * 240, y*180+160),f"Value Est={round(val.item(),2)}",(0,255,0),font=font)
+            ctrl_x = force_control[img_idx, i, 0]
+            ctrl_y = force_control[img_idx, i, 1]
+            ctrl_z = force_control[img_idx, i, 2]
+            draw.text((x * 240+20, y*180+135), f"X", (0 if ctrl_x else 255, 255 if ctrl_x else 0, 0), font=font)
+            draw.text((x * 240+50, y*180+135), f"Y", (0 if ctrl_y else 255, 255 if ctrl_y else 0, 0), font=font)
+            draw.text((x * 240+80, y*180+135), f"Z", (0 if ctrl_z else 255, 255 if ctrl_z else 0, 0), font=font)
 
         images.append(img)
         #plt.plot(img)
@@ -299,10 +307,16 @@ def getAgent(env, agent_cfg, task_name, device, args_cli, env_cfg):
             actor_n = agent_cfg['models']['actor']['n'],
             actor_latent = agent_cfg['models']['actor']['latent_size'],
             force_scale= env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0], # 1    => 1
+            torque_scale = env_cfg.ctrl.default_task_force_gains[-1] * env_cfg.ctrl.torque_action_bounds[0],
             pos_scale = env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0],     # 2    => 4
-            rot_scale = env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]     # 2.91 => 8.4681
+            rot_scale = env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0],     # 2.91 => 8.4681
+            ctrl_torque=args_cli.control_torques
         )
     else:
+        if args_cli.hybrid_control or args_cli.parallel_control:
+            sigma_idx = 6 if args_cli.control_torques else 3
+        else:
+            sigma_idx = 0
         models['policy'] = SimBaActor( #BroAgent(
             observation_space=env.cfg.observation_space, 
             action_space=env.action_space,
@@ -310,7 +324,8 @@ def getAgent(env, agent_cfg, task_name, device, args_cli, env_cfg):
             device=device,
             act_init_std = agent_cfg['models']['act_init_std'],
             actor_n = agent_cfg['models']['actor']['n'],
-            actor_latent = agent_cfg['models']['actor']['latent_size']
+            actor_latent = agent_cfg['models']['actor']['latent_size'],
+            sigma_idx = sigma_idx
         ) 
 
     models["value"] = SimBaCritic( #BroAgent(
@@ -417,7 +432,11 @@ def main(
         
     if args_cli.hybrid_control==1:
         print("\n\n[INFO]: Using Hybrid Control Wrapper.\n\n")
-        env = HybridForcePosActionWrapper(env)
+        env = HybridForcePosActionWrapper(
+            env,
+            reward_type=args_cli.hybrid_selection_reward,
+            ctrl_torque=args_cli.control_torques
+        )
 
     if args_cli.log_smoothness_metrics:
         print("\n\n[INFO] Recording Smoothness Metrics in info.\n\n")
@@ -465,6 +484,7 @@ def main(
             succ_step = torch.ones(size=(states.shape[0],), device=states.device, dtype=torch.int32) * max_rollout_steps
             tot_rew = torch.zeros(size=(states.shape[0], 1), device=states.device, dtype=torch.float32)
             engaged_mask = torch.zeros(size=(states.shape[0], max_rollout_steps), dtype=bool, device=device)
+            force_control = torch.zeros(size=(states.shape[0],max_rollout_steps, 3), dtype=bool, device=device)
             for i in tqdm.tqdm(range(max_rollout_steps), file=sys.stdout):
                 # get action
                 actions = agent.act(
@@ -481,7 +501,8 @@ def main(
                 next_states, step_rew, terminated, truncated, infos = env.step(actions)
                 next_states = torch.cat( (env.unwrapped.obs_buf['policy'], env.unwrapped.obs_buf['critic']),dim=1)
                 env.cfg.recording = True
-
+                # we collect thisa fter the step so that the ema is taken into account
+                force_control[:,i,:] = env.unwrapped.actions[:,:3] > 0.5
                 for k in range(env.num_envs):
                     images[i, k*180:(k+1)*180, 0:240, :] = infos['img'][k,:,:,:]
 
@@ -519,7 +540,7 @@ def main(
                         states = next_states
             # draw eval est + actions on image
             # make imgs into gif
-            save_tensor_as_gif(images, gif_path, tot_rew, torch.cat(vals, dim=1), succ_step, engaged_mask)
+            save_tensor_as_gif(images, gif_path, tot_rew, torch.cat(vals, dim=1), succ_step, engaged_mask, force_control)
             step_num = int(ckpt_path.split("/")[-1][6:-3])
             
             wandb.init(

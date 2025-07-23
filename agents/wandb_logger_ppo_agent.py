@@ -251,6 +251,7 @@ class WandbLoggerPPO(PPO):
             self.set_mode("train")
             #print("Return:", np.mean(np.array(self._track_rewards)))
             self._update(timestep, timesteps)
+            
             self.set_mode("eval")
 
         timestep += 1
@@ -525,7 +526,18 @@ class WandbLoggerPPO(PPO):
         super()._update(timestep, timesteps)
         # reset optimizer step
         self.resetAdamOptimizerTime(self.optimizer)
-        
+        self.track_data(
+            "Gradients / Action Mean",
+            self.policy.actor_mean.output[-2].weight.grad.norm().item()
+        )
+        self.track_data(
+            "Gradients / Log Std",
+            self.policy.actor_logstd.grad.norm().item()
+        )
+        self.track_data(
+            "Gradients / Critic",
+            self.value.critic.output[-2].weight.grad.norm().item()
+        )
         if self.cfg['track_layernorms']:
             self.track_data(
                 "Critic Layer Weight Norm / Output", 
