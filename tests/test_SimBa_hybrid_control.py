@@ -79,11 +79,23 @@ class TestHybridActionGMM(unittest.TestCase):
         self.assertTrue( p1 > 0.48 and p1 < 0.52)
     
     def test_log_prob(self):
+        self.batch_size=3
         from math import log
         test_case = torch.tensor(
-            [[ 0,1,0,1,0,1, 0,0, 0.5,0.5, 1,1, 0,0,0.5,0.5,1,1], # same value
-             [ 0,1,0,1,0,1, 0,0, 0,0, 0.5,0.5, 0.5,0.5, 1,1, 0.0,0.0],
-             [ 0,1,0,1,0,1, 0.5,0.5, 1,1, 1,1,  1,1, 0,0, 0.5,0.5]]
+            [[ 0.0, 1.0, 0.0, 1.0, 0.0, 1.0,
+
+               0.0, 0.5, 0.5, 1.0, 1.0, 0.0,
+               0.0, 0.5, 0.5, 1.0, 1.0, 0.0], # same value
+
+             [ 0.0, 1.0, 0.0, 1.0, 0.0, 1.0,
+
+               0.0, 0.0, 0.5, 0.5, 0.0, 0.0,
+               1.0, 1.0, 1.0, 1.0, 0.5, 0.5],
+
+             [ 0.0, 1.0, 0.0, 1.0, 0.0, 1.0,
+
+               1.0, 1.0, 1.0, 1.0, 0.5, 0.5,
+               0.5, 0.5, 0.0, 0.0, 0.0, 0.0]]
         )
 
         probs = {
@@ -96,17 +108,19 @@ class TestHybridActionGMM(unittest.TestCase):
         for i in range(3):
             s = torch.where(test_case[i,:6] > 0.5, 0.75, 0.25)
             sp = 1 - s
-            p = test_case[i,6:12]
-            f = test_case[i,12:18]
+            
             for k in range(6):
-                log_probs[i,k] = log( sp[k].item() * probs[p[k].item()][0] + s[k].item() * probs[f[k].item()][1] )
+                p = probs[test_case[i,6+k].item()][0]
+                f = probs[test_case[i,12+k].item()][1]
+                log_probs[i,k] = log( 0.75 * p + 0.25 * f )
                 
         test_log_prob = self.gmm.log_prob(test_case)
+        
         #print("Test:  ", test_log_prob[0,:].exp())
         #print("Answer:", log_probs[0,:].exp())
 
         self.assertTrue( torch.all(torch.abs(test_log_prob - log_probs) < 1e-3) )
-    
+    """
     def test_sample(self):
         self.gmm.uniform_rate = 0.0
         n = 100000.0
@@ -120,13 +134,14 @@ class TestHybridActionGMM(unittest.TestCase):
         self.assertTrue(torch.all(torch.abs(samps[:,:6] - 0.75) < 0.01))
         self.assertTrue(torch.all(torch.abs(samps[:,6:12] - 0.0) < 1e-2) )
         self.assertTrue(torch.all(torch.abs(samps[:,12:18] - 1.0) < 1e-2) )
-    
+    """
     def test_n_samples(self):
         self.gmm.uniform_rate = 0.0
         n = 100000
         samps = self.gmm.sample(sample_shape=(n,))
         samps[...,:6] = torch.where(samps[...,:6] > 0.5, 1.0, 0.0)
         samps = samps.mean(dim=0)
+        print(samps)
         self.assertTrue(torch.all(torch.abs(samps[...,:6] - 0.75) < 0.01))
         self.assertTrue(torch.all(torch.abs(samps[...,6:12] - 0.0) < 1e-2) )
         self.assertTrue(torch.all(torch.abs(samps[...,12:18] - 1.0) < 1e-2) )
@@ -135,6 +150,7 @@ class TestHybridActionGMM(unittest.TestCase):
         self.gmm.uniform_rate = 0.0
         entropy = self.gmm.entropy()
         self.assertTrue(entropy.size()[0] == self.batch_size)
+    
         
 if __name__=="__main__":
     unittest.main()

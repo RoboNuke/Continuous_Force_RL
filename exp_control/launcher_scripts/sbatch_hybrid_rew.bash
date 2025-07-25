@@ -5,7 +5,7 @@ nick_names=("PiH" "Gear" "Nut")
 task_idx=0
 obs_idx=0
 
-rew_types=( "simp" ) #"simp" "delta" "dirs" "base" )
+rew_types=( "base" ) #"simp" "delta" "dirs" "base" )
 exp_tag=$1 #"hybrid_baseline_llr"
 hybrid_agent=1
 ctrl_torque=0

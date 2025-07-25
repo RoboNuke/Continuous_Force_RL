@@ -114,7 +114,7 @@ from envs.factory.dmp_obs_factory_env import DMPObsFactoryEnv
 from agents.agent_list import AgentList
 #import envs.FPiH.config.franka
 import envs.factory
-
+from torch.optim.lr_scheduler import LinearLR
 """
 try:
     from isaaclab.envs import (
@@ -180,7 +180,7 @@ def main(
         env_cfg.use_force_sensor = True
         env_cfg.obs_order.append("force_torque")
         env_cfg.state_order.append("force_torque")
-    #env_cfg.episode_length_s = 2.5
+    env_cfg.episode_length_s = 2.5
 
     """ set up time scales """
     env_cfg.decimation = args_cli.decimation
@@ -260,8 +260,13 @@ def main(
     #print(env_cfg)
     # random sample some parameters
     if 'learning_rate_scheduler' in agent_cfg['agent'].keys():
-        # yaml doesn't read it as a class, but as a string idk
-        agent_cfg['agent']['learning_rate_scheduler'] = KLAdaptiveLR
+        if agent_cfg['agent']['learning_rate_scheduler'] == "KLAdaptiveLR":
+            # yaml doesn't read it as a class, but as a string idk
+            agent_cfg['agent']['learning_rate_scheduler'] = KLAdaptiveLR
+        elif agent_cfg['agent']['learning_rate_scheduler'] == 'LinearWarmup':
+            agent_cfg['agent']['learning_rate_scheduler'] = LinearLR
+            
+        
 
     #print("Decimation:", dec)
     #agent_cfg['agent']['env_cfg'] = env_cfg

@@ -241,7 +241,7 @@ class HybridForcePosActionWrapper(gym.Wrapper):#FactoryWrapper):
 
         self.unwrapped.extras['Reward / Selection Matrix'] = sel_rew
         
-        return rew_buf + sel_rew + self.force_size*torch.any(active_force, dim=1).float() * self.cfg_task.good_force_cmd_rew
+        return rew_buf + sel_rew #+ self.force_size*torch.any(active_force, dim=1).float() * self.cfg_task.good_force_cmd_rew
     
     def _simp_update_rew_buf(self, curr_successes):
         #rew_buf = self.unwrapped._update_reward_buf(curr_successes)
@@ -261,7 +261,7 @@ class HybridForcePosActionWrapper(gym.Wrapper):#FactoryWrapper):
 
         self.unwrapped.extras['Reward / Selection Matrix'] = sel_rew
         
-        return rew_buf + sel_rew + torch.any(active_force, dim=1).float() * self.cfg_task.good_force_cmd_rew
+        return rew_buf + sel_rew #+ torch.any(active_force, dim=1).float() * self.cfg_task.good_force_cmd_rew
 
     def _delta_update_rew_buf(self, curr_successes):
         rew_buf = self.old_update_rew_buf(curr_successes)

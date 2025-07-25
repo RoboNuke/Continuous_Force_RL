@@ -67,16 +67,17 @@ class HybridActionGMM(MixtureSameFamily):
         # samples except moves to format consistant for action selection
         with torch.no_grad():
             # mixture samples [n, B]
-            probs = self.mixture_distribution.probs.log()
-            weights = self.sample_gumbel_softmax(probs, sample_shape=sample_shape)
+            probs = self.mixture_distribution.probs
+            #weights = self.sample_gumbel_softmax(probs, sample_shape=sample_shape)
             
             # component samples [n, B, k, E]
             comp_samples = self.component_distribution.rsample(sample_shape)
-            #print(weights.size(), comp_samples.size())
-            #print(weights[...,0].size(), comp_samples[...,0:3,0].size(), comp_samples[...,3:6,0].size(), comp_samples[...,0:self.force_size,1].size())
+            weights = (torch.rand_like(comp_samples[...,0]) <= probs[None,...,0]).float()
+            #print(weights.size(), weights[...,:self.force_size].size(), comp_samples.size())
+            #print(comp_samples[...,0:6,0].size(), comp_samples[...,0:self.force_size,1].size())
             out_samples = torch.cat( 
                 (   
-                    weights[...,:self.force_size,0], 
+                    weights[...,:self.force_size].squeeze(0), 
                     comp_samples[...,0:6,0] / self.p_w,
                     #comp_samples[...,3:6,0] / self.r_w,
                     comp_samples[...,0:self.force_size,1] / self.f_w
@@ -87,31 +88,10 @@ class HybridActionGMM(MixtureSameFamily):
                 out_samples[...,3:6,1] * self.f_w / self.t_w
             #print("Final:", out_samples.size())
             return out_samples
-        
-
     def log_prob(self, action):
-        """ Action: batch size x 18
-            - 0:6(3) - selection
-            - 6(3):12(9) - position sample
-            - 12(9):18(12) - force sample
-        """
-
-        #  convert to GMM format
-        if len(action.shape) == 2:
-            batch_size = action.shape[0]
-            sample_size = 1
-        elif len(action.shape) == 3:
-            batch_size = action.shape[1]
-            sample_size = action.shape[0]
-        else:
-            #print(action.shape)
-            batch_size = 0
-            sample_size = 0
-        #print("action size:", action.size())
-        #print(batch_size, sample_size)
-        logits = torch.ones((sample_size,batch_size,6), device=action.device)
-        logits[...,:self.force_size] = action[...,:self.force_size] 
-        #logits[:,:3,1] = 1.0 - action[:,:3] 
+        
+        z = self.mixture_distribution.probs
+        #print(z.size())
         mean1 = action[..., self.force_size:self.force_size+6] * self.p_w         # (batch, 6)
         mean1[...,3:] *= self.r_w / self.p_w
         mean2 = torch.zeros_like(mean1)
@@ -123,20 +103,12 @@ class HybridActionGMM(MixtureSameFamily):
 
         # Combine means and expand to component axis
         means = torch.stack([mean1, mean2], dim=-1)  # (batch, 6 dims, 2 components)
-        #print("mean sizes:", means.size(), means.unsqueeze(2).size())
-        #print("logit sizes:", logits.size())
-        #print(self.component_distribution.loc.size(), self.component_distribution.scale.size())
-        log_probs = self.component_distribution.log_prob(means)
-        log_weights = self.mixture_distribution.log_prob(logits)#F.log_softmax(logits, dim=-1)
 
+        component_probs = self.component_distribution.log_prob(means).exp()
+        prob = torch.sum(z * component_probs,dim=-1)
+        return prob.log()
         
-        log_weights = torch.stack([log_weights, (1-log_weights.exp()).log()], dim=-1)
-        #print(log_weights.size(), log_probs.size())
-        log_mix = torch.logsumexp(log_weights + log_probs, dim=-1)
-        if sample_size == 1:
-            return torch.squeeze(log_mix, dim=0)
-        return log_mix
-    
+        
     def entropy(self):
         samples = self.sample(sample_shape=(10000,))
         log_prob = self.log_prob(samples)
@@ -285,9 +257,9 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
             tan_out=True
         )
         self.force_size = 6 if ctrl_torque else 3
-        with torch.no_grad():
+        #with torch.no_grad():
         #    #self.actor_mean.output[-2].weight *= 0.1 #1.0 #TODO FIX THIS TO 0.01
-            self.actor_mean.output[-2].bias[:self.force_size] = -1.1
+        #    self.actor_mean.output[-2].bias[:self.force_size] = -1.1
             
         self.actor_logstd = nn.Parameter(
             torch.ones(1, 6 + self.force_size) * math.log(act_init_std)

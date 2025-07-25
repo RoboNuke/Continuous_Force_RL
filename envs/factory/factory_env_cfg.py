@@ -70,7 +70,7 @@ class CtrlCfg:
     
     pos_action_threshold = [0.02, 0.02, 0.02]
     rot_action_threshold = [0.097, 0.097, 0.097]
-    force_action_threshold = [100, 100, 100]
+    force_action_threshold = [10, 10, 10]
     torque_action_threshold = [0.1, 0.1, 0.1]
 
     # gains for VIC (not used normally)
