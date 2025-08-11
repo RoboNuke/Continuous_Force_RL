@@ -61,6 +61,7 @@ hybrid_agent=$4
 ctrl_torque=$5
 ckpt_path=$6
 rew_type=$7
+force_bias_sel=$8
 
 task_name="Isaac-Factory-TaskType-ObsType-v0"
 echo "$task_name"
@@ -76,13 +77,14 @@ use_ft_sensor=1
 parallel_control=0
 hybrid_control=1
 
-echo $task_idx
-echo $obs_idx
-echo $break_force
-echo $hybrid_agent
-echo $ctrl_torque
-echo $ckpt_path
-echo $rew_type
+echo "Task idx: $task_idx"
+echo "Obs Idx: $obs_idx"
+echo "Break Force: $break_force"
+echo "Hybrid Agent: $hybrid_agent"
+echo "Ctrl Torque: $ctrl_torque"
+echo "Ckpt Path: $ckpt_path"
+echo "Reward Type: $rew_type"
+echo "Force Bias Selection: $force_bias_sel"
 python -m exp_control.record_ckpts.single_task_ckpt_recorder \
        --headless \
        --decimation=8 \
@@ -94,7 +96,9 @@ python -m exp_control.record_ckpts.single_task_ckpt_recorder \
        --hybrid_control=$hybrid_control \
        --hybrid_agent=$hybrid_agent \
        --control_torque=$ctrl_torque \
-       --hybrid_selection_reward=$rew_type
+       --hybrid_selection_reward=$rew_type \
+       --force_bias_sel=$force_bias_sel
+
        #--log_smoothness_metrics=0
 
 #bash "exp_control/run_hybrid_exp.bash" $1 $2 "$3_$SLURM_ARRAY_TASK_ID" $4 $5 $6 $7 $8

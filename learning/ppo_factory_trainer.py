@@ -22,7 +22,7 @@ parser.add_argument("--num_agents", type=int, default=1, help="How many agents t
 parser.add_argument("--dmp_obs", default=False, action="store_true", help="Should we use dmps for the observation space")
 parser.add_argument("--init_eval", default=True, action="store_false", help="When added, we will not perform an eval before any training has happened")
 parser.add_argument("--decimation", type=int, default=16, help="How many simulation steps between policy observations")
-parser.add_argument("--history_sample_size", type=int, default=16, help="How many samples to keep from sim steps, spread evenly from zero to decimation-1")
+parser.add_argument("--history_sample_size", type=int, default=8, help="How many samples to keep from sim steps, spread evenly from zero to decimation-1")
 parser.add_argument("--policy_hz", type=int, default=15, help="Rate in hz that the policy should get new observations")
 parser.add_argument("--use_ft_sensor", type=int, default=0, help="Adds force sensor data to the observation space")
 parser.add_argument("--break_force", type=float, default=-1.0, help="Force at which the held object breaks (peg, gear or nut)")
@@ -39,8 +39,7 @@ parser.add_argument("--control_torques", type=int, default=0, help="Allows hybri
 parser.add_argument("--impedance_control", type=int, default=0, help="Switches to impedance control as the action space")
 parser.add_argument("--impedance_agent", type=int, default=0, help="Switches to impedance agent using calculated log probs based on controller")
 parser.add_argument("--control_damping", type=int, default=0, help="Allows Impedance Controller Policy to predict the damping constants, else calculated with kd=2*sqrt(kp) (critically damped)")
-
-
+parser.add_argument("--lr_scheduler_type", type=str, default="cfg", help="Sets the learning rate scheduler type possible values: 'none', 'KLAdaptiveLR', 'LinearWarmup' ** parameters set in cfg file")
 # logging
 parser.add_argument("--exp_name", type=str, default=None, help="What to name the experiment on WandB")
 parser.add_argument("--exp_dir", type=str, default=None, help="Directory to store the experiment in")
@@ -54,6 +53,14 @@ parser.add_argument("--wandb_entity", type=str, default="hur", help="Name of wan
 parser.add_argument("--wandb_api_key", type=str, default="-1", help="API key for WandB")
 parser.add_argument("--wandb_project", type=str, default="Continuous_Force_RL", help="Wandb project to save logging to")
 
+
+
+
+parser.add_argument("--sel_adjs", type=str, default="none", help="A comma seperated list from the following ('init_bias', 'zero_weights', 'force_add_zout', 'scale_zout'")
+
+
+parser.add_argument("--force_bias_sel", type=int, default=0, help="Adds the force to the force selection term to heavily bias network to use force when forces are large.")
+parser.add_argument("--bias_selection", type=int, default=0, help="If true than -1.1 will be added to the selection bias parameters encouraging the network to move into position control")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -158,6 +165,7 @@ import torch
 if args_cli.seed == -1:
     args_cli.seed = random.randint(0, 10000)
 set_seed(args_cli.seed)
+#set_seed(6454)
 
 agent_cfg_entry_point = f"SimBaNet_ppo_cfg_entry_point"
 evaluating = False
@@ -180,7 +188,7 @@ def main(
         env_cfg.use_force_sensor = True
         env_cfg.obs_order.append("force_torque")
         env_cfg.state_order.append("force_torque")
-    env_cfg.episode_length_s = 2.5
+    #env_cfg.episode_length_s = 1.5
 
     """ set up time scales """
     env_cfg.decimation = args_cli.decimation
@@ -198,29 +206,55 @@ def main(
     env_cfg.episode_length_s = float(max_rollout_steps * env_cfg.sim.dt * env_cfg.decimation)
     # things below are just important to have in wandb config file
     agent_cfg['agent']['experiment']['tags'].append(env_cfg.task_name)
-    
+    agent_cfg['agent']['force_boundry_enforce'] = True
+    agent_cfg['agent']['ctrl_torque'] = args_cli.control_torques
     if args_cli.hybrid_control:
         agent_cfg['agent']['experiment']['tags'].append('hybrid_ctrl')
         agent_cfg['agent']['experiment']['tags'].append('hybrid_agent' if args_cli.hybrid_agent==1 else 'baseline_agent')
         agent_cfg['agent']['experiment']['tags'].append('ctrl_torque' if args_cli.control_torques else 'no_torque')
         agent_cfg['agent']['rew_type'] = args_cli.hybrid_selection_reward
+        agent_cfg['agent']['agent_type'] = 'hybrid_agent' if args_cli.hybrid_agent==1 else 'baseline_agent'
+        agent_cfg['agent']['ctrl_type'] = 'hybrid_ctrl'
     elif args_cli.parallel_control:
         agent_cfg['agent']['experiment']['tags'].append('parallel_ctrl')
         agent_cfg['agent']['experiment']['tags'].append('parallel_agent' if args_cli.parallel_agent==1 else 'baseline_agent')
+        agent_cfg['agent']['agent_type'] = 'parallel_agent' if args_cli.parallel_agent==1 else 'baseline_agent'
+        agent_cfg['agent']['ctrl_type'] = 'parallel_ctrl'
     elif args_cli.impedance_control:
         agent_cfg['agent']['experiment']['tags'].append('impedance_ctrl')
+        agent_cfg['agent']['ctrl_type'] = 'impedance_ctrl'
         agent_cfg['agent']['experiment']['tags'].append('impedance_agent' if args_cli.impedance_agent==1 else 'baseline_agent')
-        agent_cfg['agent']['experiment']['tags'].append('ctrl_damping' if args_cli.control_damping else 'crit_damped')
-        
+        agent_cfg['agent']['agent_type'] = 'impedance_agent' if args_cli.impedance_agent==1 else 'baseline_agent'
+        agent_cfg['agent']['experiment']['tags'].append('ctrl_damping' if args_cli.control_damping else 'crit_damped')    
     else:
+        agent_cfg['agent']['experiment']['tags'].append('pose_ctrl')
+        agent_cfg['agent']['ctrl_type'] = 'pose_ctrl'
         agent_cfg['agent']['experiment']['tags'].append('baseline_agent')
-        
+        agent_cfg['agent']['agent_type'] = 'baseline_agent'
+
+
+    agent_cfg['agent']['sel_adjs'] = args_cli.sel_adjs.split(",")
+    sel_adj_types = args_cli.sel_adjs.split(',')
+    agent_cfg['agent']['init_bias'] = "init_bias" in sel_adj_types
+    agent_cfg['agent']['force_add'] = "force_add_zout" in sel_adj_types
+    agent_cfg['agent']['zero_weights'] = "zero_weights" in sel_adj_types
+    agent_cfg['agent']['scale_z'] = "scale_zout" in sel_adj_types
+    
+    #if args_cli.force_bias_sel == 1:
+    #    agent_cfg['agent']['force_bias_sel'] = True
+    #    agent_cfg['agent']['experiment']['tags'].append('force_bias_sel')
+    #else:
+    #    agent_cfg['agent']['force_bias_sel'] = Fals
+    
     agent_cfg['agent']['experiment']['project'] = args_cli.wandb_project
     agent_cfg['agent']['experiment']['tags'].append(args_cli.exp_tag)
     if args_cli.use_ft_sensor > 0:
         agent_cfg['agent']['experiment']['tags'].append("force")
+        agent_cfg['agent']['use_ft_sensor'] = True
     else:
+        agent_cfg['agent']['use_ft_sensor'] = False
         agent_cfg['agent']['experiment']['tags'].append("no-force")
+        
     agent_cfg['agent']['break_force'] = args_cli.break_force
     obs_type = args_cli.task.split("-")[3]
     agent_cfg['agent']['obs_type'] = obs_type
@@ -259,12 +293,29 @@ def main(
     print("Seed:", agent_cfg['seed'], args_cli.seed)
     #print(env_cfg)
     # random sample some parameters
-    if 'learning_rate_scheduler' in agent_cfg['agent'].keys():
+
+    if args_cli.lr_scheduler_type == 'cfg':
         if agent_cfg['agent']['learning_rate_scheduler'] == "KLAdaptiveLR":
             # yaml doesn't read it as a class, but as a string idk
             agent_cfg['agent']['learning_rate_scheduler'] = KLAdaptiveLR
+            agent_cfg['agent']['learning_rate_scheduler_kwargs'] = agent_cfg['agent']['klAdaptive_lr_scheduler_kwargs']
+            agent_cfg['agent']['experiment']['tags'].append("KLAdaptiveLR")
         elif agent_cfg['agent']['learning_rate_scheduler'] == 'LinearWarmup':
             agent_cfg['agent']['learning_rate_scheduler'] = LinearLR
+            agent_cfg['agent']['learning_rate_scheduler_kwargs'] = agent_cfg['agent']['linear_warmup_learning_rate_scheduler_kwargs']
+            agent_cfg['agent']['experiment']['tags'].append("LinearWarmup")
+        else:
+            print("\n\n[Info]: Not using a learning rate scheduler\n\n")
+    elif args_cli.lr_scheduler_type == 'KLAdaptiveLR':
+        agent_cfg['agent']['learning_rate_scheduler'] = KLAdaptiveLR
+        agent_cfg['agent']['learning_rate_scheduler_kwargs'] = agent_cfg['agent']['klAdaptive_lr_scheduler_kwargs']
+        agent_cfg['agent']['experiment']['tags'].append("KLAdaptiveLR")
+    elif args_cli.lr_scheduler_type == "LinearWarmup":
+        agent_cfg['agent']['learning_rate_scheduler'] = LinearLR
+        agent_cfg['agent']['learning_rate_scheduler_kwargs'] = agent_cfg['agent']['linear_warmup_learning_rate_scheduler_kwargs']
+        agent_cfg['agent']['experiment']['tags'].append("LinearWarmup")
+    else:
+        print("\n\n[Info]: Not using a learning rate scheduler\n\n")
             
         
 
@@ -273,7 +324,9 @@ def main(
     agent_cfgs = [copy.deepcopy(agent_cfg) for _ in range(args_cli.num_agents)]
     # randomly sample a seed if seed = -1
     for agent_idx, a_cfg in enumerate(agent_cfgs):
-
+        if agent_idx > 0:
+            a_cfg['seed'] =  random.randint(0, 10000)
+        print(f"Agent {agent_idx} seed: {a_cfg['seed']}")
         # specify directory for logging experiments
         if args_cli.exp_dir is None:
             log_root_path = os.path.join("logs", a_cfg["agent"]["experiment"]["directory"])
@@ -282,7 +335,7 @@ def main(
         else:
             log_root_path = os.path.join("logs", args_cli.exp_dir)
             if agent_idx > 0:
-                log_root_path = os.path.join("logs", args_cli.exp_dir)
+                log_root_path = os.path.join("logs", args_cli.exp_dir + f"_{agent_idx}")
 
         log_root_path = os.path.abspath(log_root_path)
         print(f"[INFO] Logging experiment in directory: {log_root_path}")
@@ -425,12 +478,14 @@ def main(
     # instantiate the agent's models (function approximators).
     # PPO requires 2 models, visit its documentation for more details
     # https://skrl.readthedocs.io/en/latest/api/agents/ppo.html#models
-    models = {}
-    
+    models = [{} for i in range(args_cli.num_agents)]
+    print(models)
     #models["policy"] = Shared(env.observation_space, env.action_space, device)
     
+    agent_list = None
     # set wandb parameters
     for a_idx, a_cfg in enumerate(agent_cfgs):
+        #a_cfg['agent']['env_cfg'] = env_cfg
         a_cfg['agent']['experiment']['wandb'] = args_cli.no_log_wandb
         wandb_kwargs = {
             "project":a_cfg['agent']['experiment']['project'], #args_cli.wandb_project,
@@ -444,78 +499,90 @@ def main(
         }
 
         a_cfg["agent"]["experiment"]["wandb_kwargs"] = wandb_kwargs
-    
-    agent_list = None
-    if args_cli.parallel_agent==1:
 
-        models['policy'] = ParallelControlSimBaActor( 
+        if args_cli.parallel_agent==1:
+
+            models[a_idx]['policy'] = ParallelControlSimBaActor( 
             observation_space=env.cfg.observation_space, 
-            action_space=env.action_space,
-            #action_gain=0.05,
-            device=device,
-            act_init_std = agent_cfg['models']['act_init_std'],
-            actor_n = agent_cfg['models']['actor']['n'],
-            actor_latent = agent_cfg['models']['actor']['latent_size'],
-            force_scale= env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]
-        )
-    elif args_cli.hybrid_agent==1:
-        models['policy'] = HybridControlSimBaActor(
-            observation_space=env.cfg.observation_space, 
-            action_space=env.action_space,
-            #action_gain=0.05,
-            device=device,
-            act_init_std = agent_cfg['models']['act_init_std'],
-            actor_n = agent_cfg['models']['actor']['n'],
-            actor_latent = agent_cfg['models']['actor']['latent_size'],
-            force_scale= env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0], # 1    => 1
-            torque_scale = env_cfg.ctrl.default_task_force_gains[-1] * env_cfg.ctrl.torque_action_bounds[0],
-            pos_scale = env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0],     # 2    => 4
-            rot_scale = env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0],     # 2.91 => 8.4681
-            ctrl_torque=args_cli.control_torques
-        )
-    elif args_cli.impedance_agent==1:
-        models['policy'] = ImpedanceControlSimBaActor(
-            observation_space=env.cfg.observation_space, 
-            action_space=env.action_space,
-            #action_gain=0.05,
-            device=device,
-            act_init_std = agent_cfg['models']['act_init_std'],
-            actor_n = agent_cfg['models']['actor']['n'],
-            actor_latent = agent_cfg['models']['actor']['latent_size'],
-            pos_scale = env_cfg.ctrl.pos_action_threshold[0],  
-            rot_scale = env_cfg.ctrl.rot_action_threshold[0],
-            prop_scale = env_cfg.ctrl.vic_prop_action_threshold[0],
-            damp_scale = env_cfg.ctrl.vic_damp_action_threshold[0],
-            ctrl_damping=args_cli.control_damping
-        )
-    else:
-        if args_cli.hybrid_control or args_cli.parallel_control:
-            sigma_idx = 6 if args_cli.control_torques else 3
+                action_space=env.action_space,
+                #action_gain=0.05,
+                device=device,
+                act_init_std = agent_cfg['models']['act_init_std'],
+                actor_n = agent_cfg['models']['actor']['n'],
+                actor_latent = agent_cfg['models']['actor']['latent_size'],
+                force_scale= env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]
+            )
+        elif args_cli.hybrid_agent==1:
+            
+            if a_cfg['agent']['hybrid_agent']['unit_std_init']:
+                import math
+                a_cfg['agent']['hybrid_agent']['pos_init_std'] = (1 / (env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0])) ** 2
+                a_cfg['agent']['hybrid_agent']['rot_init_std'] = (1 / (env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]))**2
+                a_cfg['agent']['hybrid_agent']['force_init_std'] = (1 / (env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]))**2
+            
+            models[a_idx]['policy'] = HybridControlSimBaActor(
+                observation_space=env.cfg.observation_space, 
+                action_space=env.action_space,
+                #action_gain=0.05,
+                device=device,
+                pos_init_std = a_cfg['agent']['hybrid_agent']['pos_init_std'],
+                rot_init_std =  a_cfg['agent']['hybrid_agent']['rot_init_std'],
+                force_init_std =  a_cfg['agent']['hybrid_agent']['force_init_std'],
+                #act_init_std = agent_cfg['models']['act_init_std'],
+                actor_n = agent_cfg['models']['actor']['n'],
+                actor_latent = agent_cfg['models']['actor']['latent_size'],
+                force_scale= env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0], # 1    => 1
+                torque_scale = env_cfg.ctrl.default_task_force_gains[-1] * env_cfg.ctrl.torque_action_bounds[0],
+                pos_scale = env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0],     # 2    => 4
+                rot_scale = env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0],     # 2.91 => 8.4681
+                ctrl_torque=args_cli.control_torques,
+                sel_adj_types = args_cli.sel_adjs.split(",")
+                #bias_sel= args_cli.bias_selection == 1,
+                #force_bias_sel = (args_cli.force_bias_sel == 1)
+            )
+        elif args_cli.impedance_agent==1:
+            models[a_idx]['policy'] = ImpedanceControlSimBaActor(
+                observation_space=env.cfg.observation_space, 
+                action_space=env.action_space,
+                #action_gain=0.05,
+                device=device,
+                act_init_std = agent_cfg['models']['act_init_std'],
+                actor_n = agent_cfg['models']['actor']['n'],
+                actor_latent = agent_cfg['models']['actor']['latent_size'],
+                pos_scale = env_cfg.ctrl.pos_action_threshold[0],  
+                rot_scale = env_cfg.ctrl.rot_action_threshold[0],
+                prop_scale = env_cfg.ctrl.vic_prop_action_threshold[0],
+                damp_scale = env_cfg.ctrl.vic_damp_action_threshold[0],
+                ctrl_damping=args_cli.control_damping
+            )
         else:
-            sigma_idx = 0
-        models['policy'] = SimBaActor( #BroAgent(
-            observation_space=env.cfg.observation_space, 
-            action_space=env.action_space,
-            #action_gain=0.05,
-            device=device,
-            act_init_std = agent_cfg['models']['act_init_std'],
-            actor_n = agent_cfg['models']['actor']['n'],
-            actor_latent = agent_cfg['models']['actor']['latent_size'],
-            sigma_idx = sigma_idx
-        ) 
+            if args_cli.hybrid_control or args_cli.parallel_control:
+                sigma_idx = 6 if args_cli.control_torques else 3
+            else:
+                sigma_idx = 0
+            models[a_idx]['policy'] = SimBaActor( #BroAgent(
+                observation_space=env.cfg.observation_space, 
+                action_space=env.action_space,
+                #action_gain=0.05,
+                device=device,
+                act_init_std = agent_cfg['models']['act_init_std'],
+                actor_n = agent_cfg['models']['actor']['n'],
+                actor_latent = agent_cfg['models']['actor']['latent_size'],
+                sigma_idx = sigma_idx
+            ) 
 
-    models["value"] = SimBaCritic( #BroAgent(
-        state_space_size=env.cfg.state_space, 
-        device=device,
-        critic_output_init_mean = agent_cfg['models']['critic_output_init_mean'],
-        critic_n = agent_cfg['models']['critic']['n'],
-        critic_latent = agent_cfg['models']['critic']['latent_size']
-    ) 
+        models[a_idx]["value"] = SimBaCritic( #BroAgent(
+            state_space_size=env.cfg.state_space, 
+            device=device,
+            critic_output_init_mean = agent_cfg['models']['critic_output_init_mean'],
+            critic_n = agent_cfg['models']['critic']['n'],
+            critic_latent = agent_cfg['models']['critic']['latent_size']
+        ) 
 
     # create the agent
     agent_list = [
         WandbLoggerPPO(
-            models=copy.deepcopy(models),
+            models=models[i], #copy.deepcopy(models),
             memory=copy.deepcopy(memory),
             cfg=agent_cfgs[i]['agent'],
             observation_space=env.observation_space,
@@ -552,7 +619,8 @@ def main(
     cfg_trainer = {
         "timesteps": args_cli.max_steps // (args_cli.num_envs * args_cli.num_agents), 
         "headless": True,
-        "close_environment_at_exit": True
+        "close_environment_at_exit": True,
+        "disable_progressbar": agent_cfgs[0]['agent']['disable_progressbar']
     }
     
     trainer = ExtSequentialTrainer(
@@ -562,6 +630,10 @@ def main(
     )
 
     env.cfg.recording = True #vid # True
+    check_logprob_consistant_loop(trainer, vid_env)
+    return
+
+    
     # our actual learning loop
     ckpt_int = agent_cfg["agent"]["experiment"]["checkpoint_interval"]
     num_evals = max(1,args_cli.max_steps // (ckpt_int * env_per_agent))
@@ -569,27 +641,78 @@ def main(
     
     if eval_vid:   
        vid_env.set_video_name(f"evals/eval_0")
-
+    
     if args_cli.init_eval:
         trainer.eval(0, vid_env)
         
     for i in range(num_evals):
         print(f"Beginning epoch {i+1}/{num_evals}")
-        print("Training")
+        print("\tTraining")
         evaluating = False
         if train_vid:     
             vid_env.set_video_name(f"training/train_STEP_NUM")
         trainer.train(ckpt_int, vid_env)
-        
+        #if args_cli.init_eval:
         evaluating = True
         if eval_vid:
             vid_env.set_video_name(f"evals/eval_{i+1}")
 
-        print("Evaluating")
+        print("\tEvaluating")
         trainer.eval(ckpt_int*(i+1), vid_env)
 
 
 
+def check_logprob_consistant_loop(trainer, vid_env):
+    import copy
+    steps=150
+    num_envs=256
+    # get copy of starting policy
+    old_agent = copy.deepcopy(trainer.abs_agent)
+
+    # step forward 1 rollout
+    trainer.train(steps, vid_env)
+
+    # get observation and log probs from memory
+    states = trainer.agents.memory.get_tensor_by_name("states")
+    actions = trainer.agents.memory.get_tensor_by_name("actions")
+    stored_log_probs = trainer.agents.memory.get_tensor_by_name("log_prob").flatten()
+    print("Stored Log Probs NaNs:", torch.isnan(stored_log_probs).sum().item())
+    
+    recomputed_log_probs = torch.zeros(((steps-1)*num_envs,1), device = old_agent.agents.policy.device)
+    new_log_probs = torch.zeros_like(recomputed_log_probs)
+    
+    for i in range(steps-1):
+        inputs = {'states':states[i,:,:], 'taken_actions':actions[i,:,:]}
+        #a,b,c = old_agent.agents.policy.act(inputs, 'policy')
+        #print(b.size(), recomputed_log_probs[i*256:(i+1)*256,:].size())
+        _, recomputed_log_probs[i*num_envs:(i+1)*num_envs,:], _ = old_agent.agents.policy.act(inputs, 'policy')
+        _, new_log_probs[i*num_envs:(i+1)*num_envs,:], _ = trainer.abs_agent.agents.policy.act(inputs, 'policy')
+
+
+    print("recomputed nans:", torch.isnan(recomputed_log_probs).sum().item())
+    recomputed_log_probs = torch.nan_to_num(recomputed_log_probs, nan=0)
+
+    print("New NaNs:", torch.isnan(new_log_probs).sum().item())
+    new_log_probs = torch.nan_to_num(new_log_probs, nan=0)
+    
+    diff_stored_vs_recomputed = (stored_log_probs - recomputed_log_probs).abs().mean()
+    diff_old_vs_new = (recomputed_log_probs - new_log_probs).abs().mean().item()
+
+    print(f"Diff(stored vs recomputed old log_probs): {diff_stored_vs_recomputed:.6f}")
+    print(f"Diff(old vs new log_probs): {diff_old_vs_new:.6f}")
+
+    # KL between old and new
+    with torch.no_grad():
+        kl = (recomputed_log_probs - new_log_probs).mean().item()
+    print(f"Mean KL estimate: {kl:.6f}")
+
+    if diff_stored_vs_recomputed > 1e-5:
+        print("⚠ Stored log_probs mismatch! Likely preprocessing or policy snapshot bug.")
+    elif diff_old_vs_new > 0.5:  # heuristic threshold
+        print("⚠ Large policy update detected. Possibly high LR or too many epochs.")
+    else:
+        print("✅ Log-prob math seems consistent.")
+    
 if __name__ == "__main__":
     # run the main function
 

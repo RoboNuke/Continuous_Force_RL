@@ -122,6 +122,10 @@ def fn_processor(process_index, *args):
             agent.memory.reset()
             barrier.wait()
 
+        elif task == "track_hists":
+            agent.track_hists(tag = queue.get(), value=queue.get()[scope[0]:scope[1]])
+            barrier.wait()
+            
         elif task == "track_data":
             agent.track_data(tag = queue.get(), value = queue.get())
             barrier.wait()
@@ -240,6 +244,12 @@ class MPAgent():
         # TODO figure out how to send video paths
         self.send({"task":"track_video_path", "timestep":timestep}, [tag, value])
 
+    def track_hist(self, tag: str, value: torch.Tensor) -> None:
+        if not value.is_cuda:
+            value.share_memory_()
+        #print("sending mp agent")
+        self.send({"task":"track_hist"}, [tag, value])
+        
     def track_data(self, tag: str, value: float) -> None:
         self.send({"task":"track_data"}, [tag, value])
 

@@ -23,7 +23,7 @@ parser.add_argument("--hybrid_agent", type=int, default=0, help="Switches to hyb
 parser.add_argument("--control_torques", type=int, default=0, help="Allows hybrid control to effect torques not just forces")
 parser.add_argument("--log_smoothness_metrics", action="store_true", default=False, help="Log the sum squared velocity, jerk and force metrics")
 parser.add_argument("--hybrid_selection_reward", type=str, default="simp", help="Allows different rewards on the force/position selection: options are [simp, dirs, delta]")
-
+parser.add_argument("--force_bias_sel", type=int, default=0, help="Adds the force to the force selection term to heavily bias network to use force when forces are large.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -129,6 +129,7 @@ def getNextCkpt(
     lock = FileLock(ckpt_tracker_path + ".lock")
     with lock:
         try:
+            #print("opening lock")
             #found_next = False
             with open(ckpt_tracker_path, 'r') as file:
                 lines = file.readlines()
@@ -146,15 +147,23 @@ def getNextCkpt(
                         file.write(line)
             if len(next_line.split()) == 5:
                 ckpt_path, task, gif_path, wandb_project, run_id = next_line.split()
+                #print(ckpt_path)
+                #print(ckpt_path.split("/")[8])
+                #print(ckpt_path.split("/"))
+                #print(ckpt_path.split("/")[8].split("_")[4])
+                #break_force = float(ckpt_path.split("/")[8].split("_")[5])
+                #if break_force < 0:
+                #    break_force = 100000000.0
+                #input()
             else: # len(next_line.split()) == 7:
                 a, b, e, task, c, d,f, wandb_project, run_id = next_line.split()
                 ckpt_path = a + " " + b + " " + e
                 gif_path = c + " " + d + " " + f
                 
-            return ckpt_path, gif_path, wandb_project, run_id
+            return ckpt_path, gif_path, wandb_project, run_id#, break_force
         except Exception as e:
             print("Exception:", e)
-            return False, False, False, False
+            return False, False, False, False#, False
 
 
 def save_tensor_as_gif(tensor_list, filename, tot_rew, vals, succ_step, engaged_mask, force_control,duration=100, loop=0):
@@ -298,19 +307,29 @@ def getAgent(env, agent_cfg, task_name, device, args_cli, env_cfg):
             force_scale= env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]
         )
     elif args_cli.hybrid_agent==1:
+            
+        if agent_cfg['agent']['hybrid_agent']['unit_std_init']:
+            import math
+            agent_cfg['agent']['hybrid_agent']['pos_init_std'] = math.sqrt(1 / (env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0]))
+            agent_cfg['agent']['hybrid_agent']['rot_init_std'] = math.sqrt(1 / (env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]))
+            agent_cfg['agent']['hybrid_agent']['force_init_std'] = math.sqrt(1 / (env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]))
         models['policy'] = HybridControlSimBaActor(
             observation_space=env.cfg.observation_space, 
             action_space=env.action_space,
             #action_gain=0.05,
             device=device,
-            act_init_std = agent_cfg['models']['act_init_std'],
+            #act_init_std = agent_cfg['models']['act_init_std'],
+            pos_init_std = agent_cfg['agent']['hybrid_agent']['pos_init_std'],
+            rot_init_std =  agent_cfg['agent']['hybrid_agent']['rot_init_std'],
+            force_init_std =  agent_cfg['agent']['hybrid_agent']['force_init_std'],
             actor_n = agent_cfg['models']['actor']['n'],
             actor_latent = agent_cfg['models']['actor']['latent_size'],
             force_scale= env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0], # 1    => 1
             torque_scale = env_cfg.ctrl.default_task_force_gains[-1] * env_cfg.ctrl.torque_action_bounds[0],
             pos_scale = env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0],     # 2    => 4
             rot_scale = env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0],     # 2.91 => 8.4681
-            ctrl_torque=args_cli.control_torques
+            ctrl_torque=args_cli.control_torques,
+            force_bias_sel = (args_cli.force_bias_sel == 1)
         )
     else:
         if args_cli.hybrid_control or args_cli.parallel_control:
@@ -355,7 +374,7 @@ if args_cli.seed == -1:
 seed = args_cli.seed
 print("Seed:", seed)
 set_seed(seed)
-
+print("Args:", args_cli)
 @hydra_task_config("Isaac-Factory-PegInsert-Local-v0", agent_cfg_entry_point)
 def main(
     env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, 
@@ -390,13 +409,15 @@ def main(
     env_cfg.num_agents = 1
 
     """ Set up fragileness """
-    env_cfg.break_force = args_cli.break_force
+    env_cfg.break_force = args_cli.break_force #####################
 
-    env_cfg.use_force_sensor = False or args_cli.parallel_control==1 or args_cli.hybrid_control==1
+    env_cfg.use_force_sensor = True #False or args_cli.parallel_control==1 or args_cli.hybrid_control==1
+    env_cfg.sim.render_interval=env_cfg.decimation
     if args_cli.use_ft_sensor > 0:
         env_cfg.use_force_sensor = True
         env_cfg.obs_order.append("force_torque")
         env_cfg.state_order.append("force_torque")
+        print("\nUsing Force Torque Sensor\n")
     if 'learning_rate_scheduler' in agent_cfg['agent'].keys():
         # yaml doesn't read it as a class, but as a string idk
         agent_cfg['agent']['learning_rate_scheduler'] = KLAdaptiveLR
@@ -458,23 +479,59 @@ def main(
     while True:
         print("Ckpt Record Path:", args_cli.ckpt_record_path)
         ckpt_path, gif_path, wandb_project, run_id = getNextCkpt(args_cli.task, ckpt_tracker_path=args_cli.ckpt_record_path)
+        #ckpt_path, gif_path, wandb_project, run_id, break_force = getNextCkpt(args_cli.task, ckpt_tracker_path=args_cli.ckpt_record_path)
         if ckpt_path == False:
             print("Waiting 2 minutes")
             for i in tqdm.tqdm(range(120), file=sys.stdout):
                 time.sleep(1) 
             continue # try again
+        #env.unwrapped.break_force = break_force
         print(f"Filming {ckpt_path}")
+        #print(f"\tSet Break Force to {break_force}")
         # load wandb run
+        #agent.load(ckpt_path)
         
         with torch.no_grad():
+            
             #   load agent
-            agent.load(ckpt_path)
+            try:
+                agent.load(ckpt_path)
+            except:
+                print("Switching FT State")
+                print("\t", env_cfg.use_force_sensor)
+                print("\t", not env_cfg.use_force_sensor)
+                env_cfg.use_force_sensor = not env_cfg.use_force_sensor
+                if env_cfg.use_force_sensor:
+                    if 'force_torque' not in env_cfg.obs_order:
+                        env_cfg.obs_order.append("force_torque")
+                        env_cfg.state_order.append("force_torque")
+                    if 'force_torque' not in env.unwrapped.cfg.obs_order:
+                        env.unwrapped.cfg.state_order.append("force_torque")
+                        env.unwrapped.cfg.obs_order.append("force_torque")
+                    env.unwrapped.cfg.observation_space += 6 * 8
+                    env.unwrapped.cfg.state_space += 6 * 8
+                else:
+                    if "force_torque" in env_cfg.obs_order:
+                        env_cfg.obs_order.remove("force_torque")
+                        env_cfg.state_order.remove("force_torque")
+                    if "force_torque" in env.unwrapped.cfg.obs_order:
+                        env.unwrapped.cfg.state_order.remove("force_torque")
+                        env.unwrapped.cfg.obs_order.remove("force_torque")
+                    env.unwrapped.cfg.observation_space -= 6 * 8
+                    env.unwrapped.cfg.state_space -= 6 * 8
+                    
+                env.unwrapped._configure_gym_env_spaces()
+                agent = getAgent(env, agent_cfg, task, device, args_cli, env_cfg)
+                agent.load(ckpt_path)
+            
             print("agent loaded")
             # reset env
             agent.set_running_mode("eval")
             states, infos = env.unwrapped.reset()
             states, infos = env.reset()
             states = env.unwrapped._get_observations()
+            print("\tPolicy Size:", states['policy'].size())
+            print("\tCritic Size:", states['critic'].size())
             states = torch.cat( (states['policy'], states['critic']),dim=1)
             
             env.unwrapped.evaluating = True

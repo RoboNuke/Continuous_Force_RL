@@ -5,19 +5,19 @@
 ##SBATCH -p gpu,eecs2,tiamat,dgxh,dgx2,ampere		# name of partition or queue
 #SBATCH -p tiamat,gpu,dgx2,dgxh
 ##SBATCH -p tiamat
-#SBATCH --time=1-06:00:00        # time limit on job: 2 days, 12 hours, 30 minutes (default 12 hours)
+#SBATCH --time=1-23:59:59        # time limit on job: 2 days, 12 hours, 30 minutes (default 12 hours)
 ##SBATCH -N 1                   # number of nodes (default 1)
 #SBATCH --gres=gpu:1            # number of GPUs to request (default 0)
 #SBATCH --mem=32G               # request 10 gigabytes memory (per node, default depends on node)
 #SBATCH -c 8                   # number of cores/threads per task (default 1)
-#SBATCH -o ../hybrid_baseline/%A_%a.out		# name of output file for this submission script
-#SBATCH -e ../hybrid_baseline/%A_%a.err		# name of error file for this submission script
+#SBATCH -o ../baseline/%A_%a.out		# name of output file for this submission script
+#SBATCH -e ../baseline/%A_%a.err		# name of error file for this submission script
 # load any software environment module required for app (e.g. matlab, gcc, cuda)
 
 #echo "Job Name:" $SLURM_JOB_NAME
 #echo "Array:" $SLURM_ARRAY_TASK_COUNT
 ##module load cuda/10.1
-#source ~/.bashrc
+source ~/.bashrc
 eval "$(command conda 'shell.bash' 'hook' 2> /dev/null)"
 conda activate isaaclab_242
 
@@ -38,6 +38,15 @@ echo "Free memory:$int_free"
 #fi
 
 #echo "call run_exp.bash"
+echo $1
+echo $2
+echo $3
+echo $4
+echo $5
 echo $6
-
-bash "exp_control/run_hybrid_exp.bash" $1 $2 "$3_$SLURM_ARRAY_TASK_ID" $4 $5 $6 $7 $8
+echo $7
+echo $8
+echo $9
+echo ${10}
+echo ${11}
+bash "exp_control/run_hybrid_exp.bash" $1 $2 "$3_$SLURM_ARRAY_TASK_ID" $4 $5 $6 $7 $8 $9 ${10} ${11}

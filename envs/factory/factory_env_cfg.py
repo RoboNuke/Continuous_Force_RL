@@ -70,7 +70,8 @@ class CtrlCfg:
     
     pos_action_threshold = [0.02, 0.02, 0.02]
     rot_action_threshold = [0.097, 0.097, 0.097]
-    force_action_threshold = [10, 10, 10]
+    #force_action_threshold = [1, 1, 1]
+    force_action_threshold = [5,5,5] #[10,10,10]
     torque_action_threshold = [0.1, 0.1, 0.1]
 
     # gains for VIC (not used normally)
@@ -101,6 +102,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     # num_*: will be overwritten to correspond to obs_order, state_order.
     observation_space = 21
     state_space = 72
+    force_tanh_scale= 0.03 # 0.0011
     obs_order: list = [
         "fingertip_pos_rel_fixed", 
         "fingertip_quat", 

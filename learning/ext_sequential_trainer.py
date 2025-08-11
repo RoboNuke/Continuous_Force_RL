@@ -108,8 +108,12 @@ class ExtSequentialTrainer(Trainer):
                     states, 
                     timestep=timestep, 
                     timesteps=self.timesteps
-                )[0] # we take only the sampled action
+                )#[0] # we take only the sampled action
+                #mean_actions = actions[-1]["mean_actions"]
+                #for i, key in enumerate(['x','y','z']):
+                #    self.abs_agent.track_hist("sel_" + key, mean_actions[:,int(i)])
                 
+                actions = actions[0]
                 next_states, rewards, terminated, truncated, infos = self.env.step(actions.clone())
                 
                 next_states = torch.cat( (self.env.unwrapped.obs_buf['policy'], self.env.unwrapped.obs_buf['critic']),dim=1)
@@ -142,7 +146,6 @@ class ExtSequentialTrainer(Trainer):
                 # log environment info
                 if self.environment_info in infos:
                     for k, v in infos[self.environment_info].items():
-                        print(k, v)
                         if isinstance(v, torch.Tensor) and v.numel() == 1:
                             self.abs_agent.track_data(f"Info / {k}", v.item())
 

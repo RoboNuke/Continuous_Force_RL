@@ -344,8 +344,8 @@ class FactoryEnv(DirectRLEnv):
         }
 
         if self.use_ft:
-            obs_dict["force_torque"] = torch.tanh( 0.0011 * self.robot_force_torque )
-            state_dict["force_torque"] = torch.tanh( 0.0011 * self.robot_force_torque )
+            obs_dict["force_torque"] = torch.tanh( self.cfg.force_tanh_scale * self.robot_force_torque ) #0.022 should be
+            state_dict["force_torque"] = torch.tanh( self.cfg.force_tanh_scale * self.robot_force_torque )
         
         obs_tensors = [obs_dict[obs_name] for obs_name in self.cfg.obs_order]# + ["prev_actions"]]
         obs_tensors = torch.cat(obs_tensors, dim=-1)

@@ -57,6 +57,13 @@ class AgentList():
         else:
             self.agents.track_data(tag, value)
 
+    def track_hist(self, tag: str, value: torch.Tensor) -> None:
+        if self.is_list:
+            for agent, scope in zip(self.agents, self.agents_scope):
+                agent.track_hist(tag, value[scope[0]:scope[1]])
+        else:
+            self.agents.track_hist(tag, value)    
+
     def write_tracking_data(self, timestep: int, timesteps: int, eval=False) -> None:
         """Write tracking data to TensorBoard
 

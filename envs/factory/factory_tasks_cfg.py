@@ -76,12 +76,16 @@ class FactoryTask:
     action_penalty_scale: float = 0.0
     action_grad_penalty_scale: float = 0.0
 
-    force_active_threshold: float = 1.0
+    force_active_threshold: float = 2.0
     torque_active_threshold: float = 1.0
+
+    
     # 0.0276 = (1 - sum of maximum reward from baseline, course and fine ) / 3
     # this makes the new maximum reward 1 and a small negative for force control when far away
     bad_force_cmd_rew: float = -0.0139 
     good_force_cmd_rew: float = 0.0139
+    #for low wrench update
+    wrench_norm_scale: float = 1.0
     # Reward function details can be found in Appendix B of https://arxiv.org/pdf/2408.04587.
     # Multi-scale keypoints are used to capture different phases of the task.
     # Each reward passes the keypoint distance, x, through a squashing function:
@@ -122,6 +126,16 @@ class PegInsert(FactoryTask):
     asset_size = 8.0
     duration_s = 10.0
 
+
+    # easy mode:
+    """
+    hand_init_pos: list = [0.0, 0.0, 0.035]  # Relative to fixed asset tip.
+    hand_init_pos_noise: list = [0.005, 0.005, 0.00]
+    hand_init_orn_noise: list = [0.0, 0.0, 0.0]
+    fixed_asset_init_pos_noise: list = [0.01, 0.01, 0.01]
+    held_asset_pos_noise: list = [0.00, 0.0, 0.00]  # noise level of the held asset in gripper
+    """
+    
     # Robot
     hand_init_pos: list = [0.0, 0.0, 0.047]  # Relative to fixed asset tip.
     hand_init_pos_noise: list = [0.02, 0.02, 0.01]

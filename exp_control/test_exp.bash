@@ -24,14 +24,14 @@ num_agents=1
 break_force=-1
 current_datetime=$(date +"%Y-%m-%d %H:%M:%S")
 num_history_samples=8
-num_envs_per_agent=14
+num_envs_per_agent=16
 parallel_control=0
 parallel_agent=0
 hybrid_control=1
 hybrid_agent=1
 control_torques=0
-hybrid_selection_reward='simp'  #'simp' # 'dirs' 'delta'
-
+hybrid_selection_reward='base'  #'simp' # 'dirs' 'delta'
+force_bias_sel=1
 #CUDA_LAUNCH_BLOCKING=1 
 #HYDRA_FULL_ERROR=1
 python -m learning.ppo_factory_trainer \
@@ -40,7 +40,7 @@ python -m learning.ppo_factory_trainer \
     --use_ft_sensor=$use_ft_sensor \
     --exp_tag=$exp_tag \
     --wandb_group_prefix="$3_${obs_modes[$obs_idx]}_$break_force_$current_datetime" \
-    --max_steps=30000000 \
+    --max_steps=500000 \
     --num_envs=$(($num_envs_per_agent * $num_agents)) \
     --num_agents=$num_agents \
     --exp_name="$3_${obs_modes[$obs_idx]}_$break_force_$current_datetime" \
@@ -57,9 +57,12 @@ python -m learning.ppo_factory_trainer \
     --log_ckpt_data=1 \
     --control_torques=$control_torques \
     --hybrid_selection_reward=$hybrid_selection_reward \
+    --force_bias_sel=$force_bias_sel \
     --init_eval \
     --ckpt_tracker_path="/nfs/stak/users/brownhun/ckpt_trackers/$3_$current_datetime_ckpt_tracker.txt"
     #--ckpt_path="/home/hunter/good_hist_agent.pt" 
     #--hybrid_control 
+    #--init_eval \
+    #--no_log_wandb \
 
 

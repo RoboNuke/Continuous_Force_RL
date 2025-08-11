@@ -70,6 +70,10 @@ class HybridForcePosActionWrapper(gym.Wrapper):#FactoryWrapper):
             self._update_rew_buf = self._delta_update_rew_buf
         elif reward_type == "base": # no rew for hybrid control
             self._update_rew_buf = self.env.unwrapped._update_rew_buf
+        elif reward_type == "pos_simp":
+            self._update_rew_buf = self._pos_simp_update_rew_buf
+        elif reward_type == "wrench_norm":
+            self._update_rew_buf = self._low_wrench_update_rew_buf
         else:
             raise NoImplementedError(f"Reward type {reward_type} is not implemented")
 
@@ -115,7 +119,7 @@ class HybridForcePosActionWrapper(gym.Wrapper):#FactoryWrapper):
         env_ids = self.unwrapped.reset_buf.nonzero(as_tuple=False).squeeze(-1)
         if len(env_ids) > 0:
             self.unwrapped._reset_buffers(env_ids)
-        self.unwrapped.prev_action = self.unwrapped.actions
+        self.unwrapped.prev_action = self.unwrapped.actions.clone()
         self.unwrapped.actions = (
             self.unwrapped.cfg.ctrl.ema_factor * action.clone().to(self.unwrapped.device) + (1 - self.unwrapped.cfg.ctrl.ema_factor) * self.unwrapped.actions
         )
@@ -189,7 +193,7 @@ class HybridForcePosActionWrapper(gym.Wrapper):#FactoryWrapper):
         )
 
         # if pos is out of bounds we want there to be no error on force target
-        force_wrench[:,:3][out_of_bounds] = self.unwrapped.robot_force_torque[:,:3][out_of_bounds]
+        force_wrench[:,:3][out_of_bounds] = 0.0 #self.unwrapped.robot_force_torque[:,:3][out_of_bounds]
         
         task_wrench = (1-self.sel_matrix) * pose_wrench + self.sel_matrix * force_wrench
         if self.force_size > 3:
@@ -236,12 +240,12 @@ class HybridForcePosActionWrapper(gym.Wrapper):#FactoryWrapper):
         bad_dims = torch.logical_or(bad_force_ctrl, bad_pos_ctrl)
         bad_idxs  = torch.any(bad_dims, dim=1)
 
-        sel_rew = self.cfg_task.good_force_cmd_rew * torch.sum(good_dims,dim=1)
-        sel_rew = self.cfg_task.bad_force_cmd_rew  * torch.sum(bad_dims, dim=1)
-
-        self.unwrapped.extras['Reward / Selection Matrix'] = sel_rew
+        good_rew = self.cfg_task.good_force_cmd_rew * torch.sum(good_dims,dim=1)
+        bad_rew = self.cfg_task.bad_force_cmd_rew  * torch.sum(bad_dims, dim=1)
+        sel_rew = good_rew + bad_rew
+        self.unwrapped.extras['Reward / Selection Matrix'] = good_rew + bad_rew
         
-        return rew_buf + sel_rew #+ self.force_size*torch.any(active_force, dim=1).float() * self.cfg_task.good_force_cmd_rew
+        return rew_buf + good_rew + bad_rew  #+ self.force_size*torch.any(active_force, dim=1).float() * self.cfg_task.good_force_cmd_rew
     
     def _simp_update_rew_buf(self, curr_successes):
         #rew_buf = self.unwrapped._update_reward_buf(curr_successes)
@@ -257,7 +261,7 @@ class HybridForcePosActionWrapper(gym.Wrapper):#FactoryWrapper):
         bad_force_cmd = torch.logical_and(torch.all(~active_force, dim=1), torch.any(force_ctrl, dim=1))
 
         sel_rew = self.cfg_task.good_force_cmd_rew * good_force_cmd
-        sel_rew = self.cfg_task.bad_force_cmd_rew * bad_force_cmd
+        sel_rew += self.cfg_task.bad_force_cmd_rew * bad_force_cmd
 
         self.unwrapped.extras['Reward / Selection Matrix'] = sel_rew
         
@@ -273,3 +277,27 @@ class HybridForcePosActionWrapper(gym.Wrapper):#FactoryWrapper):
         self.unwrapped.extras['Reward / Selection Matrix'] = sel_rew
         
         return rew_buf + sel_rew
+
+    def _pos_simp_update_rew_buf(self, curr_successes):
+        #rew_buf = self.unwrapped._update_reward_buf(curr_successes)
+        rew_buf = self.old_update_rew_buf(curr_successes)
+        
+        # reward when selection and force/pos match
+        active_force = torch.abs(self.unwrapped.robot_force_torque[:,:self.force_size]) > self.cfg_task.force_active_threshold
+        #active_force[:,3:] = torch.abs(self.unwrapped.robot_force_torque[:,3:]) > self.cfg_task.torque_active_threshold
+        force_ctrl = self.sel_matrix[:,:self.force_size].bool()
+
+
+        good_force_cmd = torch.logical_and(torch.any(active_force,dim=1), torch.any(force_ctrl, dim=1))
+        bad_force_cmd = torch.logical_and(torch.all(~active_force, dim=1), torch.any(force_ctrl, dim=1))
+
+        sel_rew = self.cfg_task.good_force_cmd_rew * good_force_cmd
+
+        self.unwrapped.extras['Reward / Selection Matrix'] = sel_rew
+        
+        return rew_buf + sel_rew #+ torch.any(active_force, dim=1).float() * self.cfg_task.good_force_cmd_rew
+        
+    def _low_wrench_update_rew_buf(self, curr_successes):
+        rew_buf = self.old_update_rew_buf(curr_successes)
+        wrench_norm = self.unwrapped.actions[:,self.force_size:].norm(dim=-1)
+        return rew_buf - wrench_mags * self.cfg_task.wrench_norm_scale

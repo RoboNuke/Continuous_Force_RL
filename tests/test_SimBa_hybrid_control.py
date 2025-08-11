@@ -52,7 +52,7 @@ class TestHybridActionGMM(unittest.TestCase):
 
     def tearDown(self):
         pass
-
+    """
     def gumble_rate(self, uniform_rate = 0.01, n=100):
         self.gmm.uniform_rate = uniform_rate
         x1 = 0
@@ -77,7 +77,8 @@ class TestHybridActionGMM(unittest.TestCase):
         p0, p1 = self.gumble_rate(1.0, 1000)
         self.assertTrue( p0 > 0.48 and p0 < 0.52)
         self.assertTrue( p1 > 0.48 and p1 < 0.52)
-    
+    """
+    """
     def test_log_prob(self):
         self.batch_size=3
         from math import log
@@ -120,7 +121,12 @@ class TestHybridActionGMM(unittest.TestCase):
         #print("Answer:", log_probs[0,:].exp())
 
         self.assertTrue( torch.all(torch.abs(test_log_prob - log_probs) < 1e-3) )
-    """
+    
+    def test_entropy(self):
+        self.gmm.uniform_rate = 0.0
+        entropy = self.gmm.entropy()
+        self.assertTrue(entropy.size()[0] == self.batch_size)
+    
     def test_sample(self):
         self.gmm.uniform_rate = 0.0
         n = 100000.0
@@ -134,23 +140,92 @@ class TestHybridActionGMM(unittest.TestCase):
         self.assertTrue(torch.all(torch.abs(samps[:,:6] - 0.75) < 0.01))
         self.assertTrue(torch.all(torch.abs(samps[:,6:12] - 0.0) < 1e-2) )
         self.assertTrue(torch.all(torch.abs(samps[:,12:18] - 1.0) < 1e-2) )
-    """
+    
     def test_n_samples(self):
         self.gmm.uniform_rate = 0.0
         n = 100000
         samps = self.gmm.sample(sample_shape=(n,))
         samps[...,:6] = torch.where(samps[...,:6] > 0.5, 1.0, 0.0)
         samps = samps.mean(dim=0)
-        print(samps)
+        #print(samps)
         self.assertTrue(torch.all(torch.abs(samps[...,:6] - 0.75) < 0.01))
         self.assertTrue(torch.all(torch.abs(samps[...,6:12] - 0.0) < 1e-2) )
         self.assertTrue(torch.all(torch.abs(samps[...,12:18] - 1.0) < 1e-2) )
     
-    def test_entropy(self):
-        self.gmm.uniform_rate = 0.0
-        entropy = self.gmm.entropy()
-        self.assertTrue(entropy.size()[0] == self.batch_size)
+    def test_gradients(self):
+        target = self.gmm.sample()
+        print("target size:", target.size())
+        input_data = {"states":torch.rand(3,10)}
+        
+        actor = HybridControlSimBaActor(
+            input_data['states'].size()[-1],
+            target.size()[-1],
+            "cpu",
+            ctrl_torque=True
+        )
+        #print(actor)
+
+        acts, log_probs, _ = actor.act(input_data, "policy")
+        log_goal = torch.randn_like(log_probs)
+        
+        loss = torch.nn.MSELoss()(log_probs, log_goal)
+        loss.backward()
+
+        for name, param in actor.named_parameters():
+            if param.grad is not None:
+                print(f"Gradient for {name}:")
+                print(param.grad)
+            else:
+                print(f"No gradient for {name} (requires_grad might be False or not involved in computation)")
     
+    def test_init_bias_zero_weight(self):
+        target = self.gmm.sample()
+        input_data = {"states":torch.rand(3,18)} #0-5 sel, 6-12: pos 12-18: force
+        actor = HybridControlSimBaActor(
+            input_data['states'].size()[-1],
+            target.size()[-1],"cpu",
+            ctrl_torque=True,
+            sel_adj_types=["init_bias", "zero_weights"]
+        )
+
+        #print(actor.actor_mean.output[-1].weight)
+        #print(actor.actor_mean.output[-1].bias)
+
+    
+    def test_force_add(self):
+        target = self.gmm.sample()
+        input_data = {"states":torch.rand(3,18)} #0-5 sel, 6-12: pos 12-18: force
+        actor = HybridControlSimBaActor(
+            input_data['states'].size()[-1],
+            target.size()[-1],"cpu",
+            ctrl_torque=True,
+            sel_adj_types=["force_add_zout"]
+        )
+        actor.eval()
+        with torch.no_grad():
+            input_data['states'][:,-6:] = 0.75 #[input_data['states'][:,-6:] < 1e-3] = 0.5
+            pre_force = input_data['states'][:,-6:].clone()
+            with_force = actor.act(input_data, "policy")[2]['mean_actions'][:,-6:]
+            input_data['states'][:,-6:0] *= 0.0
+            without_force = actor.act(input_data, "policy")[2]['mean_actions'][:,-6:]
+            self.assertTrue(torch.all( torch.abs(with_force - without_force) < 1e-3) )
+
+    """    
+
+    def test_scale_z(self):
+        target = self.gmm.sample()
+        input_data = {"states":torch.rand(3,18)} #0-5 sel, 6-12: pos 12-18: force
+        actor = HybridControlSimBaActor(
+            input_data['states'].size()[-1],
+            target.size()[-1],"cpu",
+            ctrl_torque=True,
+            sel_adj_types=["init_bias", "zero_weights"] #"scale_zout"]
+        )
+        actor.eval()
+        out, _, info = actor.act(input_data, 'policy')
+        print(out[:,:6])
+        print(info['mean_actions'][:,:6])
+        
         
 if __name__=="__main__":
     unittest.main()

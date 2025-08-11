@@ -56,7 +56,7 @@ class WandbLoggerPPO(PPO):
         if state_size == -1:
             state_size=observation_space
         self.state_size = state_size
-
+        self._track_hists = {}
         self.track_input_histogram = cfg['track_input']
 
     def init(self, trainer_cfg: Optional[Mapping[str, Any]] = None) -> None:
@@ -155,8 +155,14 @@ class WandbLoggerPPO(PPO):
         self.tracking_data[tag + "_video"].append(timestep * self.num_envs)
         #self.data_manager.add_mp4(value, step= timestep * self.num_envs, cap=tag, fps=30)
 
-    def track_hist(self, tag: str, value: torch.Tensor, timestep: int) -> None:
-        self.data_manager.add_histogram(tag, value, timestep * self.num_envs)
+    def track_hist(self, tag: str, value: torch.Tensor) -> None:
+        #self.data_manager.add_histogram(tag, value, timestep * self.num_envs)
+        #if self._track_hist is None:
+        #    self._track_hist = {}
+        if tag in self._track_hists:
+            self._track_hists[tag].append(value.detach().cpu().numpy())
+        else:
+            self._track_hists[tag] = [value.detach().cpu().numpy()]
 
     def track_data(self, tag: str, value: float) -> None:
         """Track data to TensorBoard
@@ -168,6 +174,7 @@ class WandbLoggerPPO(PPO):
         :param value: Value to track
         :type value: float
         """
+        #print(self.tracking_data[tag])
         self.tracking_data[tag].append(value)
 
     def write_tracking_data(self, timestep: int, timesteps: int, eval=False) -> None:
@@ -180,7 +187,15 @@ class WandbLoggerPPO(PPO):
         """
         prefix = "Eval " if eval else "Training "
 
-        # handle cumulative rewards
+        # handle histograms
+        if len(self._track_hists) > 0:
+            for key, hist_data in self._track_hists.items():
+                if "sel_" in key:
+                    dim = key.replace("sel_", "")
+                    hist = np.histogram(hist_data, range=(0.0, 1.0), bins=20)
+                    self.track_data(f"{prefix} Hybrid Controller / Force Selection {dim} (hist)", wandb.Histogram(np_histogram=hist))
+
+                    # handle cumulative rewards
         if len(self._track_rewards):
             track_rewards = np.array(self._track_rewards)
             track_timesteps = np.array(self._track_timesteps)
@@ -197,12 +212,12 @@ class WandbLoggerPPO(PPO):
             if len(rew):
                 track_rew = np.array(rew)
                 if 'successes' in name or 'engaged' in name:
-                    if eval:
-                        print(f"{prefix + name}:", np.sum(rew)/self.num_envs)
+                    #if eval:
+                    #    #print(f"{prefix + name}:", np.sum(rew)/self.num_envs)
                     self.track_data( prefix + name + " rate", np.sum(rew)/self.num_envs)
                 else:
-                    if eval:
-                        print(f"{prefix + name}(mean):", np.mean(track_rew))
+                    #if eval:
+                    #    #print(f"{prefix + name}(mean):", np.mean(track_rew))
                     self.track_data( prefix+name+" (mean)", np.mean(track_rew))
                     if 'times' in name or 'lengths' in name:
                         self.track_data( prefix+name+" (min)", np.min(track_rew))
@@ -216,13 +231,16 @@ class WandbLoggerPPO(PPO):
                 "env_step":timestep*self.num_envs, 
                 "exp_step":timestep
             }
-            for k, v in self.tracking_data.items():  
+            for k, v in self.tracking_data.items():
                 if k.endswith("(min)"):
                     data_to_log[k] = np.min(v)
                 elif k.endswith("(max)"):
                     data_to_log[k] = np.max(v)
+                elif k.endswith("(hist)"):
+                    data_to_log[k]=v[0]
                 else:
                     data_to_log[k]=np.mean(v)
+            
             self.data_manager.add_scalar(data_to_log, timestep * self.num_envs)
             #self.data_manager.add_scalar({prefix + 'Termination / Engaged':torch.sum(self.engaged_once).item()}, timestep * self.num_envs)
         # reset data containers for next iteration
@@ -231,7 +249,7 @@ class WandbLoggerPPO(PPO):
         self.tracking_data.clear()
         for key in self._track_comp_rews:
             self._track_comp_rews[key].clear()
-        
+        self._track_hists.clear()
         self.reset_tracking()
         if self.log_wandb:
             for k, v in keep.items():
@@ -280,8 +298,8 @@ class WandbLoggerPPO(PPO):
                 memory.add_samples( **tensors )
 
     def write_checkpoint(self, timestep: int, timesteps: int):
-        super().write_checkpoint(timestep, timesteps)
-        ckpt_path = os.path.join(self.experiment_dir, "checkpoints", f"agent_{timestep}.pt")
+        super().write_checkpoint(timestep*self.num_envs, timesteps)
+        ckpt_path = os.path.join(self.experiment_dir, "checkpoints", f"agent_{timestep*self.num_envs}.pt")
         vid_path = os.path.join(self.experiment_dir, "eval_videos", f"agent_{timestep* self.num_envs}.gif")
         #self.track_data("ckpt_video", (timestep, vid_path) )
         if self.track_ckpt_paths:
@@ -362,6 +380,7 @@ class WandbLoggerPPO(PPO):
             # the actions to zero on termination, and then pass the fixed state in basically
             #copy_state = {'policy':states['policy'].clone(), 'critic':states['critic'].clone()}
             #copy_next_state = {'policy':next_states['policy'].clone(), 'critic':next_states['critic'].clone()}
+            #print("Wandb Log Prob Size:", self._current_log_prob.size())
             self.add_sample_to_memory(
                 states=states.clone(), 
                 actions=actions.clone(), 
@@ -382,6 +401,7 @@ class WandbLoggerPPO(PPO):
                 self._cumulative_timesteps = torch.zeros_like(rewards, dtype=torch.int32)
                 self._comp_rews = {}
                 self._track_comp_rews = {}
+                
                 for key in infos:
                     #    #if not ('success' in key or 'engage' in key):
                     self._comp_rews[key] = torch.zeros_like(rewards, dtype=torch.float32)
@@ -410,6 +430,14 @@ class WandbLoggerPPO(PPO):
                 #self.track_data("Observation / " + prefix + " Critic (max)")
                 #self.track_data("Observation / " + prefix + " Critic (mean)")
                 #self.track_data("Observation / " + prefix + " Critic (min)")
+                
+            # track selection histograms
+            #for i, name in enumerate(self.sel_names):
+            #    # TODO: is detach needed?
+            #    #print(f"{name}: {max(actions[:,i])}, {min(actions[:,i])}, {actions[:,i].size()}")
+            #    self._track_hists["sel_" + name].append(actions[:,i].detach().cpu().numpy())
+
+            
             # record step reward data
             self.tracking_data[prefix + "Reward / Instantaneous reward (max)"].append(torch.max(rewards).item())
             self.tracking_data[prefix + "Reward / Instantaneous reward (min)"].append(torch.min(rewards).item())
@@ -506,7 +534,8 @@ class WandbLoggerPPO(PPO):
         self._cumulative_rewards *= 0
         self._cumulative_timesteps *= 0
         self._track_rewards.clear()
-        self._track_timesteps.clear() 
+        self._track_timesteps.clear()
+        self._track_hists.clear()
         for key in self._track_comp_rews:
             self._track_comp_rews[key].clear()
             if key in self._comp_rews:
@@ -526,6 +555,8 @@ class WandbLoggerPPO(PPO):
         super()._update(timestep, timesteps)
         # reset optimizer step
         self.resetAdamOptimizerTime(self.optimizer)
+        """
+        print(self.policy.actor_mean)
         self.track_data(
             "Gradients / Action Mean",
             self.policy.actor_mean.output[-2].weight.grad.norm().item()
@@ -538,6 +569,7 @@ class WandbLoggerPPO(PPO):
             "Gradients / Critic",
             self.value.critic.output[-2].weight.grad.norm().item()
         )
+        """
         if self.cfg['track_layernorms']:
             self.track_data(
                 "Critic Layer Weight Norm / Output", 
