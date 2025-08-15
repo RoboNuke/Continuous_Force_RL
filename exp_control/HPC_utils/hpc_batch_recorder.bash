@@ -54,14 +54,12 @@ echo $6
 tasks=( "PegInsert" "GearMesh")
 obs_modes=( "Local" "HistoryObs" "DMPObs")
 
-task_idx=$1
-obs_idx=$2
-break_force=$3
-hybrid_agent=$4
-ctrl_torque=$5
-ckpt_path=$6
-rew_type=$7
-force_bias_sel=$8
+task_idx=0 #$1
+obs_idx=0 #$2
+break_force=$1
+hybrid_agent=$2
+sel_adjs=$3
+ckpt_path=$4
 
 task_name="Isaac-Factory-TaskType-ObsType-v0"
 echo "$task_name"
@@ -77,27 +75,24 @@ use_ft_sensor=1
 parallel_control=0
 hybrid_control=1
 
-echo "Task idx: $task_idx"
-echo "Obs Idx: $obs_idx"
 echo "Break Force: $break_force"
 echo "Hybrid Agent: $hybrid_agent"
-echo "Ctrl Torque: $ctrl_torque"
+echo "Selection Adjustments: $sel_adjs"
 echo "Ckpt Path: $ckpt_path"
-echo "Reward Type: $rew_type"
-echo "Force Bias Selection: $force_bias_sel"
+
 python -m exp_control.record_ckpts.single_task_ckpt_recorder \
-       --headless \
-       --decimation=8 \
        --task=$task_name \
-       --ckpt_record_path=$ckpt_path \
-       --break_force=$break_force \
        --use_ft_sensor=$use_ft_sensor \
-       --parallel_control=$parallel_control \
+       --decimation=8 \
+       --break_force=$break_force \
+       --headless \
        --hybrid_control=$hybrid_control \
        --hybrid_agent=$hybrid_agent \
-       --control_torque=$ctrl_torque \
-       --hybrid_selection_reward=$rew_type \
-       --force_bias_sel=$force_bias_sel
+       --control_torque=0 \
+       --hybrid_selection_reward="base" \
+       --ckpt_record_path=$ckpt_path \
+       --parallel_control=$parallel_control \
+       --sel_adjs=$sel_adjs 
 
        #--log_smoothness_metrics=0
 

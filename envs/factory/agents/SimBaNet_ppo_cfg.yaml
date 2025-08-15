@@ -49,10 +49,10 @@ agent:
   bias_selection: True
   grad_norm_clip: 0.5
   ratio_clip: 0.2
-  clip_predicted_values: False #True
+  clip_predicted_values: False
   value_clip: 0.2
 
-  entropy_loss_scale: 0.0 #5.0e-6 #
+  entropy_loss_scale: 0.0 #5.0e-3 #
   value_loss_scale: 1.0 #1.5
   kl_threshold: 0.05
   rewards_shaper_scale: 1.0
@@ -60,13 +60,31 @@ agent:
 
   
   hybrid_agent:
-    unit_std_init: False # if true hybrid_agent init stds are calculated and below is not used
+    # general params
+    ctrl_torque: False
+
+    # intial std for hybrid agent
+    unit_std_init: True # if true hybrid_agent init stds are calculated and below is not used
     pos_init_std: 1.0 #0.118 #0.25
     rot_init_std: 1.0 #0.118
     force_init_std: 1.0 #0.118
-     
+
+    # scaling for hybrid agent
+    pos_scale: 1.0
+    rot_scale: 1.0
+    force_scale: 1.0
+    torque_scale: 1.0
+
+    # Selection Bias Parameters
+    selection_adjustment_types: 'none'
+    init_scale_weights_factor: 0.1
+    init_bias: 0.0  # 2.5=>7.58% force control rate
+    pre_layer_scale_factor: 0.01
+    
+    init_scale_last_layer: True
+    init_layer_scale: 0.1
   agent_is_list: False
-  disable_progressbar: False
+  disable_progressbar: True
   
   # logging and checkpoint
   track_layernorms: True

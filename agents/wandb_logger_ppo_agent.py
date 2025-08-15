@@ -194,7 +194,9 @@ class WandbLoggerPPO(PPO):
                     dim = key.replace("sel_", "")
                     hist = np.histogram(hist_data, range=(0.0, 1.0), bins=20)
                     self.track_data(f"{prefix} Hybrid Controller / Force Selection {dim} (hist)", wandb.Histogram(np_histogram=hist))
-
+                elif "adv" in key:
+                    hist =  np.histogram(hist_data, range=(0.0, 1.0), bins=20)
+                    self.track_data(f"Learning Performance / Advantage Distribution (hist)", wandb.Histogram(np_histogram=hist))
                     # handle cumulative rewards
         if len(self._track_rewards):
             track_rewards = np.array(self._track_rewards)
@@ -381,6 +383,8 @@ class WandbLoggerPPO(PPO):
             #copy_state = {'policy':states['policy'].clone(), 'critic':states['critic'].clone()}
             #copy_next_state = {'policy':next_states['policy'].clone(), 'critic':next_states['critic'].clone()}
             #print("Wandb Log Prob Size:", self._current_log_prob.size())
+            #ta = actions
+            #print("Wandb Action Pos:", torch.max(ta[:,3:6]).item(), torch.min(ta[:,3:6]).item(), torch.median(ta[:,3:6]).item())
             self.add_sample_to_memory(
                 states=states.clone(), 
                 actions=actions.clone(), 
@@ -553,6 +557,17 @@ class WandbLoggerPPO(PPO):
 
     def _update(self, timestep: int, timesteps: int):
         super()._update(timestep, timesteps)
+
+        # plot advantage histogram
+        advs = self.memory.get_tensor_by_name("advantages")
+        self.track_hist('adv', advs)
+        
+        # get adam LR
+        for group in self.optimizer.state_dict()['param_groups']:
+            if 'lr' in group:
+                self.track_data(f"ADAM State / Learning Rate", group['lr'])
+
+        
         # reset optimizer step
         self.resetAdamOptimizerTime(self.optimizer)
         """

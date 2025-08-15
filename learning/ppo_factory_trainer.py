@@ -53,14 +53,7 @@ parser.add_argument("--wandb_entity", type=str, default="hur", help="Name of wan
 parser.add_argument("--wandb_api_key", type=str, default="-1", help="API key for WandB")
 parser.add_argument("--wandb_project", type=str, default="Continuous_Force_RL", help="Wandb project to save logging to")
 
-
-
-
 parser.add_argument("--sel_adjs", type=str, default="none", help="A comma seperated list from the following ('init_bias', 'zero_weights', 'force_add_zout', 'scale_zout'")
-
-
-parser.add_argument("--force_bias_sel", type=int, default=0, help="Adds the force to the force selection term to heavily bias network to use force when forces are large.")
-parser.add_argument("--bias_selection", type=int, default=0, help="If true than -1.1 will be added to the selection bias parameters encouraging the network to move into position control")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -260,7 +253,7 @@ def main(
     agent_cfg['agent']['obs_type'] = obs_type
     agent_cfg['agent']['experiment']['tags'].append(obs_type)
     task_type = args_cli.task.split("-")[2]
-    agent_cfg['agent']['experiment']['group'] += args_cli.wandb_group_prefix + "_" + task_type + "_" + obs_type + "_" + str(args_cli.break_force) + "_" + str(args_cli.history_sample_size)
+    agent_cfg['agent']['experiment']['group'] += args_cli.wandb_group_prefix + "_" + task_type + "_" + obs_type + "_" + str(args_cli.break_force) + "_" + str(args_cli.history_sample_size) +  "_" + args_cli.hybrid_selection_reward
     agent_cfg['agent']['history_sample_size'] = args_cli.history_sample_size
     agent_cfg['agent']['decimation'] = args_cli.decimation
     agent_cfg['agent']['sim_hz'] = 1 / env_cfg.sim.dt
@@ -519,26 +512,22 @@ def main(
                 a_cfg['agent']['hybrid_agent']['pos_init_std'] = (1 / (env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0])) ** 2
                 a_cfg['agent']['hybrid_agent']['rot_init_std'] = (1 / (env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]))**2
                 a_cfg['agent']['hybrid_agent']['force_init_std'] = (1 / (env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]))**2
-            
+
+            a_cfg['agent']['hybrid_agent']['pos_scale'] = env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0]     # 2    => 4
+            a_cfg['agent']['hybrid_agent']['rot_scale'] = env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]     # 2.91 => 8.4681
+            a_cfg['agent']['hybrid_agent']['force_scale'] = env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0] # 1    => 1
+            a_cfg['agent']['hybrid_agent']['torque_scale'] = env_cfg.ctrl.default_task_force_gains[-1] * env_cfg.ctrl.torque_action_bounds[0]
+            a_cfg['agent']['hybrid_agent']['ctrl_torque'] = args_cli.control_torques
+            a_cfg['agent']['hybrid_agent']['selection_adjustment_types'] = args_cli.sel_adjs.split(",")
+
+            # define the actual model
             models[a_idx]['policy'] = HybridControlSimBaActor(
                 observation_space=env.cfg.observation_space, 
                 action_space=env.action_space,
-                #action_gain=0.05,
                 device=device,
-                pos_init_std = a_cfg['agent']['hybrid_agent']['pos_init_std'],
-                rot_init_std =  a_cfg['agent']['hybrid_agent']['rot_init_std'],
-                force_init_std =  a_cfg['agent']['hybrid_agent']['force_init_std'],
-                #act_init_std = agent_cfg['models']['act_init_std'],
+                hybrid_agent_parameters=a_cfg['agent']['hybrid_agent'],
                 actor_n = agent_cfg['models']['actor']['n'],
                 actor_latent = agent_cfg['models']['actor']['latent_size'],
-                force_scale= env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0], # 1    => 1
-                torque_scale = env_cfg.ctrl.default_task_force_gains[-1] * env_cfg.ctrl.torque_action_bounds[0],
-                pos_scale = env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0],     # 2    => 4
-                rot_scale = env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0],     # 2.91 => 8.4681
-                ctrl_torque=args_cli.control_torques,
-                sel_adj_types = args_cli.sel_adjs.split(",")
-                #bias_sel= args_cli.bias_selection == 1,
-                #force_bias_sel = (args_cli.force_bias_sel == 1)
             )
         elif args_cli.impedance_agent==1:
             models[a_idx]['policy'] = ImpedanceControlSimBaActor(
@@ -630,8 +619,8 @@ def main(
     )
 
     env.cfg.recording = True #vid # True
-    check_logprob_consistant_loop(trainer, vid_env)
-    return
+    #check_logprob_consistant_loop(trainer, vid_env)
+    #return
 
     
     # our actual learning loop
@@ -659,6 +648,7 @@ def main(
 
         print("\tEvaluating")
         trainer.eval(ckpt_int*(i+1), vid_env)
+            
 
 
 
@@ -671,7 +661,7 @@ def check_logprob_consistant_loop(trainer, vid_env):
 
     # step forward 1 rollout
     trainer.train(steps, vid_env)
-
+    #assert 1==0
     # get observation and log probs from memory
     states = trainer.agents.memory.get_tensor_by_name("states")
     actions = trainer.agents.memory.get_tensor_by_name("actions")

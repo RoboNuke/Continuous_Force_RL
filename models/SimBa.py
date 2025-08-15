@@ -7,6 +7,18 @@ import math
 from models.feature_net import NatureCNN, layer_init, he_layer_init
 from torch.distributions import MixtureSameFamily, Normal, Bernoulli, Independent, Categorical
 
+
+class ScaleLayer(nn.Module):
+    def __init__(self, scale_factor):
+        super().__init__()
+        self.scale_factor = scale_factor
+        
+    def forward(self, x):
+        return x * self.scale_factor
+
+    def extra_repr(self):
+        return f"scale_factor={self.scale_factor}"
+    
 class SimBaLayer(nn.Module):
     def __init__(self, size, device):
         super().__init__()

@@ -23,7 +23,7 @@ parser.add_argument("--hybrid_agent", type=int, default=0, help="Switches to hyb
 parser.add_argument("--control_torques", type=int, default=0, help="Allows hybrid control to effect torques not just forces")
 parser.add_argument("--log_smoothness_metrics", action="store_true", default=False, help="Log the sum squared velocity, jerk and force metrics")
 parser.add_argument("--hybrid_selection_reward", type=str, default="simp", help="Allows different rewards on the force/position selection: options are [simp, dirs, delta]")
-parser.add_argument("--force_bias_sel", type=int, default=0, help="Adds the force to the force selection term to heavily bias network to use force when forces are large.")
+parser.add_argument("--sel_adjs", type=str, default="none", help="Adds different selection biases")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -234,9 +234,9 @@ def save_tensor_as_gif(tensor_list, filename, tot_rew, vals, succ_step, engaged_
                 )
             # draw.text((x, y),"Sample Text",(r,g,b))
             draw.text((x * 240, y*180+160),f"Value Est={round(val.item(),2)}",(0,255,0),font=font)
-            ctrl_x = force_control[img_idx, i, 0]
-            ctrl_y = force_control[img_idx, i, 1]
-            ctrl_z = force_control[img_idx, i, 2]
+            ctrl_x = force_control[img_idx, i, 0] > 0.5
+            ctrl_y = force_control[img_idx, i, 1] > 0.5
+            ctrl_z = force_control[img_idx, i, 2] > 0.5
             draw.text((x * 240+20, y*180+135), f"X", (0 if ctrl_x else 255, 255 if ctrl_x else 0, 0), font=font)
             draw.text((x * 240+50, y*180+135), f"Y", (0 if ctrl_y else 255, 255 if ctrl_y else 0, 0), font=font)
             draw.text((x * 240+80, y*180+135), f"Z", (0 if ctrl_z else 255, 255 if ctrl_z else 0, 0), font=font)
@@ -307,30 +307,23 @@ def getAgent(env, agent_cfg, task_name, device, args_cli, env_cfg):
             force_scale= env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]
         )
     elif args_cli.hybrid_agent==1:
-            
-        if agent_cfg['agent']['hybrid_agent']['unit_std_init']:
-            import math
-            agent_cfg['agent']['hybrid_agent']['pos_init_std'] = math.sqrt(1 / (env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0]))
-            agent_cfg['agent']['hybrid_agent']['rot_init_std'] = math.sqrt(1 / (env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]))
-            agent_cfg['agent']['hybrid_agent']['force_init_std'] = math.sqrt(1 / (env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]))
-        models['policy'] = HybridControlSimBaActor(
-            observation_space=env.cfg.observation_space, 
-            action_space=env.action_space,
-            #action_gain=0.05,
-            device=device,
-            #act_init_std = agent_cfg['models']['act_init_std'],
-            pos_init_std = agent_cfg['agent']['hybrid_agent']['pos_init_std'],
-            rot_init_std =  agent_cfg['agent']['hybrid_agent']['rot_init_std'],
-            force_init_std =  agent_cfg['agent']['hybrid_agent']['force_init_std'],
-            actor_n = agent_cfg['models']['actor']['n'],
-            actor_latent = agent_cfg['models']['actor']['latent_size'],
-            force_scale= env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0], # 1    => 1
-            torque_scale = env_cfg.ctrl.default_task_force_gains[-1] * env_cfg.ctrl.torque_action_bounds[0],
-            pos_scale = env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0],     # 2    => 4
-            rot_scale = env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0],     # 2.91 => 8.4681
-            ctrl_torque=args_cli.control_torques,
-            force_bias_sel = (args_cli.force_bias_sel == 1)
-        )
+
+            agent_cfg['agent']['hybrid_agent']['pos_scale'] = env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0]     # 2    => 4
+            agent_cfg['agent']['hybrid_agent']['rot_scale'] = env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]     # 2.91 => 8.4681
+            agent_cfg['agent']['hybrid_agent']['force_scale'] = env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0] # 1    => 1
+            agent_cfg['agent']['hybrid_agent']['torque_scale'] = env_cfg.ctrl.default_task_force_gains[-1] * env_cfg.ctrl.torque_action_bounds[0]
+            agent_cfg['agent']['hybrid_agent']['ctrl_torque'] = args_cli.control_torques
+            agent_cfg['agent']['hybrid_agent']['selection_adjustment_types'] = args_cli.sel_adjs.split(",")
+
+            # define the actual model
+            models['policy'] = HybridControlSimBaActor(
+                observation_space=env.cfg.observation_space, 
+                action_space=env.action_space,
+                device=device,
+                hybrid_agent_parameters=agent_cfg['agent']['hybrid_agent'],
+                actor_n = agent_cfg['models']['actor']['n'],
+                actor_latent = agent_cfg['models']['actor']['latent_size'],
+            )
     else:
         if args_cli.hybrid_control or args_cli.parallel_control:
             sigma_idx = 6 if args_cli.control_torques else 3

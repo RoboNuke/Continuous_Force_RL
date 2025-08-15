@@ -114,8 +114,10 @@ class ExtSequentialTrainer(Trainer):
                 #    self.abs_agent.track_hist("sel_" + key, mean_actions[:,int(i)])
                 
                 actions = actions[0]
+                #print("Pre-Step Tran:", torch.max(actions[:,3:6]).item(), torch.min(actions[:,3:6]).item(), torch.median(actions[:,3:6]).item())
                 next_states, rewards, terminated, truncated, infos = self.env.step(actions.clone())
                 
+                #print("Post-Step Tran:", torch.max(actions[:,3:6]).item(), torch.min(actions[:,3:6]).item(), torch.median(actions[:,3:6]).item())
                 next_states = torch.cat( (self.env.unwrapped.obs_buf['policy'], self.env.unwrapped.obs_buf['critic']),dim=1)
                 if vid_env is not None and vid_env.is_recording():
                     self.env.cfg.recording = True
@@ -128,6 +130,7 @@ class ExtSequentialTrainer(Trainer):
 
                 # record the environments' transitions
                 #print("pre record:", states.size(), next_states.size())
+                #print("Pre-Record Tran:", torch.max(actions[:,3:6]).item(), torch.min(actions[:,3:6]).item(), torch.median(actions[:,3:6]).item())
                 self.abs_agent.record_transition(
                     states=states,
                     actions=actions,

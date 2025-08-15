@@ -26,7 +26,7 @@ task_name="${task_name/TaskType/${tasks[task_idx]}}"
 echo "Env name: $task_name"
 
 #use_ft_sensor=1
-num_agents=1
+num_agents=5
 current_datetime=$(date +"%Y-%m-%d_%H:%M:%S")
 num_history_samples=8
 num_envs_per_agent=256
@@ -39,7 +39,7 @@ echo "Ctrl Torques: $control_torques"
 #CUDA_LAUNCH_BLOCKING=1 
 #HYDRA_FULL_ERROR=1
 
-ckpt_path="/nfs/stak/users/brownhun/ckpt_trackers/$3_$current_datetime_ckpt_tracker.txt"
+ckpt_path="/nfs/stak/users/brownhun/ckpt_trackers/$3_ckpt_tracker.txt"
 
 #sbatch -J "$exp_tag_recorder_$current_datetime" exp_control/HPC_utils/hpc_batch_recorder.bash \
 #       $task_idx \
@@ -60,7 +60,7 @@ python -m learning.ppo_factory_trainer \
     --max_steps=50000000 \
     --num_envs=$(($num_envs_per_agent * $num_agents)) \
     --num_agents=$num_agents \
-    --exp_name="$3_${obs_modes[$obs_idx]}_$8_$5_${12}_$current_datetime" \
+    --exp_name="$3_${obs_modes[$obs_idx]}_$8_$5_$current_datetime" \
     --exp_dir="$3_$current_datetime_$8" \
     --no_vids \
     --decimation=8 \
@@ -74,5 +74,4 @@ python -m learning.ppo_factory_trainer \
     --hybrid_selection_reward=$hybrid_selection_reward \
     --ckpt_tracker_path=$ckpt_path \
     --init_eval \
-    --sel_adjs=$sel_adjs \
-    --no_log_wandb
+    --sel_adjs=$sel_adjs 
