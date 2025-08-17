@@ -31,7 +31,9 @@ def fn_processor(process_index, *args):
 
         # initialize agent
         elif task == "init":
+            print("about to pull agent from queue")
             agent = queue.get()
+            print("got agent")
             agent.init(trainer_cfg=queue.get())
             print(f"[INFO] Processor {process_index}: init agent {type(agent).__name__} with scope {scope} on {agent.num_envs} envs")
             barrier.wait()
@@ -222,6 +224,7 @@ class MPAgent():
     def init(self, trainer_cfg):
         # initialize agents
         for pipe, queue, agent in zip(self.producer_pipes, self.queues, self.agents):
+            print(type(pipe), type(queue), type(agent))
             pipe.send({"task": "init"})
             queue.put(agent)
             queue.put(trainer_cfg)

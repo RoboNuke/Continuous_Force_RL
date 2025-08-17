@@ -77,7 +77,7 @@ class TestHybridActionGMM(unittest.TestCase):
         p0, p1 = self.gumble_rate(1.0, 1000)
         self.assertTrue( p0 > 0.48 and p0 < 0.52)
         self.assertTrue( p1 > 0.48 and p1 < 0.52)
-    
+    """
     
     def test_log_prob(self):
         self.batch_size=3
@@ -121,7 +121,7 @@ class TestHybridActionGMM(unittest.TestCase):
         #print("Answer:", log_probs[0,:].exp())
 
         self.assertTrue( torch.all(torch.abs(test_log_prob - log_probs) < 1e-3) )
-    """
+    
     def test_entropy(self):
         self.gmm.uniform_rate = 0.0
         entropy = self.gmm.entropy()

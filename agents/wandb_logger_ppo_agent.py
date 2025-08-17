@@ -6,6 +6,7 @@ import gym
 import gymnasium
 import skrl
 import torch
+import torch.nn as nn
 import numpy as np
 from skrl.memories.torch import Memory
 from skrl.models.torch import Model
@@ -58,6 +59,7 @@ class WandbLoggerPPO(PPO):
         self.state_size = state_size
         self._track_hists = {}
         self.track_input_histogram = cfg['track_input']
+        self.track_action_histogram = cfg['track_action_hists']
 
     def init(self, trainer_cfg: Optional[Mapping[str, Any]] = None) -> None:
         """Initialize the agent
@@ -149,6 +151,7 @@ class WandbLoggerPPO(PPO):
                 group=wandb_kwargs['group']
             )
             self.log_wandb = True
+        print("wandb inited")
 
     def track_video_path(self, tag: str, value: str, timestep)-> None:
         self.tracking_data[tag + "_video"].append(value)
@@ -190,12 +193,28 @@ class WandbLoggerPPO(PPO):
         # handle histograms
         if len(self._track_hists) > 0:
             for key, hist_data in self._track_hists.items():
-                if "sel_" in key:
-                    dim = key.replace("sel_", "")
+                if "act_sel_" in key:
+                    dim = key.replace("act_sel_", "")
                     hist = np.histogram(hist_data, range=(0.0, 1.0), bins=20)
                     self.track_data(f"{prefix} Hybrid Controller / Force Selection {dim} (hist)", wandb.Histogram(np_histogram=hist))
+                elif "act_pos_" in key:
+                    dim = key.replace("act_pos_","")
+                    hist = np.histogram(hist_data,range=(-1,1), bins=40)
+                    self.track_data(f"{prefix} Hybrid Controller / Pos Action {dim} (hist)", wandb.Histogram(np_histogram=hist))
+                elif "act_force_" in key:
+                    dim = key.replace("act_force_","")
+                    hist = np.histogram(hist_data,range=(-1,1), bins=40)
+                    self.track_data(f"{prefix} Hybrid Controller / Force Action {dim} (hist)", wandb.Histogram(np_histogram=hist))
+                elif "obs_pos_" in key:
+                    dim = key.replace("obs_pos_","")
+                    hist = np.histogram(hist_data, range=(-1,1), bins=40)
+                    self.track_data(f"Observation / {prefix} {dim}-Position (hist)", wandb.Histogram(np_histogram=hist))
+                elif "obs_force_" in key:
+                    dim = key.replace("obs_force_","")
+                    hist = np.histogram(hist_data, range=(-1,1), bins=40)
+                    self.track_data(f"Observation / {prefix} {dim}-Force (hist)", wandb.Histogram(np_histogram=hist))
                 elif "adv" in key:
-                    hist =  np.histogram(hist_data, range=(0.0, 1.0), bins=20)
+                    hist =  np.histogram(hist_data, range=(-5.0, 5.0), bins=200)
                     self.track_data(f"Learning Performance / Advantage Distribution (hist)", wandb.Histogram(np_histogram=hist))
                     # handle cumulative rewards
         if len(self._track_rewards):
@@ -427,14 +446,16 @@ class WandbLoggerPPO(PPO):
                     )
             """
             if self.track_input_histogram:
-                #self.data_manager.add_histogram(prefix + "Histograms / Input", states.view(-1).detach().cpu().numpy(), timestep+150)
-                self.track_data("Observation / " + prefix + " Input (max)", torch.max(states).item())
-                self.track_data("Observation / " + prefix + " Input (mean)", torch.mean(states).item())
-                self.track_data("Observation / " + prefix + " Input (min)", torch.min(states).item())
-                #self.track_data("Observation / " + prefix + " Critic (max)")
-                #self.track_data("Observation / " + prefix + " Critic (mean)")
-                #self.track_data("Observation / " + prefix + " Critic (min)")
-                
+                # pos input
+                for i, dir in enumerate(['x','y','z']):
+                    self.track_hist(f"obs_pos_{dir}", states[:,i])
+                    self.track_hist(f"obs_force_{dir}", states[:,-6+i])
+
+            if self.track_action_histogram:
+                for i, dir in enumerate(['x','y','z']):
+                    self.track_hist(f"act_sel_{dir}",actions[:,i])
+                    self.track_hist(f"act_pos_{dir}", actions[:,i+3])
+                    self.track_hist(f"act_force_{dir}", actions[:,i+9])
             # track selection histograms
             #for i, name in enumerate(self.sel_names):
             #    # TODO: is detach needed?
@@ -559,42 +580,35 @@ class WandbLoggerPPO(PPO):
         super()._update(timestep, timesteps)
 
         # plot advantage histogram
-        advs = self.memory.get_tensor_by_name("advantages")
-        self.track_hist('adv', advs)
+        if self.cfg['track_advantage_hists']:
+            advs = self.memory.get_tensor_by_name("advantages")
+            self.track_hist('adv', advs)
         
         # get adam LR
-        for group in self.optimizer.state_dict()['param_groups']:
-            if 'lr' in group:
-                self.track_data(f"ADAM State / Learning Rate", group['lr'])
+        #adam = self.optimizer.state_dict()['state']
+        #for key in adam.keys():
+        #    self.track_data(f"ADAM State / Exp Avg", adam[key]['exp_avg'].detach().cpu().numpy())
+        #    self.track_data(f"ADAM State / Exp Avg Sq", adam[key]['exp_avg_sq'].detach().cpu().numpy())
+            
+        #for group in self.optimizer.state_dict()['param_groups']:
+        #    if 'lr' in group:
+        #        self.track_data(f"ADAM State / Learning Rate", group['lr'])
 
         
         # reset optimizer step
         self.resetAdamOptimizerTime(self.optimizer)
-        """
-        print(self.policy.actor_mean)
-        self.track_data(
-            "Gradients / Action Mean",
-            self.policy.actor_mean.output[-2].weight.grad.norm().item()
-        )
-        self.track_data(
-            "Gradients / Log Std",
-            self.policy.actor_logstd.grad.norm().item()
-        )
-        self.track_data(
-            "Gradients / Critic",
-            self.value.critic.output[-2].weight.grad.norm().item()
-        )
-        """
+        
         if self.cfg['track_layernorms']:
-            self.track_data(
-                "Critic Layer Weight Norm / Output", 
-                torch.linalg.norm(self.value.critic.output[-1].weight, dim=None, ord=None).item()
-            )
-            #print("critic output norm:", torch.linalg.norm(self.value.critic.output[-1].weight, dim=None, ord=None).item())
+            if self.cfg['track_gradients']:
+                self.track_data(
+                    "Gradients / Log Std",
+                    self.policy.actor_logstd.grad.norm().item()
+                )
+            # critic tracking
             self.track_data(
                 "Critic Layer Weight Norm / Input", 
                 torch.linalg.norm(self.value.critic.input[0].weight, dim=None, ord=None).item()
-            )
+            )        
 
             for layer_idx, layer in enumerate(self.value.critic.layers):
                 self.track_data(
@@ -605,11 +619,18 @@ class WandbLoggerPPO(PPO):
                     f"Critic Layer Weight Norm / Layer {layer_idx}-2", 
                     torch.linalg.norm(layer.path[3].weight, dim=None, ord=None).item()
                 )
-
+            
             self.track_data(
-                "Actor Layer Weight Norm / Output", 
-                torch.linalg.norm(self.policy.actor_mean.output[-2].weight, dim=None, ord=None).item()
+                "Critic Layer Weight Norm / Output", 
+                torch.linalg.norm(self.value.critic.output[-1].weight, dim=None, ord=None).item()
             )
+            if self.cfg['track_gradients']:
+                self.track_data(
+                    "Gradients / Critic",
+                    self.value.critic.output[-1].weight.grad.norm().item()
+                )
+
+            #Actor Tracking
             self.track_data(
                 "Actor Layer Weight Norm / Input", 
                 torch.linalg.norm(self.policy.actor_mean.input[0].weight, dim=None, ord=None).item()
@@ -624,6 +645,23 @@ class WandbLoggerPPO(PPO):
                     f"Actor Layer Weight Norm / Layer {layer_idx}-2", 
                     torch.linalg.norm(layer.path[3].weight, dim=None, ord=None).item()
                 )
+
+            # hybrid control vs other methods have different indexs for last weight layer
+            # so we search for it here to be safe.
+            for module in reversed(self.policy.actor_mean.output):
+                if isinstance(module, nn.Linear):
+                    
+                    self.track_data(
+                        "Actor Layer Weight Norm / Output", 
+                        torch.linalg.norm(module.weight, dim=None, ord=None).item()
+                    )
+                
+                    
+                    if self.cfg['track_gradients']:
+                        self.track_data(
+                            "Gradients / Action Mean",
+                            module.weight.grad.norm().item()
+                        )
 
     def resetAdamOptimizerTime(self, opt):
         for p,v in opt.state_dict()['state'].items():

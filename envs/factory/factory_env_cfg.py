@@ -71,7 +71,8 @@ class CtrlCfg:
     pos_action_threshold = [0.02, 0.02, 0.02]
     rot_action_threshold = [0.097, 0.097, 0.097]
     #force_action_threshold = [1, 1, 1]
-    force_action_threshold = [5,5,5] #[10,10,10]
+    #force_action_threshold = [5,5,5] #
+    force_action_threshold = [10,10,10]
     torque_action_threshold = [0.1, 0.1, 0.1]
 
     # gains for VIC (not used normally)
@@ -102,12 +103,35 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     # num_*: will be overwritten to correspond to obs_order, state_order.
     observation_space = 21
     state_space = 72
-    force_tanh_scale= 0.03 # 0.0011
+    #force_tanh_scale= 0.03 # 0.0011
+    force_tanh_scale=0.0011
+
+    # noise model?
+    use_obs_noise=False
+    obs_noise_mean = {
+        "fingertip_pos_rel_fixed": [0.0,0.0,0.0],
+        "fingertip_pos_rel_fixed":[0.0,0.0,0.0],
+        "fingertip_quat": [0.0, 0.0, 0.0, 0.0],
+        "ee_linvel": [0.0,0.0,0.0],
+        "ee_angvel": [0.0,0.0,0.0],
+        "force_torque": [0.0,0.0,0.0,0.0,0.0,0.0]
+    }
+    obs_noise_std = {
+        "fingertip_pos_rel_fixed": [0.0,0.0,0.0],
+        "fingertip_pos_rel_fixed":[0.0,0.0,0.0],
+        "fingertip_quat": [0.0, 0.0, 0.0, 0.0],
+        "ee_linvel": [0.0,0.0,0.0],
+        "ee_angvel": [0.0,0.0,0.0],
+        "force_torque": [0.0,0.0,0.0,0.0,0.0,0.0]
+    }
+
+
+    
     obs_order: list = [
-        "fingertip_pos_rel_fixed", 
-        "fingertip_quat", 
-        "ee_linvel", 
-        "ee_angvel"
+        "fingertip_pos_rel_fixed", #3
+        "fingertip_quat", #4
+        "ee_linvel", #6
+        "ee_angvel" #6
     ]
 
     state_order: list = [

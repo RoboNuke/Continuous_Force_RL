@@ -54,12 +54,15 @@ echo $6
 tasks=( "PegInsert" "GearMesh")
 obs_modes=( "Local" "HistoryObs" "DMPObs")
 
-task_idx=0 #$1
-obs_idx=0 #$2
-break_force=$1
-hybrid_agent=$2
-sel_adjs=$3
-ckpt_path=$4
+task_idx=$1
+obs_idx=$2
+break_force=$3
+hybrid_agent=$4
+sel_adjs=$5
+ckpt_path=$6
+use_ft_sensor=$7
+hybrid_control=$8
+hybrid_agent=$9
 
 task_name="Isaac-Factory-TaskType-ObsType-v0"
 echo "$task_name"
@@ -71,9 +74,9 @@ task_name="${task_name/ObsType/${obs_modes[obs_idx]}}"
 task_name="${task_name/TaskType/${tasks[task_idx]}}"
 echo "Env name: $task_name"
 
-use_ft_sensor=1
+#use_ft_sensor=1
 parallel_control=0
-hybrid_control=1
+#hybrid_control=1
 
 echo "Break Force: $break_force"
 echo "Hybrid Agent: $hybrid_agent"
@@ -92,7 +95,8 @@ python -m exp_control.record_ckpts.single_task_ckpt_recorder \
        --hybrid_selection_reward="base" \
        --ckpt_record_path=$ckpt_path \
        --parallel_control=$parallel_control \
-       --sel_adjs=$sel_adjs 
+       --sel_adjs=$sel_adjs \
+       --easy_mode 
 
        #--log_smoothness_metrics=0
 

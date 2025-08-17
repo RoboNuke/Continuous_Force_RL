@@ -32,22 +32,15 @@ class HybridActionGMM(MixtureSameFamily):
         self.force_size = 6 if ctrl_torque else 3
         self.uniform_rate = uniform_rate
         self.sample_uniform = (self.uniform_rate > 0.0)
-        
-        #if self.sample_uniform:
-        #    print(f"[INFO]: Sampling from Uniform Distribution with {self.uniform_rate*100)% likelihood")
                 
     def sample(self, sample_shape=torch.Size()):
         with torch.no_grad():
             mix_sample = self.mixture_distribution.sample(sample_shape).float()
-            #print(mix_sample.dtype)
-            #mix_sample= mix_sample.float()
             mix_shape = mix_sample.shape
-
             # sample 0 or 1
             if self.sample_uniform:
                 uniform_mask = torch.rand_like(mix_sample) < self.uniform_rate
                 mix_sample[uniform_mask] = (torch.rand_like(mix_sample[uniform_mask]) > 0.5).float()
-
             # component samples [n, B, k, E] [n, 2]
             comp_samples = self.component_distribution.sample(sample_shape)
             out_samples = torch.cat(
@@ -57,14 +50,12 @@ class HybridActionGMM(MixtureSameFamily):
                     comp_samples[...,:self.force_size,1] 
                 ), dim=-1
             )
-            
             # scale everything
             out_samples[..., self.force_size:self.force_size+3] /= self.p_w
             out_samples[...,self.force_size+3:self.force_size+6] /= self.r_w
             out_samples[...,self.force_size+6:9+self.force_size] /= self.f_w # 12 or 15
             if self.force_size > 3:
                 out_samples[...,self.force_size+9:] /= self.t_w
-            
             return out_samples
 
     def log_prob(self, action):
@@ -83,10 +74,11 @@ class HybridActionGMM(MixtureSameFamily):
 
         means = torch.stack((mean1,mean2),dim=-1)
         comp_log_prob = self.component_distribution.log_prob(means)
+
         if self.sample_uniform:
             log_z = (self.mixture_distribution.probs * (1 - self.uniform_rate) + self.uniform_rate/2.0).log()
         else:
-            log_z = (self.mixture_distribution.probs).log()
+            log_z = self.mixture_distribution.logits #(self.mixture_distribution.probs).log()
         
         log_prob = torch.logsumexp(log_z + comp_log_prob, dim=-1)
         return log_prob
@@ -111,6 +103,7 @@ class HybridGMMMixin(GaussianMixin):
             rot_scale=1.0,
             force_scale=1.0,
             torque_scale=1.0,
+            uniform_rate=0.0,
             ctrl_torque=False
     ) -> None:
         super().__init__(clip_actions, clip_log_std, min_log_std, max_log_std, reduction, role)
@@ -119,6 +112,7 @@ class HybridGMMMixin(GaussianMixin):
         self.torque_scale= torque_scale
         self.pos_scale = pos_scale
         self.rot_scale = rot_scale
+        self.uniform_rate = uniform_rate
         
     def act(
         self, 
@@ -128,7 +122,6 @@ class HybridGMMMixin(GaussianMixin):
         """Act stochastically in response to the state of the environment"""
         # map from states/observations to mean actions and log standard deviations
         mean_actions, log_std, outputs = self.compute(inputs, role)
-        action = mean_actions
         #print("Pos Actions:", torch.max(action[:,3:6]).item(), torch.min(action[:,3:6]).item(), torch.median(action[:,3:6]).item())
         
         # clamp log standard deviations
@@ -136,15 +129,16 @@ class HybridGMMMixin(GaussianMixin):
             log_std = torch.clamp(log_std, self._g_log_std_min, self._g_log_std_max)
             
         batch_size = mean_actions.shape[0]
-        logits = mean_actions[:,:self.force_size].float()
+        logits = mean_actions[:,:2*self.force_size].float()
         
         # Categorical logits need to be expanded to match components
         mix_logits = torch.zeros((batch_size, 6, 2), dtype=torch.float32, device=mean_actions.device)
-        mix_logits[:, :self.force_size, 0] = 1.0 - logits[:,:]
-        mix_logits[:, :self.force_size, 1] = logits[:,:]
+        mix_logits[:,:self.force_size, :] = logits.view((batch_size, self.force_size, 2))
+        #mix_logits[:, :self.force_size, 0] = (1.0 - logits.exp()).log()
+        #mix_logits[:, :self.force_size, 1] = logits
         if self.force_size < 6:
-            mix_logits[:, self.force_size:, 0] = 0.0
-            mix_logits[:, self.force_size:, 1] = 1.0
+            mix_logits[:, self.force_size:, 0] = -100.0 #0.0
+            mix_logits[:, self.force_size:, 1] = 0.0 #1.0
             
         mix_dist = Categorical(probs=mix_logits)
 
@@ -184,8 +178,11 @@ class HybridGMMMixin(GaussianMixin):
             torque_weight = self.torque_scale,
             pos_weight=self.pos_scale,
             rot_weight = self.rot_scale,
-            ctrl_torque = self.force_size > 3
+            ctrl_torque = self.force_size > 3,
+            uniform_rate = self.uniform_rate
         )
+        cols_to_keep = [0,2,4,5,6,7,8,9,10,11,12,13]
+        mean_actions = mean_actions[:,cols_to_keep]
         actions = self._g_distribution.sample()
     
         # clip actions
@@ -235,6 +232,7 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
         force_scale = hybrid_agent_parameters['force_scale']
         torque_scale = hybrid_agent_parameters['torque_scale']
         ctrl_torque = hybrid_agent_parameters['ctrl_torque']
+        uniform_rate = hybrid_agent_parameters['uniform_sampling_rate']
         
         sel_adj_types = hybrid_agent_parameters['selection_adjustment_types']
         
@@ -250,7 +248,8 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
             rot_scale=rot_scale,
             force_scale=force_scale,
             torque_scale=torque_scale,
-            ctrl_torque=ctrl_torque
+            ctrl_torque=ctrl_torque,
+            uniform_rate=uniform_rate
         )
         print("[INFO]: Clipping Log STD" if clip_log_std else "[INFO]: No Lot STD Clipping")
         #self.end_tanh = force_bias_type in ['none', 'bias_sel']
@@ -277,7 +276,7 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
         self.actor_mean = SimBaNet(
             n=actor_n, 
             in_size=self.num_observations, 
-            out_size=self.num_actions, 
+            out_size=self.num_actions + self.force_size, 
             latent_size=actor_latent, 
             device=device,
             tan_out=False
@@ -287,8 +286,8 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
             with torch.no_grad():
                 self.actor_mean.output[-1].weight *= hybrid_agent_parameters['init_layer_scale']
         
-        self.sig = torch.nn.Sigmoid().to(device)
-        self.tanh = nn.Tanh().to(device)
+        self.selection_activation = nn.LogSigmoid().to(device) #torch.nn.Sigmoid().to(device)
+        self.component_activation = nn.Tanh().to(device)
         
         if self.force_add:
             print("[INFO]:\tAdding force to selection nodes")
@@ -305,7 +304,8 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
         if self.init_bias:
             print("[INFO]:\tSetting initial Selection Bias")
             with torch.no_grad():
-                self.actor_mean.output[-1].bias[:self.force_size] = hybrid_agent_parameters['init_bias']  #-1.1 
+                idxs = [0, 2, 4]
+                self.actor_mean.output[-1].bias[idxs] = hybrid_agent_parameters['init_bias']  #-1.1 
 
         if self.scale_z:
             scale_factor = hybrid_agent_parameters['pre_layer_scale_factor']
@@ -318,8 +318,8 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
     def compute(self, inputs, role):
         zout = self.actor_mean(inputs['states'][:,:self.num_observations])
         # first force_size are sigma, remaining is tanh
-        sels = zout[:,:self.force_size]
-        not_sels = zout[:,self.force_size:]
+        sels = zout[:,:2*self.force_size]
+        not_sels = zout[:,2*self.force_size:]
         
         new_sel_def = False
         if self.force_add:
@@ -331,12 +331,12 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
             
         # tan sigma of sels
         if new_sel_def:
-            final_sels = self.sig(new_sels)
+            final_sels = self.selection_activation(new_sels)
         else:
-            final_sels = self.sig(sels)
+            final_sels = self.selection_activation(sels)
         #final_sels = (final_sels + 1) * 2.0
         
-        final_not_sels = self.tanh(not_sels)
+        final_not_sels = self.component_activation(not_sels)
         action_mean = torch.cat([final_sels, final_not_sels], dim=-1)
         return action_mean, self.actor_logstd.expand(action_mean.size()[0],-1), {}
     

@@ -13,6 +13,8 @@ parser = argparse.ArgumentParser(description="Train an RL agent with skrl.")
 parser.add_argument("--task", type=str, default="Isaac-Factory-PegInsert-Local-v0", help="Name of the task.")
 parser.add_argument("--log_ckpt_data", type=int, default=0, help="Value of 1 turns on logging checkpoint data for replay")
 parser.add_argument("--ckpt_tracker_path", type=str, default="/nfs/stak/users/brownhun/ckpt_tracker2.txt", help="Path the ckpt recording data")
+parser.add_argument("--easy_mode", action="store_true", default=False, help="Limits the intialization to simplify problem")
+parser.add_argument("--use_obs_noise", action="store_true", default=False, help="Adds Gaussian noise specificed by env cfg to observations")
 parser.add_argument("--num_envs", type=int, default=256, help="Number of environments to simulate.")
 parser.add_argument("--seed", type=int, default=-1, help="Seed used for the environment")
 parser.add_argument("--max_steps", type=int, default=10240000, help="RL Policy training iterations.")
@@ -67,8 +69,6 @@ if not args_cli.no_vids:
 
 # clear out sys.argv for Hydra
 sys.argv = [sys.argv[0]] + hydra_args
-
-
 # launch our threads before simulation app
 from agents.mp_agent import MPAgent
 import torch.multiprocessing as mp
@@ -83,7 +83,6 @@ if args_cli.num_agents > 1:
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
-
 
 import gymnasium as gym
 
@@ -137,6 +136,7 @@ from omni.isaac.lab.envs import (
     DirectRLEnvCfg,
     ManagerBasedRLEnvCfg,
 )
+from omni.isaac.lab.utils.noise import GaussianNoiseCfg, NoiseModelCfg
 from omni.isaac.lab.utils.dict import print_dict
 from omni.isaac.lab.utils.io import dump_pickle, dump_yaml
 
@@ -189,7 +189,45 @@ def main(
     env_cfg.sim.dt = (1/args_cli.policy_hz) / args_cli.decimation
     env_cfg.sim.render_interval=args_cli.decimation
     print(f"Time scale config parameters\n\tDec: {env_cfg.decimation}\n\tSim_dt:{1/env_cfg.sim.dt}\n\tPolicy_Hz:{args_cli.policy_hz}")
-    
+
+    env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    # set initialization params
+    if args_cli.easy_mode:
+        env_cfg.episode_length_s = 2.5
+        # robot hand start relative to fixed asset
+        env_cfg.task.duration_s = 2.5
+        env_cfg.task.hand_init_pos = [0.0, 0.0, 0.035]  # Relative to fixed asset tip.
+        env_cfg.task.hand_init_pos_noise = [0.0025, 0.0025, 0.00]
+        env_cfg.task.hand_init_orn_noise = [0.0, 0.0, 0.0]
+
+        # Fixed Asset (applies to all tasks)
+        env_cfg.task.fixed_asset_init_pos_noise = [0.0, 0.0, 0.0]
+        env_cfg.task.fixed_asset_init_orn_deg = 0.0
+        env_cfg.task.fixed_asset_init_orn_range_deg = 0.0
+
+        # Held Asset (applies to all tasks)
+        env_cfg.task.held_asset_pos_noise = [0.0, 0.0, 0.0]  # noise level of the held asset in gripper
+        env_cfg.task.held_asset_rot_init = 0.0
+        print("\n\n[INFO]:Easy Mode Selected\n\n")
+
+    env_cfg.use_obs_noise = args_cli.use_obs_noise
+    if args_cli.use_obs_noise:
+        obsCfg = NoiseModelCfg()
+        gaussCfg = GaussianNoiseCfg()
+        means = []
+        stds = []
+        
+        for obs_type in env_cfg.obs_order:
+            for x in env_cfg.obs_noise_mean[obs_type]:
+                means.append(x)
+            for x in env_cfg.obs_noise_std[obs_type]:
+                stds.append(x)
+            
+        gaussCfg.mean = torch.tensor(means, device=env_cfg.sim.device)
+        gaussCfg.std = torch.tensor(stds, device=env_cfg.sim.device)
+        obsCfg.noise_cfg = gaussCfg
+        env_cfg.observation_noise_model = obsCfg
+        print("\n\n[INFO]:Applying Noise to Observations\n\n")
     """Train with skrl agent."""
     #max_rollout_steps = agent_cfg['agent']['rollouts']
     max_rollout_steps = int((1/env_cfg.sim.dt) / env_cfg.decimation * env_cfg.episode_length_s)#TODO
@@ -277,7 +315,6 @@ def main(
     # override configurations with non-hydra CLI arguments
     env_cfg.scene.num_envs = args_cli.num_envs 
     #env_cfg.scene.replicate_physics = True
-    env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
 
     env_cfg.num_agents = args_cli.num_agents
     
@@ -309,8 +346,26 @@ def main(
         agent_cfg['agent']['experiment']['tags'].append("LinearWarmup")
     else:
         print("\n\n[Info]: Not using a learning rate scheduler\n\n")
-            
-        
+
+    # get control params
+    agent_cfg['agent']['ctrl_params'] = {}
+    for key, item in vars(env_cfg.ctrl).items():
+        agent_cfg['agent']['ctrl_params'][key] = item
+
+    # get env params
+    agent_cfg['agent']['env_cfg'] = {}
+    #keys = ['force_tanh_scale','decimation', 'use_force_sensor','episode_length_s']
+    keys = ['sim','ctrl','task','scene','robot','viewer','is_finite_horizon','rerender_on_reset','wait_for_textures','xr','ui_window_class_type','seed','event']
+    for key, item in vars(env_cfg).items():
+        if not key in keys:
+            agent_cfg['agent']['env_cfg'][key] = item
+
+    # get task params
+    ignore_keys = ['fixed_asset', 'held_asset']
+    agent_cfg['agent']['task_cfg'] = {}
+    for key, item in vars(env_cfg.task).items():
+        if not key in ignore_keys:
+            agent_cfg['agent']['task_cfg'][key] = item
 
     #print("Decimation:", dec)
     #agent_cfg['agent']['env_cfg'] = env_cfg
@@ -591,6 +646,7 @@ def main(
     print("Agents generated")
     agents = None
     if args_cli.num_agents > 1:
+        print("Making Multiable Agents")
         mp_agent.set_agents(agent_list)
         agents = mp_agent
     else:
@@ -611,12 +667,14 @@ def main(
         "close_environment_at_exit": True,
         "disable_progressbar": agent_cfgs[0]['agent']['disable_progressbar']
     }
-    
+    print(agents)
     trainer = ExtSequentialTrainer(
         cfg = cfg_trainer,
         env = env,
         agents = agents
     )
+    
+    print("Trainer Created")
 
     env.cfg.recording = True #vid # True
     #check_logprob_consistant_loop(trainer, vid_env)

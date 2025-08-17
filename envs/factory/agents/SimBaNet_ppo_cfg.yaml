@@ -37,7 +37,7 @@ agent:
   linear_warmup_learning_rate_scheduler_kwargs:
      start_factor: 1.0e-7
      end_factor: 1.0
-     total_iters: 120
+     total_iters: 80
   #####################
 
 
@@ -78,17 +78,22 @@ agent:
     # Selection Bias Parameters
     selection_adjustment_types: 'none'
     init_scale_weights_factor: 0.1
-    init_bias: 0.0  # 2.5=>7.58% force control rate
-    pre_layer_scale_factor: 0.01
+    init_bias: -2.5  # 2.5=>7.58% force control rate
+    pre_layer_scale_factor: 0.1
     
     init_scale_last_layer: True
     init_layer_scale: 0.1
+
+    uniform_sampling_rate: 0.0
   agent_is_list: False
-  disable_progressbar: True
+  disable_progressbar: False
   
   # logging and checkpoint
   track_layernorms: True
   track_input: True
+  track_advantage_hists: True
+  track_gradients: True
+  track_action_hists: False
   experiment:
     directory: "DEFAULT_DIRECTORY" # pass arg to change this!
     experiment_name: "DEFAULT_EXP_NAME" # pass arg to change this

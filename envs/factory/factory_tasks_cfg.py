@@ -76,7 +76,8 @@ class FactoryTask:
     action_penalty_scale: float = 0.0
     action_grad_penalty_scale: float = 0.0
 
-    force_active_threshold: float = 2.0
+    #force_active_threshold: float = 2.0
+    force_active_threshold: float = 1.0
     torque_active_threshold: float = 1.0
 
     
@@ -132,7 +133,7 @@ class PegInsert(FactoryTask):
     hand_init_pos: list = [0.0, 0.0, 0.035]  # Relative to fixed asset tip.
     hand_init_pos_noise: list = [0.005, 0.005, 0.00]
     hand_init_orn_noise: list = [0.0, 0.0, 0.0]
-    fixed_asset_init_pos_noise: list = [0.01, 0.01, 0.01]
+    fixed_asset_init_pos_noise: list = [0.0, 0.0, 0.0]
     held_asset_pos_noise: list = [0.00, 0.0, 0.00]  # noise level of the held asset in gripper
     """
     

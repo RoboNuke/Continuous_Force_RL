@@ -54,9 +54,9 @@ class ExtSequentialTrainer(Trainer):
         agents_scope = agents_scope if agents_scope is not None else []
         
         super().__init__(env=env, agents=agents, agents_scope=agents_scope, cfg=_cfg)
-        
+        print("After super()")
         self.abs_agent = AgentList(agents, self.agents_scope, cfg=cfg)
-        
+        print(self.abs_agent)
         # init agents
         self.abs_agent.init(trainer_cfg=self.cfg)
         self.training_timestep = 0

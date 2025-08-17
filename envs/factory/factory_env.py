@@ -9,10 +9,10 @@ import torch
 import carb
 
 # different isaac sim versions
-#try:
-#    import isaacsim.core.utils.torch as torch_utils
-#except:
-import omni.isaac.core.utils.torch as torch_utils
+try:
+    import isaacsim.core.utils.torch as torch_utils
+except:
+    import omni.isaac.core.utils.torch as torch_utils
 
 # isaaclab versions
 """
@@ -344,7 +344,7 @@ class FactoryEnv(DirectRLEnv):
         }
 
         if self.use_ft:
-            obs_dict["force_torque"] = torch.tanh( self.cfg.force_tanh_scale * self.robot_force_torque ) #0.022 should be
+            obs_dict["force_torque"] = torch.tanh( self.cfg.force_tanh_scale * self.robot_force_torque ) 
             state_dict["force_torque"] = torch.tanh( self.cfg.force_tanh_scale * self.robot_force_torque )
         
         obs_tensors = [obs_dict[obs_name] for obs_name in self.cfg.obs_order]# + ["prev_actions"]]
@@ -447,7 +447,7 @@ class FactoryEnv(DirectRLEnv):
         
         self.ctrl_target_fingertip_midpoint_pos = self.fixed_pos_action_frame + pos_error_clipped
 
-    def _calc_ctrl_quat(self, min_idx=0, max_idx=3):        
+    def _calc_ctrl_quat(self, min_idx=3, max_idx=6):        
         # Interpret actions as target rot (axis-angle) displacements
         rot_actions = self.actions[:, min_idx:max_idx]
         if self.cfg_task.unidirectional_rot:
@@ -861,7 +861,6 @@ class FactoryEnv(DirectRLEnv):
         fixed_asset_pos_rand = torch.tensor(self.cfg.obs_rand.fixed_asset_pos, dtype=torch.float32, device=self.device)
         fixed_asset_pos_noise = fixed_asset_pos_noise @ torch.diag(fixed_asset_pos_rand)
         self.init_fixed_pos_obs_noise[:] = fixed_asset_pos_noise
-
         self.step_sim_no_action()
 
         # Compute the frame on the bolt that would be used as observation: fixed_pos_obs_frame

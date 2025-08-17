@@ -24,6 +24,8 @@ parser.add_argument("--control_torques", type=int, default=0, help="Allows hybri
 parser.add_argument("--log_smoothness_metrics", action="store_true", default=False, help="Log the sum squared velocity, jerk and force metrics")
 parser.add_argument("--hybrid_selection_reward", type=str, default="simp", help="Allows different rewards on the force/position selection: options are [simp, dirs, delta]")
 parser.add_argument("--sel_adjs", type=str, default="none", help="Adds different selection biases")
+parser.add_argument("--easy_mode", action="store_true", default=False, help="Limits the intialization to simplify problem")
+parser.add_argument("--use_obs_noise", action="store_true", default=False, help="Adds Gaussian noise specificed by env cfg to observations")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -385,6 +387,45 @@ def main(
     env_cfg.sim.dt = (1/args_cli.policy_hz) / args_cli.decimation
     print(f"Time scale config parameters\n\tDec: {env_cfg.decimation}\n\tSim_dt:{1/env_cfg.sim.dt}\n\tPolicy_Hz:{args_cli.policy_hz}")
     
+
+    if args_cli.easy_mode:
+        env_cfg.episode_length_s = 2.5
+        # robot hand start relative to fixed asset
+        env_cfg.task.duration_s = 2.5
+        env_cfg.task.hand_init_pos = [0.0, 0.0, 0.035]  # Relative to fixed asset tip.
+        env_cfg.task.hand_init_pos_noise = [0.0025, 0.0025, 0.00]
+        env_cfg.task.hand_init_orn_noise = [0.0, 0.0, 0.0]
+
+        # Fixed Asset (applies to all tasks)
+        env_cfg.task.fixed_asset_init_pos_noise = [0.0, 0.0, 0.0]
+        env_cfg.task.fixed_asset_init_orn_deg = 0.0
+        env_cfg.task.fixed_asset_init_orn_range_deg = 0.0
+
+        # Held Asset (applies to all tasks)
+        env_cfg.task.held_asset_pos_noise = [0.0, 0.0, 0.0]  # noise level of the held asset in gripper
+        env_cfg.task.held_asset_rot_init = 0.0
+        print("\n\n[INFO]:Easy Mode Selected\n\n")
+
+    
+    env_cfg.use_obs_noise = args_cli.use_obs_noise
+    if args_cli.use_obs_noise:
+        obsCfg = NoiseModelCfg()
+        gaussCfg = GaussianNoiseCfg()
+        means = []
+        stds = []
+        
+        for obs_type in env_cfg.obs_order:
+            for x in env_cfg.obs_noise_mean[obs_type]:
+                means.append(x)
+            for x in env_cfg.obs_noise_std[obs_type]:
+                stds.append(x)
+            
+        gaussCfg.mean = torch.tensor(means, device=env_cfg.sim.device)
+        gaussCfg.std = torch.tensor(stds, device=env_cfg.sim.device)
+        obsCfg.noise_cfg = gaussCfg
+        env_cfg.observation_noise_model = obsCfg
+        print("\n\n[INFO]:Applying Noise to Observations\n\n")
+        
     """Train with skrl agent."""
     max_rollout_steps = int((1/env_cfg.sim.dt) / env_cfg.decimation * env_cfg.episode_length_s)
     agent_cfg['agent']['rollouts'] = max_rollout_steps
@@ -393,7 +434,6 @@ def main(
     agent_cfg['agent']['experiment']['tags'].append(env_cfg.task_name)
 
     agent_cfg['agent']['break_force'] = args_cli.break_force
-
     # override configurations with non-hydra CLI arguments
     env_cfg.scene.num_envs = num_envs 
     #env_cfg.scene.replicate_physics = True

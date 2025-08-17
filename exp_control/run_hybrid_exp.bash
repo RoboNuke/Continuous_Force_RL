@@ -41,6 +41,19 @@ echo "Ctrl Torques: $control_torques"
 
 ckpt_path="/nfs/stak/users/brownhun/ckpt_trackers/$3_ckpt_tracker.txt"
 
+
+sbatch -J "$3_recorder" exp_control/HPC_utils/hpc_batch_recorder.bash \
+       $task_idx \
+       $obs_idx \
+       $break_force \
+       $hybrid_agent \
+       $sel_adjs \
+       $ckpt_path \
+       $use_ft_sensor \
+       $hybrid_control \
+       $hybrid_agent \
+       
+
 #sbatch -J "$exp_tag_recorder_$current_datetime" exp_control/HPC_utils/hpc_batch_recorder.bash \
 #       $task_idx \
 #       $obs_idx \
@@ -53,11 +66,11 @@ ckpt_path="/nfs/stak/users/brownhun/ckpt_trackers/$3_ckpt_tracker.txt"
 
 python -m learning.ppo_factory_trainer \
     --task=$task_name \
-    --wandb_project="Continuous_Force_RL"\
+    --wandb_project="debug" \
     --use_ft_sensor=$use_ft_sensor \
     --exp_tag=$exp_tag \
     --wandb_group_prefix="$3_$4_${11}_${12}_$5" \
-    --max_steps=50000000 \
+    --max_steps=100000000 \
     --num_envs=$(($num_envs_per_agent * $num_agents)) \
     --num_agents=$num_agents \
     --exp_name="$3_${obs_modes[$obs_idx]}_$8_$5_$current_datetime" \
@@ -66,7 +79,6 @@ python -m learning.ppo_factory_trainer \
     --decimation=8 \
     --history_sample_size=$num_history_samples \
     --break_force=$break_force \
-    --headless \
     --hybrid_control=$hybrid_control \
     --hybrid_agent=$hybrid_agent \
     --log_ckpt_data=1 \
@@ -74,4 +86,11 @@ python -m learning.ppo_factory_trainer \
     --hybrid_selection_reward=$hybrid_selection_reward \
     --ckpt_tracker_path=$ckpt_path \
     --init_eval \
-    --sel_adjs=$sel_adjs 
+    --sel_adjs=$sel_adjs \
+    --headless \
+    --easy_mode 
+
+
+
+
+###"Continuous_Force_RL" \

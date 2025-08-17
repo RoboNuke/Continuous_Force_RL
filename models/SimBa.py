@@ -120,7 +120,7 @@ class SimBaAgent(GaussianMixin, DeterministicMixin, Model):
 
         he_layer_init(self.critic.output[-1], bias_const=critic_output_init_mean) # 2.5 is about average return for random policy w/curriculum
         with torch.no_grad():
-            self.actor_mean.output[-2].weight *= 0.01
+            self.actor_mean.output[-2].weight *= 0.1 #0.01
 
         self.actor_logstd = nn.Parameter(
             torch.ones(1, self.num_actions) * math.log(act_init_std)
@@ -176,7 +176,7 @@ class SimBaActor(GaussianMixin, Model):
             tan_out=True
         )
         with torch.no_grad():
-            self.actor_mean.output[-2].weight *= 1.0 #TODO FIX THIS TO 0.01
+            self.actor_mean.output[-2].weight *= 1.0 #0.1 #TODO FIX THIS TO 0.01
             if sigma_idx > 0:
                 self.actor_mean.output[-2].bias[:sigma_idx] = -1.1
         
