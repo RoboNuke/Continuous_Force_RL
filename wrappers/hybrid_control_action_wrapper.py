@@ -1,5 +1,5 @@
 import torch
-import gym
+import gymnasium as gym
 from wrappers.factory_wrapper import FactoryWrapper
 import envs.factory.factory_control as fc
 try:

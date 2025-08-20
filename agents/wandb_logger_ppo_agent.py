@@ -2,8 +2,8 @@ from typing import Any, Mapping, Optional, Tuple, Union
 import copy
 import os
 
-import gym
-import gymnasium
+#import gym
+import gymnasium as gym
 import skrl
 import torch
 import torch.nn as nn
@@ -30,8 +30,8 @@ class WandbLoggerPPO(PPO):
             self,
             models: Mapping[str, Model],
             memory: Optional[Union[Memory, Tuple[Memory]]] = None,
-            observation_space: Optional[Union[int, Tuple[int], gym.Space, gymnasium.Space]] = None,
-            action_space: Optional[Union[int, Tuple[int], gym.Space, gymnasium.Space]] = None,
+            observation_space: Optional[Union[int, Tuple[int], gym.Space, gym.Space]] = None,
+            action_space: Optional[Union[int, Tuple[int], gym.Space, gym.Space]] = None,
             num_envs: int = 256,
             device: Optional[Union[str, torch.device]] = None,
             state_size=-1,
@@ -159,9 +159,6 @@ class WandbLoggerPPO(PPO):
         #self.data_manager.add_mp4(value, step= timestep * self.num_envs, cap=tag, fps=30)
 
     def track_hist(self, tag: str, value: torch.Tensor) -> None:
-        #self.data_manager.add_histogram(tag, value, timestep * self.num_envs)
-        #if self._track_hist is None:
-        #    self._track_hist = {}
         if tag in self._track_hists:
             self._track_hists[tag].append(value.detach().cpu().numpy())
         else:
@@ -179,6 +176,7 @@ class WandbLoggerPPO(PPO):
         """
         #print(self.tracking_data[tag])
         self.tracking_data[tag].append(value)
+        
 
     def write_tracking_data(self, timestep: int, timesteps: int, eval=False) -> None:
         """Write tracking data to TensorBoard
@@ -285,7 +283,6 @@ class WandbLoggerPPO(PPO):
         :type timesteps: int
         """
         self._rollout += 1
-        #print(f'Rollouts-Count {self._rollout}\t{self._rollouts}\t{not self._rollout % self._rollouts}\t{timestep >= self._learning_starts}')
         if not self._rollout % self._rollouts and timestep >= self._learning_starts:
             self.set_mode("train")
             #print("Return:", np.mean(np.array(self._track_rewards)))
@@ -451,7 +448,7 @@ class WandbLoggerPPO(PPO):
                     self.track_hist(f"obs_pos_{dir}", states[:,i])
                     self.track_hist(f"obs_force_{dir}", states[:,-6+i])
 
-            if self.track_action_histogram:
+            if self.track_action_histogram and actions.size()[1] >= 12:
                 for i, dir in enumerate(['x','y','z']):
                     self.track_hist(f"act_sel_{dir}",actions[:,i])
                     self.track_hist(f"act_pos_{dir}", actions[:,i+3])
@@ -597,7 +594,7 @@ class WandbLoggerPPO(PPO):
         
         # reset optimizer step
         self.resetAdamOptimizerTime(self.optimizer)
-        
+        """
         if self.cfg['track_layernorms']:
             if self.cfg['track_gradients']:
                 self.track_data(
@@ -662,7 +659,7 @@ class WandbLoggerPPO(PPO):
                             "Gradients / Action Mean",
                             module.weight.grad.norm().item()
                         )
-
+        """
     def resetAdamOptimizerTime(self, opt):
         for p,v in opt.state_dict()['state'].items():
             v["step"]=torch.Tensor([0])        

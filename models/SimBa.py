@@ -64,14 +64,48 @@ class SimBaNet(nn.Module):
             out = self.layers[i](out)
         out = self.output(out)
         return out
+    
+class MultiSimBaNet(nn.Module):
+    def __init__(
+            self,
+            n,
+            in_size,
+            out_size,
+            latent_size,
+            device,
+            num_nets=5,
+            tan_out=False
+    ):
+        super().__init__()
+        self.pride_nets = nn.ModuleList([
+            SimBaNet(n, in_size, out_size, latent_size, device, tan_out)
+            for _ in range(num_nets)
+        ])
+        self.num_nets = num_nets
 
+    def forward(self, x):
+        # Process each agent through its network
+        #print(x.size())
+        outputs = []
+        batch_size = int(x.size()[0] // self.num_nets)
+        #print("batch size:", batch_size)
+        for i, simba_net in enumerate(self.pride_nets):
+            simba_output = simba_net(x[i*batch_size:(i+1)*batch_size, :])  # (batch_size, out_size)
+            outputs.append(simba_output)
+            #print("inv out:", simba_output.size())
+        
+        # Stack outputs: (batch_size, num_agents, out_size)
+        #print("final:", torch.cat(outputs,dim=0).size())
+        return torch.cat(outputs, dim=0)
+        
 
 class SimBaAgent(GaussianMixin, DeterministicMixin, Model):
     def __init__(
             self, 
             observation_space,
             action_space,
-            device, 
+            device,
+            num_agents=1,
             act_init_std = 0.60653066, # -0.5 value used in maniskill
             critic_output_init_mean = 0.0,
             force_type=None, 
@@ -90,6 +124,7 @@ class SimBaAgent(GaussianMixin, DeterministicMixin, Model):
         Model.__init__(self, observation_space, action_space, device)
         GaussianMixin.__init__(self, clip_actions, clip_log_std, min_log_std, max_log_std, reduction)
         DeterministicMixin.__init__(self, clip_actions)
+
         self.feature_net = NatureCNN(
             obs_size=self.num_observations, 
             with_state=True,
@@ -98,26 +133,48 @@ class SimBaAgent(GaussianMixin, DeterministicMixin, Model):
         )
 
         in_size = self.feature_net.out_features
-        
-        self.critic = SimBaNet(
-            n=critic_n, 
-            in_size=in_size, 
-            out_size=1, 
-            latent_size=critic_latent, 
-            tan_out=False,
-            device=device
-        )
         self.sigma_idx = sigma_idx
-        #self.actors = [BroNet(actor_n, in_size, self.act_size, actor_latent, device, tanh_out=True) for i in range(tot_actors)]
-        self.actor_mean = SimBaNet(
-            n=actor_n, 
-            in_size=in_size, 
-            out_size=self.num_actions, 
-            latent_size=actor_latent, 
-            device=device,
-            tan_out=True
-        )
+        if num_agents > 1:
+            self.critic = MultiSimBaNet(
+                n=critic_n, 
+                in_size=in_size, 
+                out_size=1, 
+                latent_size=critic_latent, 
+                tan_out=False,
+                num_agents = num_agents,
+                device=device
+            )
+            
+            self.actor_mean = MultiSimBaNet(
+                n=actor_n, 
+                in_size=in_size, 
+                out_size=self.num_actions, 
+                latent_size=actor_latent, 
+                device=device,
+                num_agents=num_agents,
+                tan_out=True
+            )
+        else:
+            self.critic = SimBaNet(
+                n=critic_n, 
+                in_size=in_size, 
+                out_size=1, 
+                latent_size=critic_latent, 
+                tan_out=False,
+                device=device
+            )
+            
+            self.actor_mean = SimBaNet(
+                n=actor_n, 
+                in_size=in_size, 
+                out_size=self.num_actions, 
+                latent_size=actor_latent, 
+                device=device,
+                tan_out=True
+            )
 
+
+        ######## TODO ############ NOT WORRYING ABOUT IT NOW BECAUSE I DON"T USE THIS
         he_layer_init(self.critic.output[-1], bias_const=critic_output_init_mean) # 2.5 is about average return for random policy w/curriculum
         with torch.no_grad():
             self.actor_mean.output[-2].weight *= 0.1 #0.01
@@ -146,12 +203,14 @@ class SimBaAgent(GaussianMixin, DeterministicMixin, Model):
             return self.critic(shared_output), {}
         
 
+
 class SimBaActor(GaussianMixin, Model):
     def __init__(
             self,
             observation_space,
             action_space,
-            device, 
+            device,
+            num_agents=1,
             act_init_std = 0.60653066, # -0.5 value used in maniskill 
             actor_n = 2,
             actor_latent=512,
@@ -167,22 +226,52 @@ class SimBaActor(GaussianMixin, Model):
         Model.__init__(self, observation_space, action_space, device)
         GaussianMixin.__init__(self, clip_actions, clip_log_std, min_log_std, max_log_std, reduction)
         self.action_gain = action_gain
-        self.actor_mean = SimBaNet(
-            n=actor_n, 
-            in_size=self.num_observations, 
-            out_size=self.num_actions, 
-            latent_size=actor_latent, 
-            device=device,
-            tan_out=True
-        )
-        with torch.no_grad():
-            self.actor_mean.output[-2].weight *= 1.0 #0.1 #TODO FIX THIS TO 0.01
-            if sigma_idx > 0:
-                self.actor_mean.output[-2].bias[:sigma_idx] = -1.1
+
+        self.num_agents = num_agents
+        if num_agents > 1:
+            self.actor_mean = MultiSimBaNet(
+                n=actor_n, 
+                in_size=self.num_observations, 
+                out_size=self.num_actions, 
+                latent_size=actor_latent, 
+                device=device,
+                tan_out=True,
+                num_nets=num_agents
+            )
+            self.actor_logstd = nn.ParameterList(
+                [
+                    nn.Parameter(
+                        torch.ones(1, self.num_actions) * math.log(act_init_std)
+                    )
+                    for _ in range(num_agents)
+                ]
+            )
+            for net in self.actor_mean.pride_nets:
+                with torch.no_grad():
+                    net.output[-2].weight *= 1.0 #0.1 #TODO FIX THIS TO 0.01
+                    if sigma_idx > 0:
+                        net.actor_mean.output[-2].bias[:sigma_idx] = -1.1
+                
+        else:
         
-        self.actor_logstd = nn.Parameter(
-            torch.ones(1, self.num_actions) * math.log(act_init_std)
-        )
+            self.actor_mean = SimBaNet(
+                n=actor_n, 
+                in_size=self.num_observations, 
+                out_size=self.num_actions, 
+                latent_size=actor_latent, 
+                device=device,
+                tan_out=True
+            )
+
+            with torch.no_grad():
+                self.actor_mean.output[-2].weight *= 1.0 #0.1 #TODO FIX THIS TO 0.01
+                if sigma_idx > 0:
+                    self.actor_mean.output[-2].bias[:sigma_idx] = -1.1
+        
+            self.actor_logstd = nn.Parameter(
+                torch.ones(1, self.num_actions) * math.log(act_init_std)
+            )
+            
         self.sigma_idx = sigma_idx
 
     def act(self, inputs, role):
@@ -190,18 +279,31 @@ class SimBaActor(GaussianMixin, Model):
         return GaussianMixin.act(self, inputs, role)
 
     def compute(self, inputs, role):
-        #print("Policy compute:", role, inputs['states'].size(), inputs['states'][:,:self.num_observations].size())
+        
         action_mean = self.action_gain * self.actor_mean(inputs['states'][:,:self.num_observations])
         if self.sigma_idx > 0:
-            action_mean[:,:self.sigma_idx] = (action_mean[:,:self.sigma_idx] + 1)/2.0
-        #print(action_mean[0,:self.sigma_idx])
-        return action_mean, self.actor_logstd.expand_as(action_mean), {}
-           
+            action_mean[...,:self.sigma_idx] = (action_mean[:,:self.sigma_idx] + 1)/2.0
+
+        if self.num_agents == 1:
+            return action_mean, self.actor_logstd.expand_as(action_mean), {}
+        
+        else:
+            logstds = []
+            batch_size = int(action_mean.size()[0] // self.num_agents)
+            for i, log_std in enumerate(self.actor_logstd):
+                logstds.append(log_std.expand_as( action_mean[i*batch_size:(i+1)*batch_size,:] ))
+            logstds = torch.cat(logstds,dim=0)
+            #print("log stds size:", logstds.size())
+            return action_mean, logstds, {}
+            
+
 
 class SimBaCritic(DeterministicMixin, Model):
-    def __init__(self, 
+    def __init__(
+            self, 
             state_space_size,
-            device, 
+            device,
+            num_agents=1,
             critic_output_init_mean = 0.0,
             critic_n = 1, 
             critic_latent=128,
@@ -212,16 +314,30 @@ class SimBaCritic(DeterministicMixin, Model):
 
         in_size = self.num_observations
         #print("state space size:", state_space_size)
-        self.critic = SimBaNet(
-            n=critic_n, 
-            in_size=in_size, 
-            out_size=1, 
-            latent_size=critic_latent, 
-            tan_out=False,
-            device=device
-        )
 
-        he_layer_init(self.critic.output[-1], bias_const=critic_output_init_mean) 
+        if num_agents > 1:
+            self.critic = MultiSimBaNet(
+                n=critic_n, 
+                in_size=in_size, 
+                out_size=1, 
+                latent_size=critic_latent, 
+                tan_out=False,
+                device=device,
+                num_nets = num_agents
+            )
+            for crit in self.critic.pride_nets:
+                he_layer_init(crit.output[-1], bias_const=critic_output_init_mean) 
+        else:
+            self.critic = SimBaNet(
+                n=critic_n, 
+                in_size=in_size, 
+                out_size=1, 
+                latent_size=critic_latent, 
+                tan_out=False,
+                device=device
+            )
+
+            he_layer_init(self.critic.output[-1], bias_const=critic_output_init_mean) 
         
 
     def act(self, inputs, role):

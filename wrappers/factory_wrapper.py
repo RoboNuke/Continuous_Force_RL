@@ -1,6 +1,6 @@
 
-import gym
-from gym import Wrapper
+import gymnasium as gym
+from gymnasium import Wrapper
 from envs.factory.factory_env import FactoryEnv
 
 class FactoryWrapper(Wrapper):

@@ -1,10 +1,13 @@
+
+
+
 import argparse
 import sys
 
-#try:
-#    from isaaclab.app import AppLauncher
-#except:
-from omni.isaac.lab.app import AppLauncher
+try:
+    from isaaclab.app import AppLauncher
+except:
+    from omni.isaac.lab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with skrl.")
@@ -69,6 +72,7 @@ if not args_cli.no_vids:
 
 # clear out sys.argv for Hydra
 sys.argv = [sys.argv[0]] + hydra_args
+
 # launch our threads before simulation app
 from agents.mp_agent import MPAgent
 import torch.multiprocessing as mp
@@ -77,13 +81,11 @@ if args_cli.num_agents > 1:
     n = args_cli.num_envs // args_cli.num_agents
     agents_scope = [[i * n, (i+1) * n] for i in range(args_cli.num_agents)]
 
-    #mp.set_start_method('forkserver', force=True) #"spawn")
+    #mp.set_start_method("fork") #'forkserver', force=True) #"spawn")
     mp_agent = MPAgent(args_cli.num_agents, agents_scope=agents_scope )
-
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
-
 import gymnasium as gym
 
 import itertools
@@ -114,7 +116,7 @@ from agents.agent_list import AgentList
 #import envs.FPiH.config.franka
 import envs.factory
 from torch.optim.lr_scheduler import LinearLR
-"""
+
 try:
     from isaaclab.envs import (
         DirectMARLEnv,
@@ -128,22 +130,23 @@ try:
     import isaaclab_tasks  # noqa: F401
     from isaaclab_tasks.utils.hydra import hydra_task_config
     from isaaclab_rl.skrl import SkrlVecEnvWrapper
+    print("isaaclab successfully loaded")
 except:
-"""
-from omni.isaac.lab.envs import (
-    DirectMARLEnv,
-    DirectMARLEnvCfg,
-    DirectRLEnvCfg,
-    ManagerBasedRLEnvCfg,
-)
-from omni.isaac.lab.utils.noise import GaussianNoiseCfg, NoiseModelCfg
-from omni.isaac.lab.utils.dict import print_dict
-from omni.isaac.lab.utils.io import dump_pickle, dump_yaml
+    print("Isaaclab not successfully loaded")
+    from omni.isaac.lab.envs import (
+        DirectMARLEnv,
+        DirectMARLEnvCfg,
+        DirectRLEnvCfg,
+        ManagerBasedRLEnvCfg,
+    )
+    from omni.isaac.lab.utils.noise import GaussianNoiseCfg, NoiseModelCfg
+    from omni.isaac.lab.utils.dict import print_dict
+    from omni.isaac.lab.utils.io import dump_pickle, dump_yaml
 
-import omni.isaac.lab_tasks  # noqa: F401
-from omni.isaac.lab_tasks.utils.hydra import hydra_task_config
-from omni.isaac.lab_tasks.utils.wrappers.skrl import SkrlVecEnvWrapper
-
+    import omni.isaac.lab_tasks  # noqa: F401
+    from omni.isaac.lab_tasks.utils.hydra import hydra_task_config
+    from omni.isaac.lab_tasks.utils.wrappers.skrl import SkrlVecEnvWrapper
+    print("Fallback worked")
 
 #from wrappers.info_video_recorder_wrapper import InfoRecordVideo
 from wrappers.parallel_force_pos_action_wrapper import ParallelForcePosActionWrapper

@@ -1,6 +1,6 @@
-from gym import Env, spaces
-import gym
-from gym.spaces import Box
+from gymnasium import Env, spaces
+import gymnasium as gym
+from gymnasium.spaces import Box
 import torch
 import envs.factory.factory_control as fc
 try:

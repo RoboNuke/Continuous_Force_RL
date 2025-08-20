@@ -15,7 +15,7 @@ except:
     import omni.isaac.core.utils.torch as torch_utils
 
 # isaaclab versions
-"""
+
 try:
     import isaaclab.sim as sim_utils
     from isaaclab.assets import Articulation
@@ -24,18 +24,20 @@ try:
     from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
     from isaaclab.utils.math import axis_angle_from_quat
     # TODO get ArticulationView equivalent (robotView?)
-except:
-"""
-import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.assets import Articulation
-from omni.isaac.lab.envs import DirectRLEnv
-from omni.isaac.lab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
-from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
-from omni.isaac.lab.utils.math import axis_angle_from_quat
-from omni.isaac.core.articulations import ArticulationView
+    from isaacsim.core.api.robots import RobotView
+except ModuleNotFoundError:
+    import omni.isaac.lab.sim as sim_utils
+    from omni.isaac.lab.assets import Articulation
+    from omni.isaac.lab.envs import DirectRLEnv
+    from omni.isaac.lab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
+    from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
+    from omni.isaac.lab.utils.math import axis_angle_from_quat
+    from omni.isaac.core.articulations import ArticulationView
+    from omni.isaac.lab.sensors import TiledCamera
+    
 from . import factory_control as fc
 from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
-from omni.isaac.lab.sensors import TiledCamera
+    
 
 class FactoryEnv(DirectRLEnv):
     cfg: FactoryEnvCfg
@@ -93,7 +95,12 @@ class FactoryEnv(DirectRLEnv):
         self._set_friction(self._robot, self.cfg_task.robot_cfg.friction)
 
     def _init_force_torque_sensor(self):
-        self._robot_av = ArticulationView(prim_paths_expr="/World/envs/env_.*/Robot")
+        try:
+            self._robot_av = ArticulationView(prim_paths_expr="/World/envs/env_.*/Robot")
+            self._robot_av.initialize()
+        except:
+            self._robot_av = RobotView(prim_paths_expr="/World/envs/env_.*/Robot")
+
         self._robot_av.initialize()
 
     def _set_friction(self, asset, value):
@@ -306,6 +313,7 @@ class FactoryEnv(DirectRLEnv):
         # get forcetorque data
         if self.use_ft or self.fragile:
             self.robot_force_torque = self._robot_av.get_measured_joint_forces()[:,8,:]
+            #print("force x:\n", self.robot_force_torque[:,0])
 
         # reset update timestamp
         self.last_update_timestamp = self._robot._data._sim_timestamp
@@ -650,6 +658,9 @@ class FactoryEnv(DirectRLEnv):
         rew_dict['curr_engaged'] = curr_engaged.clone().float()
 
         rew_dict["curr_successes"] = curr_successes.clone().float()
+
+        self.extras['current_engagements'] = curr_engaged.clone().float()
+        self.extras['current_successes'] = curr_successes.clone().float()
         
         rew_buf = (
             rew_dict["kp_coarse"]

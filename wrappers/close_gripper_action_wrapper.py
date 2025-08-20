@@ -1,6 +1,6 @@
-from gym import Env, spaces
-import gym
-from gym.spaces import Box
+import gymnasium as gym
+from gymnasium import Env, spaces
+from gymnasium.spaces import Box
 import torch
 
 class GripperCloseEnv(gym.ActionWrapper):

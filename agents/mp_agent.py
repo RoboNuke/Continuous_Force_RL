@@ -124,9 +124,9 @@ def fn_processor(process_index, *args):
             agent.memory.reset()
             barrier.wait()
 
-        elif task == "track_hists":
-            agent.track_hists(tag = queue.get(), value=queue.get()[scope[0]:scope[1]])
-            barrier.wait()
+        #elif task == "track_hists":
+        #    agent.track_hists(tag = queue.get(), value=queue.get()[scope[0]:scope[1]])
+        #    barrier.wait()
             
         elif task == "track_data":
             agent.track_data(tag = queue.get(), value = queue.get())
@@ -219,12 +219,12 @@ class MPAgent():
                 try:
                     model.share_memory()
                 except RuntimeError:
+                    print("Failed to share model memory")
                     pass
 
     def init(self, trainer_cfg):
         # initialize agents
         for pipe, queue, agent in zip(self.producer_pipes, self.queues, self.agents):
-            print(type(pipe), type(queue), type(agent))
             pipe.send({"task": "init"})
             queue.put(agent)
             queue.put(trainer_cfg)

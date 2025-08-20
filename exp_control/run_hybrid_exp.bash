@@ -1,4 +1,5 @@
 #!/bin/bash
+
 tasks=( "PegInsert" "GearMesh")
 obs_modes=( "Local" "HistoryObs" "DMPObs")
 
@@ -42,16 +43,16 @@ echo "Ctrl Torques: $control_torques"
 ckpt_path="/nfs/stak/users/brownhun/ckpt_trackers/$3_ckpt_tracker.txt"
 
 
-sbatch -J "$3_recorder" exp_control/HPC_utils/hpc_batch_recorder.bash \
-       $task_idx \
-       $obs_idx \
-       $break_force \
-       $hybrid_agent \
-       $sel_adjs \
-       $ckpt_path \
-       $use_ft_sensor \
-       $hybrid_control \
-       $hybrid_agent \
+#sbatch -J "$3_recorder" exp_control/HPC_utils/hpc_batch_recorder.bash \
+#       $task_idx \
+#       $obs_idx \
+#       $break_force \
+#       $hybrid_agent \
+#       $sel_adjs \
+#       $ckpt_path \
+#       $use_ft_sensor \
+#       $hybrid_control \
+#       $hybrid_agent \
        
 
 #sbatch -J "$exp_tag_recorder_$current_datetime" exp_control/HPC_utils/hpc_batch_recorder.bash \
@@ -64,9 +65,10 @@ sbatch -J "$3_recorder" exp_control/HPC_utils/hpc_batch_recorder.bash \
 #       $rew_type
 
 
-python -m learning.ppo_factory_trainer \
+#python -m learning.ppo_factory_trainer \
+python -m learning.factory_runner \
     --task=$task_name \
-    --wandb_project="debug" \
+    --wandb_project="Easy_Mode" \
     --use_ft_sensor=$use_ft_sensor \
     --exp_tag=$exp_tag \
     --wandb_group_prefix="$3_$4_${11}_${12}_$5" \

@@ -19,8 +19,8 @@ models:
 agent:
   class: PPO
   rollouts: 150 # set by env
-  learning_epochs: 4
-  mini_batches: 128 #steps / minibatch (256 envs * 150 steps per update)
+  learning_epochs: 2 #4
+  mini_batches: 4 #150 #128 #steps / minibatch (256 envs * 150 steps per update)
   discount_factor: 0.99
   lambda: 0.99
   learning_rate: 1.0e-6
@@ -89,11 +89,12 @@ agent:
   disable_progressbar: False
   
   # logging and checkpoint
-  track_layernorms: True
-  track_input: True
-  track_advantage_hists: True
-  track_gradients: True
+  track_layernorms: False
+  track_input: False
+  track_advantage_hists: False
+  track_gradients: False
   track_action_hists: False
+  
   experiment:
     directory: "DEFAULT_DIRECTORY" # pass arg to change this!
     experiment_name: "DEFAULT_EXP_NAME" # pass arg to change this
@@ -114,5 +115,5 @@ video_tracking:
   video_length: 50
 
 
-defaults:
-  - override hydra/job_logging: custom
+#defaults:
+#  - override hydra/job_logging: custom
