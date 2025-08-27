@@ -75,9 +75,9 @@ class MultiRandomMemory(Memory):
 
 
 def test_sample_all():
-    envs_per_agent = 3
-    num_agents = 4
-    rollout_len = 2
+    envs_per_agent = 4
+    num_agents = 3
+    rollout_len = 3
     tot_envs = envs_per_agent * num_agents
     
     memory = MultiRandomMemory(#MultiRandomMemory(
@@ -87,28 +87,41 @@ def test_sample_all():
         replacement=True
     )
     
-    names = ['obs', 'act', 'rew', 'next_obs', 'done']
+    names = ['obs', 'act'] #, 'rew', 'done']
     for name in names:
         #print(name, 2 if name in ['obs','next_obs'] else 1)
         memory.create_tensor(name=name, size = 2 if name in ['obs','next_obs'] else 1, dtype=torch.float32)
 
     # Fake trajectory data
     for i in range(rollout_len):
-        obs = torch.tensor([[i*k, (i + 0.1)*k] for k in range(tot_envs)])
-        act = torch.tensor([[i * 0.5 * k] for k in range(tot_envs)])
-        rew = torch.tensor([[i * tot_envs + k] for k in range(tot_envs)])
-        next_obs = torch.tensor([[i + 1*k, i + 1.1*k] for k in range(tot_envs)])
-        done = torch.tensor([(i == (num_agents - k // envs_per_agent)) for k in range(tot_envs)]).unsqueeze(-1)
+        obs = torch.tensor(
+            [[i/10+k//envs_per_agent, i/10+k//envs_per_agent+0.5] for k in range(tot_envs)]
+        ) 
+        act = obs[:,0] + 10 
+        rew = obs[:,0] + 100
+        #print(rew)
+        done = obs[:,0] + 1000
+        print(obs)
+        act=act.unsqueeze(-1)
+        print(act.size())
+        print(act)
         memory.add_samples(
             obs=obs,
-            act=act,
-            rew=rew,
-            next_obs=next_obs,
-            done=done
+            act=act#,
+            #rew=rew,
+            #done=done
         )
     #print(memory.tensors['rew'])
     # Call sample_all
-    batch = memory.sample_all(names=names, mini_batches= 3)
+    print(memory.get_tensor_by_name("obs"))
+    print(memory.get_tensor_by_name("act"))
+    batchs = memory.sample_all(names=names, mini_batches= 3)
+    for batch in range(3):
+        for a in range(num_agents):
+            print(f"Batch {batch}:{a+1} obs:")
+            print(batchs[batch][0][a*envs_per_agent:(a+1)*envs_per_agent])
+            print(f"Batch {batch}:{a+1} act:")
+            print( batchs[batch][1][a*envs_per_agent:(a+1)*envs_per_agent])
     #print("=== Sample All Test ===")
     #print(batch)
     #print(len(batch), len(batch[0]), batch[0][0].size())

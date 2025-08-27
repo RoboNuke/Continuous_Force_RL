@@ -54,9 +54,20 @@ class FactoryEnv(DirectRLEnv):
         #cfg.state_space += cfg.action_space
         self.cfg_task = cfg.task
         self.use_ft = cfg.use_force_sensor
-        self.break_force = cfg.break_force
-        self.fragile =  (self.break_force > 0)
-            
+        self.break_force = torch.ones((cfg.scene.num_envs,), dtype=torch.float32, device=cfg.sim.device)
+        if type(cfg.break_force) == list:
+            forces = cfg.break_force
+            group_size = int( cfg.scene.num_envs // len(forces) )
+            self.fragile = True
+            for i, force in enumerate(forces):
+                if force == -1:
+                    self.break_force[ i * group_size: (i+1) * group_size] *= 2**23
+                else:
+                    self.break_force[ i * group_size: (i+1) * group_size ] *= force
+        else:
+            self.break_force *= cfg.break_force
+            self.fragile =  torch.any(self.break_force > 0)
+                                                  
         super().__init__(cfg, render_mode, **kwargs)
 
 
@@ -534,7 +545,8 @@ class FactoryEnv(DirectRLEnv):
         """Update intermediate values used for rewards and observations."""
         self._compute_intermediate_values(dt=self.physics_dt)
         #time_out = self.episode_length_buf >= self.max_episode_length #- 1
-        if self.common_step_counter % self.max_episode_length == 0:
+        if self.common_step_counter % (self.max_episode_length) == 0:
+            print("Common Step:", self.common_step_counter)
             time_out = torch.ones_like(self.ep_succeeded)
         else:
             time_out = torch.zeros_like(self.ep_succeeded)
@@ -643,7 +655,7 @@ class FactoryEnv(DirectRLEnv):
 
         # Action penalties.
         rew_dict["action_penalty"] = torch.norm(self.actions, p=2)
-        rew_dict["action_grad_penalty"] = 0 #torch.norm(self.actions - self.prev_actions, p=2, dim=-1)
+        rew_dict["action_grad_penalty"] = torch.zeros_like(rew_dict['action_penalty'])#0 #torch.norm(self.actions - self.prev_actions, p=2, dim=-1)
         curr_engaged = (
             self._get_curr_successes(success_threshold=self.cfg_task.engage_threshold, check_rot=False)
         )
@@ -661,7 +673,6 @@ class FactoryEnv(DirectRLEnv):
 
         self.extras['current_engagements'] = curr_engaged.clone().float()
         self.extras['current_successes'] = curr_successes.clone().float()
-        
         rew_buf = (
             rew_dict["kp_coarse"]
             + rew_dict["kp_baseline"]
@@ -671,6 +682,17 @@ class FactoryEnv(DirectRLEnv):
             + rew_dict["curr_engaged"]
             + rew_dict["curr_successes"]
         )
+        for tag, rew in rew_dict.items():
+            if (not type(rew) == torch.tensor and not type(rew) == torch.Tensor) or (tag == "action_penalty"):
+                #@print(f"{tag} is not tensor, {type(rew)}")
+                continue
+            if torch.isnan(rew).any() or (rew > 1.0).any():
+                idxs = torch.logical_or(torch.isnan(rew), rew > 1.0)
+                print(f"{tag} has Bad Values\n{rew[idxs]}")
+                for tag2, rew2 in rew_dict.items():
+                    print(f"\t{tag2}:{rew2[idxs]}")
+                print(f"\tKeypoint Dist:{self.keypoint_dist[idxs]}")
+                
 
         for rew_name, rew in rew_dict.items():
             if 'action' in rew_name or 'engaged' in rew_name or 'successes' in rew_name:

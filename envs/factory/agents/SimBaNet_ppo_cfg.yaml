@@ -7,8 +7,9 @@ break_force: -1
 # this is the parameters for the BroNet shared model
 models:
   force_encoding: None
+  last_layer_scale: 0.1
   act_init_std: 1.0 # note this is paired with tanh on action mean and scaled by env ##0.025 # max linear motion is 0.05 => 99.6 will be in that range
-  critic_output_init_mean: 20 #50 #was tried # seemed to be early value policy drives to
+  critic_output_init_mean: 20 #was tried # seemed to be early value policy drives to
   critic:
     n: 2
     latent_size: 1024
@@ -19,8 +20,8 @@ models:
 agent:
   class: PPO
   rollouts: 150 # set by env
-  learning_epochs: 2 #4
-  mini_batches: 4 #150 #128 #steps / minibatch (256 envs * 150 steps per update)
+  learning_epochs: 4
+  mini_batches: 150 #128 #steps / minibatch (256 envs * 150 steps per update)
   discount_factor: 0.99
   lambda: 0.99
   learning_rate: 1.0e-6
@@ -44,7 +45,7 @@ agent:
   # below are not args
   random_timesteps: 0
   learning_starts: 0
-
+  mixed_precision: False
 
   bias_selection: True
   grad_norm_clip: 0.5
@@ -55,8 +56,8 @@ agent:
   entropy_loss_scale: 0.0 #5.0e-3 #
   value_loss_scale: 1.0 #1.5
   kl_threshold: 0.05
-  rewards_shaper_scale: 1.0
-  time_limit_bootstrap: True
+  rewards_shaper_scale: 0.1
+  time_limit_bootstrap: False
 
   
   hybrid_agent:
@@ -83,7 +84,7 @@ agent:
     
     init_scale_last_layer: True
     init_layer_scale: 0.1
-
+    
     uniform_sampling_rate: 0.0
   agent_is_list: False
   disable_progressbar: False

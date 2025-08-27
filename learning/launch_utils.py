@@ -180,10 +180,12 @@ def set_wandb_env_data(env_cfg, agent_cfg, args_cli):
     agent_cfg['agent']['ckpt_tracker_path'] = args_cli.ckpt_tracker_path
     
     # override configurations with non-hydra CLI arguments
-    env_cfg.scene.num_envs = args_cli.num_envs 
-    #env_cfg.scene.replicate_physics = True
+    env_cfg.agent_groups =  (len(env_cfg.break_force) if type(env_cfg.break_force)==list else 1) 
+    env_cfg.scene.num_envs = args_cli.num_envs * env_cfg.agent_groups
+    print(f"Scene set to {env_cfg.scene.replicate_physics}")
+    env_cfg.scene.replicate_physics = True
 
-    env_cfg.num_agents = args_cli.num_agents
+    env_cfg.num_agents = args_cli.num_agents * env_cfg.agent_groups
     
     agent_cfg['agent']['seed'] = args_cli.seed
 
@@ -236,70 +238,78 @@ def set_learn_rate_scheduler(env_cfg, agent_cfg, args_cli):
 
 
 def set_individual_agent_log_paths(env_cfg, agent_cfg, args_cli):
-    for agent_idx in range(args_cli.num_agents):
-        agent_cfg['agent'][f'agent_{agent_idx}'] = {}
-        agent_cfg['agent'][f'agent_{agent_idx}']['experiment'] = {}
-        if agent_idx > 0:
-            agent_cfg['agent'][f'agent_{agent_idx}']['seed'] =  random.randint(0, 10000)
+    break_forces = agent_cfg['agent']['break_force']
+    if not type(break_forces) == list:
+        break_forces = [break_forces]
+    
+    agent_idx = 0 
+    for break_force in break_forces:
+        for i in range(args_cli.num_agents):
+            agent_cfg['agent'][f'agent_{agent_idx}'] = {}
+            agent_cfg['agent'][f'agent_{agent_idx}']['break_force'] = break_force
+            agent_cfg['agent'][f'agent_{agent_idx}']['experiment'] = {}
+            if agent_idx > 0:
+                agent_cfg['agent'][f'agent_{agent_idx}']['seed'] =  random.randint(0, 10000)
             
-            print(f"[INFO]:\tAgent {agent_idx} seed: {agent_cfg['agent'][f'agent_{agent_idx}']['seed']}")
-        else:
-            print(f"[INFO]:\tAgent {agent_idx} seed: {agent_cfg['agent']['seed']}")
-        
-        #agent_cfg['agent']['agent_{agent_idx}']['experiment']['directory'] = agent_cfg['agent']['experiment']['directory'] + f"_{agent_idx}"
-        # specify directory for logging experiments
-        if args_cli.exp_dir is None:
-            #log_root_path = os.path.join("logs", agent_cfg["agent"][f'agent_{agent_idx}']["experiment"]["directory"])
-            #if agent_idx > 0:
-            log_root_path = os.path.join("logs", agent_cfg["agent"]["experiment"]["directory"] + f"_{agent_idx}")
-        else:
-            #agent_cfg['agent']['agent_{agent_idx}']['experiment']['directory'] = args_cli.exp_dir + f"_{agent_idx}"
-            log_root_path = os.path.join("logs", args_cli.exp_dir + f"_{agent_idx}")
-            #if agent_idx > 0:
-            #    log_root_path = os.path.join("logs", args_cli.exp_dir + f"_{agent_idx}")
-
-        log_root_path = os.path.abspath(log_root_path)
-        print(f"[INFO] Logging Agent {agent_idx} experiment in directory: {log_root_path}")
-
-        # specify directory for logging runs: {time-stamp}_{run_name}
-        #agent_cfg['agent'][f'agent_{agent_idx}']['experiment']['experiment_name'] = agent_cfg['agent']['experiment']['experiment_name'] + f"_{agent_idx}"
-        if args_cli.exp_name is None:
-            if agent_cfg["agent"]["experiment"]["experiment_name"] == "":
-                log_dir = args_cli.task
+                print(f"[INFO]:\tAgent {agent_idx} seed: {agent_cfg['agent'][f'agent_{agent_idx}']['seed']}")
             else:
-                log_dir = agent_cfg["agent"]["experiment"]["experiment_name"] + f"_{agent_idx}"
-        else:
-            log_dir = f"{args_cli.exp_name}_{agent_idx}"
-
-        #log_dir += f'_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}'
+                print(f"[INFO]:\tAgent {agent_idx} seed: {agent_cfg['agent']['seed']}")
         
-        # set directory into agent config
-        agent_cfg["agent"][f'agent_{agent_idx}']["experiment"]["directory"] = log_root_path
-        agent_cfg["agent"][f'agent_{agent_idx}']["experiment"]["experiment_name"] = log_dir
+            #agent_cfg['agent']['agent_{agent_idx}']['experiment']['directory'] = agent_cfg['agent']['experiment']['directory'] + f"_{agent_idx}"
+            # specify directory for logging experiments
+            if args_cli.exp_dir is None:
+                #log_root_path = os.path.join("logs", agent_cfg["agent"][f'agent_{agent_idx}']["experiment"]["directory"])
+                #if agent_idx > 0:
+                log_root_path = os.path.join("logs", agent_cfg["agent"]["experiment"]["directory"] + f"_f({break_force})_{agent_idx}")
+            else:
+                #agent_cfg['agent']['agent_{agent_idx}']['experiment']['directory'] = args_cli.exp_dir + f"_{agent_idx}"
+                log_root_path = os.path.join("logs", args_cli.exp_dir + f"_f({break_force})_{agent_idx}")
+                #if agent_idx > 0:
+                #    log_root_path = os.path.join("logs", args_cli.exp_dir + f"_{agent_idx}")
 
-        # update log_dir
-        log_dir = os.path.join(log_root_path, log_dir)
-        #os.makedirs(os.path.join(log_dir, 'checkpoints'), exist_ok=True)
-        # dump the configuration into log-directory
-        if args_cli.dump_yaml:
-            dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
-            dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
+            log_root_path = os.path.abspath(log_root_path)
+            print(f"[INFO] Logging Agent {agent_idx} experiment in directory: {log_root_path}")
+
+            # specify directory for logging runs: {time-stamp}_{run_name}
+            #agent_cfg['agent'][f'agent_{agent_idx}']['experiment']['experiment_name'] = agent_cfg['agent']['experiment']['experiment_name'] + f"_{agent_idx}"
+            if args_cli.exp_name is None:
+                if agent_cfg["agent"]["experiment"]["experiment_name"] == "":
+                    log_dir = args_cli.task
+                else:
+                    log_dir = agent_cfg["agent"]["experiment"]["experiment_name"] + f"_f({break_force})_{agent_idx}"
+            else:
+                log_dir = f"{args_cli.exp_name}_f({break_force})_{agent_idx}"
+
+            #log_dir += f'_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}'
+        
+            # set directory into agent config
+            agent_cfg["agent"][f'agent_{agent_idx}']["experiment"]["directory"] = log_root_path
+            agent_cfg["agent"][f'agent_{agent_idx}']["experiment"]["experiment_name"] = log_dir
+
+            # update log_dir
+            log_dir = os.path.join(log_root_path, log_dir)
+            #os.makedirs(os.path.join(log_dir, 'checkpoints'), exist_ok=True)
+            # dump the configuration into log-directory
+            if args_cli.dump_yaml:
+                dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
+                dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
 
         
-        agent_cfg['agent'][f'agent_{agent_idx}']['experiment']['wandb'] = args_cli.no_log_wandb
-        wandb_kwargs = {
-            "project":agent_cfg['agent']['experiment']['project'], #args_cli.wandb_project,
-            "entity":args_cli.wandb_entity,
-            "api_key":args_cli.wandb_api_key,
-            "tags":agent_cfg['agent']['experiment']['tags'],
-            "group":agent_cfg['agent']['experiment']['group'],
-            #"tags":args_cli.wandb_tags,
-            #"group":args_cli.wandb_group,
-            "run_name":agent_cfg["agent"][f"agent_{agent_idx}"]["experiment"]["experiment_name"] + f"_{agent_idx}"
-        }
+            agent_cfg['agent'][f'agent_{agent_idx}']['experiment']['wandb'] = args_cli.no_log_wandb
+            wandb_kwargs = {
+                "project":agent_cfg['agent']['experiment']['project'], #args_cli.wandb_project,
+                "entity":args_cli.wandb_entity,
+                "api_key":args_cli.wandb_api_key,
+                "tags":agent_cfg['agent']['experiment']['tags'],
+                "group":agent_cfg['agent']['experiment']['group'] + f"_f({break_force})",
+                #"tags":args_cli.wandb_tags,
+                #"group":args_cli.wandb_group,
+                "run_name":agent_cfg["agent"][f"agent_{agent_idx}"]["experiment"]["experiment_name"] + f"_f({break_force})_{agent_idx}"
+            }
 
-        print(f"Wandb Args {agent_idx}:", wandb_kwargs)
-        agent_cfg["agent"][f'agent_{agent_idx}']["experiment"]["wandb_kwargs"] = wandb_kwargs
+            print(f"Wandb Args {agent_idx}:", wandb_kwargs)
+            agent_cfg["agent"][f'agent_{agent_idx}']["experiment"]["wandb_kwargs"] = wandb_kwargs
+            agent_idx += 1
             
 def set_video(env_cfg, agent_cfg, args_cli, env):
     # determine video kwargs
@@ -353,7 +363,7 @@ def set_video(env_cfg, agent_cfg, args_cli, env):
         vid_env = None
     return vid_env
 
-def set_controller_wrapper(env_cfg, agent_cfg, args_cli):
+def set_controller_wrapper(env_cfg, agent_cfg, args_cli, env):
     
     if args_cli.parallel_control==1:
         print("\n\n[INFO]: Using Parallel Control Wrapper.\n\n")
@@ -399,7 +409,7 @@ def set_models(env_cfg, agent_cfg, args_cli, env):
             import math
             agent_cfg['agent']['hybrid_agent']['pos_init_std'] = (1 / (env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0])) ** 2
             agent_cfg['agent']['hybrid_agent']['rot_init_std'] = (1 / (env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]))**2
-            agetn_cfg['agent']['hybrid_agent']['force_init_std'] = (1 / (env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]))**2
+            agent_cfg['agent']['hybrid_agent']['force_init_std'] = (1 / (env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]))**2
 
         agent_cfg['agent']['hybrid_agent']['pos_scale'] = env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0]     # 2    => 4
         agent_cfg['agent']['hybrid_agent']['rot_scale'] = env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]     # 2.91 => 8.4681
@@ -415,7 +425,7 @@ def set_models(env_cfg, agent_cfg, args_cli, env):
             hybrid_agent_parameters=agent_cfg['agent']['hybrid_agent'],
             actor_n = agent_cfg['models']['actor']['n'],
             actor_latent = agent_cfg['models']['actor']['latent_size'],
-            num_agents = args_cli.num_agents
+            num_agents = env_cfgs.num_agents, #args_cli.num_agents
         )
     elif args_cli.impedance_agent==1:
         ############ TODO: Make Multi Version ##########################
@@ -438,17 +448,18 @@ def set_models(env_cfg, agent_cfg, args_cli, env):
             sigma_idx = 6 if args_cli.control_torques else 3
         else:
             sigma_idx = 0
-            models['policy'] = SimBaActor( #BroAgent(
-                observation_space=env.cfg.observation_space, 
-                action_space=env.action_space,
-                #action_gain=0.05,
-                device=env.device,
-                act_init_std = agent_cfg['models']['act_init_std'],
-                actor_n = agent_cfg['models']['actor']['n'],
-                actor_latent = agent_cfg['models']['actor']['latent_size'],
-                sigma_idx = sigma_idx,
-                num_agents = args_cli.num_agents
-            ) 
+        models['policy'] = SimBaActor( #BroAgent(
+            observation_space=env.cfg.observation_space, 
+            action_space=env.action_space,
+            #action_gain=0.05,
+            device=env.device,
+            act_init_std = agent_cfg['models']['act_init_std'],
+            actor_n = agent_cfg['models']['actor']['n'],
+            actor_latent = agent_cfg['models']['actor']['latent_size'],
+            sigma_idx = sigma_idx,
+            num_agents = env_cfg.num_agents, #args_cli.num_agents,
+            last_layer_scale=agent_cfg['models']['last_layer_scale']
+        ) 
 
     models["value"] = SimBaCritic( #BroAgent(
         state_space_size=env.cfg.state_space, 
@@ -456,19 +467,13 @@ def set_models(env_cfg, agent_cfg, args_cli, env):
         critic_output_init_mean = agent_cfg['models']['critic_output_init_mean'],
         critic_n = agent_cfg['models']['critic']['n'],
         critic_latent = agent_cfg['models']['critic']['latent_size'],
-        num_agents = args_cli.num_agents
-    )
-
-    optimizer = torch.optim.Adam(
-        itertools.chain(models['policy'].parameters(), models['value'].parameters()), 
-        lr=agent_cfg['agent']['learning_rate'],
-        betas=(0.999, 0.999)
+        num_agents = env_cfg.num_agents #args_cli.num_agents
     )
     print("[INFO]: Models and optimizer created")
-    return models, optimizer
+    return models
 
 
-def set_agent(env_cfg, agent_cfg, args_cli, models, memory, env=None,):
+def set_agent(env_cfg, agent_cfg, args_cli, models, memory, env=None):
     # temp until we redo the logger
     for key, item in agent_cfg['agent']['agent_0']['experiment'].items():
         agent_cfg['agent']['experiment'][key] = item
@@ -492,15 +497,20 @@ def set_agent(env_cfg, agent_cfg, args_cli, models, memory, env=None,):
         cfg=agent_cfg['agent'],
         observation_space=env.observation_space,
         action_space=env.action_space,
-        num_envs=args_cli.num_envs,
+        num_envs=env_cfg.scene.num_envs, #args_cli.num_envs,
         state_size=env.cfg.observation_space+env.cfg.state_space,
         device=env.device,
         task = args_cli.task,
-        num_agents= args_cli.num_agents
+        num_agents= env_cfg.num_agents #args_cli.num_agents
     ) 
-        
+
+    agent.optimizer = torch.optim.Adam(
+        itertools.chain(models['policy'].parameters(), models['value'].parameters()), 
+        lr=agent_cfg['agent']['learning_rate'],
+        betas=(0.999, 0.999)
+    )
     
-    print("[INFO]: Agent(s) generated")
+    print("[INFO]: Agent(s) and optimizer generated")
     return agent
     
 

@@ -3,7 +3,7 @@
 #SBATCH -J RLUPDATE			    # name of job
 #SBATCH -A virl-grp	            # name of my sponsored account, e.g. class or research group, NOT ONID!
 ##SBATCH -p gpu,eecs2,tiamat,dgxh,dgx2,ampere		# name of partition or queue
-#SBATCH -p tiamat,gpu,dgx2,dgxh
+#SBATCH -p tiamat,gpu
 ##SBATCH -p tiamat
 #SBATCH --time=1-23:59:59        # time limit on job: 2 days, 12 hours, 30 minutes (default 12 hours)
 ##SBATCH -N 1                   # number of nodes (default 1)
@@ -19,7 +19,7 @@
 ##module load cuda/10.1
 source ~/.bashrc
 eval "$(command conda 'shell.bash' 'hook' 2> /dev/null)"
-conda activate isaaclab_242
+conda activate isaaclab_drail
 
 echo "Conda env: $CONDA_DEFAULT_ENV"
 

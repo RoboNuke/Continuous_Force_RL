@@ -30,7 +30,7 @@ parser.add_argument("--decimation", type=int, default=16, help="How many simulat
 parser.add_argument("--history_sample_size", type=int, default=8, help="How many samples to keep from sim steps, spread evenly from zero to decimation-1")
 parser.add_argument("--policy_hz", type=int, default=15, help="Rate in hz that the policy should get new observations")
 parser.add_argument("--use_ft_sensor", type=int, default=0, help="Adds force sensor data to the observation space")
-parser.add_argument("--break_force", type=float, default=-1.0, help="Force at which the held object breaks (peg, gear or nut)")
+parser.add_argument("--break_force", type=str, default="-1.0", help="Force at which the held object breaks (peg, gear or nut)")
 parser.add_argument("--exp_tag", type=str, default="debug", help="Tag to apply to exp in wandb")
 parser.add_argument("--wandb_group_prefix", type=str, default="", help="Prefix of wandb group to add this to")
 
@@ -94,6 +94,7 @@ from memories.multi_random import MultiRandomMemory
 from skrl.agents.torch.ppo import PPO, PPO_DEFAULT_CONFIG
 from skrl.resources.preprocessors.torch import RunningStandardScaler
 
+from wrappers.smoothness_obs_wrapper import SmoothnessObservationWrapper
 from learning.ext_sequential_trainer import ExtSequentialTrainer, EXT_SEQUENTIAL_TRAINER_DEFAULT_CONFIG
 from wrappers.close_gripper_action_wrapper import GripperCloseEnv
 from models.default_mixin import Shared
@@ -138,8 +139,8 @@ import learning.launch_utils as lUtils
 #set_seed(args_cli.seed)  # e.g. `set_seed(42)` for fixed seed
 if args_cli.seed == -1:
     args_cli.seed = random.randint(0, 10000)
-set_seed(args_cli.seed)
-#set_seed(6454)
+#set_seed(args_cli.seed)
+set_seed(7378)
 
 agent_cfg_entry_point = f"SimBaNet_ppo_cfg_entry_point"
 evaluating = False
@@ -155,8 +156,13 @@ def main(
     print("Ckpt Path:", args_cli.ckpt_tracker_path)
 
     """ Set up fragileness """
-    env_cfg.break_force = args_cli.break_force
-    agent_cfg['agent']['break_force'] = args_cli.break_force
+    print("Break Force:", args_cli.break_force.split(","))
+    if len(args_cli.break_force.split(",")) > 1:
+        forces = [ float(val)  for val in args_cli.break_force.split(",")]
+        env_cfg.break_force = forces
+    else:
+        env_cfg.break_force = float(args_cli.break_force)
+    agent_cfg['agent']['break_force'] = env_cfg.break_force
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
     
     lUtils.set_use_force(# conditions we need force torque sensor
@@ -168,7 +174,10 @@ def main(
         args_cli.use_ft_sensor==1
     )
 
-   
+    if agent_cfg['agent']['rewards_shaper_scale'] > 0.0:
+        def scale_reward(rew, timestep, timesteps, scale=agent_cfg['agent']['rewards_shaper_scale']):
+            return rew * scale
+        agent_cfg['agent']['rewards_shaper'] = scale_reward
     # set initialization params
     lUtils.set_easy_mode(env_cfg, agent_cfg, args_cli.easy_mode)
     lUtils.set_time_params(env_cfg, args_cli)
@@ -192,13 +201,8 @@ def main(
         render_mode=None
     )
     # load and wrap the Isaac Lab environment
-    #from skrl.envs.loaders.torch import load_isaaclab_env
-    #from skrl.envs.wrappers.torch import wrap_env
-    
-    #env = load_isaaclab_env(task_name="Isaac-Ant-v0")
-    #env = wrap_env(env)
     print("[INFO]: Env Built!")
-    lUtils.set_controller_wrapper(env_cfg, agent_cfg, args_cli)
+    lUtils.set_controller_wrapper(env_cfg, agent_cfg, args_cli, env)
     
     if args_cli.log_smoothness_metrics:
         print("\n\n[INFO]: Recording Smoothness Metrics in info.\n\n")
@@ -220,10 +224,10 @@ def main(
         memory_size=agent_cfg['agent']["rollouts"], 
         num_envs=env.num_envs, 
         device=device,
-        replacement=True,
-        num_agents=args_cli.num_agents
+        replacement=True#,
+        #num_agents=args_cli.num_agents
     )
-    models, optimizer = lUtils.set_models(env_cfg, agent_cfg, args_cli, env)
+    models = lUtils.set_models(env_cfg, agent_cfg, args_cli, env)
     print(models)
     agents = lUtils.set_agent(env_cfg, agent_cfg, args_cli, models, memory, env)
     print(agents)

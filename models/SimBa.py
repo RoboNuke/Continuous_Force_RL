@@ -215,6 +215,7 @@ class SimBaActor(GaussianMixin, Model):
             actor_n = 2,
             actor_latent=512,
             action_gain=1.0,
+            last_layer_scale=1.0,
 
             clip_actions=False,
             clip_log_std=True, 
@@ -248,9 +249,9 @@ class SimBaActor(GaussianMixin, Model):
             )
             for net in self.actor_mean.pride_nets:
                 with torch.no_grad():
-                    net.output[-2].weight *= 1.0 #0.1 #TODO FIX THIS TO 0.01
+                    net.output[-2].weight *= last_layer_scale #0.1 #TODO FIX THIS TO 0.01
                     if sigma_idx > 0:
-                        net.actor_mean.output[-2].bias[:sigma_idx] = -1.1
+                        net.output[-2].bias[:sigma_idx] = -1.1
                 
         else:
         
@@ -264,7 +265,7 @@ class SimBaActor(GaussianMixin, Model):
             )
 
             with torch.no_grad():
-                self.actor_mean.output[-2].weight *= 1.0 #0.1 #TODO FIX THIS TO 0.01
+                self.actor_mean.output[-2].weight *= last_layer_scale #0.1 #TODO FIX THIS TO 0.01
                 if sigma_idx > 0:
                     self.actor_mean.output[-2].bias[:sigma_idx] = -1.1
         

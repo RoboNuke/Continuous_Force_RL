@@ -27,10 +27,10 @@ task_name="${task_name/TaskType/${tasks[task_idx]}}"
 echo "Env name: $task_name"
 
 #use_ft_sensor=1
-num_agents=5
+num_agents=5 #####################################################################5
 current_datetime=$(date +"%Y-%m-%d_%H:%M:%S")
 num_history_samples=8
-num_envs_per_agent=256
+num_envs_per_agent=256 ########################################################
 #hybrid_control=1
 
 
@@ -68,7 +68,7 @@ ckpt_path="/nfs/stak/users/brownhun/ckpt_trackers/$3_ckpt_tracker.txt"
 #python -m learning.ppo_factory_trainer \
 python -m learning.factory_runner \
     --task=$task_name \
-    --wandb_project="Easy_Mode" \
+    --wandb_project="debug" \
     --use_ft_sensor=$use_ft_sensor \
     --exp_tag=$exp_tag \
     --wandb_group_prefix="$3_$4_${11}_${12}_$5" \
@@ -89,8 +89,8 @@ python -m learning.factory_runner \
     --ckpt_tracker_path=$ckpt_path \
     --init_eval \
     --sel_adjs=$sel_adjs \
-    --headless \
-    --easy_mode 
+    --headless #\
+    #--easy_mode  #############################################################################
 
 
 

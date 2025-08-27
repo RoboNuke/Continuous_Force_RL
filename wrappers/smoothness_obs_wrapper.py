@@ -17,8 +17,8 @@ class SmoothnessObservationWrapper(gym.Wrapper):
         #self.unwrapped = env
         super().__init__(env)
         self.obs = {}
-        self.obs['Smoothness / Squared Joint Velocity'] = torch.zeros((self.num_envs, 1), device=self.device)
-        self.obs['Smoothness / Jerk'] = torch.zeros_like(self.obs['Smoothness / Squared Joint Velocity'])
+        self.obs['Smoothness / Squared Joint Velocity'] = torch.zeros((self.unwrapped.num_envs, 1), device=self.unwrapped.device)
+        #self.obs['Smoothness / Jerk'] = torch.zeros_like(self.obs['Smoothness / Squared Joint Velocity'])
         self.obs['Smoothness / Damage Force'] = torch.zeros_like(self.obs['Smoothness / Squared Joint Velocity'])
         self.obs['Smoothness / Damage Torque'] = torch.zeros_like(self.obs['Smoothness / Squared Joint Velocity'])
         
@@ -36,11 +36,12 @@ class SmoothnessObservationWrapper(gym.Wrapper):
         #observation, r, term, trun, info = self.unwrapped.step(action)
         observation, r, term, trun, info = self.env.step(action)
         
-        if self.old_acc is None:
-            self.old_acc = torch.zeros_like(observation['info']['joint_acc'])
+        #if self.old_acc is None:
+        #    #self.old_acc = torch.zeros_like(observation['info']['joint_acc'])
+        # #   self.old_acc = torch.zeros_like(observation['Smoothness / Squared Joint Velocity'])
 
         reset_set = torch.logical_or(term, trun)
-        self.old_acc[reset_set] *= 0
+        #self.old_acc[reset_set] *= 0
         #TODO: Add Force
         #self.sdf[reset_set] *= 0
 
@@ -59,9 +60,9 @@ class SmoothnessObservationWrapper(gym.Wrapper):
         #obs['sqr_qa'] = torch.linalg.norm(qacc * qacc, axis=1)
 
         # jerk
-        jerk = (qacc - self.old_acc) / 0.1
-        self.obs['Smoothness / Jerk'][:,0] =  torch.linalg.norm(jerk, axis=1)
-        self.old_acc = qacc
+        #jerk = (qacc - self.old_acc) / 0.1
+        #self.obs['Smoothness / Jerk'][:,0] =  torch.linalg.norm(jerk, axis=1)
+        #self.old_acc = qacc
 
         # force 
         #print("Dmg force size:", observation['info']['dmg_force'].size())

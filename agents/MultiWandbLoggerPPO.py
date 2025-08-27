@@ -120,9 +120,9 @@ class EpisodeTracker:
         self.finished_metrics = []
         self.learning_metrics = []
 
-    def reset_envs(self, done_mask: torch.Tensor):
+    def reset_envs(self, done_mask: torch.Tensor, infos: dict):
         if done_mask.any():
-            metrics = self._gather_metrics(done_mask)
+            metrics = self._gather_metrics(done_mask, infos)
             self.finished_metrics.append(metrics)
 
         # reset selected envs
@@ -145,7 +145,9 @@ class EpisodeTracker:
             reward_components: dict,
             engaged: torch.Tensor,
             success: torch.Tensor,
-            done: torch.Tensor
+            done: torch.Tensor,
+            infos: dict,
+            
     ):
         reward = reward.detach().squeeze()
         engaged = engaged.detach().bool()
@@ -163,8 +165,7 @@ class EpisodeTracker:
             if k not in self.comp_sums:
                 self.comp_sums[k] = torch.zeros_like(v, dtype=torch.float32, device=self.device)
             self.comp_sums[k] += v
-            
-
+        
         # engagement transitions
         just_started = engaged & ~self.current_engaged
         just_ended = ~engaged & self.current_engaged
@@ -187,9 +188,9 @@ class EpisodeTracker:
 
         # handle completed episodes
         if done.any():
-            self.reset_envs(done)
+            self.reset_envs(done, infos)
 
-    def _gather_metrics(self, mask: torch.Tensor):
+    def _gather_metrics(self, mask: torch.Tensor, infos: dict):
         idxs = torch.nonzero(mask, as_tuple=False).flatten()
         metrics = {
             "Episode / Return (Avg)": self.env_returns[idxs], #.mean().item(),
@@ -229,6 +230,10 @@ class EpisodeTracker:
         if success_mask.any():
             metrics["Success / Steps to Success (Avg)"] = self.steps_to_first_success[idxs][success_mask].float()
 
+        if 'smoothness' in infos:
+            for key, val in infos['smoothness'].items():
+                metrics[key] = val[idxs]
+            
         return metrics
 
     def pop_finished(self):
@@ -254,8 +259,9 @@ class EpisodeTracker:
             entropies,
             policy_losses,
             value_losses,
-            policy_model = None,
-            critic_model = None
+            policy_state = None,
+            critic_state = None,
+            optimizer=None
     ):
         """
         Compute PPO diagnostic metrics. All args are tensors collected over minibatch/update.
@@ -279,8 +285,16 @@ class EpisodeTracker:
             stats["Critic / Loss (Avg)"] = value_losses.mean().item()
             stats["Critic / Loss (0.95 Quantile)"] = value_losses.quantile(0.95).item()
             stats["Critic / Predicted Values (Avg)"] = values.mean().item()
-                        
-
+            #print("Value losses size:", value_losses.size())
+            #if (value_losses > 500).any():
+            #    bad_idxs =  (value_losses > 500)
+            #    print(f"Bad Returns:{returns[bad_idxs]}")
+            #    print(f"Bad Advantages:{advantages[bad_idxs]}")
+            #    print(f"Bad Values:{values[bad_idxs]}")
+            #    print(f"Bad Val Losses:{value_losses[bad_idxs]}")
+            #    print(f"Bad old Log Prob:{old_log_probs[bad_idxs]}")
+            #    print(f"Bad new Log Prob:{new_log_probs[bad_idxs]}")
+            #    assert 1==0
             # --- Advantage diagnostics ---
             stats["Advantage / Mean"] = advantages.mean().item()
             stats["Advantage / Std Dev"] = advantages.std().item()
@@ -294,37 +308,52 @@ class EpisodeTracker:
             ).item()
 
             # Gradient norms (if models given)
-            def grad_norm(model):
-                norms = [p.grad.detach().norm(2) for p in model.parameters() if p.grad is not None]
-                return torch.norm(torch.stack(norms), 2) if norms else torch.tensor(0.)
+            def grad_norm(model_grads):
+                #norms = [p.grad.detach().norm(2) for p in model.parameters() if p.grad is not None]
+                return torch.norm(torch.stack(model_grads), 2) 
 
-            policy_grad_norm = grad_norm(policy_model) if policy_model is not None else torch.tensor(0.)
-            critic_grad_norm = grad_norm(critic_model) if critic_model is not None else torch.tensor(0.)
+            stats['Policy / Gradient Norm'] = grad_norm(policy_state['gradients']) if policy_state is not None else torch.tensor(0.)
+            stats['Critic / Gradient Norm'] = grad_norm(critic_state['gradients']) if critic_state is not None else torch.tensor(0.)
             
-            stats['Policy / Gradient Norm'] = policy_grad_norm
-            stats['Critic / Gradient Norm'] = critic_grad_norm
-
-            """
             # Optimizer step size estimate (Adam effective step)
-            def adam_step_size(optimizer, grad_norm):
+            def adam_step_size(optimizer_state, optimizer):
                 step_sizes = []
-                for group in optimizer.param_groups:
-                    for p in group['params']:
-                        if p.grad is None: 
-                            continue
-                        state = optimizer.state[p]
-                        if 'exp_avg_sq' not in state: 
-                            continue
-                        denom = (state['exp_avg_sq'].sqrt() / group['lr']).add_(group['eps'])
-                        step_sizes.append((p.grad / denom).norm(2))
-                return torch.norm(torch.stack(step_sizes), 2) if step_sizes else torch.tensor(0.)
 
-            policy_step_size = adam_step_size(policy_optimizer, policy_grad_norm) if policy_optimizer else torch.tensor(0.)
-            value_step_size = adam_step_size(value_optimizer, value_grad_norm) if value_optimizer else torch.tensor(0.)
+                for name, state in optimizer_state.items():
+                    # This is a simplified calculation of the effective step size
+                    # based on the ADAM update rule. It doesn't account for things
+                    # like weight decay or amsgrad if they are used.
+                    # The actual update is: param = param - learning_rate * step_size
+                    # where step_size is related to exp_avg and exp_avg_sq
+                    # Here we approximate the step size based on the bias-corrected
+                    # first and second moments.
 
-            stats['policy_step_size'] = policy_step_size
-            stats['value_step_size'] = value_step_size
-            """
+                    if 'exp_avg' in state and 'exp_avg_sq' in state and 'step' in state:
+                        beta1, beta2 = optimizer.defaults['betas']
+                        eps = optimizer.defaults['eps']
+                        lr = optimizer.defaults['lr']
+                        step = state['step']
+
+                    bias_correction1 = 1 - beta1 ** step
+                    bias_correction2 = 1 - beta2 ** step
+
+                    # Avoid division by zero if exp_avg_sq is very small
+                    if state['exp_avg_sq'] > 1e-8:
+                        # Simplified effective step direction (ignoring sqrt in denominator for just step size)
+                        effective_step_direction = ((state['exp_avg'] / bias_correction1) / (torch.sqrt(state['exp_avg_sq'] / bias_correction2).clone().detach()) + eps)
+                        net_step_sizes = (lr * effective_step_direction).item()
+                    else:
+                        net_step_sizes = 0.0
+
+                    step_sizes.append(net_step_sizes)
+                return sum(step_sizes) / (len(step_sizes) + 1e-6)
+
+            policy_step_size = adam_step_size(policy_state['optimizer_state'], optimizer) if policy_state is not None else torch.tensor(0.)
+            value_step_size = adam_step_size(critic_state['optimizer_state'], optimizer) if critic_state is not None else torch.tensor(0.)
+
+            stats['Policy / Step Size'] = policy_step_size
+            stats['Critic / Step Size'] = value_step_size
+            
         self.learning_metrics.append(stats)
 
     
@@ -391,7 +420,8 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
             state_size=-1,
             cfg: Optional[dict] = None,
             track_ckpt_paths = False,
-            task="Isaac-Factory-PegInsert-Local-v0"
+            task="Isaac-Factory-PegInsert-Local-v0",
+            optimizers = None
     ) -> None:
         super().__init__(models, memory, observation_space, action_space, num_envs, device, state_size, cfg, track_ckpt_paths, task)
         self.global_step = 0
@@ -415,7 +445,6 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         self.track_input_histogram = cfg['track_input']
         self.track_action_histogram = cfg['track_action_hists']
         self.loggers = []
-        
 
     def init(self, trainer_cfg: Optional[Mapping[str, Any]] = None) -> None:
         #DONE
@@ -479,6 +508,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         # setup Weights & Biases
         self.log_wandb = False
         if self.cfg.get("experiment", {}).get("wandb", False):
+            agent_cfg_datas = [self.cfg.pop(f"agent_{i}") for i in range(self.num_agents)]
             # save experiment configuration
             for i in range(self.num_agents):
                 try:
@@ -487,12 +517,12 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                     print("[INFO]: Extracting model config had Attribute Error...")
                     models_cfg = {k: v[i]._modules for (k, v) in self.models.items()}
                     print("[INFO]: Attribute Error Handled")
-                self.cfg['experiment'] = self.cfg[f'agent_{i}']['experiment']
+                self.cfg['experiment'] = agent_cfg_datas[i]['experiment']
                 wandb_config={**self.cfg, **trainer_cfg, **models_cfg, "num_envs":self.num_envs // self.num_agents}
                 # set default values
                 exp_dir = os.path.join(self.cfg['experiment']['directory'], self.cfg['experiment']['experiment_name'])
                 print("logger exp dir:", exp_dir)
-                wandb_kwargs = copy.deepcopy(self.cfg[f'agent_{i}'].get("experiment", {}).get("wandb_kwargs", {}))
+                wandb_kwargs = copy.deepcopy(agent_cfg_datas[i].get("experiment", {}).get("wandb_kwargs", {}))
                 wandb_kwargs.setdefault("name", exp_dir)
                 wandb_kwargs.setdefault("config", {})
                 wandb_kwargs["config"].update(wandb_config)
@@ -576,9 +606,11 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
             # compute values
             values, _, _ = self.value.act({"states": self._state_preprocessor(states)}, role="value")
             values = self._value_preprocessor(values, inverse=True)
+            #print("Applied value preprocessor in record transition")
 
             # time-limit (truncation) boostrapping
             if self._time_limit_bootstrap:
+                print("Time limit boostrapping")
                 rewards += self._discount_factor * values * truncated
             
             
@@ -601,18 +633,12 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                 values=values.clone()
             )
 
-        ##### TODO ADD SMOOTHNESS HERE OR ABOVE ######
         if eval_mode:
             mask_update = torch.logical_or(terminated, truncated).view((self.num_envs,)) # one that didn't term
             alive_mask[mask_update] = False
             finished_episodes = torch.logical_and(mask_update, alive_mask).view(-1,)
         else:
             finished_episodes = torch.logical_or(terminated, truncated).view(-1,)
-
-        if torch.any(finished_episodes):
-            if 'smoothness' in infos.keys():
-                for key, rew in infos['smoothness'].items():
-                    pass
         
         if self.track_input_histogram:
             # pos input
@@ -625,7 +651,6 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                 self.track_hist(f"act_sel_{dir}",actions[:,i])
                 self.track_hist(f"act_pos_{dir}", actions[:,i+3])
                 self.track_hist(f"act_force_{dir}", actions[:,i+9])
-                    
         for i, logger in enumerate(self.loggers):
             a = i * self.envs_per_agent
             b = (i+1) * self.envs_per_agent
@@ -637,7 +662,12 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
             engaged = infos['current_engagements'][a:b]
             success = infos['current_successes'][a:b]
             dones = finished_episodes[a:b]
-            logger.step(rew, comps, engaged, success, dones)
+            info = {}
+            if 'smoothness' in infos:
+                info['smoothness'] = {}
+                for key,val in infos['smoothness'].items():
+                    info['smoothness'][key] = val[a:b]
+            logger.step(rew, comps, engaged, success, dones, info)
         
         return alive_mask
             
@@ -646,7 +676,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         for logger in self.loggers:
             logger.publish()
 
-    def track_data(self, tag: str, values: torch.tensor) -> None:
+    def track_data(self, tag: str, values: torch.tensor, agg=['mean']) -> None:
         #DONE
         if type(values) == float:
             self.loggers[0].add_metric(tag, values)
@@ -654,7 +684,17 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         
         batch_size = values.size()[0] // self.num_agents
         for i, logger in enumerate(self.loggers):
-            logger.add_metric(tag, values[i*batch_size,(i+1)*batch_size]).detach().mean().item()
+            data = values[i*batch_size: (i+1)*batch_size].detach().cpu()
+            if 'mean' in agg:
+                logger.add_metric(tag + " (Avg)", data.mean().item())
+            if 'median' in agg:
+                logger.add_metric(tag + " (Median)", data.median().item())
+            if 'std' in agg:
+                logger.add_metric(tag + " (Std)", data.std().item())
+            if 'max' in agg:
+                logger.add_metric(tag + " (Max)", torch.max(data).item())
+            if 'min' in agg:
+                logger.add_metric(tag + " (Min)", torch.min(data).item())
 
     def track_hist(self, key: str, value: torch.Tensor) -> None:
         #DONE
@@ -726,6 +766,14 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         for i, logger in enumerate(self.loggers):
             a = i * agent_batch
             b = a + agent_batch
+
+            if self.num_agents > 1:
+                policy_state = self._get_network_state(self.policy.actor_mean.pride_nets[i])
+                critic_state = self._get_network_state(self.value.critic.pride_nets[i])
+            else:
+                policy_state = self._get_network_state(self.policy.actor_mean)
+                critic_state = self._get_network_state(self.value.critic)
+            
             logger.log_minibatch_update(
                 returns[a:b],
                 values[a:b],
@@ -734,9 +782,32 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                 new_log_probs[a:b],
                 entropies[a:b],
                 policy_losses[a:b],
-                value_losses[a:b]
+                value_losses[a:b],
+                policy_state,
+                critic_state,
+                self.optimizer
             )
 
+    def _get_network_state(self, simba_net):            
+        gradients = []
+        weight_norms = {}
+        optimizer_state = {}
+        # Store gradients
+        for name, param in simba_net.named_parameters():
+            if param.grad is not None:
+                gradients.append(param.grad.detach().norm(2))
+                if param in self.optimizer.state:
+                    optimizer_state[name] = {
+                        'exp_avg': self.optimizer.state[param]['exp_avg'].norm().item(),
+                        'exp_avg_sq': self.optimizer.state[param]['exp_avg_sq'].norm().item(),
+                        'step': self.optimizer.state[param]['step']
+                    }
+                    
+                    # Clear gradients after processing to avoid accumulation issues
+                param.grad = None
+            weight_norms[name] = param.norm().item()
+                
+        return( {"gradients":gradients, "weight_norms":weight_norms, "optimizer_state":optimizer_state})
             
     def _one_time_metrics(self,
         actions,
@@ -804,6 +875,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                 advantages[i] = advantage
             # returns computation
             returns = advantages + values
+            
             # normalize advantages
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
@@ -827,7 +899,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
             discount_factor=self._discount_factor,
             lambda_coefficient=self._lambda,
         )
-
+        
         self.memory.set_tensor_by_name("values", self._value_preprocessor(values, train=True))
         self.memory.set_tensor_by_name("returns", self._value_preprocessor(returns, train=True))
         self.memory.set_tensor_by_name("advantages", advantages)
@@ -853,7 +925,6 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                 with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
 
                     sampled_states = self._state_preprocessor(sampled_states, train=not epoch)
-
                     _, next_log_prob, _ = self.policy.act(
                         {"states": sampled_states, "taken_actions": sampled_actions}, role="policy"
                     )
@@ -875,7 +946,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                             #print(f"\tAgent {i} Approx KL:", agent_kl)
 
                     entropys = self.policy.get_entropy(role="policy")
-                    
+                    entropys[~keep_mask] = 0.0
 
                     # compute entropy loss
                     if self._entropy_loss_scale:
@@ -892,7 +963,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                     )
 
                     policy_losses = -torch.min(surrogate, surrogate_clipped)
-                    
+                    policy_losses[~keep_mask]=0.0
                     policy_loss = policy_losses[keep_mask].mean()
 
                     # compute value loss
@@ -904,6 +975,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                         )
                         
                     value_losses = self._value_loss_scale * F.mse_loss(sampled_returns, predicted_values, reduction='none')
+                    value_losses[~keep_mask] = 0.0
                     value_loss = value_losses[keep_mask].mean()
 
                 # optimization step
@@ -927,7 +999,10 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                         )
 
                 self.scaler.step(self.optimizer)
+                
                 self.scaler.update()
+
+                
                 self._log_minibatch_update(
                     sampled_returns,
                     predicted_values,
