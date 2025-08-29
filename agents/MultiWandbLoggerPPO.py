@@ -310,6 +310,8 @@ class EpisodeTracker:
             # Gradient norms (if models given)
             def grad_norm(model_grads):
                 #norms = [p.grad.detach().norm(2) for p in model.parameters() if p.grad is not None]
+                if len(model_grads) == 0:
+                    return torch.tensor(0.0)
                 return torch.norm(torch.stack(model_grads), 2) 
 
             stats['Policy / Gradient Norm'] = grad_norm(policy_state['gradients']) if policy_state is not None else torch.tensor(0.)
@@ -508,7 +510,10 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         # setup Weights & Biases
         self.log_wandb = False
         if self.cfg.get("experiment", {}).get("wandb", False):
-            agent_cfg_datas = [self.cfg.pop(f"agent_{i}") for i in range(self.num_agents)]
+            self.agent_exp_cfgs = [self.cfg.pop(f"agent_{i}") for i in range(self.num_agents)]
+            break_forces = self.cfg.pop("break_force")
+            if not type(break_forces) == list:
+                break_forces = [break_forces]
             # save experiment configuration
             for i in range(self.num_agents):
                 try:
@@ -517,12 +522,13 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                     print("[INFO]: Extracting model config had Attribute Error...")
                     models_cfg = {k: v[i]._modules for (k, v) in self.models.items()}
                     print("[INFO]: Attribute Error Handled")
-                self.cfg['experiment'] = agent_cfg_datas[i]['experiment']
+                self.cfg['experiment'] = self.agent_exp_cfgs[i]['experiment']
+                self.cfg['break_force'] = break_forces[ i // 5 ] #TODO NO MAGIC NUMBERS!
                 wandb_config={**self.cfg, **trainer_cfg, **models_cfg, "num_envs":self.num_envs // self.num_agents}
                 # set default values
                 exp_dir = os.path.join(self.cfg['experiment']['directory'], self.cfg['experiment']['experiment_name'])
                 print("logger exp dir:", exp_dir)
-                wandb_kwargs = copy.deepcopy(agent_cfg_datas[i].get("experiment", {}).get("wandb_kwargs", {}))
+                wandb_kwargs = copy.deepcopy(self.agent_exp_cfgs[i].get("experiment", {}).get("wandb_kwargs", {}))
                 wandb_kwargs.setdefault("name", exp_dir)
                 wandb_kwargs.setdefault("config", {})
                 wandb_kwargs["config"].update(wandb_config)
@@ -530,15 +536,15 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                 # init loggers
                 self.loggers.append(EpisodeTracker(wandb_kwargs, wandb_config,self.device))
                 self.log_wandb = True
+            
         print("[INFO]: Multilogging WandB Initialized")
 
     def write_checkpoint(self, timestep: int, timesteps: int):
-        #DONE
         # save the network parameters
         actor_model = self.models['policy']
         if actor_model.num_agents > 1:
             for i, (net, log_std) in enumerate(zip(actor_model.actor_mean.pride_nets, actor_model.actor_logstd)):
-                exp_args = self.cfg[f'agent_{i}']['experiment']
+                exp_args = self.agent_exp_cfgs[i]['experiment']  #elf.cfg[f'agent_{i}']['experiment']
                 ckpt_path = os.path.join(exp_args['directory'], exp_args['experiment_name'], "checkpoints", f"agent_{i}_{timestep*self.num_envs // self.num_agents}.pt")
                 torch.save({
                     'net_state_dict': net.state_dict(),
@@ -651,6 +657,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                 self.track_hist(f"act_sel_{dir}",actions[:,i])
                 self.track_hist(f"act_pos_{dir}", actions[:,i+3])
                 self.track_hist(f"act_force_{dir}", actions[:,i+9])
+                
         for i, logger in enumerate(self.loggers):
             a = i * self.envs_per_agent
             b = (i+1) * self.envs_per_agent
@@ -672,12 +679,10 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         return alive_mask
             
     def write_tracking_data(self, timestep: int, timesteps: int, eval=False) -> None:
-        #DONE?
         for logger in self.loggers:
             logger.publish()
 
     def track_data(self, tag: str, values: torch.tensor, agg=['mean']) -> None:
-        #DONE
         if type(values) == float:
             self.loggers[0].add_metric(tag, values)
             return
@@ -764,9 +769,6 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         batch_size = returns.size()[0]
         agent_batch = batch_size // self.num_agents
         for i, logger in enumerate(self.loggers):
-            a = i * agent_batch
-            b = a + agent_batch
-
             if self.num_agents > 1:
                 policy_state = self._get_network_state(self.policy.actor_mean.pride_nets[i])
                 critic_state = self._get_network_state(self.value.critic.pride_nets[i])
@@ -775,16 +777,17 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                 critic_state = self._get_network_state(self.value.critic)
             
             logger.log_minibatch_update(
-                returns[a:b],
-                values[a:b],
-                advantages[a:b],
-                old_log_probs[a:b],
-                new_log_probs[a:b],
-                entropies[a:b],
-                policy_losses[a:b],
-                value_losses[a:b],
-                policy_state,
-                critic_state,
+                returns[i,:],
+                values[i,:],
+                advantages[i,:],
+                old_log_probs[i,:],
+                new_log_probs[i,:],
+                entropies[i,:,:],
+                policy_losses[i,:],
+                value_losses[i,:],
+                None, #policy_state,
+                None, #critic_state,
+                
                 self.optimizer
             )
 
@@ -813,13 +816,10 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         actions,
         returns
     ):
-        agent_batch = actions.size()[0] // self.num_agents
         for i, logger in enumerate(self.loggers):
-            a = i * agent_batch
-            b = a + agent_batch
             logger.one_time_learning_metrics(
-                actions[a:b],
-                returns[a:b],
+                actions[i,:,:],
+                returns[i,:,:],
                 self.global_step // self.num_agents
             )
                 
@@ -832,7 +832,6 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         :param timesteps: Number of timesteps
         :type timesteps: int
         """
-
         def compute_gae(
             rewards: torch.Tensor,
             dones: torch.Tensor,
@@ -921,41 +920,41 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
             ) in sampled_batches:
 
                 sample_size = sampled_states.size()[0]
-                keep_mask = torch.ones((sample_size,), dtype=bool, device=self.device)
+                keep_mask = torch.ones((self.num_agents,), dtype=bool, device=self.device)
                 with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
-
+                    
                     sampled_states = self._state_preprocessor(sampled_states, train=not epoch)
                     _, next_log_prob, _ = self.policy.act(
                         {"states": sampled_states, "taken_actions": sampled_actions}, role="policy"
                     )
 
+                    sampled_states = sampled_states.view(self.num_agents, self.envs_per_agent, -1)
+                    next_log_prob = next_log_prob.view(self.num_agents, self.envs_per_agent)
+                    sampled_log_prob = sampled_log_prob.view(self.num_agents, self.envs_per_agent)
                     # compute approximate KL divergence
                     with torch.no_grad():
                         ratio = next_log_prob - sampled_log_prob
                         agent_kls = ((torch.exp(ratio) - 1) - ratio)
-                        
-                        for i in range(self.num_agents):
-                            a = i * sample_size // self.num_agents
-                            b = a + sample_size // self.num_agents
-                            agent_kl = agent_kls[a:b].mean() 
 
-                            # zero out gradients for agents with high approximate kls
-                            if self._kl_threshold and agent_kl > self._kl_threshold:
-                                keep_mask[a:b] = False
-                            
-                            #print(f"\tAgent {i} Approx KL:", agent_kl)
+                        agent_kls = torch.mean(agent_kls, 1)
+
+                        if self._kl_threshold:
+                            keep_mask = ~torch.logical_or( ~keep_mask, agent_kls > self._kl_threshold)
 
                     entropys = self.policy.get_entropy(role="policy")
-                    entropys[~keep_mask] = 0.0
+                    #print(entropys.size())
+                    entropys = entropys.view(self.num_agents, self.envs_per_agent,-1)
+                    entropys[~keep_mask,:] = 0.0
 
                     # compute entropy loss
                     if self._entropy_loss_scale:
-                        entropy_loss = -self._entropy_loss_scale * entropys[keep_mask].mean()
+                        entropy_loss = -self._entropy_loss_scale * entropys[keep_mask,:].mean()
                     else:
                         entropy_loss = 0
                     
 
                     # compute policy loss
+                    sampled_advantages = sampled_advantages.view(self.num_agents, self.envs_per_agent)
                     ratio = torch.exp(next_log_prob - sampled_log_prob)
                     surrogate = sampled_advantages * ratio
                     surrogate_clipped = sampled_advantages * torch.clip(
@@ -963,20 +962,23 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                     )
 
                     policy_losses = -torch.min(surrogate, surrogate_clipped)
-                    policy_losses[~keep_mask]=0.0
-                    policy_loss = policy_losses[keep_mask].mean()
+                    policy_losses[~keep_mask,:]=0.0
+                    policy_loss = policy_losses[keep_mask,:].mean()
 
                     # compute value loss
-                    predicted_values, _, _ = self.value.act({"states": sampled_states}, role="value")
-
+                    predicted_values, _, _ = self.value.act({"states": sampled_states.view(self.num_envs,-1)}, role="value")
+                    predicted_values = predicted_values.view( self.num_agents, self.envs_per_agent)
+                    
                     if self._clip_predicted_values:
                         predicted_values = sampled_values + torch.clip(
                             predicted_values - sampled_values, min=-self._value_clip, max=self._value_clip
                         )
+
+                    sampled_returns = sampled_returns.view(self.num_agents, self.envs_per_agent)
                         
                     value_losses = self._value_loss_scale * F.mse_loss(sampled_returns, predicted_values, reduction='none')
-                    value_losses[~keep_mask] = 0.0
-                    value_loss = value_losses[keep_mask].mean()
+                    value_losses[~keep_mask,:] = 0.0
+                    value_loss = value_losses[keep_mask,:].mean()
 
                 # optimization step
                 # zero out losses from cancelled
@@ -1004,8 +1006,8 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
 
                 
                 self._log_minibatch_update(
-                    sampled_returns,
-                    predicted_values,
+                    sampled_returns, 
+                    predicted_values, 
                     sampled_advantages,
                     sampled_log_prob,
                     next_log_prob,
@@ -1016,8 +1018,8 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
 
 
             self._one_time_metrics(
-                self.memory.get_tensor_by_name("actions"),
-                self.memory.get_tensor_by_name("returns")
+                self.memory.get_tensor_by_name("actions").view(self.num_agents, self.envs_per_agent, -1),
+                self.memory.get_tensor_by_name("returns").view(self.num_agents, self.envs_per_agent, -1)
             )
                 
             # TODO: ########################################################################

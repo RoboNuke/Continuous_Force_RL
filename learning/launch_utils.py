@@ -39,8 +39,10 @@ from skrl.utils import set_seed
 from skrl.memories.torch import RandomMemory
 from skrl.agents.torch.ppo import PPO, PPO_DEFAULT_CONFIG
 from skrl.resources.preprocessors.torch import RunningStandardScaler
+from models.block_simba import BlockSimBaCritic, BlockSimBaActor
+from agents.block_wandb_logger_PPO import BlockWandbLoggerPPO
 
-
+from models.block_simba import export_policies, make_agent_optimizer
 def set_easy_mode(env_cfg, agent_cfg, easy_mode):
     agent_cfg['agent']['easy_mode'] = easy_mode
     if not easy_mode:
@@ -469,9 +471,70 @@ def set_models(env_cfg, agent_cfg, args_cli, env):
         critic_latent = agent_cfg['models']['critic']['latent_size'],
         num_agents = env_cfg.num_agents #args_cli.num_agents
     )
-    print("[INFO]: Models and optimizer created")
+    print("[INFO]: Models created")
     return models
 
+
+def set_block_models(env_cfg, agent_cfg, args_cli, env):
+    models = {}
+    if args_cli.hybrid_control or args_cli.parallel_control:
+        sigma_idx = 6 if args_cli.control_torques else 3
+    else:
+        sigma_idx = 0
+    models['policy'] = BlockSimBaActor( #BroAgent(
+        observation_space=env.cfg.observation_space, 
+        action_space=env.action_space,
+        #action_gain=0.05,
+        device=env.device,
+        act_init_std = agent_cfg['models']['act_init_std'],
+        actor_n = agent_cfg['models']['actor']['n'],
+        actor_latent = agent_cfg['models']['actor']['latent_size'],
+        sigma_idx = sigma_idx,
+        num_agents = env_cfg.num_agents, #args_cli.num_agents,
+        last_layer_scale=agent_cfg['models']['last_layer_scale']
+    )
+
+    models["value"] = BlockSimBaCritic( #BroAgent(
+        state_space_size=env.cfg.state_space, 
+        device=env.device,
+        critic_output_init_mean = agent_cfg['models']['critic_output_init_mean'],
+        critic_n = agent_cfg['models']['critic']['n'],
+        critic_latent = agent_cfg['models']['critic']['latent_size'],
+        num_agents = env_cfg.num_agents #args_cli.num_agents
+    )
+    print("[INFO]: Block models created")
+    return models
+    
+def set_block_agent(env_cfg, agent_cfg, args_cli, models, memory, env=None):
+    for key, item in agent_cfg['agent']['agent_0']['experiment'].items():
+        agent_cfg['agent']['experiment'][key] = item
+    agent = BlockWandbLoggerPPO(
+        models=models, #copy.deepcopy(models),
+        memory=memory,
+        cfg=agent_cfg['agent'],
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        num_envs=env_cfg.scene.num_envs, #args_cli.num_envs,
+        state_size=env.cfg.observation_space+env.cfg.state_space,
+        device=env.device,
+        task = args_cli.task,
+        num_agents= env_cfg.num_agents #args_cli.num_agents
+    ) 
+
+    agent.optimizer = make_agent_optimizer(
+        models['policy'],
+        models['value'].critic,
+        policy_lr = agent_cfg['agent']['learning_rate'],
+        critic_lr = agent_cfg['agent']['learning_rate'],
+        betas=(0.999, 0.999),
+        eps=1e-8,
+        weight_decay=0
+    )
+    
+    print("[INFO]: Block Agents and optimizer generated")
+    return agent
+    
+    
 
 def set_agent(env_cfg, agent_cfg, args_cli, models, memory, env=None):
     # temp until we redo the logger

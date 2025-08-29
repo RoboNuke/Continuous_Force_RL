@@ -66,8 +66,8 @@ AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli, hydra_args = parser.parse_known_args()
 
-args_cli.video = True
-args_cli.enable_cameras = True
+args_cli.video = False
+args_cli.enable_cameras = False
 
 # clear out sys.argv for Hydra
 sys.argv = [sys.argv[0]] + hydra_args
@@ -227,9 +227,10 @@ def main(
         replacement=True#,
         #num_agents=args_cli.num_agents
     )
-    models = lUtils.set_models(env_cfg, agent_cfg, args_cli, env)
+    models = lUtils.set_block_models(env_cfg, agent_cfg, args_cli, env) #lUtils.set_models(env_cfg, agent_cfg, args_cli, env)
     print(models)
-    agents = lUtils.set_agent(env_cfg, agent_cfg, args_cli, models, memory, env)
+    #agents = lUtils.set_agent(env_cfg, agent_cfg, args_cli, models, memory, env)
+    agents = lUtils.set_block_agent(env_cfg, agent_cfg, args_cli, models, memory, env)
     print(agents)
     
     # configure and instantiate the RL trainer
@@ -253,7 +254,8 @@ def main(
     evaluating = False
 
     vid_env = None
-
+    
+    torch.autograd.set_detect_anomaly(True)
     trainer.train(args_cli.max_steps // env_per_agent, vid_env)
 
     

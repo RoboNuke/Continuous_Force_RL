@@ -1,0 +1,374 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import os
+from models.SimBa import SimBaNet
+from typing import Any, Mapping, Tuple, Union
+from skrl.models.torch import DeterministicMixin, GaussianMixin, Model
+import math
+from models.feature_net import NatureCNN, layer_init, he_layer_init
+
+# -----------------------------
+#  Block Linear Layer
+# -----------------------------
+class BlockLinear(nn.Module):
+    def __init__(self, num_blocks, in_features, out_features, name="linear"):
+        super().__init__()
+        self.weight = nn.Parameter(torch.zeros(num_blocks, out_features, in_features))
+        self.bias = nn.Parameter(torch.zeros(num_blocks, out_features))
+        # init each block separately
+        #print(name, in_features, out_features)
+        for i in range(num_blocks):
+            nn.init.kaiming_normal_(self.weight[i])
+            nn.init.zeros_(self.bias[i])
+            self.weight[i]._agent_id = i
+            self.bias[i]._agent_id = i
+            self.weight[i]._name=f"{name}({in_features}x{out_features}).weight"
+            self.bias[i]._name=f"{name}({in_features}x{out_features}).bias"
+
+    def forward(self, x):
+        # x: (num_blocks, batch, in_features)
+        #print("X size:", x.size(), self.weight.size(), self.bias.size())
+        #out = torch.einsum("nbi,nio->nbo", x, self.weight) + self.bias[:, None, :]
+        out = torch.einsum("nbi,noi->nbo", x, self.weight) + self.bias[:, None, :]
+        return out
+
+
+# -----------------------------
+#  Block LayerNorm (per-agent independent)
+# -----------------------------
+class BlockLayerNorm(nn.Module):
+    def __init__(self, num_blocks, normalized_shape, eps=1e-5, affine=True, name="layer_norm"):
+        super().__init__()
+        self.eps = eps
+        self.affine = affine
+        shape = (num_blocks, normalized_shape)
+        if affine:
+            self.weight = nn.Parameter(torch.ones(*shape))
+            self.bias = nn.Parameter(torch.zeros(*shape))
+            for i in range(num_blocks):
+                self.weight[i]._agent_id = i
+                self.bias[i]._agent_id = i
+                self.weight[i]._name=f"{name}.weight"
+                self.bias[i]._name=f"{name}.bias"
+        else:
+            self.register_parameter("weight", None)
+            self.register_parameter("bias", None)
+        
+
+    def forward(self, x):
+        # x: (num_blocks, batch, features)
+        mean = x.mean(-1, keepdim=True)
+        var = x.var(-1, unbiased=False, keepdim=True)
+        inv_std = torch.rsqrt(var + self.eps)
+        out = (x - mean) * inv_std
+        if self.affine:
+            out = out * self.weight[:, None, :] + self.bias[:, None, :]
+        return out
+
+
+# -----------------------------
+#  Block Residual Block
+# -----------------------------
+class BlockResidualBlock(nn.Module):
+    def __init__(self, num_blocks, dim, name="resblock"):
+        super().__init__()
+        self.ln = BlockLayerNorm(num_blocks, dim, name=f"{name}.ln")
+        self.fc1 = BlockLinear(num_blocks, dim, 4*dim, name=f"{name}.fc1")
+        self.relu = nn.ReLU(inplace=False)
+        self.fc2 = BlockLinear(num_blocks, 4*dim, dim, name=f"{name}.fc2")
+
+    def forward(self, x):
+        res = x
+        out = self.ln(x)
+        out = self.relu(self.fc1(out))
+        out = self.fc2(out)
+        #print("Block size:", x.size(), out.size())
+        return res + out
+
+# -----------------------------
+#  Multi-Agent Block Policy
+# -----------------------------
+class BlockSimBa(nn.Module):
+    def __init__(self, num_agents, obs_dim, hidden_dim, act_dim, device, num_blocks=2, tanh=False):
+        super().__init__()
+        self.device=device
+        self.num_agents = num_agents
+        self.obs_dim = obs_dim
+        self.hidden_dim = hidden_dim
+        self.act_dim = act_dim
+        self.num_blocks = num_blocks
+        self.use_tanh = tanh
+        
+        self.fc_in = BlockLinear(num_agents, obs_dim, hidden_dim, name="fc_in")
+        self.resblocks = nn.ModuleList(
+            [BlockResidualBlock(num_agents, hidden_dim, name=f"resblock_{i}") for i in range(num_blocks)]
+        )
+        self.ln_out = BlockLayerNorm(num_agents, hidden_dim, name="ln_out")
+        self.fc_out = BlockLinear(num_agents, hidden_dim, act_dim, name="fc_out")
+        #self.tanh = tanh
+        #self.th = nn.Tanh()
+    def forward(self, obs, num_envs):
+        """
+        obs: (num_agents * num_envs, obs_dim)
+        """
+        num_agents = self.fc_in.weight.shape[0]
+        obs = obs.view(num_agents, num_envs, -1)
+
+        x = self.fc_in(obs)
+        for block in self.resblocks:
+            x = block(x)
+        actions = self.fc_out( self.ln_out(x) )
+        if self.use_tanh:
+            actions = torch.tanh(actions)
+        return actions.view(-1, actions.shape[-1])  # flatten back
+
+
+class BlockSimBaActor(GaussianMixin, Model):
+    def __init__(
+            self,
+            observation_space,
+            action_space,
+            device,
+            num_agents=1,
+            act_init_std = 0.60653066, # -0.5 value used in maniskill 
+            actor_n = 2,
+            actor_latent=512,
+            action_gain=1.0,
+            last_layer_scale=1.0,
+
+            clip_actions=False,
+            clip_log_std=True, 
+            min_log_std=-20, 
+            max_log_std=2, 
+            reduction="sum",
+            sigma_idx=0
+        ):
+        Model.__init__(self, observation_space, action_space, device)
+        GaussianMixin.__init__(self, clip_actions, clip_log_std, min_log_std, max_log_std, reduction)
+
+        self.num_agents = num_agents
+        
+        self.actor_logstd = nn.ParameterList(
+            [
+                nn.Parameter(
+                    torch.ones(1, self.num_actions) * math.log(act_init_std)
+                )
+                for _ in range(num_agents)
+            ]
+        ).to(device)
+        for i in range(num_agents):
+            self.actor_logstd[i]._agent_id = i
+            self.actor_logstd[i]._name=f"logstd_{i}"
+
+        self.actor_mean = BlockSimBa(
+            num_agents = self.num_agents,
+            obs_dim = self.num_observations,
+            hidden_dim = actor_latent,
+            act_dim = self.num_actions,
+            device=device,
+            num_blocks = actor_n,
+            tanh = True
+        ).to(device)
+
+        self.sigma_idx = sigma_idx
+
+        with torch.no_grad():
+            self.actor_mean.fc_out.weight *= last_layer_scale
+            if sigma_idx > 0:
+                self.actor_mean.fc_out.bias[:sigma_idx] = -1.1
+
+    def act(self, inputs, role):
+        return GaussianMixin.act(self, inputs, role)
+
+    def compute(self, inputs, role):
+        num_envs = inputs['states'].size()[0] // self.num_agents
+        #print("Num envs:", num_envs)
+        action_mean = self.actor_mean(inputs['states'][:,:self.num_observations], num_envs)
+        if self.sigma_idx > 0:
+            #action_mean[...,:self.sigma_idx] = (action_mean[:,:self.sigma_idx] + 1) / 2.0
+            left  = (action_mean[..., :self.sigma_idx] + 1.0) * 0.5
+            right = action_mean[..., self.sigma_idx:]
+            action_mean = torch.cat([left, right], dim=-1)
+        
+        logstds = []
+        batch_size = int(action_mean.size()[0] // self.num_agents)
+        for i, log_std in enumerate(self.actor_logstd):
+            logstds.append(log_std.expand_as( action_mean[i*batch_size:(i+1)*batch_size,:] ))
+        logstds = torch.cat(logstds,dim=0)
+        #print("log stds size:", logstds.size())
+        return action_mean, logstds, {}
+    
+
+class BlockSimBaCritic(DeterministicMixin, Model):
+    def __init__(
+            self, 
+            state_space_size,
+            device,
+            num_agents=1,
+            critic_output_init_mean = 0.0,
+            critic_n = 1, 
+            critic_latent=128,
+            clip_actions=False,
+        ):
+        Model.__init__(self, state_space_size, 1, device)
+        DeterministicMixin.__init__(self, clip_actions)
+
+        in_size = self.num_observations
+
+        self.critic = BlockSimBa(
+            num_agents = num_agents,
+            obs_dim = in_size,
+            hidden_dim=critic_latent,
+            act_dim = 1,
+            device=device,
+            num_blocks=critic_n,
+            tanh = False
+        ).to(device)
+        
+        torch.nn.init.constant_(self.critic.fc_out.bias, critic_output_init_mean)
+        self.num_agents = num_agents
+
+    def act(self, inputs, role):
+        #print("critic act:", inputs, role)
+        return DeterministicMixin.act(self, inputs, role)
+
+    def compute(self, inputs, role):
+        num_envs = inputs['states'].size()[0] // self.num_agents
+        #print("critic compute:", role, inputs['states'].size(), inputs['states'][:,-self.num_observations:].size())
+        return self.critic(inputs['states'][:,-self.num_observations:], num_envs), {}
+
+    
+# -----------------------------
+#  Helpers
+# -----------------------------
+def export_policies(block_model, stds, save_paths):
+    """
+    Save each agent's parameters separately.
+    save_paths: list of file paths, length = num_agents
+    """
+    num_agents = block_model.fc_in.weight.shape[0]
+    hidden_dim = block_model.fc_in.weight.shape[1]
+    obs_dim = block_model.fc_in.weight.shape[2]
+    act_dim = block_model.fc_out.weight.shape[1]
+    num_blocks = len(block_model.resblocks)
+
+    for i in range(num_agents):
+        agent = extract_agent(block_model, i)
+
+        # save
+        if stds is not None:
+            # policy
+            torch.save({
+                'net_state_dict':agent.state_dict(),
+                'log_std': stds[i]
+            }, save_paths[i])
+        else:
+            # critic 
+            torch.save(agent.state_dict(), save_paths[i])
+
+def extract_agent(block_model: nn.Module, agent_idx: int):
+    """
+    Extract a single-agent network from a block-parallel model.
+    
+    Args:
+        block_model: block-parallel model (with tagged params)
+        agent_idx: which agent to extract
+        single_agent_class: class constructor for single-agent net (e.g., SimBaNet)
+        *args, **kwargs: arguments to construct the single-agent network
+    
+    Returns:
+        A single-agent model with weights/biases copied from block_model[agent_idx].
+    """
+    # Build a fresh single-agent network
+    agent_model = SimBaNet(
+        n=len(block_model.resblocks),
+        in_size=block_model.obs_dim,
+        out_size=block_model.act_dim,
+        latent_size=block_model.hidden_dim,
+        device=block_model.device,
+        tan_out=block_model.use_tanh
+    )
+    # Copy over the parameters
+    for (name, agent_param), (block_name, block_param) in zip(
+        agent_model.named_parameters(), block_model.named_parameters()
+    ):
+        assert name.split('.')[-1] == block_name.split('.')[-1], f"Mismatch {name} vs {block_name}"
+        # Take the slice for this agent
+        if hasattr(block_param, "ndim") and block_param.ndim > 1 and block_param.shape[0] == block_model.num_agents:
+            agent_param.data.copy_(block_param.data[agent_idx].clone())
+        elif block_param.shape[0] == block_model.num_agents:  # vector param
+            agent_param.data.copy_(block_param.data[agent_idx].clone())
+        else:
+            agent_param.data.copy_(block_param.data.clone())
+
+        # Preserve tags
+        agent_param._agent_id = agent_idx
+        agent_param._name = getattr(block_param, "_name", name)
+    
+    return agent_model
+
+def pack_agents_into_block(block_model: nn.Module, agent_models: dict):
+    """
+    Pack parameters from single-agent models back into a block-parallel model.
+    
+    Args:
+        block_model: block-parallel model (with tagged params)
+        agent_models: dict {agent_idx: single_agent_model}
+    
+    Notes:
+        Overwrites block_model params for the agents provided.
+    """
+    for agent_idx, agent_model in agent_models.items():
+        for (name, agent_param), (block_name, block_param) in zip(
+            agent_model.named_parameters(), block_model.named_parameters()
+        ):
+            assert name.split('.')[-1] == block_name.split('.')[-1], f"Mismatch {name} vs {block_name}"
+
+            if hasattr(block_param, "ndim") and block_param.ndim > 1 and block_param.shape[0] == block_model.num_agents:
+                block_param.data[agent_idx].copy_(agent_param.data)
+            elif block_param.shape[0] == block_model.num_agents:  # vector param
+                block_param.data[agent_idx].copy_(agent_param.data)
+            else:
+                block_param.data.copy_(agent_param.data)
+
+            # Restore tags
+            block_param._agent_id = agent_idx
+            block_param._name = getattr(block_param, "_name", name)
+
+
+import torch.optim as optim
+
+
+def make_agent_optimizer(
+        policy_block,
+        # policy_std,
+        critic_block,
+        policy_lr,
+        critic_lr,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=0
+):
+    """
+    Create a single Adam optimizer with parameter groups for each agent's
+    policy and critic, with different base learning rates.
+    """
+    num_agents = policy_block.num_agents
+    assert critic_block.num_agents == num_agents, "Policy and critic must have same number of agents"
+
+    param_groups = []
+
+    for i in range(num_agents):
+        # Policy group
+        policy_params = [p for p in policy_block.parameters() if hasattr(p, "_agent_id") and p._agent_id == i]
+        #policy_params.append( policy_std[i] )
+        param_groups.append({"params": policy_params, "lr": policy_lr})
+        
+
+        # Critic group
+        critic_params = [p for p in critic_block.parameters() if hasattr(p, "_agent_id") and p._agent_id == i]
+        param_groups.append({"params": critic_params, "lr": critic_lr})
+
+    optimizer = torch.optim.Adam(param_groups, betas=betas, eps=eps, weight_decay=weight_decay)
+    return optimizer

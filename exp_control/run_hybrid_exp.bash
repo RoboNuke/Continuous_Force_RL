@@ -1,6 +1,7 @@
 #!/bin/bash
 
 tasks=( "PegInsert" "GearMesh")
+nick_names=("PiH" "Gear" "Nut")
 obs_modes=( "Local" "HistoryObs" "DMPObs")
 
 task_idx=$1
@@ -14,6 +15,7 @@ hybrid_selection_reward=$8 #'delta'  #'simp' # 'dirs' 'delta'
 sel_adjs=$9
 use_ft_sensor=${10}
 hybrid_control=${11}
+project=${12}
 
 echo "Hybrid Control:${12}    $hybrid_control"
 task_name="Isaac-Factory-TaskType-ObsType-v0"
@@ -28,7 +30,7 @@ echo "Env name: $task_name"
 
 #use_ft_sensor=1
 num_agents=5 #####################################################################5
-current_datetime=$(date +"%Y-%m-%d_%H:%M:%S")
+current_datetime=$(date +"%m-%d_%H:%M")
 num_history_samples=8
 num_envs_per_agent=256 ########################################################
 #hybrid_control=1
@@ -68,14 +70,14 @@ ckpt_path="/nfs/stak/users/brownhun/ckpt_trackers/$3_ckpt_tracker.txt"
 #python -m learning.ppo_factory_trainer \
 python -m learning.factory_runner \
     --task=$task_name \
-    --wandb_project="debug" \
+    --wandb_project=$project \
     --use_ft_sensor=$use_ft_sensor \
     --exp_tag=$exp_tag \
-    --wandb_group_prefix="$3_$4_${11}_${12}_$5" \
-    --max_steps=100000000 \
+    --wandb_group_prefix="$3_$4_${nick_names[$task_idx]}_OBS-${obs_modes[$obs_idx]}_Hyb-Ctrl(${11})_Hyb-Agent($6)" \
+    --max_steps=75000000 \
     --num_envs=$(($num_envs_per_agent * $num_agents)) \
     --num_agents=$num_agents \
-    --exp_name="$3_${obs_modes[$obs_idx]}_$8_$5_$current_datetime" \
+    --exp_name="$3_$4_${nick_names[$task_idx]}_OBS-${obs_modes[$obs_idx]}_Hyb-Ctrl(${11})_Hyb-Agent($6)_$current_datetime" \
     --exp_dir="$3_$current_datetime_$8" \
     --no_vids \
     --decimation=8 \

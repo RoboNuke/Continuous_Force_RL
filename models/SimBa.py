@@ -40,6 +40,11 @@ class SimBaNet(nn.Module):
         super().__init__()
         self.layers = []
         self.n = n
+        self.in_size = in_size,
+        self.out_size = out_size
+        self.latent_size = latent_size
+        self.device = device
+        self.tan_out = tan_out
         self.input = nn.Sequential(
             he_layer_init(nn.Linear(in_size, latent_size))
         ).to(device)
