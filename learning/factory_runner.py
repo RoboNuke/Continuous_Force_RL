@@ -51,6 +51,7 @@ parser.add_argument("--exp_dir", type=str, default=None, help="Directory to stor
 parser.add_argument("--dump_yaml", action="store_true", default=False, help="Store config files in yaml format")
 parser.add_argument("--log_smoothness_metrics", action="store_true", default=False, help="Log the sum squared velocity, jerk and force metrics")
 parser.add_argument("--no_vids", action="store_true", default=False, help="Set up sim environment to support cameras")
+parser.add_argument("--debug_mode", action="store_true", default=False, help="Enables extra information for debugging")
 
 # wandb
 parser.add_argument("--no_log_wandb", action="store_false", default=True, help="Disables the wandb logger")
@@ -139,8 +140,8 @@ import learning.launch_utils as lUtils
 #set_seed(args_cli.seed)  # e.g. `set_seed(42)` for fixed seed
 if args_cli.seed == -1:
     args_cli.seed = random.randint(0, 10000)
-#set_seed(args_cli.seed)
-set_seed(7378)
+set_seed(args_cli.seed)
+#set_seed(7378)
 
 agent_cfg_entry_point = f"SimBaNet_ppo_cfg_entry_point"
 evaluating = False
@@ -227,8 +228,9 @@ def main(
         replacement=True#,
         #num_agents=args_cli.num_agents
     )
-    models = lUtils.set_block_models(env_cfg, agent_cfg, args_cli, env) #lUtils.set_models(env_cfg, agent_cfg, args_cli, env)
-    print(models)
+    models = lUtils.set_block_models(env_cfg, agent_cfg, args_cli, env) 
+    #models = lUtils.set_models(env_cfg, agent_cfg, args_cli, env)
+    #print(models)
     #agents = lUtils.set_agent(env_cfg, agent_cfg, args_cli, models, memory, env)
     agents = lUtils.set_block_agent(env_cfg, agent_cfg, args_cli, models, memory, env)
     print(agents)

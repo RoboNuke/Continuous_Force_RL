@@ -450,7 +450,7 @@ def set_models(env_cfg, agent_cfg, args_cli, env):
             sigma_idx = 6 if args_cli.control_torques else 3
         else:
             sigma_idx = 0
-        models['policy'] = SimBaActor( #BroAgent(
+        models['policy'] = torch.compile(SimBaActor( #BroAgent(
             observation_space=env.cfg.observation_space, 
             action_space=env.action_space,
             #action_gain=0.05,
@@ -461,16 +461,16 @@ def set_models(env_cfg, agent_cfg, args_cli, env):
             sigma_idx = sigma_idx,
             num_agents = env_cfg.num_agents, #args_cli.num_agents,
             last_layer_scale=agent_cfg['models']['last_layer_scale']
-        ) 
+        ) )
 
-    models["value"] = SimBaCritic( #BroAgent(
+    models["value"] = torch.compile(SimBaCritic( #BroAgent(
         state_space_size=env.cfg.state_space, 
         device=env.device,
         critic_output_init_mean = agent_cfg['models']['critic_output_init_mean'],
         critic_n = agent_cfg['models']['critic']['n'],
         critic_latent = agent_cfg['models']['critic']['latent_size'],
         num_agents = env_cfg.num_agents #args_cli.num_agents
-    )
+    ))
     print("[INFO]: Models created")
     return models
 
@@ -523,14 +523,35 @@ def set_block_agent(env_cfg, agent_cfg, args_cli, models, memory, env=None):
 
     agent.optimizer = make_agent_optimizer(
         models['policy'],
-        models['value'].critic,
+        models['value'],
         policy_lr = agent_cfg['agent']['learning_rate'],
         critic_lr = agent_cfg['agent']['learning_rate'],
         betas=(0.999, 0.999),
         eps=1e-8,
-        weight_decay=0
+        weight_decay=0,
+        debug=args_cli.debug_mode
     )
-    
+    """
+    print("Named parameters in the optimizer:")
+    for i, param_group in enumerate(agent.optimizer.param_groups):
+        print(f"\nParameter Group {i+1}:")
+        for j, param in enumerate(param_group['params']):
+            # Find the name of the parameter by iterating through model.named_parameters()
+            # This is necessary because the optimizer only stores the parameter tensors, not their names
+            param_name = None
+            for k, model in enumerate(models):
+                for name, model_param in models[model].named_parameters():
+                    if model_param is param:
+                        param_name = name
+                        break
+                    
+                if param_name:
+                    print(f"    Parameter {j+1} (Name: {param_name}, Shape: {param.shape})")
+                else:
+                    print(f"    Parameter {j+1} (Shape: {param.shape})")
+    #print(agent.optimizer.param_groups)
+    assert 1==0
+    """
     print("[INFO]: Block Agents and optimizer generated")
     return agent
     
@@ -572,10 +593,54 @@ def set_agent(env_cfg, agent_cfg, args_cli, models, memory, env=None):
         lr=agent_cfg['agent']['learning_rate'],
         betas=(0.999, 0.999)
     )
-    
+
+    #for name, param in agent.optimizer.named_parameters():
+    #    print(f"Name: {name}, Shape: {param.size()}")
+    """
+    print("Named parameters in the optimizer:")
+    for i, param_group in enumerate(agent.optimizer.param_groups):
+        print(f"\nParameter Group {i+1}:")
+        for j, param in enumerate(param_group['params']):
+            # Find the name of the parameter by iterating through model.named_parameters()
+            # This is necessary because the optimizer only stores the parameter tensors, not their names
+            param_name = None
+            for model in models:
+                for name, model_param in models[model].named_parameters():
+                    if model_param is param:
+                        param_name = name
+                        break
+                    
+                if param_name:
+                    print(f"    Parameter {j+1} (Name: {param_name}, Shape: {param.shape})")
+                else:
+                    print(f"    Parameter {j+1} (Shape: {param.shape})")
+    #print(agent.optimizer.param_groups)
+    assert 1==0
+    """
     print("[INFO]: Agent(s) and optimizer generated")
     return agent
-    
+
+def print_warn(warning):
+    print('\033[1;33;40m [WARN]: {warning} \033[0m')
+
+def attach_grad_debug_hooks(model, role='policy'):
+    """
+    Internal helper: attach gradient debug hooks to parameters.
+    Prints warning if grad is None or zero.
+    """
+    for pname, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        #pname = getattr(p, "_name", "unnamed")
+        def make_hook(pname=pname, role=role):
+            def hook(grad):
+                if grad is None:
+                    print_warn("f{role} {pname} → NO GRAD")
+                elif grad.norm().item() == 0:
+                    print_warn(f"{role} {pname} → ZERO GRAD")
+                return grad
+            return hook
+        p.register_hook(make_hook())
 
 def check_logprob_consistant_loop(trainer, vid_env):
     import copy

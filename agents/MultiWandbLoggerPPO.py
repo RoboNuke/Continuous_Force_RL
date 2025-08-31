@@ -519,15 +519,15 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                 try:
                     models_cfg = {k: v._modules for (k, v) in self.models.items()}
                 except AttributeError:
-                    print("[INFO]: Extracting model config had Attribute Error...")
+                    #print("[INFO]: Extracting model config had Attribute Error...")
                     models_cfg = {k: v[i]._modules for (k, v) in self.models.items()}
-                    print("[INFO]: Attribute Error Handled")
+                    #print("[INFO]: Attribute Error Handled")
                 self.cfg['experiment'] = self.agent_exp_cfgs[i]['experiment']
                 self.cfg['break_force'] = break_forces[ i // 5 ] #TODO NO MAGIC NUMBERS!
                 wandb_config={**self.cfg, **trainer_cfg, **models_cfg, "num_envs":self.num_envs // self.num_agents}
                 # set default values
                 exp_dir = os.path.join(self.cfg['experiment']['directory'], self.cfg['experiment']['experiment_name'])
-                print("logger exp dir:", exp_dir)
+                #print("logger exp dir:", exp_dir)
                 wandb_kwargs = copy.deepcopy(self.agent_exp_cfgs[i].get("experiment", {}).get("wandb_kwargs", {}))
                 wandb_kwargs.setdefault("name", exp_dir)
                 wandb_kwargs.setdefault("config", {})
@@ -616,7 +616,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
 
             # time-limit (truncation) boostrapping
             if self._time_limit_bootstrap:
-                print("Time limit boostrapping")
+                #print("Time limit boostrapping")
                 rewards += self._discount_factor * values * truncated
             
             
@@ -785,8 +785,8 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                 entropies[i,:,:],
                 policy_losses[i,:],
                 value_losses[i,:],
-                None, #policy_state,
-                None, #critic_state,
+                policy_state,
+                critic_state,
                 
                 self.optimizer
             )
@@ -909,6 +909,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         # learning epochs
         for epoch in range(self._learning_epochs):
             mini_batch = 0
+            #print(f"Epoch:{epoch}")
             # mini-batches loop
             for (
                 sampled_states,
@@ -918,7 +919,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                 sampled_returns,
                 sampled_advantages,
             ) in sampled_batches:
-
+                #print(f"Mini Batch:{mini_batch}")
                 sample_size = sampled_states.size()[0]
                 keep_mask = torch.ones((self.num_agents,), dtype=bool, device=self.device)
                 with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
@@ -1015,6 +1016,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                     policy_losses,
                     value_losses
                 )
+                mini_batch += 1
 
 
             self._one_time_metrics(

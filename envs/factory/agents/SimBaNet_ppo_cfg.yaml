@@ -57,7 +57,7 @@ agent:
   value_loss_scale: 1.0 #1.5
   kl_threshold: 0.05
   rewards_shaper_scale: 0.1
-  time_limit_bootstrap: False
+  time_limit_bootstrap: True
 
   
   hybrid_agent:
@@ -87,7 +87,7 @@ agent:
     
     uniform_sampling_rate: 0.0
   agent_is_list: False
-  disable_progressbar: False
+  disable_progressbar: True
   
   # logging and checkpoint
   track_layernorms: False

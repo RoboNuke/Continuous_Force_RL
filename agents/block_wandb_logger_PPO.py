@@ -100,8 +100,6 @@ class BlockWandbLoggerPPO(MultiWandbLoggerPPO):
     ):
         for i, logger in enumerate(self.loggers):
             state = self._get_block_network_state(i)
-            #policy_state = self._get_block_network_state(self.policy.actor_mean.pride_nets[i])
-            #critic_state = self._get_block_network_state(self.value.critic.pride_nets[i])
             
             logger.log_minibatch_update(
                 returns[i,:],
@@ -116,13 +114,12 @@ class BlockWandbLoggerPPO(MultiWandbLoggerPPO):
                 state['critic'],
                 self.optimizer
             )
-
+    """
     def _get_block_network_state(self, agent_idx):
-        """
-        Extract optimizer state for one agent, returning separate dicts for
-        policy and critic. Assumes optimizer param_groups were created with
-        make_agent_optimizer (policy first, critic second per agent).
-        """
+        #Extract optimizer state for one agent, returning separate dicts for
+        #policy and critic. Assumes optimizer param_groups were created with
+        #make_agent_optimizer (policy first, critic second per agent).
+        
         state = {
             "policy": {"gradients":[], "weight_norms":{}, "optimizer_state":{}},
             "critic":{"gradients":[], "weight_norms":{}, "optimizer_state":{}}
@@ -156,5 +153,42 @@ class BlockWandbLoggerPPO(MultiWandbLoggerPPO):
                 state[kind]['weight_norms'][name] = param.norm().item()
 
         return state
+    """
+    def _get_block_network_state(self, agent_idx):
+        """
+        Extract optimizer state for one agent, returning separate dicts for
+        policy and critic. Assumes optimizer param_groups were created with
+        make_agent_optimizer (policy first, critic second per agent).
+        """
+        state = {
+            "policy": {"gradients":[], "weight_norms":{}, "optimizer_state":{}},
+            "critic":{"gradients":[], "weight_norms":{}, "optimizer_state":{}}
+        }
+        for role in ['critic','policy']:
+            for pname, p in self.value.named_parameters():
+                #role = getattr(p, "role")
+                if p.grad is not None:
+                    try:
+                        state[role]['gradients'].append(p.grad.detach()[agent_idx,:,:].norm(2))
+                    except IndexError:
+                        #print(pname, " re-indexed")
+                        state[role]['gradients'].append(p.grad.detach()[agent_idx,:].norm(2))
 
-    
+                    if pname in self.optimizer.state:
+                        # this is the same for every agent since they share the optimizer
+                        op_state = self.optimizer.state[pname]
+                        state[role]['opimizer_state'][pname] = {
+                            "exp_avg": op_state["exp_avg"].norm().item(),
+                            "exp_avg_sq": op_state["exp_avg_sq"].norm().item(),
+                            "step": op_state["step"],
+                        }
+                    
+                    # Optional: clear grad after collection
+                    p.grad = None
+
+                # Weight norms
+                state[role]['weight_norms'][pname] = p.norm().item()
+
+        return state
+                        
+

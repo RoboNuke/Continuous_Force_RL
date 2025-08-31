@@ -14,8 +14,8 @@ from models.feature_net import NatureCNN, layer_init, he_layer_init
 class BlockLinear(nn.Module):
     def __init__(self, num_blocks, in_features, out_features, name="linear"):
         super().__init__()
-        self.weight = nn.Parameter(torch.zeros(num_blocks, out_features, in_features))
-        self.bias = nn.Parameter(torch.zeros(num_blocks, out_features))
+        self.weight = nn.Parameter(torch.zeros(num_blocks, out_features, in_features), requires_grad=True)
+        self.bias = nn.Parameter(torch.zeros(num_blocks, out_features), requires_grad=True)
         # init each block separately
         #print(name, in_features, out_features)
         for i in range(num_blocks):
@@ -44,8 +44,8 @@ class BlockLayerNorm(nn.Module):
         self.affine = affine
         shape = (num_blocks, normalized_shape)
         if affine:
-            self.weight = nn.Parameter(torch.ones(*shape))
-            self.bias = nn.Parameter(torch.zeros(*shape))
+            self.weight = nn.Parameter(torch.ones(*shape), requires_grad=True)
+            self.bias = nn.Parameter(torch.zeros(*shape), requires_grad=True)
             for i in range(num_blocks):
                 self.weight[i]._agent_id = i
                 self.bias[i]._agent_id = i
@@ -152,7 +152,7 @@ class BlockSimBaActor(GaussianMixin, Model):
         self.actor_logstd = nn.ParameterList(
             [
                 nn.Parameter(
-                    torch.ones(1, self.num_actions) * math.log(act_init_std)
+                    torch.ones(1, self.num_actions) * math.log(act_init_std), requires_grad=True
                 )
                 for _ in range(num_agents)
             ]
@@ -339,36 +339,78 @@ def pack_agents_into_block(block_model: nn.Module, agent_models: dict):
 
 import torch.optim as optim
 
-
 def make_agent_optimizer(
-        policy_block,
-        # policy_std,
-        critic_block,
+        block_policy,
+        block_critic,
         policy_lr,
         critic_lr,
         betas=(0.9, 0.999),
         eps=1e-8,
-        weight_decay=0
+        weight_decay=0,
+        debug=False
 ):
     """
     Create a single Adam optimizer with parameter groups for each agent's
     policy and critic, with different base learning rates.
     """
+    param_groups = [
+        {"params": list(block_policy.parameters()), "lr": policy_lr, "role": "policy"},
+        {"params": list(block_critic.parameters()), "lr": critic_lr, "role": "critic"},
+    ]
+    if debug:
+        from learning.launch_utils import attach_grad_debug_hooks
+        attach_grad_debug_hooks(block_policy, "policy")
+        attach_grad_debug_hooks(block_critic, "critic")
+        
+    return torch.optim.Adam(param_groups, betas=betas, eps=eps, weight_decay=weight_decay)
+
+"""
     num_agents = policy_block.num_agents
     assert critic_block.num_agents == num_agents, "Policy and critic must have same number of agents"
-
+    
     param_groups = []
 
     for i in range(num_agents):
         # Policy group
-        policy_params = [p for p in policy_block.parameters() if hasattr(p, "_agent_id") and p._agent_id == i]
+        policy_params = [
+            p for p in policy_block.parameters()
+            if hasattr(p, "_agent_id") and p._agent_id == i
+        ]
+        for name, p in policy_block.named_parameters():
+            print(name) #p._agent_id, p._name)
+
+        for p in policy_params:
+            print(p._name)
         #policy_params.append( policy_std[i] )
-        param_groups.append({"params": policy_params, "lr": policy_lr})
+        param_groups.append({
+            "params": policy_params,
+            "lr": policy_lr,
+            "agent_id": i,
+            "role": "policy"
+        })
+        assert len(policy_params) > 0, f"Policy Param {i} not added to param group"
+        print(f"[INFO]: Created policy param group for agent {policy_params[0]._agent_id}, with lr={policy_lr} and size={len(policy_params)}")
+        if debug:
+            attach_grad_debug_hooks(policy_params, i, "policy")
         
 
         # Critic group
-        critic_params = [p for p in critic_block.parameters() if hasattr(p, "_agent_id") and p._agent_id == i]
-        param_groups.append({"params": critic_params, "lr": critic_lr})
+        critic_params = [
+            p for p in critic_block.parameters()
+            if hasattr(p, "_agent_id") and p._agent_id == i
+        ]
+        param_groups.append({
+            "params": critic_params,
+            "lr": critic_lr,
+            "agent_id": i,
+            "role": "critic"
+        })
+        assert len(critic_params) > 0, f"Critic Param {i} not added to param group"
+        print(f"[INFO]: Created critic param group for agent {critic_params[0]._agent_id}, with lr={critic_lr} and size={len(critic_params)}")
+        if debug:
+            attach_grad_debug_hooks(critic_params, i, "critic")
 
     optimizer = torch.optim.Adam(param_groups, betas=betas, eps=eps, weight_decay=weight_decay)
     return optimizer
+    """
+    

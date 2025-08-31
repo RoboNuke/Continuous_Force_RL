@@ -92,6 +92,7 @@ python -m learning.factory_runner \
     --init_eval \
     --sel_adjs=$sel_adjs \
     --headless #\
+    #--debug_mode
     #--easy_mode  #############################################################################
 
 

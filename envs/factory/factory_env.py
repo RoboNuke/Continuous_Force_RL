@@ -546,7 +546,7 @@ class FactoryEnv(DirectRLEnv):
         self._compute_intermediate_values(dt=self.physics_dt)
         #time_out = self.episode_length_buf >= self.max_episode_length #- 1
         if self.common_step_counter % (self.max_episode_length) == 0:
-            print("Common Step:", self.common_step_counter)
+            #print("Common Step:", self.common_step_counter)
             time_out = torch.ones_like(self.ep_succeeded)
         else:
             time_out = torch.zeros_like(self.ep_succeeded)

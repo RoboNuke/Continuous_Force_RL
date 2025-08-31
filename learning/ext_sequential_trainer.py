@@ -55,7 +55,6 @@ class ExtSequentialTrainer(Trainer):
         
         super().__init__(env=env, agents=agents, agents_scope=agents_scope, cfg=_cfg)
         self.abs_agent = AgentList(agents, self.agents_scope, cfg=cfg)
-        print(self.abs_agent)
         # init agents
         self.abs_agent.init(trainer_cfg=self.cfg)
         self.training_timestep = 0
