@@ -9,7 +9,7 @@ rew_types=( "base" ) # "pos_simp" "delta" "dirs" ) #"base" ) "wrench_norm"
 exp_tag="FPiH_AUG31" #"long_baseline" #"exps_AUG15" #"hybrid_baseline_llr"
 project="AUG31_Exps"
 hybrid_agent=0
-#hybrid_control=0
+hybrid_control=1
 ctrl_torque=0
 #use_ft_sensor=1
 use_ft_sensors=(1 0)
@@ -20,8 +20,8 @@ sel_adjs="init_bias" #,force_add_zout,init_scale_weights,scale_zin" # "init_bias
 
 for use_ft_sensor in "${use_ft_sensors[@]}";
 do
-    for hybrid_control in {0..1};
-    do		   
+    #for hybrid_control in {0..1};
+    #do		   
 	#    for rew_type in "${rew_types[@]}";
 	if [[ "$use_ft_sensor" -eq 1 ]]; then
 	    name="$1_FT(ON)"
@@ -34,10 +34,10 @@ do
     
 	for break_force in "${break_forces[@]}";
 	do
-	    echo $name
-	    echo $break_force
-	    #sbatch -J "${nick_names[$task_idx]}_$1_${break_force}" exp_control/HPC_utils/hpc_batch_hybrid.bash \
-	    bash exp_control/run_hybrid_exp.bash \
+	    #echo $name
+	    #echo $break_force
+	    #bash exp_control/run_hybrid_exp.bash \
+	    sbatch -J "${nick_names[$task_idx]}_$1_${break_force}" exp_control/HPC_utils/hpc_batch_hybrid.bash \
 		   $task_idx \
 		   $obs_idx \
 		   $name \
@@ -50,9 +50,8 @@ do
 		   $use_ft_sensor \
 		   $hybrid_control \
 		   $project
-	exit 0
 	done
-    done
+    #done
 done
 
 #$exp_tag \
