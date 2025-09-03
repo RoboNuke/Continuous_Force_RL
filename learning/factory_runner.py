@@ -143,7 +143,12 @@ if args_cli.seed == -1:
 set_seed(args_cli.seed)
 #set_seed(7378)
 
-agent_cfg_entry_point = f"SimBaNet_ppo_cfg_entry_point"
+
+if args_cli.debug_mode:
+    agent_cfg_entry_point = f"SimBaNet_debug_entry_point"
+else:
+    agent_cfg_entry_point = f"SimBaNet_ppo_cfg_entry_point"
+
 evaluating = False
 print("\n\nImports complete\n\n")
 @hydra_task_config(args_cli.task, agent_cfg_entry_point)
@@ -214,7 +219,13 @@ def main(
         env, 
         ml_framework="torch"
     )      
-    
+    lUtils.set_preprocessors(
+        env_cfg, 
+        agent_cfg, 
+        env, 
+        state=agent_cfg['agent']['state_preprocessor'], 
+        value=agent_cfg['agent']['value_preprocessor']
+    )
     print("[INFO]: Observation Space Size:", env.cfg.observation_space)
     print("[INFO]: State Space Size:", env.cfg.state_space)
     print("[INFO]: Action Space Size:", env.action_space)

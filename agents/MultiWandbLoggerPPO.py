@@ -40,6 +40,8 @@ from skrl.agents.torch import Agent
 from skrl.resources.schedulers.torch import KLAdaptiveLR
 import statistics
 
+from envs.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG
+
 class EpisodeTracker:
     def __init__(
             self,
@@ -251,7 +253,7 @@ class EpisodeTracker:
 
     def log_minibatch_update(
             self,
-            returns,
+            returns, #num_samples x num_envs_per_agent x dim
             values,
             advantages,
             old_log_probs,
@@ -336,18 +338,15 @@ class EpisodeTracker:
                         lr = optimizer.defaults['lr']
                         step = state['step']
 
-                    bias_correction1 = 1 - beta1 ** step
-                    bias_correction2 = 1 - beta2 ** step
+                        bias_correction1 = 1 - beta1 ** step
+                        bias_correction2 = 1 - beta2 ** step
 
-                    # Avoid division by zero if exp_avg_sq is very small
-                    if state['exp_avg_sq'] > 1e-8:
-                        # Simplified effective step direction (ignoring sqrt in denominator for just step size)
-                        effective_step_direction = ((state['exp_avg'] / bias_correction1) / (torch.sqrt(state['exp_avg_sq'] / bias_correction2).clone().detach()) + eps)
-                        net_step_sizes = (lr * effective_step_direction).item()
-                    else:
-                        net_step_sizes = 0.0
-
-                    step_sizes.append(net_step_sizes)
+                        # Avoid division by zero if exp_avg_sq is very small
+                        if state['exp_avg_sq'] > 1e-8:
+                            # Simplified effective step direction (ignoring sqrt in denominator for just step size)
+                            effective_step_direction = ((state['exp_avg'] / bias_correction1) / (torch.sqrt(state['exp_avg_sq'] / bias_correction2).clone().detach()) + eps)
+                            net_step_sizes = (lr * effective_step_direction).item()
+                            step_sizes.append(net_step_sizes)
                 return sum(step_sizes) / (len(step_sizes) + 1e-6)
 
             policy_step_size = adam_step_size(policy_state['optimizer_state'], optimizer) if policy_state is not None else torch.tensor(0.)
@@ -378,7 +377,7 @@ class EpisodeTracker:
     def one_time_learning_metrics(
             self,
             actions,
-            returns= None,
+            sensitivity_data=None,
             global_step=-1
     ):
         with torch.no_grad():
@@ -409,6 +408,10 @@ class EpisodeTracker:
             #self.metrics["return_mean"] = returns.mean().item()
             #self.metrics["return_median"] = returns.median().item()
 
+        if sensitivity_data is not None:
+            for key, val in sensitivity_data.items():
+                self.metrics[key] = val
+        
 class MultiWandbLoggerPPO(WandbLoggerPPO):
     def __init__(
             self,
@@ -423,6 +426,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
             cfg: Optional[dict] = None,
             track_ckpt_paths = False,
             task="Isaac-Factory-PegInsert-Local-v0",
+            task_cfg = None,
             optimizers = None
     ) -> None:
         super().__init__(models, memory, observation_space, action_space, num_envs, device, state_size, cfg, track_ckpt_paths, task)
@@ -447,6 +451,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         self.track_input_histogram = cfg['track_input']
         self.track_action_histogram = cfg['track_action_hists']
         self.loggers = []
+        self.task_cfg = task_cfg
 
     def init(self, trainer_cfg: Optional[Mapping[str, Any]] = None) -> None:
         #DONE
@@ -755,7 +760,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
 
     def _log_minibatch_update(
             self,
-            returns,
+            returns, #num_samples x num_agents x num_envs_per_agent x dim
             values,
             advantages,
             old_log_probs,
@@ -777,14 +782,14 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                 critic_state = self._get_network_state(self.value.critic)
             
             logger.log_minibatch_update(
-                returns[i,:],
-                values[i,:],
-                advantages[i,:],
-                old_log_probs[i,:],
-                new_log_probs[i,:],
-                entropies[i,:,:],
-                policy_losses[i,:],
-                value_losses[i,:],
+                returns[:,i,:],
+                values[:,i,:],
+                advantages[:,i,:],
+                old_log_probs[:,i,:],
+                new_log_probs[:,i,:],
+                entropies[:,i,:,:],
+                policy_losses[:,i,:],
+                value_losses[:,i,:],
                 policy_state,
                 critic_state,
                 
@@ -813,15 +818,131 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         return( {"gradients":gradients, "weight_norms":weight_norms, "optimizer_state":optimizer_state})
             
     def _one_time_metrics(self,
+        states,
         actions,
-        returns
+        #log_probs,
+        #returns
     ):
+        
+        # log sensitivity to grouped parts of observation space
+        #s = self._state_preprocessor(states).clone().detach().requires_grad_(True)
+        s = states.clone().detach().requires_grad_(True).view(self._rollouts, self.num_envs, -1)
+        sample_size=s.size()[0]
+        
+        acts = actions.view(self._rollouts, self.num_envs, -1)
+        
+        logp = torch.stack(
+            [
+                self.policy.act( 
+                    {
+                        "states": s[i,:,:], 
+                        "taken_actions":acts[i,:,:]
+                    }, role="policy"
+                )[1].squeeze(-1) for i in range(self._rollouts)
+            ]
+        )
+        
+        g = torch.autograd.grad(
+            logp.mean(), s, retain_graph=True
+        )[0].mean(0).view(self.num_agents, self.envs_per_agent, -1) 
+        
+        fisher_like = (g**2).mean(1)
+        saliency = g.abs().mean(1)
+        
+
+        # ---- Masking utility ----
+        def mask_features(x, group_indices, baseline=None):
+            
+            #Replace features at group_indices with baseline.
+            #baseline: float, np.array, or None (defaults to 0)
+            
+            x_masked = x.clone()
+            if baseline is None:
+                baseline = 0.0
+            x_masked[:, :, group_indices] = baseline
+            return x_masked
+        
+        # --- Critic saliency ---
+        self.value.train(False)
+        v = torch.stack(
+            [
+                self.value.act( 
+                    {"states": s[i,:,:]}, role="value" 
+                )[0].squeeze(-1) for i in range(self._rollouts)
+            ]
+        ).mean(0).view(self.num_agents, self.envs_per_agent) # [agents, num_envs_per_agent]
+        #self.value.train(True)
+        h = torch.autograd.grad(v.mean(), s)[0].mean(0).view(self.num_agents, self.envs_per_agent, -1)
+        critic_saliency = h.abs().mean(1) # [agents, dim]
+
+        start_idx = 0
+        agent_metrics = [ {} for i in range(self.num_agents)]
+        if self.task_cfg is not None:
+            for group in self.task_cfg.obs_order:
+                idxs = [start_idx + i for i in range(OBS_DIM_CFG[group])]
+                for i in range(self.num_agents):
+                    agent_metrics[i][f'{group} Sensitivity / Policy Saliency'] = saliency[i, idxs].mean().item()
+                    agent_metrics[i][f'{group} Sensitivity / Policy Fisher'] = fisher_like[i, idxs].mean().item()
+                
+
+                # Distribution shift effect
+                s_masked = mask_features(s, idxs)
+                masked_logp = torch.stack(
+                    [
+                        self.policy.act(
+                            {
+                                "states": s_masked[j,:,:], 
+                                "taken_actions":acts[j,:,:]
+                            }, 
+                            role="policy"
+                        )[1] for j in range(self._rollouts)
+                    ]
+                )#.mean(0).view(self.num_agents, self.envs_per_agent) 
+                #print("\tOG:   ",torch.min(logp).item(), torch.mean(logp).item(), torch.max(logp).item())
+                #print("\tMask: ",torch.min(masked_logp).item(), torch.mean(masked_logp).item(), torch.max(masked_logp).item())
+                ratio = (masked_logp - logp).mean(0).view(self.num_agents, self.envs_per_agent)
+                #print("\tRatio:",torch.min(ratio).item(), torch.mean(ratio).item(), torch.max(ratio).item())
+                kl = ((torch.exp(ratio) - 1) - ratio)
+                #print("\tKL:   ",torch.min(kl).item(), torch.mean(kl).item(), torch.max(kl).item())
+                for i in range(self.num_agents):
+                    #print(kl[i,:].size())
+                    agent_metrics[i][f'{group} Sensitivity / Policy KL'] = kl[i,:].mean().item()
+                start_idx += OBS_DIM_CFG[group]
+
+            for group in self.task_cfg.state_order:
+                idxs = [start_idx + i for i in range(STATE_DIM_CFG[group])]
+
+                s_masked = mask_features(s, idxs)
+                v_masked = torch.stack(
+                    [
+                        self.value.act(
+                            {"states":s_masked[j,:,:], "taken_actions":acts[j,:,:]},
+                            role="value"
+                        )[0].squeeze(-1) for j in range(self._rollouts)
+                    ]
+                ).mean(0).view(self.num_agents, self.envs_per_agent)
+                tot_v_delta =  (v - v_masked).abs()
+                for i in range(self.num_agents):
+                    v_delta = tot_v_delta[i,:].mean().item()
+                
+                    agent_metrics[i][f'{group} Sensitivity / Critic Saliency'] = critic_saliency[i, idxs].mean().item()
+                    agent_metrics[i][f'{group} Sensitivity / Critic Value Change'] = v_delta
+                
+                start_idx += STATE_DIM_CFG[group]
+        
+
+
         for i, logger in enumerate(self.loggers):
             logger.one_time_learning_metrics(
-                actions[i,:,:],
-                returns[i,:,:],
-                self.global_step // self.num_agents
+                #states=states[i,:,:],
+                actions=actions[i,:,:],
+                sensitivity_data=agent_metrics[i],
+                #returns=returns[i,:,:],
+                #log_probs=log_probs[i,:,:],
+                global_step=self.global_step // self.num_agents
             )
+                
+
                 
     def _update(self, timestep: int, timesteps: int):
         #super()._update(timestep, timesteps) def _update(self, timestep: int, timesteps: int) -> None:
@@ -905,6 +1026,14 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
 
         # sample mini-batches from memory
         sampled_batches = self.memory.sample_all(names=self._tensors_names, mini_batches=self._mini_batches)
+        sample_size = self._rollouts // self._mini_batches
+        
+        self._one_time_metrics(
+            states = self._state_preprocessor(self.memory.get_tensor_by_name("states")).view(self._rollouts, self.num_agents, self.envs_per_agent, -1),
+            actions=self.memory.get_tensor_by_name("actions").view(self._rollouts, self.num_agents, self.envs_per_agent, -1),
+            #returns=self.memory.get_tensor_by_name("returns").view(self.num_agents, self.envs_per_agent, -1),
+            #log_probs=self.memory.get_tensor_by_name("log_prob").view(self.num_agents, self.envs_per_agent,-1)
+        )
         
         # learning epochs
         for epoch in range(self._learning_epochs):
@@ -920,7 +1049,6 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                 sampled_advantages,
             ) in sampled_batches:
                 #print(f"Mini Batch:{mini_batch}")
-                sample_size = sampled_states.size()[0]
                 keep_mask = torch.ones((self.num_agents,), dtype=bool, device=self.device)
                 with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
                     
@@ -928,34 +1056,31 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                     _, next_log_prob, _ = self.policy.act(
                         {"states": sampled_states, "taken_actions": sampled_actions}, role="policy"
                     )
-
-                    sampled_states = sampled_states.view(self.num_agents, self.envs_per_agent, -1)
-                    next_log_prob = next_log_prob.view(self.num_agents, self.envs_per_agent)
-                    sampled_log_prob = sampled_log_prob.view(self.num_agents, self.envs_per_agent)
+                    sampled_states = sampled_states.view(sample_size, self.num_agents, self.envs_per_agent, -1)
+                    next_log_prob = next_log_prob.view(sample_size, self.num_agents, self.envs_per_agent)
+                    sampled_log_prob = sampled_log_prob.view(sample_size, self.num_agents, self.envs_per_agent)
                     # compute approximate KL divergence
                     with torch.no_grad():
                         ratio = next_log_prob - sampled_log_prob
                         agent_kls = ((torch.exp(ratio) - 1) - ratio)
 
-                        agent_kls = torch.mean(agent_kls, 1)
-
+                        agent_kls = torch.mean(agent_kls, (0,2)) # assumes sample_size x num_agents x num_envs_per_agent x 1
                         if self._kl_threshold:
                             keep_mask = ~torch.logical_or( ~keep_mask, agent_kls > self._kl_threshold)
 
                     entropys = self.policy.get_entropy(role="policy")
-                    #print(entropys.size())
-                    entropys = entropys.view(self.num_agents, self.envs_per_agent,-1)
-                    entropys[~keep_mask,:] = 0.0
+                    entropys = entropys.view(sample_size, self.num_agents, self.envs_per_agent,-1)
+                    entropys[:,~keep_mask,:] = 0.0
 
                     # compute entropy loss
                     if self._entropy_loss_scale:
-                        entropy_loss = -self._entropy_loss_scale * entropys[keep_mask,:].mean()
+                        entropy_loss = -self._entropy_loss_scale * entropys[:,keep_mask,:].mean()
                     else:
                         entropy_loss = 0
                     
 
                     # compute policy loss
-                    sampled_advantages = sampled_advantages.view(self.num_agents, self.envs_per_agent)
+                    sampled_advantages = sampled_advantages.view(sample_size, self.num_agents, self.envs_per_agent)
                     ratio = torch.exp(next_log_prob - sampled_log_prob)
                     surrogate = sampled_advantages * ratio
                     surrogate_clipped = sampled_advantages * torch.clip(
@@ -963,23 +1088,23 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                     )
 
                     policy_losses = -torch.min(surrogate, surrogate_clipped)
-                    policy_losses[~keep_mask,:]=0.0
-                    policy_loss = policy_losses[keep_mask,:].mean()
+                    policy_losses[:,~keep_mask,:]=0.0
+                    policy_loss = policy_losses[:,keep_mask,:].mean()
 
                     # compute value loss
                     predicted_values, _, _ = self.value.act({"states": sampled_states.view(self.num_envs,-1)}, role="value")
-                    predicted_values = predicted_values.view( self.num_agents, self.envs_per_agent)
+                    predicted_values = predicted_values.view( sample_size, self.num_agents, self.envs_per_agent)
                     
                     if self._clip_predicted_values:
                         predicted_values = sampled_values + torch.clip(
                             predicted_values - sampled_values, min=-self._value_clip, max=self._value_clip
                         )
 
-                    sampled_returns = sampled_returns.view(self.num_agents, self.envs_per_agent)
+                    sampled_returns = sampled_returns.view(sample_size, self.num_agents, self.envs_per_agent)
                         
                     value_losses = self._value_loss_scale * F.mse_loss(sampled_returns, predicted_values, reduction='none')
-                    value_losses[~keep_mask,:] = 0.0
-                    value_loss = value_losses[keep_mask,:].mean()
+                    value_losses[:,~keep_mask,:] = 0.0
+                    value_loss = value_losses[:,keep_mask,:].mean()
 
                 # optimization step
                 # zero out losses from cancelled
@@ -1017,12 +1142,6 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                     value_losses
                 )
                 mini_batch += 1
-
-
-            self._one_time_metrics(
-                self.memory.get_tensor_by_name("actions").view(self.num_agents, self.envs_per_agent, -1),
-                self.memory.get_tensor_by_name("returns").view(self.num_agents, self.envs_per_agent, -1)
-            )
                 
             # TODO: ########################################################################
             # update learning rate
@@ -1037,6 +1156,8 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                 else:
                     self.scheduler.step()
             """
+
+        
 
 
 

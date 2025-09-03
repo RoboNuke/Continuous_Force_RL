@@ -357,10 +357,10 @@ def make_agent_optimizer(
         {"params": list(block_policy.parameters()), "lr": policy_lr, "role": "policy"},
         {"params": list(block_critic.parameters()), "lr": critic_lr, "role": "critic"},
     ]
-    if debug:
-        from learning.launch_utils import attach_grad_debug_hooks
-        attach_grad_debug_hooks(block_policy, "policy")
-        attach_grad_debug_hooks(block_critic, "critic")
+    #if debug:
+    #    from learning.launch_utils import attach_grad_debug_hooks
+    #    attach_grad_debug_hooks(block_policy, "policy")
+    #    attach_grad_debug_hooks(block_critic, "critic")
         
     return torch.optim.Adam(param_groups, betas=betas, eps=eps, weight_decay=weight_decay)
 

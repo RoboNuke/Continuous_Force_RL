@@ -53,7 +53,6 @@ STATE_DIM_CFG = {
     "force_torque": 6
 }
 
-
 @configclass
 class ObsRandCfg:
     fixed_asset_pos = [0.001, 0.001, 0.001]
@@ -103,8 +102,9 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     # num_*: will be overwritten to correspond to obs_order, state_order.
     observation_space = 21
     state_space = 72
-    #force_tanh_scale= 0.03 # 0.0011
-    force_tanh_scale=0.0011
+    tanh_force_torque= False
+    force_tanh_scale= 0.03 # 0.0011
+    #force_tanh_scale=0.0011
 
     # noise model?
     use_obs_noise=False
@@ -132,7 +132,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         "fingertip_quat", #4
         "ee_linvel", #6
         "ee_angvel" #6
-    ]
+    ] #19
 
     state_order: list = [
         "fingertip_pos",
@@ -145,7 +145,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         "held_quat",
         "fixed_pos",
         "fixed_quat",
-    ]
+    ] #43
 
     task_name: str = "peg_insert"  # peg_insert, gear_mesh, nut_thread
     task: FactoryTask = FactoryTask()

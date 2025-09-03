@@ -58,10 +58,25 @@ class BlockWandbLoggerPPO(MultiWandbLoggerPPO):
             state_size=-1,
             cfg: Optional[dict] = None,
             track_ckpt_paths = False,
+            task_cfg=None,
             task="Isaac-Factory-PegInsert-Local-v0",
             optimizer = None
     ) -> None:
-        super().__init__(models, memory, observation_space, action_space, num_agents, num_envs, device, state_size, cfg, track_ckpt_paths, task, optimizer)
+        super().__init__(
+            models=models, 
+            memory=memory, 
+            observation_space=observation_space, 
+            action_space=action_space, 
+            num_agents=num_agents, 
+            num_envs=num_envs, 
+            device=device, 
+            state_size=state_size, 
+            cfg=cfg, 
+            track_ckpt_paths=track_ckpt_paths, 
+            task=task, 
+            optimizers=optimizer, 
+            task_cfg=task_cfg
+        )
 
 
     def write_checkpoint(self, timestep: int, timesteps: int):
@@ -87,7 +102,7 @@ class BlockWandbLoggerPPO(MultiWandbLoggerPPO):
 
     def _log_minibatch_update(
             self,
-            returns,
+            returns, # num_samples x num_agents x num_envs_per_agent x dim
             values,
             advantages,
             old_log_probs,
@@ -102,14 +117,14 @@ class BlockWandbLoggerPPO(MultiWandbLoggerPPO):
             state = self._get_block_network_state(i)
             
             logger.log_minibatch_update(
-                returns[i,:],
-                values[i,:],
-                advantages[i,:],
-                old_log_probs[i,:],
-                new_log_probs[i,:],
-                entropies[i,:],
-                policy_losses[i,:],
-                value_losses[i,:],
+                returns[:,i,:],
+                values[:,i,:],
+                advantages[:,i,:],
+                old_log_probs[:,i,:],
+                new_log_probs[:,i,:],
+                entropies[:,i,:],
+                policy_losses[:,i,:],
+                value_losses[:,i,:],
                 state['policy'],
                 state['critic'],
                 self.optimizer
@@ -165,7 +180,8 @@ class BlockWandbLoggerPPO(MultiWandbLoggerPPO):
             "critic":{"gradients":[], "weight_norms":{}, "optimizer_state":{}}
         }
         for role in ['critic','policy']:
-            for pname, p in self.value.named_parameters():
+            net = self.value if role=='critic' else self.policy
+            for pname, p in net.named_parameters():
                 #role = getattr(p, "role")
                 if p.grad is not None:
                     try:

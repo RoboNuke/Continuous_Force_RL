@@ -43,12 +43,26 @@ from models.block_simba import BlockSimBaCritic, BlockSimBaActor
 from agents.block_wandb_logger_PPO import BlockWandbLoggerPPO
 
 from models.block_simba import export_policies, make_agent_optimizer
+
+
+def set_preprocessors(env_cfg, agent_cfg, env, state, value):
+    # import the preprocessor class 
+    from skrl.resources.preprocessors.torch import RunningStandardScaler
+    if state:
+        agent_cfg['agent']["state_preprocessor"] = RunningStandardScaler
+        agent_cfg['agent']["state_preprocessor_kwargs"] = {"size": env.cfg.observation_space + env.cfg.state_space, "device": env_cfg.sim.device}
+    
+    if value:
+        agent_cfg['agent']["value_preprocessor"] = RunningStandardScaler
+        agent_cfg['agent']["value_preprocessor_kwargs"] = {"size": 1, "device": env_cfg.sim.device}
+
+
 def set_easy_mode(env_cfg, agent_cfg, easy_mode):
     agent_cfg['agent']['easy_mode'] = easy_mode
     if not easy_mode:
         return
     
-    env_cfg.episode_length_s = 10
+    env_cfg.episode_length_s = 10.0
     # robot hand start relative to fixed asset
     env_cfg.task.duration_s = env_cfg.episode_length_s
     env_cfg.task.hand_init_pos = [0.0, 0.0, 0.035]  # Relative to fixed asset tip.
@@ -497,7 +511,7 @@ def set_block_models(env_cfg, agent_cfg, args_cli, env):
     models["value"] = BlockSimBaCritic( #BroAgent(
         state_space_size=env.cfg.state_space, 
         device=env.device,
-        critic_output_init_mean = agent_cfg['models']['critic_output_init_mean'],
+        critic_output_init_mean = agent_cfg['models']['critic_output_init_mean'] * agent_cfg['agent']['rewards_shaper_scale'],
         critic_n = agent_cfg['models']['critic']['n'],
         critic_latent = agent_cfg['models']['critic']['latent_size'],
         num_agents = env_cfg.num_agents #args_cli.num_agents
@@ -518,6 +532,7 @@ def set_block_agent(env_cfg, agent_cfg, args_cli, models, memory, env=None):
         state_size=env.cfg.observation_space+env.cfg.state_space,
         device=env.device,
         task = args_cli.task,
+        task_cfg = env_cfg,
         num_agents= env_cfg.num_agents #args_cli.num_agents
     ) 
 
@@ -621,7 +636,7 @@ def set_agent(env_cfg, agent_cfg, args_cli, models, memory, env=None):
     return agent
 
 def print_warn(warning):
-    print('\033[1;33;40m [WARN]: {warning} \033[0m')
+    print(f'\033[1;33;40m [WARN]: {warning} \033[0m')
 
 def attach_grad_debug_hooks(model, role='policy'):
     """

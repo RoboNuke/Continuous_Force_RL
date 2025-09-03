@@ -74,7 +74,7 @@ python -m learning.factory_runner \
     --use_ft_sensor=$use_ft_sensor \
     --exp_tag=$exp_tag \
     --wandb_group_prefix="$3_$4_${nick_names[$task_idx]}_OBS-${obs_modes[$obs_idx]}_Hyb-Ctrl(${11})_Hyb-Agent($6)" \
-    --max_steps=75000000 \
+    --max_steps=1000000 \
     --num_envs=$(($num_envs_per_agent * $num_agents)) \
     --num_agents=$num_agents \
     --exp_name="$3_$4_${nick_names[$task_idx]}_OBS-${obs_modes[$obs_idx]}_Hyb-Ctrl(${11})_Hyb-Agent($6)_$current_datetime" \
@@ -85,14 +85,15 @@ python -m learning.factory_runner \
     --break_force=$break_force \
     --hybrid_control=$hybrid_control \
     --hybrid_agent=$hybrid_agent \
-    --log_ckpt_data=1 \
+    --log_ckpt_data=0 \
     --control_torques=$control_torques \
     --hybrid_selection_reward=$hybrid_selection_reward \
     --ckpt_tracker_path=$ckpt_path \
     --init_eval \
     --sel_adjs=$sel_adjs \
     --headless #\
-    #--debug_mode
+    #--debug_mode \
+    #--seed=42 \
     #--easy_mode  #############################################################################
 
 

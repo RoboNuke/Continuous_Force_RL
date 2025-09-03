@@ -42,6 +42,10 @@ agent:
   #####################
 
 
+  # preprocessor
+  state_preprocessor: True
+  value_preprocessor: True
+
   # below are not args
   random_timesteps: 0
   learning_starts: 0
