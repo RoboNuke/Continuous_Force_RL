@@ -41,12 +41,11 @@ do
 			echo "Failed to get name correct"
 		fi
 
-
 		for break_force in "${break_forces[@]}";
 		do
-			echo "  ${nick_names[$task_idx]}_$name_${break_force}"
+			echo "  ${nick_names[$task_idx]}_${name}_${break_force}"
 			
-			#bash exp_control/run_hybrid_exp.bash \
+			bash exp_control/run_hybrid_exp.bash \
 			sbatch -J "${nick_names[$task_idx]}_$name_${break_force}" exp_control/HPC_utils/hpc_batch_hybrid.bash \
 				$task_idx \
 				$obs_idx \

@@ -840,7 +840,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                     }, role="policy"
                 )[1].squeeze(-1) for i in range(self._rollouts)
             ]
-        )
+        ).mean(0)
         
         g = torch.autograd.grad(
             logp.mean(), s, retain_graph=True
@@ -897,15 +897,14 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                             role="policy"
                         )[1] for j in range(self._rollouts)
                     ]
-                )#.mean(0).view(self.num_agents, self.envs_per_agent) 
+                ).mean(0).view(self.num_agents, self.envs_per_agent) 
                 #print("\tOG:   ",torch.min(logp).item(), torch.mean(logp).item(), torch.max(logp).item())
                 #print("\tMask: ",torch.min(masked_logp).item(), torch.mean(masked_logp).item(), torch.max(masked_logp).item())
-                ratio = (masked_logp - logp).mean(0).view(self.num_agents, self.envs_per_agent)
+                ratio = masked_logp - logp.view(self.num_agents, self.envs_per_agent)
                 #print("\tRatio:",torch.min(ratio).item(), torch.mean(ratio).item(), torch.max(ratio).item())
                 kl = ((torch.exp(ratio) - 1) - ratio)
                 #print("\tKL:   ",torch.min(kl).item(), torch.mean(kl).item(), torch.max(kl).item())
                 for i in range(self.num_agents):
-                    #print(kl[i,:].size())
                     agent_metrics[i][f'{group} Sensitivity / Policy KL'] = kl[i,:].mean().item()
                 start_idx += OBS_DIM_CFG[group]
 
@@ -1027,7 +1026,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         # sample mini-batches from memory
         sampled_batches = self.memory.sample_all(names=self._tensors_names, mini_batches=self._mini_batches)
         sample_size = self._rollouts // self._mini_batches
-        
+
         self._one_time_metrics(
             states = self._state_preprocessor(self.memory.get_tensor_by_name("states")).view(self._rollouts, self.num_agents, self.envs_per_agent, -1),
             actions=self.memory.get_tensor_by_name("actions").view(self._rollouts, self.num_agents, self.envs_per_agent, -1),
@@ -1156,8 +1155,6 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                 else:
                     self.scheduler.step()
             """
-
-        
 
 
 
