@@ -831,17 +831,16 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         
         acts = actions.view(self._rollouts, self.num_envs, -1)
         
-        logp = torch.stack(
-            [
-                self.policy.act( 
-                    {
-                        "states": s[i,:,:], 
-                        "taken_actions":acts[i,:,:]
-                    }, role="policy"
-                )[1].squeeze(-1) for i in range(self._rollouts)
-            ]
-        ).mean(0)
-        
+        logp = torch.zeros((self.num_envs, ), device =self.device)
+        for i in range(self._rollouts):
+            logp += self.policy.act( 
+                {
+                    "states": s[i,:,:], 
+                    "taken_actions":acts[i,:,:]
+                }, role="policy"
+            )[1].squeeze(-1) 
+        logp /= self._rollouts
+
         g = torch.autograd.grad(
             logp.mean(), s, retain_graph=True
         )[0].mean(0).view(self.num_agents, self.envs_per_agent, -1) 
@@ -877,6 +876,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
 
         start_idx = 0
         agent_metrics = [ {} for i in range(self.num_agents)]
+        s_masked = torch.zeros_like(s)
         if self.task_cfg is not None:
             for group in self.task_cfg.obs_order:
                 idxs = [start_idx + i for i in range(OBS_DIM_CFG[group])]
@@ -887,17 +887,19 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
 
                 # Distribution shift effect
                 s_masked = mask_features(s, idxs)
-                masked_logp = torch.stack(
-                    [
-                        self.policy.act(
-                            {
+                masked_logp = torch.zeros_like(logp)
+                for j in range(self._rollouts):
+                        masked_logp += self.policy.act(
+                            {   
                                 "states": s_masked[j,:,:], 
                                 "taken_actions":acts[j,:,:]
                             }, 
                             role="policy"
-                        )[1] for j in range(self._rollouts)
-                    ]
-                ).mean(0).view(self.num_agents, self.envs_per_agent) 
+                        )[1]
+                
+                masked_logp /= self._rollouts
+                masked_logp = masked_logp.view(self.num_agents, self.envs_per_agent) 
+
                 #print("\tOG:   ",torch.min(logp).item(), torch.mean(logp).item(), torch.max(logp).item())
                 #print("\tMask: ",torch.min(masked_logp).item(), torch.mean(masked_logp).item(), torch.max(masked_logp).item())
                 ratio = masked_logp - logp.view(self.num_agents, self.envs_per_agent)
@@ -908,18 +910,17 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                     agent_metrics[i][f'{group} Sensitivity / Policy KL'] = kl[i,:].mean().item()
                 start_idx += OBS_DIM_CFG[group]
 
+            v_masked = torch.zeros((self.num_agents, self.envs_per_agent), device=self.device)
             for group in self.task_cfg.state_order:
                 idxs = [start_idx + i for i in range(STATE_DIM_CFG[group])]
 
                 s_masked = mask_features(s, idxs)
-                v_masked = torch.stack(
-                    [
-                        self.value.act(
+                v_masked *= 0.0
+                for j in range(self._rollouts):
+                    v_masked = self.value.act(
                             {"states":s_masked[j,:,:], "taken_actions":acts[j,:,:]},
                             role="value"
-                        )[0].squeeze(-1) for j in range(self._rollouts)
-                    ]
-                ).mean(0).view(self.num_agents, self.envs_per_agent)
+                    )[0].squeeze(-1).view(self.num_agents, self.envs_per_agent)
                 tot_v_delta =  (v - v_masked).abs()
                 for i in range(self.num_agents):
                     v_delta = tot_v_delta[i,:].mean().item()
