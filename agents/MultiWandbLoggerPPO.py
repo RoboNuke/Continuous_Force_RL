@@ -831,6 +831,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         
         acts = actions.view(self._rollouts, self.num_envs, -1)
         
+        """
         logp = torch.zeros((self.num_envs, ), device =self.device)
         for i in range(self._rollouts):
             logp += self.policy.act( 
@@ -889,13 +890,13 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                 s_masked = mask_features(s, idxs)
                 masked_logp = torch.zeros_like(logp)
                 for j in range(self._rollouts):
-                        masked_logp += self.policy.act(
-                            {   
-                                "states": s_masked[j,:,:], 
-                                "taken_actions":acts[j,:,:]
-                            }, 
-                            role="policy"
-                        )[1]
+                    masked_logp += self.policy.act(
+                        {   
+                            "states": s_masked[j,:,:], 
+                            "taken_actions":acts[j,:,:]
+                        }, 
+                        role="policy"
+                    )[1]
                 
                 masked_logp /= self._rollouts
                 masked_logp = masked_logp.view(self.num_agents, self.envs_per_agent) 
@@ -929,14 +930,14 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                     agent_metrics[i][f'{group} Sensitivity / Critic Value Change'] = v_delta
                 
                 start_idx += STATE_DIM_CFG[group]
-        
+        """
 
 
         for i, logger in enumerate(self.loggers):
             logger.one_time_learning_metrics(
                 #states=states[i,:,:],
                 actions=actions[i,:,:],
-                sensitivity_data=agent_metrics[i],
+                #sensitivity_data=agent_metrics[i],
                 #returns=returns[i,:,:],
                 #log_probs=log_probs[i,:,:],
                 global_step=self.global_step // self.num_agents
