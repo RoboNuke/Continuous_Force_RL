@@ -74,7 +74,7 @@ python -m learning.factory_runner \
     --use_ft_sensor=$use_ft_sensor \
     --exp_tag=$exp_tag \
     --wandb_group_prefix="$3_$4_${nick_names[$task_idx]}_OBS-${obs_modes[$obs_idx]}_Hyb-Ctrl(${11})_Hyb-Agent($6)" \
-    --max_steps=1000000 \
+    --max_steps=75000000 \
     --num_envs=$(($num_envs_per_agent * $num_agents)) \
     --num_agents=$num_agents \
     --exp_name="$3_$4_${nick_names[$task_idx]}_OBS-${obs_modes[$obs_idx]}_Hyb-Ctrl(${11})_Hyb-Agent($6)_$current_datetime" \

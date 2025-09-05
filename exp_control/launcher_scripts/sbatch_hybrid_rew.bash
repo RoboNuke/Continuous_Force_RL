@@ -6,8 +6,8 @@ task_idx=0
 obs_idx=0
 
 rew_types=( "base" ) # "pos_simp" "delta" "dirs" ) #"base" ) "wrench_norm"
-exp_tag="FPiH_SEP03" #"long_baseline" #"exps_AUG15" #"hybrid_baseline_llr"
-project="SEP03_Exps" #"AUG31_Exps"
+exp_tag="FPiH_SEP04" #"long_baseline" #"exps_AUG15" #"hybrid_baseline_llr"
+project="SEP04_Exps" #"AUG31_Exps"
 hybrid_agent=0
 #hybrid_control=0
 ctrl_torque=0
