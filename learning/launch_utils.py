@@ -6,7 +6,7 @@ from models.bro_model import BroAgent, BroActor, BroCritic
 from models.SimBa import SimBaAgent, SimBaActor, SimBaCritic
 
 from models.SimBa_parallel_control import ParallelControlSimBaActor
-from models.SimBa_hybrid_control import HybridControlSimBaActor
+from models.SimBa_hybrid_control import HybridControlSimBaActor, HybridControlBlockSimBaActor
 
 try:
     from isaaclab.utils.dict import print_dict
@@ -420,20 +420,9 @@ def set_models(env_cfg, agent_cfg, args_cli, env):
             force_scale= env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]
         )
     elif args_cli.hybrid_agent==1:
-            
-        if agent_cfg['agent']['hybrid_agent']['unit_std_init']:
-            import math
-            agent_cfg['agent']['hybrid_agent']['pos_init_std'] = (1 / (env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0])) ** 2
-            agent_cfg['agent']['hybrid_agent']['rot_init_std'] = (1 / (env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]))**2
-            agent_cfg['agent']['hybrid_agent']['force_init_std'] = (1 / (env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]))**2
+        
+        set_hybrid_agent_init_stds(env_cfg, agent_cfg, args_cli)
 
-        agent_cfg['agent']['hybrid_agent']['pos_scale'] = env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0]     # 2    => 4
-        agent_cfg['agent']['hybrid_agent']['rot_scale'] = env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]     # 2.91 => 8.4681
-        agent_cfg['agent']['hybrid_agent']['force_scale'] = env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0] # 1    => 1
-        agent_cfg['agent']['hybrid_agent']['torque_scale'] = env_cfg.ctrl.default_task_force_gains[-1] * env_cfg.ctrl.torque_action_bounds[0]
-        agent_cfg['agent']['hybrid_agent']['ctrl_torque'] = args_cli.control_torques
-
-            # define the actual model
         models['policy'] = HybridControlSimBaActor(
             observation_space=env.cfg.observation_space, 
             action_space=env.action_space,
@@ -441,7 +430,7 @@ def set_models(env_cfg, agent_cfg, args_cli, env):
             hybrid_agent_parameters=agent_cfg['agent']['hybrid_agent'],
             actor_n = agent_cfg['models']['actor']['n'],
             actor_latent = agent_cfg['models']['actor']['latent_size'],
-            num_agents = env_cfgs.num_agents, #args_cli.num_agents
+            num_agents = env_cfg.num_agents, #args_cli.num_agents
         )
     elif args_cli.impedance_agent==1:
         ############ TODO: Make Multi Version ##########################
@@ -489,24 +478,52 @@ def set_models(env_cfg, agent_cfg, args_cli, env):
     return models
 
 
+def set_hybrid_agent_init_stds(env_cfg, agent_cfg, args_cli):
+            
+    if agent_cfg['agent']['hybrid_agent']['unit_std_init']:
+        import math
+        agent_cfg['agent']['hybrid_agent']['pos_init_std'] = (1 / (env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0])) ** 2
+        agent_cfg['agent']['hybrid_agent']['rot_init_std'] = (1 / (env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]))**2
+        agent_cfg['agent']['hybrid_agent']['force_init_std'] = (1 / (env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]))**2
+
+    agent_cfg['agent']['hybrid_agent']['pos_scale'] = env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0]     # 2    => 4
+    agent_cfg['agent']['hybrid_agent']['rot_scale'] = env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]     # 2.91 => 8.4681
+    agent_cfg['agent']['hybrid_agent']['force_scale'] = env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0] # 1    => 1
+    agent_cfg['agent']['hybrid_agent']['torque_scale'] = env_cfg.ctrl.default_task_force_gains[-1] * env_cfg.ctrl.torque_action_bounds[0]
+    agent_cfg['agent']['hybrid_agent']['ctrl_torque'] = args_cli.control_torques
+
+
 def set_block_models(env_cfg, agent_cfg, args_cli, env):
     models = {}
-    if args_cli.hybrid_control or args_cli.parallel_control:
-        sigma_idx = 6 if args_cli.control_torques else 3
+
+    if args_cli.hybrid_agent==1:
+        set_hybrid_agent_init_stds(env_cfg, agent_cfg, args_cli)
+        models['policy'] = HybridControlBlockSimBaActor(
+            observation_space=env.cfg.observation_space, 
+            action_space=env.action_space,
+            device=env.device,
+            hybrid_agent_parameters=agent_cfg['agent']['hybrid_agent'],
+            actor_n = agent_cfg['models']['actor']['n'],
+            actor_latent = agent_cfg['models']['actor']['latent_size'],
+            num_agents = env_cfg.num_agents, #args_cli.num_agents
+        )
     else:
-        sigma_idx = 0
-    models['policy'] = BlockSimBaActor( #BroAgent(
-        observation_space=env.cfg.observation_space, 
-        action_space=env.action_space,
-        #action_gain=0.05,
-        device=env.device,
-        act_init_std = agent_cfg['models']['act_init_std'],
-        actor_n = agent_cfg['models']['actor']['n'],
-        actor_latent = agent_cfg['models']['actor']['latent_size'],
-        sigma_idx = sigma_idx,
-        num_agents = env_cfg.num_agents, #args_cli.num_agents,
-        last_layer_scale=agent_cfg['models']['last_layer_scale']
-    )
+        if args_cli.hybrid_control or args_cli.parallel_control:
+            sigma_idx = 6 if args_cli.control_torques else 3
+        else:
+            sigma_idx = 0
+        models['policy'] = BlockSimBaActor( #BroAgent(
+            observation_space=env.cfg.observation_space, 
+            action_space=env.action_space,
+            #action_gain=0.05,
+            device=env.device,
+            act_init_std = agent_cfg['models']['act_init_std'],
+            actor_n = agent_cfg['models']['actor']['n'],
+            actor_latent = agent_cfg['models']['actor']['latent_size'],
+            sigma_idx = sigma_idx,
+            num_agents = env_cfg.num_agents, #args_cli.num_agents,
+            last_layer_scale=agent_cfg['models']['last_layer_scale']
+        )
 
     models["value"] = BlockSimBaCritic( #BroAgent(
         state_space_size=env.cfg.state_space, 
@@ -539,13 +556,17 @@ def set_block_agent(env_cfg, agent_cfg, args_cli, models, memory, env=None):
     agent.optimizer = make_agent_optimizer(
         models['policy'],
         models['value'],
-        policy_lr = agent_cfg['agent']['learning_rate'],
-        critic_lr = agent_cfg['agent']['learning_rate'],
+        #policy_lr = agent_cfg['agent']['learning_rate'],
+        #critic_lr = agent_cfg['agent']['learning_rate'],
+        policy_lr = agent_cfg['agent']['policy_learning_rate'],
+        critic_lr = agent_cfg['agent']['critic_learning_rate'],
         betas=(0.999, 0.999),
         eps=1e-8,
         weight_decay=0,
         debug=args_cli.debug_mode
     )
+    if agent_cfg['agent']['value_update_ratio'] > 1:
+        print(f"[INFO]: Agent using value update ratio of {agent_cfg['agent']['value_update_ratio']}")
     """
     print("Named parameters in the optimizer:")
     for i, param_group in enumerate(agent.optimizer.param_groups):

@@ -90,7 +90,16 @@ class BlockResidualBlock(nn.Module):
 #  Multi-Agent Block Policy
 # -----------------------------
 class BlockSimBa(nn.Module):
-    def __init__(self, num_agents, obs_dim, hidden_dim, act_dim, device, num_blocks=2, tanh=False):
+    def __init__(
+            self, 
+            num_agents, 
+            obs_dim, 
+            hidden_dim, 
+            act_dim, 
+            device, 
+            num_blocks=2, 
+            tanh=False
+        ):
         super().__init__()
         self.device=device
         self.num_agents = num_agents

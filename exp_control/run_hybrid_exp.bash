@@ -29,7 +29,7 @@ task_name="${task_name/TaskType/${tasks[task_idx]}}"
 echo "Env name: $task_name"
 
 #use_ft_sensor=1
-num_agents=5 #####################################################################5
+num_agents=1 #####################################################################5
 current_datetime=$(date +"%m-%d_%H:%M")
 num_history_samples=8
 num_envs_per_agent=256 ########################################################
@@ -91,10 +91,10 @@ python -m learning.factory_runner \
     --ckpt_tracker_path=$ckpt_path \
     --init_eval \
     --sel_adjs=$sel_adjs \
-    --headless #\
-    #--debug_mode \
-    #--seed=42 \
-    #--easy_mode  #############################################################################
+    --headless \
+    --debug_mode \
+    --seed=42 \
+    --easy_mode  #############################################################################
 
 
 

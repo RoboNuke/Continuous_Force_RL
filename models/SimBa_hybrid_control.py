@@ -1,4 +1,3 @@
-
 import torch
 import torch.nn as nn
 import numpy as np
@@ -10,6 +9,7 @@ from torch.distributions import MixtureSameFamily, Normal, Bernoulli, Independen
 from models.SimBa import SimBaNet, ScaleLayer, MultiSimBaNet
 from torch.distributions.distribution import Distribution
 import torch.nn.functional as F
+from models.block_simba import BlockSimBa
 
 class HybridActionGMM(MixtureSameFamily):
     def __init__(
@@ -188,7 +188,7 @@ class HybridGMMMixin(GaussianMixin):
         # clip actions
         if self._g_clip_actions:
             actions = torch.clamp(actions, min=self._g_clip_actions_min, max=self._g_clip_actions_max)
-        ta = inputs.get("taken_actions", actions)
+        #ta = inputs.get("taken_actions", actions)
         
         # log of the probability density function
         log_prob = self._g_distribution.log_prob(inputs.get("taken_actions", actions).clone())
@@ -254,7 +254,7 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
         print("[INFO]: Clipping Log STD" if clip_log_std else "[INFO]: No Lot STD Clipping")
         #self.end_tanh = force_bias_type in ['none', 'bias_sel']
         self.force_size = 6 if ctrl_torque else 3
-        print("[INFO]: Controlling Torque" if self.force_size==6 else "[INFO]: Not Controlling Force")
+        print("[INFO]: Controlling Torque" if self.force_size==6 else "[INFO]: Not Controlling Torque")
 
         self.num_agents = num_agents
         if self.num_agents <= 0:
@@ -280,7 +280,12 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
             ]
             #torch.ones(1, 6 + self.force_size) #* math.log(act_init_std)
         )
+
+        self.create_net(actor_n, actor_latent, hybrid_agent_parameters, device)
+
+        self.apply_selection_adjustments(hybrid_agent_parameters)
     
+    def create_net(self, actor_n, actor_latent, hybrid_agent_parameters, device):
         self.actor_mean = MultiSimBaNet(
             n=actor_n, 
             in_size=self.num_observations, 
@@ -298,12 +303,13 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
         
         self.selection_activation = nn.LogSigmoid().to(device) #torch.nn.Sigmoid().to(device)
         self.component_activation = nn.Tanh().to(device)
-        
+
+    def apply_selection_adjustments(self, hybrid_agent_parameters):
         if self.force_add:
             raise NotImplementedError("[ERROR]: Force add not updated for multi-net case")
-            print("[INFO]:\tAdding force to selection nodes")
-            torch.autograd.set_detect_anomaly(True)
-            self.force_bias_param = nn.ParameterList( [nn.Parameter( torch.ones(1, self.force_size) ) for _ in range(self.num_agents)])
+            #print("[INFO]:\tAdding force to selection nodes")
+            #torch.autograd.set_detect_anomaly(True)
+            #self.force_bias_param = nn.ParameterList( [nn.Parameter( torch.ones(1, self.force_size) ) for _ in range(self.num_agents)])
 
         if self.init_scale_weights:
             print("[INFO]:\tDownscaling Initial Selection Weights")
@@ -319,7 +325,7 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
                 idxs = [0, 2, 4]
                 for net in self.actor_mean.pride_nets:
                     net.output[-1].bias[idxs] = hybrid_agent_parameters['init_bias']  #-1.1 
-
+                    net.output[-1].bias[idxs+1] = 0
         if self.scale_z:
             scale_factor = hybrid_agent_parameters['pre_layer_scale_factor']
             print(f"[INFO]:\tAdding Scale Layer before final linear layer (scale_factor={scale_factor}")
@@ -329,8 +335,11 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
     def act(self, inputs, role):
         return HybridGMMMixin.act(self, inputs, role)
 
+    def get_zout(self, inputs):
+        return self.actor_mean(inputs['states'][:,:self.num_observations])
+    
     def compute(self, inputs, role):
-        zout = self.actor_mean(inputs['states'][:,:self.num_observations])
+        zout = self.get_zout(inputs)
         # first force_size are sigma, remaining is tanh
         sels = zout[:,:2*self.force_size]
         not_sels = zout[:,2*self.force_size:]
@@ -353,8 +362,12 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
         
         final_not_sels = self.component_activation(not_sels)
         action_mean = torch.cat([final_sels, final_not_sels], dim=-1)
+        
+        return action_mean, self.get_logstds(action_mean), {}
 
-        # for this keep in mind thes std is not the same size as the action space, because selection terms
+    def get_logstds(self, action_mean):
+
+        # for this keep in mind the std is not the same size as the action space, because selection terms
         logstds = []
         batch_size = int(action_mean.size()[0] // self.num_agents)
         for  i, log_std in enumerate(self.actor_logstd):
@@ -362,8 +375,54 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
                 log_std.expand_as( action_mean[i*batch_size:(i+1)*batch_size,:6+self.force_size])
             )
         logstds = torch.cat(logstds, dim=0)
-        
-        return action_mean, logstds, {}
+        return logstds
     
+class HybridControlBlockSimBaActor(HybridControlSimBaActor):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
-  
+    def create_net(self, actor_n, actor_latent, hybrid_agent_parameters, device):
+        self.actor_mean = BlockSimBa(
+            num_agents=self.num_agents,
+            obs_dim=self.num_observations,
+            hidden_dim=actor_latent,
+            act_dim=self.num_actions + self.force_size,
+            device=device,
+            num_blocks=actor_n,
+            tanh=False
+        )
+
+        if hybrid_agent_parameters['init_scale_last_layer']:
+            with torch.no_grad():
+                self.actor_mean.fc_out.weight *= hybrid_agent_parameters['init_layer_scale']
+        
+        self.selection_activation = nn.LogSigmoid().to(device) #torch.nn.Sigmoid().to(device)
+        self.component_activation = nn.Tanh().to(device)
+
+
+    def apply_selection_adjustments(self, hybrid_agent_parameters):
+        if self.force_add:
+            raise NotImplementedError("[ERROR]: Force add not updated for block SimBa networks")
+        
+        if self.init_scale_weights:
+            print("[INFO]:\tDownscaling Initial Selection Weights")
+            with torch.no_grad():
+                scale_factor = hybrid_agent_parameters['init_scale_weights_factor']
+                self.actor_mean.fc_out.weight[:,:self.force_size,:] *= scale_factor
+                self.actor_mean.fc_out.bias[:, :self.force_size] *= scale_factor
+        
+        if self.init_bias:
+            print("[INFO]:\tSetting initial Selection Bias")
+            with torch.no_grad():
+                # we have logits of size 2*force size 
+                # were each is the chance of selecting force or not selecting force
+                self.actor_mean.fc_out.bias[:, [0,2,4]] = hybrid_agent_parameters['init_bias']  #-1.1 
+                self.actor_mean.fc_out.bias[:, [1,3,5]] = 0.0
+
+        if self.scale_z:
+            raise NotImplementedError("[ERROR]: Last layer input scaling not implemented for block SimBa networks")
+    
+    def get_zout(self, inputs):
+        num_envs = inputs['states'].size()[0] // self.num_agents
+        #print("Num envs:", num_envs)
+        return self.actor_mean(inputs['states'][:,:self.num_observations], num_envs)

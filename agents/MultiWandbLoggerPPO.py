@@ -450,6 +450,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         
         self.track_input_histogram = cfg['track_input']
         self.track_action_histogram = cfg['track_action_hists']
+        self.value_update_ratio = cfg['value_update_ratio']
         self.loggers = []
         self.task_cfg = task_cfg
 
@@ -1130,6 +1131,35 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                 self.scaler.step(self.optimizer)
                 
                 self.scaler.update()
+
+                if self.value_update_ratio > 1:
+                    for i in range(self.value_update_ratio-1): #minus one because we already updated critic once
+                        # compute value loss
+                        predicted_values, _, _ = self.value.act({"states": sampled_states.view(self.num_envs,-1)}, role="value")
+                        predicted_values = predicted_values.view( sample_size, self.num_agents, self.envs_per_agent)
+                        
+                        if self._clip_predicted_values:
+                            predicted_values = sampled_values + torch.clip(
+                                predicted_values - sampled_values, min=-self._value_clip, max=self._value_clip
+                            )
+
+                        sampled_returns = sampled_returns.view(sample_size, self.num_agents, self.envs_per_agent)
+                            
+                        vls = self._value_loss_scale * F.mse_loss(sampled_returns, predicted_values, reduction='none')
+                        vls[:,~keep_mask,:] = 0.0
+
+                        # make sure we get average losses for each update
+                        value_losses += vls
+
+                        value_loss = vls[:,keep_mask,:].mean()
+                        self.optimizer.zero_grad()
+                        self.scaler.scale(value_loss).backward() # only value so policy params won't change
+                        if self._grad_norm_clip > 0:
+                            nn.utils.clip_grad_norm_(self.value.parameters(), self._grad_norm_clip)
+                        
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                    value_losses /= self.value_update_ratio 
 
                 
                 self._log_minibatch_update(
