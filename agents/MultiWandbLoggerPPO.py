@@ -453,6 +453,9 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         self.value_update_ratio = cfg['value_update_ratio']
         self.loggers = []
         self.task_cfg = task_cfg
+        self._random_value_timesteps = cfg['random_value_timesteps']
+        if self._random_value_timesteps > self._random_timesteps:
+            self._random_timesteps = self._random_value_timesteps
 
     def init(self, trainer_cfg: Optional[Mapping[str, Any]] = None) -> None:
         #DONE
@@ -1112,7 +1115,10 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                 # zero out losses from cancelled
                 
                 self.optimizer.zero_grad()
-                self.scaler.scale(policy_loss + entropy_loss + value_loss).backward()
+                if timestep < self._random_value_timesteps:
+                    self.scaler.scale(value_loss)
+                else:
+                    self.scaler.scale(policy_loss + entropy_loss + value_loss).backward()
 
                 if config.torch.is_distributed:
                     self.policy.reduce_parameters()

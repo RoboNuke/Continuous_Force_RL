@@ -21,13 +21,13 @@ agent:
   class: PPO
   rollouts: 150 # set by env
   learning_epochs: 4
-  mini_batches: 50 #128 #steps / minibatch (256 envs * 150 steps per update)
+  mini_batches: 150 #128 #steps / minibatch (256 envs * 150 steps per update)
   discount_factor: 0.99
   lambda: 0.99
   #learning_rate: 1.0e-6
   policy_learning_rate: 1.0e-6
-  critic_learning_rate: 1.0e-5
-  value_update_ratio: 4 # ratio of value network updates to policy network updates
+  critic_learning_rate: 1.0e-6
+  value_update_ratio: 1 # ratio of value network updates to policy network updates
 
   # preprocessor
   state_preprocessor: True
@@ -50,7 +50,8 @@ agent:
 
 
   # below are not args
-  random_timesteps: 0
+  random_timesteps: 0 # these steps will udpate policy + critic
+  random_value_timesteps: 300 # steps that only update critic
   learning_starts: 0
   mixed_precision: False
 
@@ -93,7 +94,7 @@ agent:
     
     init_scale_last_layer: True
     # applies to all weights
-    init_layer_scale: 1.0
+    init_layer_scale: 0.1
     
     uniform_sampling_rate: 0.0
   agent_is_list: False

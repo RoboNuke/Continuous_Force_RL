@@ -25,7 +25,7 @@ bash exp_control/run_hybrid_exp.bash \
     $break_force \
     $hybrid_agent \
     $ctrl_torque \
-    "base" \
+    "simp" \
     $sel_adjs \
     $use_ft_sensor \
     $hybrid_control \
