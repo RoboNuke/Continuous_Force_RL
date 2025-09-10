@@ -29,7 +29,7 @@ task_name="${task_name/TaskType/${tasks[task_idx]}}"
 echo "Env name: $task_name"
 
 #use_ft_sensor=1
-num_agents=3 #####################################################################5
+num_agents=5 #####################################################################5
 current_datetime=$(date +"%m-%d_%H:%M")
 num_history_samples=8
 num_envs_per_agent=256 ########################################################
@@ -74,7 +74,7 @@ python -m learning.factory_runner \
     --use_ft_sensor=$use_ft_sensor \
     --exp_tag=$exp_tag \
     --wandb_group_prefix="$3_$4_${nick_names[$task_idx]}_OBS-${obs_modes[$obs_idx]}_Hyb-Ctrl(${11})_Hyb-Agent($6)" \
-    --max_steps=75000000 \
+    --max_steps=15000000 \
     --num_envs=$(($num_envs_per_agent * $num_agents)) \
     --num_agents=$num_agents \
     --exp_name="$3_$4_${nick_names[$task_idx]}_OBS-${obs_modes[$obs_idx]}_Hyb-Ctrl(${11})_Hyb-Agent($6)_$current_datetime" \
@@ -91,10 +91,10 @@ python -m learning.factory_runner \
     --ckpt_tracker_path=$ckpt_path \
     --init_eval \
     --sel_adjs=$sel_adjs \
-    --headless \
-    --debug_mode \
-    --seed=42 \
-    --easy_mode  #############################################################################
+    --headless #\
+    #--debug_mode \
+    #--seed=42 \
+    #--easy_mode  #############################################################################
 
 
 

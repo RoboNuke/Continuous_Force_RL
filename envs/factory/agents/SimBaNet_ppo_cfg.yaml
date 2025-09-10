@@ -11,7 +11,7 @@ models:
   act_init_std: 1.0 # note this is paired with tanh on action mean and scaled by env ##0.025 # max linear motion is 0.05 => 99.6 will be in that range
   critic_output_init_mean: 50 #20 #was tried # seemed to be early value policy drives to
   critic:
-    n: 2
+    n: 3 #2
     latent_size: 1024
   actor:
     n: 1
@@ -23,11 +23,12 @@ agent:
   learning_epochs: 4
   mini_batches: 150 #128 #steps / minibatch (256 envs * 150 steps per update)
   discount_factor: 0.99
-  lambda: 0.99
+  lambda: 0.95 #0.99
   #learning_rate: 1.0e-6
   policy_learning_rate: 1.0e-6
   critic_learning_rate: 1.0e-5 #-6
   value_update_ratio: 2
+  use_huber_value_loss: True
 
   ##### LR Kwargs #####
   #KLAdaptive 
@@ -51,7 +52,7 @@ agent:
 
   # below are not args
   random_timesteps: 0
-  random_value_timesteps: 0
+  random_value_timesteps: 150 #0
   learning_starts: 0
   mixed_precision: False
 
@@ -88,7 +89,7 @@ agent:
     # Selection Bias Parameters
     selection_adjustment_types: 'none'
     init_scale_weights_factor: 0.1
-    init_bias: -6.22 #-2.5  # 2.5=>7.58% force control rate
+    init_bias: -2.5  # 2.5=>7.58% force control rate
     pre_layer_scale_factor: 0.1
     
     init_scale_last_layer: True
