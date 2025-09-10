@@ -9,9 +9,9 @@ models:
   force_encoding: None
   last_layer_scale: 1.0
   act_init_std: 1.0 # note this is paired with tanh on action mean and scaled by env ##0.025 # max linear motion is 0.05 => 99.6 will be in that range
-  critic_output_init_mean: 75 #50 #20 #was tried # seemed to be early value policy drives to
+  critic_output_init_mean: 60 #50 #20 #was tried # seemed to be early value policy drives to
   critic:
-    n: 2
+    n: 3 #2
     latent_size: 1024
   actor:
     n: 1
@@ -28,7 +28,7 @@ agent:
   policy_learning_rate: 1.0e-6
   critic_learning_rate: 1.0e-5
   value_update_ratio: 2 # ratio of value network updates to policy network updates
-  use_huber_value_loss: False
+  use_huber_value_loss: True
 
   # preprocessor
   state_preprocessor: True
@@ -52,7 +52,7 @@ agent:
 
   # below are not args
   random_timesteps: 0 # these steps will udpate policy + critic
-  random_value_timesteps: 0 #300 # steps that only update critic
+  random_value_timesteps: 1500 # steps that only update critic
   learning_starts: 0
   mixed_precision: False
 

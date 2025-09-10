@@ -205,7 +205,7 @@ class HybridForcePosActionWrapper(gym.Wrapper):#FactoryWrapper):
         
         task_wrench = (1-self.sel_matrix) * pose_wrench + self.sel_matrix * force_wrench
         if self.force_size > 3:
-            task_wrench[:,3:] = pos_wrench[:,3:]
+            task_wrench[:,3:] = pose_wrench[:,3:]
 
         #task_wrench[:,3:5] = 0.0 # prevent rotating anywhere but parallel to tabletop
 

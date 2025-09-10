@@ -60,8 +60,8 @@ class ObsRandCfg:
 
 @configclass
 class CtrlCfg:
-    ema_factor = 1.0 #0.2
-    no_sel_ema = False #True
+    ema_factor = 0.2
+    no_sel_ema = True
     pos_action_bounds = [0.05, 0.05, 0.05]
     rot_action_bounds = [1.0, 1.0, 1.0]
     force_action_bounds = [50.0, 50.0, 50.0]
