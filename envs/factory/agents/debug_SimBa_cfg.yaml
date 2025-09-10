@@ -7,9 +7,9 @@
 # this is the parameters for the BroNet shared model
 models:
   force_encoding: None
-  last_layer_scale: 0.1
+  last_layer_scale: 1.0
   act_init_std: 1.0 # note this is paired with tanh on action mean and scaled by env ##0.025 # max linear motion is 0.05 => 99.6 will be in that range
-  critic_output_init_mean: 20 #was tried # seemed to be early value policy drives to
+  critic_output_init_mean: 75 #50 #20 #was tried # seemed to be early value policy drives to
   critic:
     n: 2
     latent_size: 1024
@@ -26,8 +26,9 @@ agent:
   lambda: 0.99
   #learning_rate: 1.0e-6
   policy_learning_rate: 1.0e-6
-  critic_learning_rate: 1.0e-6
-  value_update_ratio: 1 # ratio of value network updates to policy network updates
+  critic_learning_rate: 1.0e-5
+  value_update_ratio: 2 # ratio of value network updates to policy network updates
+  use_huber_value_loss: False
 
   # preprocessor
   state_preprocessor: True
@@ -51,7 +52,7 @@ agent:
 
   # below are not args
   random_timesteps: 0 # these steps will udpate policy + critic
-  random_value_timesteps: 300 # steps that only update critic
+  random_value_timesteps: 0 #300 # steps that only update critic
   learning_starts: 0
   mixed_precision: False
 
@@ -64,9 +65,12 @@ agent:
   entropy_loss_scale: 0.0 #5.0e-3 #
   value_loss_scale: 1.0 #1.5
   kl_threshold: 0.05
-  rewards_shaper_scale: 0.1
   time_limit_bootstrap: True
 
+  ### REWARD SHAPING ######
+  reward_shaper_type: 'const_scale' #'running_scalar' #
+  rewards_shaper_scale: 0.1 #1.0
+  
   
   hybrid_agent:
     # general params
@@ -88,13 +92,13 @@ agent:
     selection_adjustment_types: 'none'
 
     # this applies only to selection weights
-    init_scale_weights_factor: 1.0
+    init_scale_weights_factor: 0.1 #1.0
     init_bias: -2.5  # 2.5=>7.58% force control rate
-    pre_layer_scale_factor: 0.1
     
-    init_scale_last_layer: True
     # applies to all weights
-    init_layer_scale: 0.1
+    pre_layer_scale_factor: 0.1
+    init_scale_last_layer: True
+    init_layer_scale: 1.0
     
     uniform_sampling_rate: 0.0
   agent_is_list: False

@@ -57,6 +57,15 @@ def set_preprocessors(env_cfg, agent_cfg, env, state, value):
         agent_cfg['agent']["value_preprocessor_kwargs"] = {"size": 1, "device": env_cfg.sim.device}
 
 
+def set_reward_shaping(env_cfg, agent_cfg):
+
+    if agent_cfg['agent']['reward_shaper_type'] == 'const_scale':
+        def scale_reward(rew, timestep, timesteps, scale=agent_cfg['agent']['rewards_shaper_scale']):
+            return rew * scale
+        agent_cfg['agent']['rewards_shaper'] = scale_reward
+    elif agent_cfg['agent']['reward_shaper_type'] == 'running_scalar':
+        agent_cfg['agent']['rewards_shaper'] = RunningStandardScaler( **{"size": 1, "device":env_cfg.sim.device})
+    
 def set_easy_mode(env_cfg, agent_cfg, easy_mode):
     agent_cfg['agent']['easy_mode'] = easy_mode
     if not easy_mode:

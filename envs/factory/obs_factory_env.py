@@ -68,8 +68,8 @@ class HistoryObsFactoryEnv(FactoryEnv):
         #if self.calc_accel:
         #    cfg.state_space += 6 * self.h_len
 
-        cfg.observation_space += cfg.action_space
-        cfg.state_space += cfg.action_space
+        #cfg.observation_space += cfg.action_space
+        #cfg.state_space += cfg.action_space
         self.cfg_task = cfg.task
 
         # need to reset env observation space size for vectorization
@@ -169,7 +169,7 @@ class HistoryObsFactoryEnv(FactoryEnv):
         
         noisy_fixed_pos = self.fixed_pos_obs_frame + self.init_fixed_pos_obs_noise # size (num_envs, 3)
 
-        prev_actions = self.actions.clone()
+        #prev_actions = self.actions.clone()
         
         obs_dict = {
             "fingertip_pos": self.fingertip_midpoint_history[:, self.keep_idxs, :].view( (self.num_envs, -1)),
@@ -177,7 +177,7 @@ class HistoryObsFactoryEnv(FactoryEnv):
             "fingertip_quat": self.fingertip_quat_history[:, self.keep_idxs, :].view( (self.num_envs, -1)),
             "ee_linvel": self.ee_linvel_history[:, self.keep_idxs, :].view( (self.num_envs, -1)),
             "ee_angvel": self.ee_angvel_history[:, self.keep_idxs, :].view( (self.num_envs, -1)),
-            "prev_actions": prev_actions,
+            #"prev_actions": prev_actions,
         }
         
         state_dict = {
@@ -195,7 +195,7 @@ class HistoryObsFactoryEnv(FactoryEnv):
             "task_prop_gains": self.task_prop_gains,
             "pos_threshold": self.pos_threshold,
             "rot_threshold": self.rot_threshold,
-            "prev_actions": prev_actions,
+            #"prev_actions": prev_actions,
         }
 
         if self.calc_accel:
@@ -221,15 +221,16 @@ class HistoryObsFactoryEnv(FactoryEnv):
         
         # scale force readings
         if self.cfg.use_force_sensor:
-            obs_dict['force_torque'] = torch.tanh( 0.0011 * obs_dict['force_torque'])
-            state_dict['force_torque'] = torch.tanh( 0.0011 * state_dict['force_torque'])
+            obs_dict['force_torque'] = torch.tanh( self.cfg.force_tanh_scale * obs_dict['force_torque'])
+            state_dict['force_torque'] = torch.tanh( self.cfg.force_tanh_scale * state_dict['force_torque'])
 
-        obs_tensors = [obs_dict[obs_name] for obs_name in self.cfg.obs_order + ["prev_actions"]]
+        obs_tensors = [obs_dict[obs_name] for obs_name in self.cfg.obs_order]# + ["prev_actions"]]
         
         obs_tensors = torch.cat(obs_tensors, dim=-1)
+        #print("Env obs tensor:", obs_tensors.size())
         
-        state_tensors = [state_dict[state_name] for state_name in self.cfg.state_order + ["prev_actions"]]
-        
+        state_tensors = [state_dict[state_name] for state_name in self.cfg.state_order]# + ["prev_actions"]]
         state_tensors = torch.cat(state_tensors, dim=-1)
+        #print("Env state tensor:", state_tensors.size())
         
         return {"policy": obs_tensors, "critic": state_tensors}

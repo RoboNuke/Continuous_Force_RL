@@ -83,8 +83,8 @@ class FactoryTask:
     
     # 0.0276 = (1 - sum of maximum reward from baseline, course and fine ) / 3
     # this makes the new maximum reward 1 and a small negative for force control when far away
-    bad_force_cmd_rew: float = -0.0139 
-    good_force_cmd_rew: float = 0.0139
+    bad_force_cmd_rew: float = -0.1 
+    good_force_cmd_rew: float = 0.1
     #for low wrench update
     wrench_norm_scale: float = 1.0
     # Reward function details can be found in Appendix B of https://arxiv.org/pdf/2408.04587.

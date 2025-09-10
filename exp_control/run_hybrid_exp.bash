@@ -29,7 +29,7 @@ task_name="${task_name/TaskType/${tasks[task_idx]}}"
 echo "Env name: $task_name"
 
 #use_ft_sensor=1
-num_agents=1 #####################################################################5
+num_agents=3 #####################################################################5
 current_datetime=$(date +"%m-%d_%H:%M")
 num_history_samples=8
 num_envs_per_agent=256 ########################################################

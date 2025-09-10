@@ -120,9 +120,17 @@ class HybridForcePosActionWrapper(gym.Wrapper):#FactoryWrapper):
         if len(env_ids) > 0:
             self.unwrapped._reset_buffers(env_ids)
         self.unwrapped.prev_action = self.unwrapped.actions.clone()
-        self.unwrapped.actions = (
-            self.unwrapped.cfg.ctrl.ema_factor * action.clone().to(self.unwrapped.device) + (1 - self.unwrapped.cfg.ctrl.ema_factor) * self.unwrapped.actions
-        )
+        
+        if self.unwrapped.cfg.ctrl.no_sel_ema:
+            self.unwrapped.actions[:,self.force_size:] = (
+                self.unwrapped.cfg.ctrl.ema_factor * action[:,self.force_size:].clone().to(self.unwrapped.device) + (1 - self.unwrapped.cfg.ctrl.ema_factor) * self.unwrapped.actions[:,self.force_size:]
+            )
+            self.unwrapped.actions[:, :self.force_size] = action[:,:self.force_size]
+        else:
+            self.unwrapped.actions = (
+                self.unwrapped.cfg.ctrl.ema_factor * action.clone().to(self.unwrapped.device) + (1 - self.unwrapped.cfg.ctrl.ema_factor) * self.unwrapped.actions
+            )
+                                   
         
         
         #self.unwrapped.prev_action = self.unwrapped.actions

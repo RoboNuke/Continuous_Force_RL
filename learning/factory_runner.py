@@ -180,10 +180,8 @@ def main(
         args_cli.use_ft_sensor==1
     )
 
-    if agent_cfg['agent']['rewards_shaper_scale'] > 0.0:
-        def scale_reward(rew, timestep, timesteps, scale=agent_cfg['agent']['rewards_shaper_scale']):
-            return rew * scale
-        agent_cfg['agent']['rewards_shaper'] = scale_reward
+    lUtils.set_reward_shaping(env_cfg, agent_cfg)
+    
     # set initialization params
     lUtils.set_easy_mode(env_cfg, agent_cfg, args_cli.easy_mode)
     lUtils.set_time_params(env_cfg, args_cli)

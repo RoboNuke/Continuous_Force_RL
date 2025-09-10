@@ -144,12 +144,12 @@ class HybridGMMMixin(GaussianMixin):
 
         
         #print("mix dist:", mix_dist.probs)
-        mean1 = mean_actions[:, self.force_size:self.force_size+6]
+        mean1 = mean_actions[:, 2*self.force_size:2*self.force_size+6]
         mean1[:,:3] *= self.pos_scale            # (batch, 6)
         mean1[:,3:6] *= self.rot_scale
         
         mean2 = torch.zeros_like(mean1)
-        mean2[:,:self.force_size] = mean_actions[:, 6+self.force_size:6+2*self.force_size]
+        mean2[:,:self.force_size] = mean_actions[:, 6+2*self.force_size:6+3*self.force_size]
         mean2[:,:3] *= self.force_scale    # (batch, 6)
         if self.force_size > 3:
             mean2[:,3:6] *= self.torque_scale

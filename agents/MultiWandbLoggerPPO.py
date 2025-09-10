@@ -197,6 +197,7 @@ class EpisodeTracker:
         metrics = {
             "Episode / Return (Avg)": self.env_returns[idxs], #.mean().item(),
             "Episode / Return (Median)": self.env_returns[idxs], #mean().item(),
+            "Episode / Return (std)": self.env_returns[idxs],
             "Episode / Episode Length": self.env_steps[idxs].float(),
             "Engagement / Engaged Rate": self.engaged_any[idxs].float(),
             "Success / Success Rate": self.succeeded_any[idxs].float(),
@@ -253,14 +254,14 @@ class EpisodeTracker:
 
     def log_minibatch_update(
             self,
-            returns, #num_samples x num_envs_per_agent x dim
-            values,
-            advantages,
-            old_log_probs,
-            new_log_probs,
-            entropies,
-            policy_losses,
-            value_losses,
+            returns=None, #num_samples x num_envs_per_agent x dim
+            values=None,
+            advantages=None,
+            old_log_probs=None,
+            new_log_probs=None,
+            entropies=None,
+            policy_losses=None,
+            value_losses=None,
             policy_state = None,
             critic_state = None,
             optimizer=None
@@ -271,43 +272,41 @@ class EpisodeTracker:
         """
         stats = {}
         with torch.no_grad():
-            # --- Policy stats ---
-            ratio = (new_log_probs - old_log_probs).exp()
-            clip_mask = (ratio < 1-self.clip_eps) | (ratio > 1+self.clip_eps)
-            kl = old_log_probs - new_log_probs
-            stats["Policy / KL-Divergence (Avg)"] = kl.mean().item()
-            stats["Policy / KL-Divergence (0.95 Quantile)"] = kl.quantile(0.95).item()
-            stats["Policy / Clip Fraction"] = clip_mask.float().mean().item()
+            if new_log_probs is not None and old_log_probs is not None:
+                # --- Policy stats ---
+                ratio = (new_log_probs - old_log_probs).exp()
+                clip_mask = (ratio < 1-self.clip_eps) | (ratio > 1+self.clip_eps)
+                kl = old_log_probs - new_log_probs
+                stats["Policy / KL-Divergence (Avg)"] = kl.mean().item()
+                stats["Policy / KL-Divergence (0.95 Quantile)"] = kl.quantile(0.95).item()
+                stats["Policy / Clip Fraction"] = clip_mask.float().mean().item()
 
-            
-            stats["Policy / Entropy (Avg)"] = entropies.mean().item()
-            stats["Policy / Loss (Avg)"] = policy_losses.mean().item()
+            if entropies is not None:
+                stats["Policy / Entropy (Avg)"] = entropies.mean().item()
+            if policy_losses is not None:
+                stats["Policy / Loss (Avg)"] = policy_losses.mean().item()
 
-            # --- Value stats ---
-            stats["Critic / Loss (Avg)"] = value_losses.mean().item()
-            stats["Critic / Loss (0.95 Quantile)"] = value_losses.quantile(0.95).item()
-            stats["Critic / Predicted Values (Avg)"] = values.mean().item()
-            #print("Value losses size:", value_losses.size())
-            #if (value_losses > 500).any():
-            #    bad_idxs =  (value_losses > 500)
-            #    print(f"Bad Returns:{returns[bad_idxs]}")
-            #    print(f"Bad Advantages:{advantages[bad_idxs]}")
-            #    print(f"Bad Values:{values[bad_idxs]}")
-            #    print(f"Bad Val Losses:{value_losses[bad_idxs]}")
-            #    print(f"Bad old Log Prob:{old_log_probs[bad_idxs]}")
-            #    print(f"Bad new Log Prob:{new_log_probs[bad_idxs]}")
-            #    assert 1==0
-            # --- Advantage diagnostics ---
-            stats["Advantage / Mean"] = advantages.mean().item()
-            stats["Advantage / Std Dev"] = advantages.std().item()
-            stats["Advantage / Skew"] = (
-                (((advantages - advantages.mean()) ** 3).mean() / (advantages.std() ** 3 + 1e-8))
-                .item()
-            )
+            if value_losses is not None and values is not None and returns is not None:
+                # --- Value stats ---
+                stats["Critic / Loss (Avg)"] = value_losses.mean().item()
+                stats["Critic / Loss (Median)"] = value_losses.median().item()
+                stats["Critic / Loss (0.95 Quantile)"] = value_losses.quantile(0.95).item()
+                stats["Critic / Loss (0.90 Quantile)"] = value_losses.quantile(0.90).item()
+                stats["Critic / Predicted Values (Avg)"] = values.mean().item()
+                stats["Critic / Predicted Values (Std)"] = values.std().item()
             
-            stats["Critic / Explained Variance"] = (
-                1 - ((returns - values).var(unbiased=False) / returns.var(unbiased=False).clamp(min=1e-8))
-            ).item()
+                stats["Critic / Explained Variance"] = (
+                    1 - ((returns - values).var(unbiased=False) / returns.var(unbiased=False).clamp(min=1e-8))
+                ).item()
+
+            if advantages is not None:
+                # --- Advantage diagnostics ---
+                stats["Advantage / Mean"] = advantages.mean().item()
+                stats["Advantage / Std Dev"] = advantages.std().item()
+                stats["Advantage / Skew"] = (
+                    (((advantages - advantages.mean()) ** 3).mean() / (advantages.std() ** 3 + 1e-8))
+                    .item()
+                )
 
             # Gradient norms (if models given)
             def grad_norm(model_grads):
@@ -315,9 +314,6 @@ class EpisodeTracker:
                 if len(model_grads) == 0:
                     return torch.tensor(0.0)
                 return torch.norm(torch.stack(model_grads), 2) 
-
-            stats['Policy / Gradient Norm'] = grad_norm(policy_state['gradients']) if policy_state is not None else torch.tensor(0.)
-            stats['Critic / Gradient Norm'] = grad_norm(critic_state['gradients']) if critic_state is not None else torch.tensor(0.)
             
             # Optimizer step size estimate (Adam effective step)
             def adam_step_size(optimizer_state, optimizer):
@@ -349,12 +345,15 @@ class EpisodeTracker:
                             step_sizes.append(net_step_sizes)
                 return sum(step_sizes) / (len(step_sizes) + 1e-6)
 
-            policy_step_size = adam_step_size(policy_state['optimizer_state'], optimizer) if policy_state is not None else torch.tensor(0.)
-            value_step_size = adam_step_size(critic_state['optimizer_state'], optimizer) if critic_state is not None else torch.tensor(0.)
+            if policy_state is not None:
+                stats['Policy / Gradient Norm'] = grad_norm(policy_state['gradients']) if policy_state is not None else torch.tensor(0.)
+                policy_step_size = adam_step_size(policy_state['optimizer_state'], optimizer) if policy_state is not None else torch.tensor(0.)
+                stats['Policy / Step Size'] = policy_step_size
 
-            stats['Policy / Step Size'] = policy_step_size
-            stats['Critic / Step Size'] = value_step_size
-            
+            if critic_state is not None:
+                stats['Critic / Gradient Norm'] = grad_norm(critic_state['gradients']) if critic_state is not None else torch.tensor(0.)
+                value_step_size = adam_step_size(critic_state['optimizer_state'], optimizer) if critic_state is not None else torch.tensor(0.)
+                stats['Critic / Step Size'] = value_step_size
         self.learning_metrics.append(stats)
 
     
@@ -363,13 +362,15 @@ class EpisodeTracker:
         #if not self.learning_metrics:
         #    return {}
         out = {}
-        keys = self.learning_metrics[0].keys()
+        #keys = self.learning_metrics[0].keys()
+        keys = list(set(self.learning_metrics[0].keys()) | set(self.learning_metrics[1].keys()))
         for k in keys:
-            vals = torch.tensor([m[k] for m in self.learning_metrics], device=self.device, dtype=torch.float32)
-            #if isinstance(vals[0], float):
-            #out[k] = sum(vals) / len(vals)
-            #else:  # numpy arrays
-            #    out[k] = sum(vals) / len(vals)
+            agg_met = []
+            for m in self.learning_metrics:
+                if k in m:
+                    agg_met.append(m[k])
+            vals = torch.tensor(agg_met, device=self.device, dtype=torch.float32)
+            #vals = torch.tensor([m[k] if k in m else pass for m in self.learning_metrics], device=self.device, dtype=torch.float32)
             out[k] = vals
         self.learning_metrics = []
         return out
@@ -451,11 +452,12 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
         self.track_input_histogram = cfg['track_input']
         self.track_action_histogram = cfg['track_action_hists']
         self.value_update_ratio = cfg['value_update_ratio']
+        self.huber_value_loss = cfg['use_huber_value_loss']
         self.loggers = []
         self.task_cfg = task_cfg
         self._random_value_timesteps = cfg['random_value_timesteps']
-        if self._random_value_timesteps > self._random_timesteps:
-            self._random_timesteps = self._random_value_timesteps
+        #if self._random_value_timesteps > self._random_timesteps:
+        #    self._random_timesteps = self._random_value_timesteps
 
     def init(self, trainer_cfg: Optional[Mapping[str, Any]] = None) -> None:
         #DONE
@@ -466,7 +468,8 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
 
         :param trainer_cfg: Trainer configuration
         :type trainer_cfg: dict, optional
-        """
+super().step(action)
+  File "/nfs/stak/users/brownhun/h        """
 
         #super().init(trainer_cfg)
         #return
@@ -616,7 +619,10 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
 
             # reward shaping
             if self._rewards_shaper is not None:
-                rewards = self._rewards_shaper(rewards, timestep, timesteps)
+                try:
+                    rewards = self._rewards_shaper(rewards, timestep, timesteps)
+                except:
+                    rewards = self._rewards_shaper(rewards)
 
             # compute values
             values, _, _ = self.value.act({"states": self._state_preprocessor(states)}, role="value")
@@ -764,40 +770,33 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
 
     def _log_minibatch_update(
             self,
-            returns, #num_samples x num_agents x num_envs_per_agent x dim
-            values,
-            advantages,
-            old_log_probs,
-            new_log_probs,
-            entropies,
-            policy_losses,
-            value_losses,
-            policy_model = None,
-            critic_model = None
+            returns=None, #num_samples x num_agents x num_envs_per_agent x dim
+            values=None,
+            advantages=None,
+            old_log_probs=None,
+            new_log_probs=None,
+            entropies=None,
+            policy_losses=None,
+            value_losses=None,
+            policy_state = None,
+            critic_state = None
     ):
-        batch_size = returns.size()[0]
-        agent_batch = batch_size // self.num_agents
+        #batch_size = returns.size()[0]
+        #agent_batch = batch_size // self.num_agents
         for i, logger in enumerate(self.loggers):
-            if self.num_agents > 1:
-                policy_state = self._get_network_state(self.policy.actor_mean.pride_nets[i])
-                critic_state = self._get_network_state(self.value.critic.pride_nets[i])
-            else:
-                policy_state = self._get_network_state(self.policy.actor_mean)
-                critic_state = self._get_network_state(self.value.critic)
             
             logger.log_minibatch_update(
-                returns[:,i,:],
-                values[:,i,:],
-                advantages[:,i,:],
-                old_log_probs[:,i,:],
-                new_log_probs[:,i,:],
-                entropies[:,i,:,:],
-                policy_losses[:,i,:],
-                value_losses[:,i,:],
-                policy_state,
-                critic_state,
-                
-                self.optimizer
+                returns = returns[:,i,:] if returns is not None else None,
+                values = values[:,i,:] if values is not None else None,
+                advantages = advantages[:,i,:] if advantages is not None else None,
+                old_log_probs = old_log_probs[:,i,:] if old_log_probs is not None else None,
+                new_log_probs = new_log_probs[:,i,:] if new_log_probs is not None else None,
+                entropies = entropies[:,i,:,:] if entropies is not None else None,
+                policy_losses = policy_losses[:,i,:] if policy_losses is not None else None,
+                value_losses = value_losses[:,i,:] if value_losses is not None else None,
+                policy_state = policy_state,
+                critic_state = critic_state,
+                optimizer = self.optimizer
             )
 
     def _get_network_state(self, simba_net):            
@@ -1099,7 +1098,7 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
                     # compute value loss
                     predicted_values, _, _ = self.value.act({"states": sampled_states.view(self.num_envs,-1)}, role="value")
                     predicted_values = predicted_values.view( sample_size, self.num_agents, self.envs_per_agent)
-                    
+                    sampled_values = sampled_values.view(sample_size, self.num_agents, self.envs_per_agent)
                     if self._clip_predicted_values:
                         predicted_values = sampled_values + torch.clip(
                             predicted_values - sampled_values, min=-self._value_clip, max=self._value_clip
@@ -1107,79 +1106,144 @@ class MultiWandbLoggerPPO(WandbLoggerPPO):
 
                     sampled_returns = sampled_returns.view(sample_size, self.num_agents, self.envs_per_agent)
                         
-                    value_losses = self._value_loss_scale * F.mse_loss(sampled_returns, predicted_values, reduction='none')
-                    value_losses[:,~keep_mask,:] = 0.0
-                    value_loss = value_losses[:,keep_mask,:].mean()
+                    #value_losses = self._value_loss_scale * F.mse_loss(sampled_returns, predicted_values, reduction='none')
+                    #value_losses = self._value_loss_scale * F.HuberLoss(reduction='none', delta=0.1)
+                    value_loss, value_losses, predicted_values = self.calc_value_loss(sampled_states, sampled_values, sampled_returns, keep_mask, sample_size)
 
                 # optimization step
                 # zero out losses from cancelled
                 
                 self.optimizer.zero_grad()
                 if timestep < self._random_value_timesteps:
-                    self.scaler.scale(value_loss)
+                    self.update_nets(value_loss)
                 else:
-                    self.scaler.scale(policy_loss + entropy_loss + value_loss).backward()
+                    self.update_nets(policy_loss + entropy_loss + value_loss)
 
-                if config.torch.is_distributed:
-                    self.policy.reduce_parameters()
-                    if self.policy is not self.value:
-                        self.value.reduce_parameters()
-
-                if self._grad_norm_clip > 0:
-                    self.scaler.unscale_(self.optimizer)
-                    if self.policy is self.value:
-                        nn.utils.clip_grad_norm_(self.policy.parameters(), self._grad_norm_clip)
-                    else:
-                        nn.utils.clip_grad_norm_(
-                            itertools.chain(self.policy.parameters(), self.value.parameters()), self._grad_norm_clip
-                        )
-
-                self.scaler.step(self.optimizer)
-                
-                self.scaler.update()
+                    
+                if self.num_agents == 1:
+                    policy_state = self._get_network_state(self.policy.actor_mean.pride_nets[i])
+                else:
+                    policy_state = self._get_network_state(self.policy.actor_mean)
 
                 if self.value_update_ratio > 1:
+                    
+                    self._log_minibatch_update(
+                        #sampled_returns, 
+                        #predicted_values, 
+                        advantages = sampled_advantages,
+                        old_log_probs = sampled_log_prob,
+                        new_log_probs = next_log_prob,
+                        entropies = entropys,
+                        policy_losses = policy_losses,
+                        #value_losses
+                        policy_state = policy_state
+                    )
                     for i in range(self.value_update_ratio-1): #minus one because we already updated critic once
-                        # compute value loss
-                        predicted_values, _, _ = self.value.act({"states": sampled_states.view(self.num_envs,-1)}, role="value")
-                        predicted_values = predicted_values.view( sample_size, self.num_agents, self.envs_per_agent)
-                        
-                        if self._clip_predicted_values:
-                            predicted_values = sampled_values + torch.clip(
-                                predicted_values - sampled_values, min=-self._value_clip, max=self._value_clip
-                            )
-
-                        sampled_returns = sampled_returns.view(sample_size, self.num_agents, self.envs_per_agent)
-                            
-                        vls = self._value_loss_scale * F.mse_loss(sampled_returns, predicted_values, reduction='none')
-                        vls[:,~keep_mask,:] = 0.0
-
-                        # make sure we get average losses for each update
+                        value_loss, vls, predicted_values = self.calc_value_loss(
+                            sampled_states,
+                            sampled_values,
+                            sampled_returns,
+                            keep_mask,
+                            sample_size
+                        )
                         value_losses += vls
-
-                        value_loss = vls[:,keep_mask,:].mean()
-                        self.optimizer.zero_grad()
-                        self.scaler.scale(value_loss).backward() # only value so policy params won't change
-                        if self._grad_norm_clip > 0:
-                            nn.utils.clip_grad_norm_(self.value.parameters(), self._grad_norm_clip)
+                        self.update_nets(value_loss)
                         
-                        self.scaler.step(self.optimizer)
-                        self.scaler.update()
-                    value_losses /= self.value_update_ratio 
+                    value_losses /= self.value_update_ratio
 
-                
-                self._log_minibatch_update(
-                    sampled_returns, 
-                    predicted_values, 
-                    sampled_advantages,
-                    sampled_log_prob,
-                    next_log_prob,
-                    entropys,
-                    policy_losses,
-                    value_losses
-                )
+                    if self.num_agents == 1:
+                        critic_state = self._get_network_state(self.value.critic.pride_nets[i])
+                    else:
+                        critic_state = self._get_network_state(self.value.critic)
+                    
+                    self._log_minibatch_update(
+                        returns = sampled_returns,
+                        values = predicted_values,
+                        value_losses = value_losses,
+                        critic_state = critic_state
+                    )
+                else:
+
+                    if self.num_agents == 1:
+                        critic_state = self._get_network_state(self.value.critic.pride_nets[i])
+                    else:
+                        critic_state = self._get_network_state(self.value.critic)
+                    # log everything 
+                    self._log_minibatch_update(
+                        returns=sampled_returns, 
+                        values=predicted_values, 
+                        advantages = sampled_advantages,
+                        old_log_probs = sampled_log_prob,
+                        new_log_probs = next_log_prob,
+                        entropies = entropys,
+                        policy_losses = policy_losses,
+                        value_losses=value_losses,
+                        policy_state = policy_state,
+                        critic_state = critic_state
+                    )
                 mini_batch += 1
-                
+
+
+    def update_nets(self, loss):
+                        
+        self.optimizer.zero_grad()
+        self.scaler.scale(loss).backward()
+
+        if config.torch.is_distributed:
+            self.policy.reduce_parameters()
+            if self.policy is not self.value:
+                self.value.reduce_parameters()
+
+        if self._grad_norm_clip > 0:
+            self.scaler.unscale_(self.optimizer)
+            if self.policy is self.value:
+                nn.utils.clip_grad_norm_(self.policy.parameters(), self._grad_norm_clip)
+            else:
+                nn.utils.clip_grad_norm_(
+                    itertools.chain(self.policy.parameters(), self.value.parameters()), self._grad_norm_clip
+                )             
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        
+    def adaptive_huber_delta(self, predicted, sampled, k=1.35):
+        e = (sampled - predicted)
+        med = e.median()
+        mad = (e - med).abs().median() + 1e-8
+        return float(k * mad)
+    
+    def calc_value_loss(self, sampled_states, sampled_values, sampled_returns, keep_mask, sample_size):
+        
+        with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
+            # compute value loss
+            predicted_values, _, _ = self.value.act({"states": sampled_states.view(self.num_envs,-1)}, role="value")
+            predicted_values = predicted_values.view( sample_size, self.num_agents, self.envs_per_agent)
+        
+            if self._clip_predicted_values:
+                predicted_values = sampled_values + torch.clip(
+                    predicted_values - sampled_values, min=-self._value_clip, max=self._value_clip
+                )
+
+            sampled_returns = sampled_returns.view(sample_size, self.num_agents, self.envs_per_agent)
+
+            if self.huber_value_loss:
+                vls = self._value_loss_scale * F.huber_loss(
+                    predicted_values,
+                    sampled_returns,
+                    reduction='none',
+                    delta = self.adaptive_huber_delta(predicted_values, sampled_values)
+                )
+            else:
+                vls = self._value_loss_scale * F.mse_loss(sampled_returns, predicted_values, reduction='none')
+            vls[:,~keep_mask,:] = 0.0
+        
+            # make sure we get average losses for each update
+            #value_losses += vls
+        
+            value_loss = vls[:,keep_mask,:].mean()
+
+            return value_loss, vls, predicted_values
+        
+        
             # TODO: ########################################################################
             # update learning rate
             """if self._learning_rate_scheduler:

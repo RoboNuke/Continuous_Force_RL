@@ -99,19 +99,19 @@ class BlockWandbLoggerPPO(MultiWandbLoggerPPO):
                 with open(self.tracker_path, "a") as f:
                     for i in range(self.num_agents):
                         f.write(f'{ckpt_paths[i]} {self.task_name} {vid_paths[i]} {self.loggers[i].wandb_cfg["project"]} {self.loggers[i].wandb_cfg["run_id"]}\n')
-
+    """
     def _log_minibatch_update(
             self,
-            returns, # num_samples x num_agents x num_envs_per_agent x dim
-            values,
-            advantages,
-            old_log_probs,
-            new_log_probs,
-            entropies,
-            policy_losses,
-            value_losses,
-            policy_model = None,
-            critic_model = None
+            returns=None, #num_samples x num_agents x num_envs_per_agent x dim
+            values=None,
+            advantages=None,
+            old_log_probs=None,
+            new_log_probs=None,
+            entropies=None,
+            policy_losses=None,
+            value_losses=None,
+            policy_state = None,
+            critic_state = None
     ):
         for i, logger in enumerate(self.loggers):
             state = self._get_block_network_state(i)
@@ -129,6 +129,7 @@ class BlockWandbLoggerPPO(MultiWandbLoggerPPO):
                 state['critic'],
                 self.optimizer
             )
+    """
     """
     def _get_block_network_state(self, agent_idx):
         #Extract optimizer state for one agent, returning separate dicts for
