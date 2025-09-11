@@ -19,7 +19,7 @@
 ##module load cuda/10.1
 #source ~/.bashrc
 eval "$(command conda 'shell.bash' 'hook' 2> /dev/null)"
-conda activate isaaclab_242
+conda activate isaaclab_drail
 
 echo "Conda env: $CONDA_DEFAULT_ENV"
 
@@ -62,7 +62,6 @@ sel_adjs=$5
 ckpt_path=$6
 use_ft_sensor=$7
 hybrid_control=$8
-hybrid_agent=$9
 
 task_name="Isaac-Factory-TaskType-ObsType-v0"
 echo "$task_name"
@@ -83,7 +82,8 @@ echo "Hybrid Agent: $hybrid_agent"
 echo "Selection Adjustments: $sel_adjs"
 echo "Ckpt Path: $ckpt_path"
 
-python -m exp_control.record_ckpts.single_task_ckpt_recorder \
+#python -m exp_control.record_ckpts.single_task_ckpt_recorder \
+python -m exp_control.record_ckpts.block_simba_ckpt_recorder \   
        --task=$task_name \
        --use_ft_sensor=$use_ft_sensor \
        --decimation=8 \
@@ -94,10 +94,10 @@ python -m exp_control.record_ckpts.single_task_ckpt_recorder \
        --control_torque=0 \
        --hybrid_selection_reward="base" \
        --ckpt_record_path=$ckpt_path \
-       --parallel_control=$parallel_control \
-       --sel_adjs=$sel_adjs \
-       --easy_mode 
+       --eval_seed=42 \
+       --sel_adjs=$sel_adjs 
 
        #--log_smoothness_metrics=0
 
 #bash "exp_control/run_hybrid_exp.bash" $1 $2 "$3_$SLURM_ARRAY_TASK_ID" $4 $5 $6 $7 $8
+# bash exp_control/HPC_utils/hpc_batch_recorder.bash 0 0 25 0 "init_bias" ~/ckpt_trackers/pose_ctrl_FT\(OFF\)_ckpt_tracker.txt 0 0

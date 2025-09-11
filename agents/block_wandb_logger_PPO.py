@@ -88,9 +88,15 @@ class BlockWandbLoggerPPO(MultiWandbLoggerPPO):
             ckpt_paths.append(os.path.join(exp_args['directory'], exp_args['experiment_name'], "checkpoints", f"agent_{i}_{timestep*self.num_envs // self.num_agents}.pt"))
             vid_paths.append( os.path.join(exp_args['directory'], exp_args['experiment_name'], "eval_videos", f"agent_{i}_{timestep* self.num_envs // self.num_agents}.gif"))
             critic_paths.append(os.path.join(exp_args['directory'], exp_args['experiment_name'], "checkpoints", f"critic_{i}_{timestep*self.num_envs // self.num_agents}.pt"))
-                             
-        export_policies(self.models['policy'].actor_mean, self.models['policy'].actor_logstd, ckpt_paths)
-        export_policies(self.models['value'].critic, None, critic_paths)
+
+        # Get preprocessor states (shared across all agents)
+        preprocessor_states = {
+            'state_preprocessor': self._state_preprocessor.state_dict() if hasattr(self, '_state_preprocessor') and self._state_preprocessor is not None else None,
+            'value_preprocessor': self._value_preprocessor.state_dict() if hasattr(self, '_value_preprocessor') and self._value_preprocessor is not None else None,
+        }
+
+        export_policies(self.models['policy'].actor_mean, self.models['policy'].actor_logstd, ckpt_paths, preprocessor_states)
+        export_policies(self.models['value'].critic, None, critic_paths, preprocessor_states)
         
         #self.track_data("ckpt_video", (timestep, vid_path) )
         if self.track_ckpt_paths:

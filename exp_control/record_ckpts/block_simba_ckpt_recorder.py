@@ -1,5 +1,13 @@
+#import argparse
+#import sys
+#try:
+#    from isaaclab.app import AppLauncher
+#except:
+#    from omni.isaac.lab.app import AppLauncher
+
 import argparse
 import sys
+
 try:
     from isaaclab.app import AppLauncher
 except:
@@ -12,7 +20,6 @@ parser.add_argument("--task", type=str, default="Isaac-Factory-PegInsert-Local-v
 parser.add_argument("--ckpt_record_path", type=str, default="/nfs/stak/users/brownhun/ckpt_tracker.txt", help="Path the ckpt recording data")
 parser.add_argument("--easy_mode", action="store_true", default=False, help="Limits the intialization to simplify problem")
 parser.add_argument("--use_obs_noise", action="store_true", default=False, help="Adds Gaussian noise specificed by env cfg to observations")
-parser.add_argument("--seed", type=int, default=-1, help="Seed used for the environment")
 parser.add_argument("--decimation", type=int, default=8, help="How many simulation steps between policy observations")
 parser.add_argument("--policy_hz", type=int, default=15, help="Rate in hz that the policy should get new observations")
 parser.add_argument("--break_force", type=str, default="-1.0", help="Force at which the held object breaks (peg, gear or nut)")
@@ -34,6 +41,8 @@ parser.add_argument("--impedance_agent", type=int, default=0, help="Switches to 
 parser.add_argument("--control_damping", type=int, default=0, help="Allows Impedance Controller Policy to predict the damping constants")
 parser.add_argument("--log_smoothness_metrics", action="store_true", default=False, help="Log the sum squared velocity, jerk and force metrics")
 parser.add_argument("--sel_adjs", type=str, default="none", help="Adds different selection biases")
+parser.add_argument("--sensitivity_mask_freq", type=int, default=10, help="Frequency for running masking experiments (every N steps, 1=every step)")
+parser.add_argument("--eval_seed", type=int, default=42, help="Fixed seed for consistent evaluation environments")
 
 # learning params
 parser.add_argument("--lr_scheduler_type", type=str, default="cfg", help="Sets the learning rate scheduler type")
@@ -273,8 +282,210 @@ class Img2InfoWrapperclass(gym.Wrapper):
         observations, info = super().reset(**kwargs)
         info['img'] = self.unwrapped.scene['tiled_camera'].data.output['rgb']
         return observations, info
+def calculate_sensitivity_metrics_incremental():
+      """Initialize incremental sensitivity calculation storage."""
+      return {
+          'step_count': 0,
+          'policy_saliency_sum': {},
+          'policy_fisher_sum': {},
+          'critic_saliency_sum': {},
+          'masking_kl_sum': {},
+          'masking_value_change_sum': {},
+          'masking_step_count': 0
+      }
 
-def calculate_evaluation_metrics(infos_history, rewards_history, success_history, engagement_history):
+def update_sensitivity_metrics(
+    agent, states, actions, sensitivity_storage, 
+    env, step_num, mask_freq, device
+):
+    """Update sensitivity metrics incrementally during rollout."""
+    from envs.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG
+
+    # Split states back into policy and critic components
+    obs_dim = env.cfg.observation_space
+    policy_states = states[:, :obs_dim]
+    critic_states = states
+
+    # Enable gradients only for this calculation
+    policy_states_grad = policy_states.clone().detach().requires_grad_(True)
+    critic_states_grad = critic_states.clone().detach().requires_grad_(True)
+
+    # === POLICY SALIENCY (every step) ===
+    try:
+        # Get policy log probability
+        state_input = policy_states_grad
+        if hasattr(agent, '_state_preprocessor') and agent._state_preprocessor is not None:
+            state_input = agent._state_preprocessor(state_input)
+
+        _, log_prob, _ = agent.policy.act({
+            "states": state_input,
+            "taken_actions": actions
+        }, role="policy")
+
+        # Calculate gradients
+        policy_grads = torch.autograd.grad(
+            log_prob.mean(), policy_states_grad,
+            retain_graph=True, create_graph=False
+        )[0]
+
+        # Accumulate saliency metrics by observation group
+        start_idx = 0
+        for group in env.cfg.obs_order:
+            if group in OBS_DIM_CFG:
+                end_idx = start_idx + OBS_DIM_CFG[group]
+                group_grads = policy_grads[:, start_idx:end_idx]
+
+                # Accumulate saliency and Fisher information
+                if group not in sensitivity_storage['policy_saliency_sum']:
+                    sensitivity_storage['policy_saliency_sum'][group] = 0.0
+                    sensitivity_storage['policy_fisher_sum'][group] = 0.0
+
+                sensitivity_storage['policy_saliency_sum'][group] += group_grads.abs().mean().item()
+                sensitivity_storage['policy_fisher_sum'][group] += (group_grads ** 2).mean().item()
+
+                start_idx = end_idx
+
+    except Exception as e:
+        print(f"Warning: Policy saliency calculation failed at step {step_num}: {e}")
+
+    # === CRITIC SALIENCY (every step) ===
+    try:
+        # Get critic value
+        state_input = critic_states_grad
+        if hasattr(agent, '_state_preprocessor') and agent._state_preprocessor is not None:
+            state_input = agent._state_preprocessor(state_input)
+
+        values, _, _ = agent.value.act({"states": state_input}, role="value")
+
+        # Calculate gradients
+        critic_grads = torch.autograd.grad(
+            values.mean(), critic_states_grad,
+            create_graph=False
+        )[0]
+        
+        # Accumulate critic saliency by state group
+        start_idx = 0
+        for group in env.cfg.state_order:
+            if group in STATE_DIM_CFG:
+                end_idx = start_idx + STATE_DIM_CFG[group]
+                group_grads = critic_grads[:, start_idx:end_idx]
+                
+                if group not in sensitivity_storage['critic_saliency_sum']:
+                    sensitivity_storage['critic_saliency_sum'][group] = 0.0
+
+                sensitivity_storage['critic_saliency_sum'][group] += group_grads.abs().mean().item()
+                start_idx = end_idx
+
+    except Exception as e:
+        print(f"Warning: Critic saliency calculation failed at step {step_num}: {e}")
+
+    # === MASKING EXPERIMENTS (every mask_freq steps) ===
+    if step_num % mask_freq == 0:
+        try:
+            # Get baseline policy and critic outputs (without gradients)
+            with torch.no_grad():
+                baseline_state_input = policy_states
+                if hasattr(agent, '_state_preprocessor') and agent._state_preprocessor is not None:
+                    baseline_state_input = agent._state_preprocessor(baseline_state_input)
+
+                _, baseline_log_prob, _ = agent.policy.act({
+                    "states": baseline_state_input,
+                    "taken_actions": actions
+                }, role="policy")
+
+                baseline_values, _, _ = agent.value.act({
+                    "states": agent._state_preprocessor(critic_states) if hasattr(agent, '_state_preprocessor') and
+                    agent._state_preprocessor is not None else critic_states
+                }, role="value")
+
+                # Test masking each observation group
+                start_idx = 0
+                for group in env.cfg.obs_order:
+                    if group in OBS_DIM_CFG:
+                        end_idx = start_idx + OBS_DIM_CFG[group]
+
+                        # Create masked states
+                        masked_policy_states = policy_states.clone()
+                        masked_policy_states[:, start_idx:end_idx] = 0.0  # Mask to zero
+
+                        with torch.no_grad():
+                            # Policy KL divergence
+                            masked_state_input = masked_policy_states
+                            if hasattr(agent, '_state_preprocessor') and agent._state_preprocessor is not None:
+                                masked_state_input = agent._state_preprocessor(masked_state_input)
+
+                            _, masked_log_prob, _ = agent.policy.act({
+                                "states": masked_state_input,
+                                "taken_actions": actions
+                            }, role="policy")
+
+                            ratio = masked_log_prob - baseline_log_prob
+                            kl = ((torch.exp(ratio) - 1) - ratio).mean().item()
+
+                            if group not in sensitivity_storage['masking_kl_sum']:
+                                sensitivity_storage['masking_kl_sum'][group] = 0.0
+                            sensitivity_storage['masking_kl_sum'][group] += kl
+
+                        start_idx = end_idx
+
+                # Test masking each state group for critic
+                start_idx = 0
+                for group in env.cfg.state_order:
+                    if group in STATE_DIM_CFG:
+                        end_idx = start_idx + STATE_DIM_CFG[group]
+
+                        # Create masked states
+                        masked_critic_states = critic_states.clone()
+                        masked_critic_states[:, start_idx:end_idx] = 0.0
+
+                        with torch.no_grad():
+                            masked_values, _, _ = agent.value.act({
+                                "states": agent._state_preprocessor(masked_critic_states) if hasattr(agent, '_state_preprocessor') and
+                                agent._state_preprocessor is not None else masked_critic_states
+                            }, role="value")
+
+                            value_change = (baseline_values - masked_values).abs().mean().item()
+
+                            if group not in sensitivity_storage['masking_value_change_sum']:
+                                sensitivity_storage['masking_value_change_sum'][group] = 0.0
+                            sensitivity_storage['masking_value_change_sum'][group] += value_change
+
+                        start_idx = end_idx
+
+            sensitivity_storage['masking_step_count'] += 1
+
+        except Exception as e:
+            print(f"Warning: Masking experiments failed at step {step_num}: {e}")
+
+        sensitivity_storage['step_count'] += 1
+
+def finalize_sensitivity_metrics(sensitivity_storage):
+    """Convert accumulated sums to averages."""
+    final_metrics = {}
+
+    # Policy saliency metrics
+    for group, total in sensitivity_storage['policy_saliency_sum'].items():
+        final_metrics[f'{group} Sensitivity / Policy Saliency'] = total / sensitivity_storage['step_count']
+
+    for group, total in sensitivity_storage['policy_fisher_sum'].items():
+        final_metrics[f'{group} Sensitivity / Policy Fisher'] = total / sensitivity_storage['step_count']
+
+    # Critic saliency metrics
+    for group, total in sensitivity_storage['critic_saliency_sum'].items():
+        final_metrics[f'{group} Sensitivity / Critic Saliency'] = total / sensitivity_storage['step_count']
+
+    # Masking metrics (averaged over masking steps only)
+    if sensitivity_storage['masking_step_count'] > 0:
+        for group, total in sensitivity_storage['masking_kl_sum'].items():
+            final_metrics[f'{group} Sensitivity / Policy KL'] = total / sensitivity_storage['masking_step_count']
+
+        for group, total in sensitivity_storage['masking_value_change_sum'].items():
+            final_metrics[f'{group} Sensitivity / Critic Value Change'] = total / sensitivity_storage['masking_step_count']
+
+    return final_metrics
+
+def calculate_evaluation_metrics(infos_history, rewards_history, success_history, engagement_history, 
+                                 terminated_episodes=None, truncated_episodes=None, final_success=None):
     """
     Calculate evaluation statistics similar to MultiWandbLoggerPPO.
     
@@ -283,6 +494,9 @@ def calculate_evaluation_metrics(infos_history, rewards_history, success_history
         rewards_history: List of reward tensors from each step  
         success_history: List of success masks from each step
         engagement_history: List of engagement masks from each step
+        terminated_episodes: Boolean tensor indicating which episodes terminated
+        truncated_episodes: Boolean tensor indicating which episodes truncated  
+        final_success: Boolean tensor indicating final success state
     
     Returns:
         Dictionary of evaluation metrics
@@ -303,14 +517,29 @@ def calculate_evaluation_metrics(infos_history, rewards_history, success_history
     any_engagement = torch.zeros(num_envs, dtype=torch.bool, device=final_success.device)
     for engagement in engagement_history:
         any_engagement |= engagement.squeeze()
-    
-    # Failure rate is 1 - success rate
-    success_rate = final_success.float().mean().item()
-    failure_rate = 1.0 - success_rate
     engagement_rate = any_engagement.float().mean().item()
-    
+
+    # Calculate success, failure, and truncation rates
+    if final_success is not None:
+        success_rate = final_success.float().mean().item()
+    else:
+        final_success = success_history[-1] if success_history else torch.zeros(num_envs, dtype=torch.bool)
+        success_rate = final_success.float().mean().item()
+        
     metrics["Eval / Success Rate"] = success_rate
-    metrics["Eval / Failure Rate"] = failure_rate 
+
+    # Failure rate: episodes that terminated without success
+    if terminated_episodes is not None and final_success is not None:
+        failed_episodes = terminated_episodes & ~final_success
+        failure_rate = failed_episodes.float().mean().item()
+
+        # Truncation rate: episodes that truncated without success
+        truncated_no_success = truncated_episodes & ~final_success
+        truncation_rate = truncated_no_success.float().mean().item()
+
+        metrics["Eval / Failure Rate"] = failure_rate
+        metrics["Eval / Truncation Rate"] = truncation_rate
+
     metrics["Eval / Engagement Rate"] = engagement_rate
     metrics["Eval / Total Returns (Avg)"] = total_returns.mean().item()
     metrics["Eval / Total Returns (Std)"] = total_returns.std().item()
@@ -350,9 +579,78 @@ def calculate_evaluation_metrics(infos_history, rewards_history, success_history
     
     return metrics
 
+def extract_and_set_break_force(env, wandb_project, run_id):
+    """
+    Extract break_force from wandb config and update environment.
+      
+    Args:
+        env: The environment instance
+        wandb_project: WandB project name
+        run_id: WandB run ID
+      
+    Returns:
+        break_force value that was set, or None if failed
+    """
+    import wandb
+
+    try:
+        # Initialize wandb API to fetch run config
+        api = wandb.Api()
+        run = api.run(f"{wandb_project}/{run_id}")
+
+        # Extract break_force from config
+        break_force = run.config.get('break_force', None)
+
+        if break_force is None:
+            print("Warning: break_force not found in wandb config")
+            return None
+
+        print(f"Extracted break_force from wandb config: {break_force}")
+
+        # Update environment
+        base_env = env.unwrapped
+
+        if break_force == -1.0:
+            # Unbreakable - set very high force
+            base_env.break_force.fill_(2**23)
+        else:
+            # Set specific force for all environments
+            base_env.break_force.fill_(break_force)
+
+        # Always keep fragile=True for smoothness metrics
+        base_env.fragile = True
+
+        print(f"Updated environment break_force to {base_env.break_force[0].item():.2f} (fragile=True)")
+
+        return break_force
+
+    except Exception as e:
+        print(f"Warning: Failed to extract/set break_force from wandb: {e}")
+        return None
+
+
 if args_cli.seed == -1:
     args_cli.seed = random.randint(0, 10000)
-seed = args_cli.seed
+    
+def reset_evaluation_seed(seed):
+    """Reset seed for consistent evaluation across checkpoints."""
+    print(f"Setting evaluation seed to {seed} for consistent environments")
+    set_seed(seed)
+
+    # Also set additional random generators for completeness
+    import numpy as np
+    import torch
+    import random
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+    
+seed = args_cli.eval_seed
 print("Seed:", seed)
 set_seed(seed)
 print("Args:", args_cli)
@@ -456,8 +754,8 @@ def main(
         replacement=True
     )
     
-    models = lUtils.set_block_models(env_cfg, agent_cfg, args_cli, env)
-    agent = lUtils.set_block_agent(env_cfg, agent_cfg, args_cli, models, memory, env)
+    models = lUtils.set_models(env_cfg, agent_cfg, args_cli, env)
+    agent = lUtils.set_agent(env_cfg, agent_cfg, args_cli, models, memory, env)
 
     print("configured...")
     while True:
@@ -507,6 +805,16 @@ def main(
             
             print("agent loaded")
             # Reset env
+            # Extract and set break_force from wandb config
+            extracted_break_force = extract_and_set_break_force(env, wandb_project, run_id)
+            if extracted_break_force is not None:
+                print(f"Successfully configured break_force: {extracted_break_force}")
+            else:
+                print("Using default break_force from environment config")
+
+            # Reset seed for consistent evaluation
+            reset_evaluation_seed(args_cli.eval_seed)
+
             agent.set_running_mode("eval")
             states, infos = env.unwrapped.reset()
             states, infos = env.reset()
@@ -529,6 +837,9 @@ def main(
             rewards_history = []
             success_history = []
             engagement_history = []
+            terminated_episodes = torch.zeros(size=(states.shape[0],), dtype=torch.bool, device=device)  # Track which episodes terminated
+            truncated_episodes = torch.zeros(size=(states.shape[0],), dtype=torch.bool, device=device)   # Track which episodes truncated
+            sensitivity_storage = calculate_sensitivity_metrics_incremental()
             
             for i in tqdm.tqdm(range(max_rollout_steps), file=sys.stdout):
                 # Get action
@@ -538,6 +849,17 @@ def main(
                     timesteps=max_rollout_steps
                 )[-1]['mean_actions']
 
+                if args_cli.sensitivity_mask_freq > 0:  # Allow disabling with freq=0
+                    update_sensitivity_metrics(
+                        agent=agent,
+                        states=states,
+                        actions=actions,
+                        sensitivity_storage=sensitivity_storage,
+                        env=env,
+                        step_num=i,
+                        mask_freq=args_cli.sensitivity_mask_freq,
+                        device=device
+                    )
                 vals.append(agent.value.act({"states": states}, role="value")[0])
                 
                 # Zero out actions for failed or successful environments
@@ -556,8 +878,10 @@ def main(
                 for k in range(env.num_envs):
                     images[i, k*180:(k+1)*180, 0:240, :] = infos['img'][k,:,:,:]
 
-                # Only track statistics for environments that haven't terminated
+                # Track which episodes terminated vs truncated (only for currently active episodes)
                 active_envs = alive_mask[:,0]
+                terminated_episodes[active_envs] |= terminated[active_envs]
+                truncated_episodes[active_envs] |= truncated[active_envs]
                 tot_rew[active_envs] += step_rew[active_envs]
 
                 # Update alive mask
@@ -613,8 +937,13 @@ def main(
             step_num = int(ckpt_path.split("/")[-1][6:-3])
             
             # Calculate evaluation metrics
-            eval_metrics = calculate_evaluation_metrics(infos_history, rewards_history, success_history, engagement_history)
-            
+            eval_metrics = calculate_evaluation_metrics(
+                infos_history, rewards_history, success_history, engagement_history,
+                terminated_episodes, truncated_episodes, success_mask[:,0]  # Pass the termination tracking
+            )
+            sensitivity_metrics = finalize_sensitivity_metrics(sensitivity_storage) if args_cli.sensitivity_mask_freq > 0 else {}
+            print(f"Calculated {len(sensitivity_metrics)} sensitivity metrics")
+
             # Log to WandB
             wandb.init(
                 project=wandb_project,
@@ -630,11 +959,14 @@ def main(
                     format='gif'
                 ),
                 "env_step": step_num, 
-                "exp_step": step_num // 256
+                "exp_step": step_num // 256,
+                "eval_seed": args_cli.eval_seed  # Log the seed used
+
             }
             
             # Add evaluation metrics
             log_data.update(eval_metrics)
+            log_data.update(sensitivity_metrics)
             
             wandb.log(log_data)
             wandb.finish()

@@ -416,19 +416,7 @@ def set_models(env_cfg, agent_cfg, args_cli, env):
     # https://skrl.readthedocs.io/en/latest/api/agents/ppo.html#models
     
     models = {}
-    if args_cli.parallel_agent==1:
-        ############ TODO: Make Multi Version ##########################
-        models['policy'] = ParallelControlSimBaActor( 
-            observation_space=env.cfg.observation_space, 
-            action_space=env.action_space,
-            #action_gain=0.05,
-            device=env.device,
-            act_init_std = agent_cfg['models']['act_init_std'],
-            actor_n = agent_cfg['models']['actor']['n'],
-            actor_latent = agent_cfg['models']['actor']['latent_size'],
-            force_scale= env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]
-        )
-    elif args_cli.hybrid_agent==1:
+    if args_cli.hybrid_agent==1:
         
         set_hybrid_agent_init_stds(env_cfg, agent_cfg, args_cli)
 
@@ -440,22 +428,6 @@ def set_models(env_cfg, agent_cfg, args_cli, env):
             actor_n = agent_cfg['models']['actor']['n'],
             actor_latent = agent_cfg['models']['actor']['latent_size'],
             num_agents = env_cfg.num_agents, #args_cli.num_agents
-        )
-    elif args_cli.impedance_agent==1:
-        ############ TODO: Make Multi Version ##########################
-        models['policy'] = ImpedanceControlSimBaActor(
-            observation_space=env.cfg.observation_space, 
-            action_space=env.action_space,
-            #action_gain=0.05,
-            device=env.device,
-            act_init_std = agent_cfg['models']['act_init_std'],
-            actor_n = agent_cfg['models']['actor']['n'],
-            actor_latent = agent_cfg['models']['actor']['latent_size'],
-            pos_scale = env_cfg.ctrl.pos_action_threshold[0],  
-            rot_scale = env_cfg.ctrl.rot_action_threshold[0],
-            prop_scale = env_cfg.ctrl.vic_prop_action_threshold[0],
-            damp_scale = env_cfg.ctrl.vic_damp_action_threshold[0],
-            ctrl_damping=args_cli.control_damping
         )
     else:
         if args_cli.hybrid_control or args_cli.parallel_control:

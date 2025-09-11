@@ -251,11 +251,12 @@ class BlockSimBaCritic(DeterministicMixin, Model):
 # -----------------------------
 #  Helpers
 # -----------------------------
+"""
 def export_policies(block_model, stds, save_paths):
-    """
-    Save each agent's parameters separately.
-    save_paths: list of file paths, length = num_agents
-    """
+    
+    #Save each agent's parameters separately.
+    #save_paths: list of file paths, length = num_agents
+    
     num_agents = block_model.fc_in.weight.shape[0]
     hidden_dim = block_model.fc_in.weight.shape[1]
     obs_dim = block_model.fc_in.weight.shape[2]
@@ -276,6 +277,41 @@ def export_policies(block_model, stds, save_paths):
             # critic 
             torch.save(agent.state_dict(), save_paths[i])
 
+"""            
+def export_policies(block_model, stds, save_paths, preprocessor_states=None):
+      """
+      Save each agent's parameters separately with preprocessor states.
+      save_paths: list of file paths, length = num_agents
+      preprocessor_states: dict with state_preprocessor and value_preprocessor state_dicts
+      """
+      num_agents = block_model.fc_in.weight.shape[0]
+
+      for i in range(num_agents):
+          agent = extract_agent(block_model, i)
+
+          # Create save dictionary
+          if stds is not None:
+              # policy
+              save_dict = {
+                  'net_state_dict': agent.state_dict(),
+                  'log_std': stds[i]
+              }
+          else:
+              # critic 
+              save_dict = {
+                  'net_state_dict': agent.state_dict()
+              }
+
+          # Add preprocessor states if provided
+          if preprocessor_states is not None:
+              if preprocessor_states.get('state_preprocessor') is not None:
+                  save_dict['state_preprocessor'] = preprocessor_states['state_preprocessor']
+              if preprocessor_states.get('value_preprocessor') is not None:
+                  save_dict['value_preprocessor'] = preprocessor_states['value_preprocessor']
+
+          torch.save(save_dict, save_paths[i])
+
+          
 def extract_agent(block_model: nn.Module, agent_idx: int):
     """
     Extract a single-agent network from a block-parallel model.

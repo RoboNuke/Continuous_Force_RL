@@ -124,6 +124,14 @@ class EpisodeTracker:
 
     def reset_envs(self, done_mask: torch.Tensor, infos: dict):
         if done_mask.any():
+            # Calculate final engagement lengths for environments ending while engaged
+            idxs = torch.nonzero(done_mask, as_tuple=False).flatten()
+            for i in idxs.tolist():
+                # If environment is currently engaged when episode ends, record the engagement length
+                if self.current_engaged[i] and self.engagement_start[i] >= 0:
+                    length = self.env_steps[i].item() - self.engagement_start[i].item()
+                    self.engagement_lengths[i].append(length)
+
             metrics = self._gather_metrics(done_mask, infos)
             self.finished_metrics.append(metrics)
 
@@ -560,7 +568,9 @@ super().step(action)
                 ckpt_path = os.path.join(exp_args['directory'], exp_args['experiment_name'], "checkpoints", f"agent_{i}_{timestep*self.num_envs // self.num_agents}.pt")
                 torch.save({
                     'net_state_dict': net.state_dict(),
-                    'log_std': log_std
+                    'log_std': log_std,
+                    'state_preprocessor': self._state_preprocessor.state_dict() if hasattr(self, '_state_preprocessor') and self._state_preprocessor is not None else None,
+                    'value_preprocessor': self._value_preprocessor.state_dict() if hasattr(self, '_value_preprocessor') and self._value_preprocessor is not None else None,
                 }, ckpt_path)
                 print(f"Saved network {i} to {ckpt_path}")
         else:
@@ -568,7 +578,9 @@ super().step(action)
             ckpt_path = os.path.join(exp_args['directory'], exp_args['experiment_name'], "checkpoints", f"agent_{timestep*self.num_envs // self.num_agents}.pt")
             torch.save({
                 'net_state_dict': actor_model.actor_mean.state_dict(),
-                'log_std': actor_model.actor_logstd
+                'log_std': actor_model.actor_logstd,
+                'state_preprocessor': self._state_preprocessor.state_dict() if hasattr(self, '_state_preprocessor') and self._state_preprocessor is not None else None,
+                'value_preprocessor': self._value_preprocessor.state_dict() if hasattr(self, '_value_preprocessor') and self._value_preprocessor is not None else None,
             }, ckpt_path)
             print(f"Saved single network to {ckpt_path}")
             
@@ -579,7 +591,61 @@ super().step(action)
             with lock:
                 with open(self.tracker_path, "a") as f:
                     f.write(f'{ckpt_path} {self.task_name} {vid_path} {self.loggers[i].wandb_cfg["project"]} {self.loggers[i].wandb_cfg["run_id"]}\n')
-                        
+    def load(self, path: str, **kwargs):
+        """Load single agent checkpoint with policy, critic, and preprocessor states."""
+        checkpoint = torch.load(path, map_location=self.device)
+
+        # Load policy network parameters
+        if 'net_state_dict' in checkpoint:
+            # Standard checkpoint format
+            self.models['policy'].actor_mean.load_state_dict(checkpoint['net_state_dict'])
+            if 'log_std' in checkpoint:
+                self.models['policy'].actor_logstd = checkpoint['log_std']
+            print("Loaded policy network")
+        else:
+            # Fallback: assume entire checkpoint is the policy state dict
+            self.models['policy'].actor_mean.load_state_dict(checkpoint)
+            print("Loaded policy network (fallback format)")
+
+        # Load critic network - need to construct critic checkpoint path
+        # Policy path: "agent_0_12345.pt" -> Critic path: "critic_0_12345.pt"
+        critic_path = path.replace("agent_", "critic_")
+        if os.path.exists(critic_path):
+            try:
+                critic_checkpoint = torch.load(critic_path, map_location=self.device)
+                
+                if 'net_state_dict' in critic_checkpoint:
+                    # Standard format
+                    self.models['value'].critic.load_state_dict(critic_checkpoint['net_state_dict'])
+                else:
+                    # Fallback: assume entire checkpoint is the critic state dict
+                    self.models['value'].critic.load_state_dict(critic_checkpoint)
+                print("Loaded critic network")
+            except Exception as e:
+                print(f"Warning: Failed to load critic from {critic_path}: {e}")
+        else:
+            print(f"Warning: Critic checkpoint not found at {critic_path}")
+
+        # Load preprocessor states if they exist (check both policy and critic checkpoints)
+        for ckpt_name, ckpt in [("policy", checkpoint), ("critic", critic_checkpoint if 'critic_checkpoint' in locals() else {})]:
+            if isinstance(ckpt, dict):
+                if 'state_preprocessor' in ckpt and ckpt['state_preprocessor'] is not None:
+                    if hasattr(self, '_state_preprocessor') and self._state_preprocessor is not None:
+                        self._state_preprocessor.load_state_dict(ckpt['state_preprocessor'])
+                        print(f"Loaded state preprocessor from {ckpt_name} checkpoint")
+                    else:
+                        print(f"Warning: {ckpt_name} checkpoint contains state_preprocessor but agent doesn't have one configured")
+
+                if 'value_preprocessor' in ckpt and ckpt['value_preprocessor'] is not None:
+                    if hasattr(self, '_value_preprocessor') and self._value_preprocessor is not None:
+                        self._value_preprocessor.load_state_dict(ckpt['value_preprocessor'])
+                        print(f"Loaded value preprocessor from {ckpt_name} checkpoint")
+                    else:
+                        print(f"Warning: {ckpt_name} checkpoint contains value_preprocessor but agent doesn't have one configured")
+
+        print(f"Loaded checkpoint from {path}")
+
+                  
     def record_transition(self,
                         states: torch.Tensor,
                         actions: torch.Tensor,
