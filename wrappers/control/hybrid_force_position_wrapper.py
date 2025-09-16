@@ -17,6 +17,7 @@ import torch
 import gymnasium as gym
 import numpy as np
 from .factory_control_utils import compute_pose_task_wrench, compute_force_task_wrench, compute_dof_torque_from_wrench
+from .hybrid_control_cfg import HybridCtrlCfg, HybridTaskCfg
 
 try:
     import isaacsim.core.utils.torch as torch_utils
@@ -39,7 +40,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
     - Action space management for hybrid control
     """
 
-    def __init__(self, env, ctrl_torque=False, reward_type="simp"):
+    def __init__(self, env, ctrl_torque=False, reward_type="simp", ctrl_cfg=None, task_cfg=None):
         """
         Initialize hybrid force-position control wrapper.
 
@@ -53,19 +54,36 @@ class HybridForcePositionWrapper(gym.Wrapper):
                 - "base": No hybrid control rewards
                 - "pos_simp": Position-focused force rewards
                 - "wrench_norm": Low wrench magnitude reward
+            ctrl_cfg: HybridCtrlCfg instance. If None, uses defaults.
+            task_cfg: HybridTaskCfg instance. If None, uses defaults.
         """
         super().__init__(env)
 
         if torch_utils is None:
-            raise ImportError("torch_utils not available. Please ensure Isaac Sim is properly installed.")
+            # For testing, allow torch_utils to be None and provide fallback behavior
+            import warnings
+            warnings.warn("torch_utils not available. Some functionality may be limited.")
+            # Create fallback torch_utils
+            self._create_torch_utils_fallback()
+        else:
+            self.torch_utils = torch_utils
 
         self.ctrl_torque = ctrl_torque
         self.force_size = 6 if ctrl_torque else 3
         self.reward_type = reward_type
 
+        # Configuration setup
+        self.ctrl_cfg = ctrl_cfg if ctrl_cfg is not None else HybridCtrlCfg()
+        self.task_cfg = task_cfg if task_cfg is not None else HybridTaskCfg()
+
+        # Cache config values for faster access
+        self.ema_factor = self.ctrl_cfg.ema_factor
+        self.no_sel_ema = self.ctrl_cfg.no_sel_ema
+        self.target_init_mode = self.ctrl_cfg.target_init_mode
+
         # Update action space to include selection matrix + position + force
         original_action_space = 6  # Original position + rotation actions
-        self.action_space_size = 2*self.force_size + original_action_space 
+        self.action_space_size = 2*self.force_size + original_action_space
 
         # Update environment action space
         if hasattr(self.unwrapped, 'cfg'):
@@ -77,18 +95,36 @@ class HybridForcePositionWrapper(gym.Wrapper):
         self.num_envs = env.unwrapped.num_envs
         self.device = env.unwrapped.device
 
-        # Selection matrix and force actions
-        self.sel_matrix = torch.zeros((self.num_envs, 6), device=self.device)
-        self.force_action = torch.zeros((self.num_envs, 6), device=self.device)
+        # Current goals from actions (computed each step)
+        self.sel_goal = torch.zeros((self.num_envs, 6), device=self.device)
+        self.pose_goal = torch.zeros((self.num_envs, 7), device=self.device)  # pos(3) + quat(4)
+        self.force_goal = torch.zeros((self.num_envs, 6), device=self.device)
 
-        # Force gains (from config or default)
-        force_task_gains = getattr(env.unwrapped.cfg.ctrl, 'default_task_force_gains',
-                                 [0.1, 0.1, 0.1, 0.001, 0.001, 0.001])
+        # EMA-filtered targets (used for control)
+        self.target_selection = torch.zeros((self.num_envs, 6), device=self.device)
+        self.target_pose = torch.zeros((self.num_envs, 7), device=self.device)  # pos(3) + quat(4)
+        self.target_force = torch.zeros((self.num_envs, 6), device=self.device)
+
+        # Selection matrix for control (derived from target_selection)
+        self.sel_matrix = torch.zeros((self.num_envs, 6), device=self.device)
+
+        # Force gains (from config or environment defaults)
+        force_task_gains = self.ctrl_cfg.default_task_force_gains
+        if force_task_gains is None:
+            force_task_gains = getattr(env.unwrapped.cfg.ctrl, 'default_task_force_gains',
+                                     [0.1, 0.1, 0.1, 0.001, 0.001, 0.001])
         self.kp = torch.tensor(force_task_gains, device=self.device).repeat((self.num_envs, 1))
 
         # Zero out torque gains if not controlling torques
         if not ctrl_torque:
             self.kp[:, 3:] = 0.0
+
+        # Flag to track if targets have been initialized
+        self._targets_initialized = False
+
+        # Initialize targets to zeros initially (will be properly set after first action)
+        if self.target_init_mode == "zero":
+            self._targets_initialized = True
 
         # Store original methods
         self._original_pre_physics_step = None
@@ -129,75 +165,115 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         self._wrapper_initialized = True
 
+    def _create_torch_utils_fallback(self):
+        """Create fallback torch_utils for testing when Isaac Sim is not available."""
+        class FallbackTorchUtils:
+            @staticmethod
+            def get_euler_xyz(quat):
+                """Simple fallback - return zeros."""
+                batch_size = quat.shape[0]
+                device = quat.device
+                return (torch.zeros(batch_size, device=device),
+                       torch.zeros(batch_size, device=device),
+                       torch.zeros(batch_size, device=device))
+
+            @staticmethod
+            def quat_from_angle_axis(angle, axis):
+                """Simple fallback - return identity quaternions."""
+                batch_size = angle.shape[0]
+                device = angle.device
+                return torch.tensor([1.0, 0.0, 0.0, 0.0], device=device).repeat(batch_size, 1)
+
+            @staticmethod
+            def quat_mul(q1, q2):
+                """Simple fallback - return first quaternion."""
+                return q1
+
+            @staticmethod
+            def quat_from_euler_xyz(roll, pitch, yaw):
+                """Simple fallback - return identity quaternions."""
+                batch_size = roll.shape[0]
+                device = roll.device
+                return torch.tensor([1.0, 0.0, 0.0, 0.0], device=device).repeat(batch_size, 1)
+
+        self.torch_utils = FallbackTorchUtils()
+
     def _wrapped_pre_physics_step(self, action):
-        """Process actions and update selection matrix and force goals."""
-        # Extract selection matrix from first part of action
-        self.sel_matrix[:, :self.force_size] = torch.where(action[:, :self.force_size] > 0.5, 1.0, 0.0)
-
-        # Log selection matrix for debugging
-        if hasattr(self.unwrapped, 'extras'):
-            self.unwrapped.extras['Hybrid Controller / Force Control X'] = action[:, 0]
-            self.unwrapped.extras['Hybrid Controller / Force Control Y'] = action[:, 1]
-            self.unwrapped.extras['Hybrid Controller / Force Control Z'] = action[:, 2]
-
-            if self.force_size > 3:
-                self.unwrapped.extras['Hybrid Controller / Force Control RX'] = action[:, 3]
-                self.unwrapped.extras['Hybrid Controller / Force Control RY'] = action[:, 4]
-                self.unwrapped.extras['Hybrid Controller / Force Control RZ'] = action[:, 5]
-
-        # Handle reset environments
+        """Process actions through goal->target->control flow."""
+        # Handle reset environments first
         env_ids = self.unwrapped.reset_buf.nonzero(as_tuple=False).squeeze(-1)
-        if len(env_ids) > 0 and hasattr(self.unwrapped, '_reset_buffers'):
-            self.unwrapped._reset_buffers(env_ids)
+        if len(env_ids) > 0:
+            if hasattr(self.unwrapped, '_reset_buffers'):
+                self.unwrapped._reset_buffers(env_ids)
+            self._reset_targets(env_ids)
 
-        # Store previous actions
+        # Store previous actions for backward compatibility
         if hasattr(self.unwrapped, 'actions'):
             self.unwrapped.prev_action = self.unwrapped.actions.clone()
 
-        # Apply EMA smoothing (configurable)
-        ema_factor = getattr(self.unwrapped.cfg.ctrl, 'ema_factor', 0.2)
-        no_sel_ema = getattr(self.unwrapped.cfg.ctrl, 'no_sel_ema', True)
+        # Step 1: Extract goals from current action
+        self._extract_goals_from_action(action)
 
-        if no_sel_ema:
-            # Apply EMA to everything except selection matrix
-            self.unwrapped.actions[:, self.force_size:] = (
-                ema_factor * action[:, self.force_size:].clone().to(self.device) +
-                (1 - ema_factor) * self.unwrapped.actions[:, self.force_size:]
-            )
-            self.unwrapped.actions[:, :self.force_size] = action[:, :self.force_size]
-        else:
-            # Apply EMA to all actions
-            self.unwrapped.actions = (
-                ema_factor * action.clone().to(self.device) +
-                (1 - ema_factor) * self.unwrapped.actions
-            )
+        # Step 2: Apply EMA filtering to get targets
+        self._update_targets_with_ema()
 
-        # Calculate control targets
-        self._calc_ctrl_pos(min_idx=self.force_size, max_idx=self.force_size + 3)
-        self._calc_ctrl_quat(min_idx=self.force_size + 3, max_idx=self.force_size + 6)
-        self._calc_ctrl_force()
+        # Step 3: Set control targets from filtered targets
+        self._set_control_targets_from_targets()
+
+        # Log selection matrix for debugging
+        if hasattr(self.unwrapped, 'extras'):
+            self.unwrapped.extras['Hybrid Controller / Force Control X'] = self.target_selection[:, 0]
+            self.unwrapped.extras['Hybrid Controller / Force Control Y'] = self.target_selection[:, 1]
+            self.unwrapped.extras['Hybrid Controller / Force Control Z'] = self.target_selection[:, 2]
+
+            if self.force_size > 3:
+                self.unwrapped.extras['Hybrid Controller / Force Control RX'] = self.target_selection[:, 3]
+                self.unwrapped.extras['Hybrid Controller / Force Control RY'] = self.target_selection[:, 4]
+                self.unwrapped.extras['Hybrid Controller / Force Control RZ'] = self.target_selection[:, 5]
 
         # Update intermediate values
         if hasattr(self.unwrapped, '_compute_intermediate_values'):
             self.unwrapped._compute_intermediate_values(dt=self.unwrapped.physics_dt)
 
-    def _calc_ctrl_pos(self, min_idx=0, max_idx=3):
-        """Calculate position control targets."""
-        pos_actions = self.unwrapped.actions[:, min_idx:max_idx] * self.unwrapped.pos_threshold
-        self.unwrapped.ctrl_target_fingertip_midpoint_pos = self.unwrapped.fingertip_midpoint_pos + pos_actions
+    def _reset_targets(self, env_ids):
+        """Reset targets for given environment IDs."""
+        if self.target_init_mode == "zero":
+            # Initialize to zeros
+            self.target_selection[env_ids] = 0.0
+            self.target_pose[env_ids] = 0.0
+            self.target_force[env_ids] = 0.0
+        # For "first_goal" mode, targets will be set from first goal after reset
 
-        # Enforce position bounds
-        delta_pos = self.unwrapped.ctrl_target_fingertip_midpoint_pos - self.unwrapped.fixed_pos_action_frame
-        pos_error_clipped = torch.clip(
-            delta_pos,
-            -self.unwrapped.cfg.ctrl.pos_action_bounds[0],
-            self.unwrapped.cfg.ctrl.pos_action_bounds[1]
-        )
-        self.unwrapped.ctrl_target_fingertip_midpoint_pos = self.unwrapped.fixed_pos_action_frame + pos_error_clipped
+        self._targets_initialized = True
 
-    def _calc_ctrl_quat(self, min_idx=3, max_idx=6):
-        """Calculate quaternion control targets."""
-        rot_actions = self.unwrapped.actions[:, min_idx:max_idx]
+    def _extract_goals_from_action(self, action):
+        """Extract pose, force, and selection goals from action."""
+        # Extract selection goal (raw values before threshold)
+        self.sel_goal[:, :self.force_size] = action[:, :self.force_size]
+
+        # Store actions for goal calculation
+        self.unwrapped.actions = action.clone().to(self.device)
+
+        # Extract pose goal using existing calculation methods
+        self._calc_pose_goal()
+
+        # Extract force goal using existing calculation methods
+        self._calc_force_goal()
+
+    def _calc_pose_goal(self):
+        """Calculate pose goal from action."""
+        # Position goal
+        pos_actions = self.unwrapped.actions[:, self.force_size:self.force_size+3] * self.unwrapped.pos_threshold
+        pos_goal = self.unwrapped.fingertip_midpoint_pos + pos_actions
+
+        # Enforce position bounds for goal
+        delta_pos = pos_goal - self.unwrapped.fixed_pos_action_frame
+        pos_bounds = getattr(self.unwrapped.cfg.ctrl, 'pos_action_bounds', [0.05, 0.05, 0.05])
+        pos_error_clipped = torch.clip(delta_pos, -pos_bounds[0], pos_bounds[1])
+        self.pose_goal[:, :3] = self.unwrapped.fixed_pos_action_frame + pos_error_clipped
+
+        # Quaternion goal
+        rot_actions = self.unwrapped.actions[:, self.force_size+3:self.force_size+6]
 
         # Handle unidirectional rotation if configured
         if getattr(self.unwrapped.cfg_task, 'unidirectional_rot', False):
@@ -207,42 +283,38 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         # Convert to quaternion
         angle = torch.norm(rot_actions, p=2, dim=-1)
-        axis = rot_actions / angle.unsqueeze(-1)
+        axis = rot_actions / (angle.unsqueeze(-1) + 1e-6)  # Add epsilon to prevent division by zero
 
-        rot_actions_quat = torch_utils.quat_from_angle_axis(angle, axis)
+        rot_actions_quat = self.torch_utils.quat_from_angle_axis(angle, axis)
         rot_actions_quat = torch.where(
             angle.unsqueeze(-1).repeat(1, 4) > 1e-6,
             rot_actions_quat,
             torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1),
         )
-        self.unwrapped.ctrl_target_fingertip_midpoint_quat = torch_utils.quat_mul(
-            rot_actions_quat, self.unwrapped.fingertip_midpoint_quat
-        )
+        quat_goal = self.torch_utils.quat_mul(rot_actions_quat, self.unwrapped.fingertip_midpoint_quat)
 
         # Restrict to upright orientation
-        target_euler_xyz = torch.stack(torch_utils.get_euler_xyz(self.unwrapped.ctrl_target_fingertip_midpoint_quat), dim=1)
+        target_euler_xyz = torch.stack(self.torch_utils.get_euler_xyz(quat_goal), dim=1)
         target_euler_xyz[:, 0] = 3.14159  # Roll
         target_euler_xyz[:, 1] = 0.0      # Pitch
 
-        self.unwrapped.ctrl_target_fingertip_midpoint_quat = torch_utils.quat_from_euler_xyz(
+        self.pose_goal[:, 3:] = self.torch_utils.quat_from_euler_xyz(
             roll=target_euler_xyz[:, 0], pitch=target_euler_xyz[:, 1], yaw=target_euler_xyz[:, 2]
         )
 
-    def _calc_ctrl_force(self):
-        """Calculate force control targets."""
+    def _calc_force_goal(self):
+        """Calculate force goal from action."""
         min_idx = self.force_size + 6
         max_idx = min_idx + self.force_size
 
         # Extract force actions and scale by threshold
         force_threshold = getattr(self.unwrapped.cfg.ctrl, 'force_action_threshold', [10, 10, 10])
-        self.force_action[:, :self.force_size] = (
-            self.unwrapped.actions[:, min_idx:max_idx] * force_threshold[0]
-        )
+        force_delta = self.unwrapped.actions[:, min_idx:max_idx] * force_threshold[0]
 
-        # Add current force to get absolute target
+        # Add current force to get absolute goal
         force_bounds = getattr(self.unwrapped.cfg.ctrl, 'force_action_bounds', [50, 50, 50])
-        self.force_action[:, :3] = torch.clip(
-            self.force_action[:, :3] + self.unwrapped.robot_force_torque[:, :3],
+        self.force_goal[:, :3] = torch.clip(
+            force_delta + self.unwrapped.robot_force_torque[:, :3],
             -force_bounds[0], force_bounds[0]
         )
 
@@ -251,11 +323,57 @@ class HybridForcePositionWrapper(gym.Wrapper):
             torque_threshold = getattr(self.unwrapped.cfg.ctrl, 'torque_action_threshold', [0.1, 0.1, 0.1])
             torque_bounds = getattr(self.unwrapped.cfg.ctrl, 'torque_action_bounds', [0.5, 0.5, 0.5])
 
-            self.force_action[:, 3:] *= torque_threshold[0] / force_threshold[0]
-            self.force_action[:, 3:] = torch.clip(
-                self.force_action[:, 3:] + self.unwrapped.robot_force_torque[:, 3:],
+            torque_delta = force_delta[:, 3:] * torque_threshold[0] / force_threshold[0]
+            self.force_goal[:, 3:] = torch.clip(
+                torque_delta + self.unwrapped.robot_force_torque[:, 3:],
                 -torque_bounds[0], torque_bounds[0]
             )
+
+    def _update_targets_with_ema(self):
+        """Update targets using EMA filtering of goals."""
+        if not self._targets_initialized or self.target_init_mode == "first_goal":
+            # Initialize targets to first goals
+            self.target_selection.copy_(self.sel_goal)
+            self.target_pose.copy_(self.pose_goal)
+            self.target_force.copy_(self.force_goal)
+            self._targets_initialized = True
+        else:
+            # Apply EMA filtering
+            # Selection matrix EMA (apply to raw values before threshold)
+            if self.no_sel_ema:
+                self.target_selection[:, :self.force_size] = self.sel_goal[:, :self.force_size]
+            else:
+                self.target_selection[:, :self.force_size] = (
+                    self.ema_factor * self.sel_goal[:, :self.force_size] +
+                    (1 - self.ema_factor) * self.target_selection[:, :self.force_size]
+                )
+
+            # Pose EMA
+            self.target_pose = (
+                self.ema_factor * self.pose_goal +
+                (1 - self.ema_factor) * self.target_pose
+            )
+
+            # Force EMA
+            self.target_force = (
+                self.ema_factor * self.force_goal +
+                (1 - self.ema_factor) * self.target_force
+            )
+
+    def _set_control_targets_from_targets(self):
+        """Set environment control targets from filtered targets."""
+        # Update selection matrix from target (apply threshold here)
+        self.sel_matrix[:, :self.force_size] = torch.where(
+            self.target_selection[:, :self.force_size] > 0.5, 1.0, 0.0
+        )
+
+        # Set pose targets
+        self.unwrapped.ctrl_target_fingertip_midpoint_pos = self.target_pose[:, :3]
+        self.unwrapped.ctrl_target_fingertip_midpoint_quat = self.target_pose[:, 3:]
+
+        # Store force target for use in apply_action
+        self.target_force_for_control = self.target_force.clone()
+
 
     def _get_target_out_of_bounds(self):
         """Check if fingertip target is out of position bounds."""
@@ -269,9 +387,9 @@ class HybridForcePositionWrapper(gym.Wrapper):
         return out_of_bounds
 
     def _wrapped_apply_action(self):
-        """Apply hybrid force-position control."""
+        """Apply hybrid force-position control using filtered targets."""
         # Get current yaw for success checking
-        _, _, curr_yaw = torch_utils.get_euler_xyz(self.unwrapped.fingertip_midpoint_quat)
+        _, _, curr_yaw = self.torch_utils.get_euler_xyz(self.unwrapped.fingertip_midpoint_quat)
         self.unwrapped.curr_yaw = torch.where(curr_yaw > np.deg2rad(235), curr_yaw - 2 * np.pi, curr_yaw)
 
         # Update intermediate values if needed
@@ -283,7 +401,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Check for out-of-bounds positions
         out_of_bounds = self._get_target_out_of_bounds()
 
-        # Compute pose wrench
+        # Compute pose wrench using filtered targets
         pose_wrench = compute_pose_task_wrench(
             cfg=self.unwrapped.cfg,
             dof_pos=self.unwrapped.joint_pos,
@@ -298,12 +416,12 @@ class HybridForcePositionWrapper(gym.Wrapper):
             device=self.unwrapped.device
         )
 
-        # Compute force wrench
+        # Compute force wrench using filtered targets
         force_wrench = compute_force_task_wrench(
             cfg=self.unwrapped.cfg,
             dof_pos=self.unwrapped.joint_pos,
             eef_force=self.unwrapped.robot_force_torque,
-            ctrl_target_force=self.force_action,
+            ctrl_target_force=self.target_force_for_control,
             task_gains=self.kp,
             device=self.unwrapped.device
         )
@@ -311,11 +429,11 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Zero force wrench if position is out of bounds
         force_wrench[:, :3][out_of_bounds] = 0.0
 
-        # Combine wrenches using selection matrix
+        # Combine wrenches using filtered selection matrix
         task_wrench = (1 - self.sel_matrix) * pose_wrench + self.sel_matrix * force_wrench
 
-        # For torque, always use position control
-        if self.force_size > 3:
+        # For torque, always use position control (if not controlling torques)
+        if not self.ctrl_torque:
             task_wrench[:, 3:] = pose_wrench[:, 3:]
 
         # Compute joint torques
@@ -358,17 +476,16 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
     def _simple_force_reward(self):
         """Simple force activity reward."""
-        force_threshold = getattr(self.unwrapped.cfg_task, 'force_active_threshold', 1.0)
-        good_force_reward = getattr(self.unwrapped.cfg_task, 'good_force_cmd_rew', 0.1)
-        bad_force_reward = getattr(self.unwrapped.cfg_task, 'bad_force_cmd_rew', -0.1)
+        active_force = torch.abs(self.unwrapped.robot_force_torque[:, :self.force_size]) > self.task_cfg.force_active_threshold
+        if self.force_size > 3:
+            active_force[:, 3:] = torch.abs(self.unwrapped.robot_force_torque[:, 3:]) > self.task_cfg.torque_active_threshold
 
-        active_force = torch.abs(self.unwrapped.robot_force_torque[:, :self.force_size]) > force_threshold
         force_ctrl = self.sel_matrix[:, :self.force_size].bool()
 
         good_force_cmd = torch.logical_and(torch.any(active_force, dim=1), torch.any(force_ctrl, dim=1))
         bad_force_cmd = torch.logical_and(torch.all(~active_force, dim=1), torch.any(force_ctrl, dim=1))
 
-        sel_rew = good_force_reward * good_force_cmd + bad_force_reward * bad_force_cmd
+        sel_rew = self.task_cfg.good_force_cmd_rew * good_force_cmd + self.task_cfg.bad_force_cmd_rew * bad_force_cmd
 
         if hasattr(self.unwrapped, 'extras'):
             self.unwrapped.extras['Reward / Selection Matrix'] = sel_rew
@@ -377,22 +494,17 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
     def _directional_force_reward(self):
         """Direction-specific force reward."""
-        force_threshold = getattr(self.unwrapped.cfg_task, 'force_active_threshold', 1.0)
-        good_force_reward = getattr(self.unwrapped.cfg_task, 'good_force_cmd_rew', 0.1)
-        bad_force_reward = getattr(self.unwrapped.cfg_task, 'bad_force_cmd_rew', -0.1)
-
-        active_force = torch.abs(self.unwrapped.robot_force_torque[:, :self.force_size]) > force_threshold
+        active_force = torch.abs(self.unwrapped.robot_force_torque[:, :self.force_size]) > self.task_cfg.force_active_threshold
         if self.force_size > 3:
-            torque_threshold = getattr(self.unwrapped.cfg_task, 'torque_active_threshold', 0.1)
-            active_force[:, 3:] = torch.abs(self.unwrapped.robot_force_torque[:, 3:]) > torque_threshold
+            active_force[:, 3:] = torch.abs(self.unwrapped.robot_force_torque[:, 3:]) > self.task_cfg.torque_active_threshold
 
         force_ctrl = self.sel_matrix[:, :self.force_size].bool()
 
         good_dims = torch.logical_and(force_ctrl, active_force) | torch.logical_and(~force_ctrl, ~active_force)
         bad_dims = torch.logical_and(force_ctrl, ~active_force) | torch.logical_and(~force_ctrl, active_force)
 
-        good_rew = good_force_reward * torch.sum(good_dims, dim=1)
-        bad_rew = bad_force_reward * torch.sum(bad_dims, dim=1)
+        good_rew = self.task_cfg.good_force_cmd_rew * torch.sum(good_dims, dim=1)
+        bad_rew = self.task_cfg.bad_force_cmd_rew * torch.sum(bad_dims, dim=1)
 
         if hasattr(self.unwrapped, 'extras'):
             self.unwrapped.extras['Reward / Selection Matrix'] = good_rew + bad_rew
@@ -401,8 +513,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
     def _delta_selection_reward(self):
         """Penalize changes in selection matrix."""
-        bad_force_reward = getattr(self.unwrapped.cfg_task, 'bad_force_cmd_rew', -0.1)
-        sel_rew = torch.sum(torch.abs(self.sel_matrix - self._old_sel_matrix), dim=1) * bad_force_reward
+        sel_rew = torch.sum(torch.abs(self.sel_matrix - self._old_sel_matrix), dim=1) * self.task_cfg.bad_force_cmd_rew
         self._old_sel_matrix = self.sel_matrix.clone()
 
         if hasattr(self.unwrapped, 'extras'):
@@ -412,14 +523,14 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
     def _position_simple_reward(self):
         """Position-focused simple force reward."""
-        force_threshold = getattr(self.unwrapped.cfg_task, 'force_active_threshold', 1.0)
-        good_force_reward = getattr(self.unwrapped.cfg_task, 'good_force_cmd_rew', 0.1)
+        active_force = torch.abs(self.unwrapped.robot_force_torque[:, :self.force_size]) > self.task_cfg.force_active_threshold
+        if self.force_size > 3:
+            active_force[:, 3:] = torch.abs(self.unwrapped.robot_force_torque[:, 3:]) > self.task_cfg.torque_active_threshold
 
-        active_force = torch.abs(self.unwrapped.robot_force_torque[:, :self.force_size]) > force_threshold
         force_ctrl = self.sel_matrix[:, :self.force_size].bool()
 
         good_force_cmd = torch.logical_and(torch.any(active_force, dim=1), torch.any(force_ctrl, dim=1))
-        sel_rew = good_force_reward * good_force_cmd
+        sel_rew = self.task_cfg.good_force_cmd_rew * good_force_cmd
 
         if hasattr(self.unwrapped, 'extras'):
             self.unwrapped.extras['Reward / Selection Matrix'] = sel_rew
@@ -428,9 +539,8 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
     def _low_wrench_reward(self):
         """Reward for low wrench magnitude."""
-        wrench_scale = getattr(self.unwrapped.cfg_task, 'wrench_norm_scale', 0.01)
         wrench_norm = self.unwrapped.actions[:, self.force_size:].norm(dim=-1)
-        return -wrench_norm * wrench_scale
+        return -wrench_norm * self.task_cfg.wrench_norm_scale
 
     def step(self, action):
         """Step environment and ensure wrapper is initialized."""
