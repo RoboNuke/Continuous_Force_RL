@@ -5,12 +5,14 @@ This wrapper is deprecated and retained only for backward compatibility.
 Please use the new configurable logging system instead:
 
 New Usage:
-    from wrappers.logging.factory_wandb_wrapper import FactoryWandbLoggingWrapper
+    from wrappers.logging.factory_metrics_wrapper import FactoryMetricsWrapper
     from wrappers.logging.generic_wandb_wrapper import GenericWandbLoggingWrapper
     from wrappers.logging.logging_config import LoggingConfigPresets
 
-    # For factory environments
-    wrapper = FactoryWandbLoggingWrapper(env, wandb_config)
+    # For factory environments (two-layer approach)
+    env = FactoryMetricsWrapper(env)  # Compute metrics
+    config = LoggingConfigPresets.factory_config()
+    wrapper = GenericWandbLoggingWrapper(env, config)  # Log metrics
 
     # For other environments
     config = LoggingConfigPresets.basic_config()

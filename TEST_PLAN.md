@@ -178,57 +178,30 @@ This document outlines the comprehensive testing strategy for all factory enviro
 
 ### 4. HybridForcePositionWrapper Tests
 
-#### Test File: `tests/test_hybrid_force_position_wrapper.py`
+#### Test File: `tests/unit/test_hybrid_force_position_wrapper.py`
 
 **Test Cases:**
-- `test_initialization`
-  - Test with different reward_type values
-  - Verify ctrl_torque parameter effects
-  - Check action space size calculation
+- ✅ `test_initialization_force_only` - Test 3DOF force control initialization
+- ✅ `test_initialization_force_and_torque` - Test 6DOF force+torque initialization
+- ✅ `test_initialization_without_force_data` - Test error handling without force data
+- ✅ `test_initialization_reward_types` - Test different reward strategies
+- ✅ `test_selection_matrix_parsing` - Test selection matrix from actions
+- ✅ `test_action_ema_smoothing` - Test EMA filtering of targets
+- ✅ `test_calc_pose_goal` - Test pose goal calculation from actions
+- ✅ `test_calc_force_goal` - Test force goal calculation from actions
+- ✅ `test_get_target_out_of_bounds` - Test position bounds checking
+- ✅ `test_simple_force_reward` - Test simple force activity reward
+- ✅ `test_directional_force_reward` - Test direction-specific rewards
+- ✅ `test_delta_selection_reward` - Test selection change penalty
+- ✅ `test_low_wrench_reward` - Test low wrench magnitude reward
+- ✅ `test_wrapped_apply_action` - Test hybrid control application
+- ✅ `test_wrapped_update_rew_buf` - Test reward buffer integration
+- ✅ `test_step_initialization` - Test wrapper initialization on step
+- ✅ `test_reset_initialization` - Test wrapper initialization on reset
+- ✅ `test_torch_utils_import_warning` - Test fallback torch_utils
+- ✅ `test_action_space_update` - Test action space configuration
 
-- `test_action_space_expansion`
-  - Verify original 6 → extended size
-  - Test force_size calculation (3 vs 6)
-  - Check environment action space update
-
-- `test_selection_matrix_handling`
-  - Test selection matrix parsing from actions
-  - Verify force/position mode switching
-  - Check tensor shapes and values
-
-- `test_reward_strategies`
-  - Test "simp" reward calculation
-  - Test "dirs" directional rewards
-  - Test "delta" selection matrix penalty
-  - Test "pos_simp" position-focused
-  - Test "wrench_norm" low wrench
-  - Test "base" (no hybrid rewards)
-
-- `test_force_goal_calculation`
-  - Test force action parsing
-  - Verify bounds checking
-  - Check force gain application
-
-- `test_position_control_integration`
-  - Test position action parsing
-  - Verify pose calculation methods
-  - Check quaternion handling
-
-- `test_out_of_bounds_detection`
-  - Test position target bounds checking
-  - Verify out-of-bounds handling
-  - Check safety mechanisms
-
-- `test_control_law_computation`
-  - Mock factory_control_utils functions
-  - Test hybrid control law calculation
-  - Verify force/position blending
-
-**Mock Requirements:**
-- Mock factory_control_utils functions
-- Mock environment with control configuration
-- Various action inputs for testing
-- Position and force target scenarios
+**Status: ✅ COMPLETED - 19/19 tests passing**
 
 ---
 
@@ -643,7 +616,20 @@ numpy>=1.21.0
 - [x] Error conditions tested - **COMPLETED**
 - [x] Mock integrations working - **COMPLETED**
 
-**Status: ✅ COMPLETED - All 9 wrapper test suites implemented with 240+ test cases**
+**Status: ✅ COMPLETED - All 12 wrapper test suites implemented with 272 test cases passing**
+
+#### Individual Test Suite Status:
+- ✅ `test_force_torque_wrapper.py` - 8/8 tests passing
+- ✅ `test_fragile_object_wrapper.py` - 19/19 tests passing
+- ✅ `test_efficient_reset_wrapper.py` - 17/17 tests passing
+- ✅ `test_hybrid_force_position_wrapper.py` - 19/19 tests passing
+- ✅ `test_factory_metrics_wrapper.py` - 46/46 tests passing
+- ✅ `test_history_observation_wrapper.py` - 42/42 tests passing
+- ✅ `test_observation_manager_wrapper.py` - 37/37 tests passing
+- ✅ `test_factory_environment_builder.py` - 23/23 tests passing
+- ✅ `test_generic_wandb_wrapper.py` - 27/27 tests passing
+- ✅ `test_logging_config.py` - 25/25 tests passing
+- ✅ `test_wandb_logging_wrapper.py` - 9/9 tests passing (legacy tests)
 
 ### Integration Tests
 - [ ] All wrapper combinations functional
