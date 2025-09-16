@@ -1,0 +1,113 @@
+# Factory Environment Logging Configuration
+# This configuration defines which metrics to track for factory manipulation tasks
+
+# Wandb Settings
+wandb_entity: "your_entity"
+wandb_project: "factory_manipulation"
+wandb_name: "factory_experiment"
+wandb_group: "baseline"
+wandb_tags: ["factory", "manipulation", "ppo"]
+
+# General Settings
+num_agents: 1
+clip_eps: 0.2
+
+# Tracking Flags
+track_learning_metrics: true
+track_action_metrics: true
+track_episodes: true
+track_rewards: true
+track_episode_length: true
+track_terminations: true
+
+# Tracked Metrics
+tracked_metrics:
+  # Core episode metrics
+  reward:
+    default_value: 0.0
+    metric_type: "scalar"
+    aggregation: "mean"
+    wandb_name: "Episode / Reward"
+    enabled: true
+
+  # Factory-specific engagement metrics
+  current_engagements:
+    default_value: 0.0
+    metric_type: "boolean"
+    aggregation: "mean"
+    wandb_name: "Engagement / Engaged Rate"
+    enabled: true
+
+  current_successes:
+    default_value: 0.0
+    metric_type: "boolean"
+    aggregation: "mean"
+    wandb_name: "Success / Success Rate"
+    enabled: true
+
+  # Smoothness metrics from FactoryMetricsWrapper
+  "smoothness / Smoothness / Sum Square Velocity":
+    default_value: 0.0
+    metric_type: "scalar"
+    aggregation: "mean"
+    wandb_name: "Smoothness / Sum Squared Velocity"
+    normalize_by_episode_length: true
+    enabled: true
+
+  # Force/torque metrics from FactoryMetricsWrapper
+  "smoothness / Smoothness / Max Force":
+    default_value: 0.0
+    metric_type: "scalar"
+    aggregation: "mean"
+    wandb_name: "Force / Max Force"
+    enabled: true
+
+  "smoothness / Smoothness / Max Torque":
+    default_value: 0.0
+    metric_type: "scalar"
+    aggregation: "mean"
+    wandb_name: "Force / Max Torque"
+    enabled: true
+
+  "smoothness / Smoothness / Avg Force":
+    default_value: 0.0
+    metric_type: "scalar"
+    aggregation: "mean"
+    wandb_name: "Force / Avg Force"
+    enabled: true
+
+  "smoothness / Smoothness / Avg Torque":
+    default_value: 0.0
+    metric_type: "scalar"
+    aggregation: "mean"
+    wandb_name: "Force / Avg Torque"
+    enabled: true
+
+  # Reward components (these will be detected dynamically)
+  "Reward / reach_reward":
+    default_value: 0.0
+    metric_type: "scalar"
+    aggregation: "mean"
+    wandb_name: "Reward / Reach"
+    enabled: true
+
+  "Reward / grasp_reward":
+    default_value: 0.0
+    metric_type: "scalar"
+    aggregation: "mean"
+    wandb_name: "Reward / Grasp"
+    enabled: true
+
+  "Reward / lift_reward":
+    default_value: 0.0
+    metric_type: "scalar"
+    aggregation: "mean"
+    wandb_name: "Reward / Lift"
+    enabled: true
+
+  "Reward / align_reward":
+    default_value: 0.0
+    metric_type: "scalar"
+    aggregation: "mean"
+    wandb_name: "Reward / Align"
+    enabled: true

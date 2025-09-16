@@ -86,45 +86,180 @@ class HistoryObservationWrapper(gym.Wrapper):
             self._initialize_wrapper()
 
     def _update_observation_dimensions(self):
-        """Update observation space dimensions for history components."""
+        """Update observation space dimensions for history components using Isaac Lab's native approach."""
+
+        # Define default component dimensions
+        component_dims = {
+            "fingertip_pos": 3,
+            "fingertip_pos_rel_fixed": 3,
+            "fingertip_quat": 4,
+            "ee_linvel": 3,
+            "ee_angvel": 3,
+            "force_torque": 6,
+            "held_pos": 3,
+            "held_pos_rel_fixed": 3,
+            "held_quat": 4,
+        }
+
+        # Try multiple approaches to update dimensions
+        self._update_config_dimensions(component_dims)
+        self._update_environment_spaces(component_dims)
+
+    def _update_config_dimensions(self, component_dims):
+        """Update dimension configurations using multiple fallback approaches."""
+
+        # Approach 1: Try to find and update the environment's own dimension config
         try:
-            from envs.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG
+            # Get the module that the environment was defined in
+            env_module = self.unwrapped.__class__.__module__
+            if env_module:
+                import importlib
+                module = importlib.import_module(env_module)
 
-            # Update dimensions for history components
+                # Look for dimension config dictionaries in the environment's module
+                for attr_name in ['OBS_DIM_CFG', 'STATE_DIM_CFG']:
+                    if hasattr(module, attr_name):
+                        dim_cfg = getattr(module, attr_name)
+                        if isinstance(dim_cfg, dict):
+                            self._apply_history_scaling(dim_cfg, component_dims)
+
+        except (ImportError, AttributeError):
+            pass
+
+        # Approach 2: Try to find Isaac Lab's built-in factory environment config
+        try:
+            from isaaclab.envs.manipulation.factory import factory_env_cfg
+            if hasattr(factory_env_cfg, 'OBS_DIM_CFG'):
+                self._apply_history_scaling(factory_env_cfg.OBS_DIM_CFG, component_dims)
+            if hasattr(factory_env_cfg, 'STATE_DIM_CFG'):
+                self._apply_history_scaling(factory_env_cfg.STATE_DIM_CFG, component_dims)
+        except (ImportError, AttributeError, ModuleNotFoundError):
+            pass
+
+        # Approach 3: Try alternative Isaac Lab paths
+        try:
+            from omni.isaac.lab.envs.manipulation.factory import factory_env_cfg
+            if hasattr(factory_env_cfg, 'OBS_DIM_CFG'):
+                self._apply_history_scaling(factory_env_cfg.OBS_DIM_CFG, component_dims)
+            if hasattr(factory_env_cfg, 'STATE_DIM_CFG'):
+                self._apply_history_scaling(factory_env_cfg.STATE_DIM_CFG, component_dims)
+        except (ImportError, AttributeError, ModuleNotFoundError):
+            pass
+
+        # Approach 4: Create local dimension mapping if environment supports it
+        if hasattr(self.unwrapped, 'cfg'):
+            cfg = self.unwrapped.cfg
+
+            # Update obs_dims/state_dims if they exist
+            for dims_attr in ['obs_dims', 'state_dims']:
+                if hasattr(cfg, dims_attr) or hasattr(self.unwrapped, dims_attr):
+                    dims = getattr(cfg, dims_attr, getattr(self.unwrapped, dims_attr, {}))
+                    self._apply_history_scaling(dims, component_dims)
+
+    def _apply_history_scaling(self, dim_cfg, component_dims):
+        """Apply history scaling to dimension configuration."""
+        if not isinstance(dim_cfg, dict):
+            return
+
+        # Update dimensions for history components
+        for component in self.history_components:
+            if component in dim_cfg:
+                original_dim = dim_cfg[component]
+                dim_cfg[component] = original_dim * self.num_samples
+            elif component in component_dims:
+                # Use default dimension if not in config
+                dim_cfg[component] = component_dims[component] * self.num_samples
+
+        # Add acceleration components if enabled
+        if self.calc_acceleration:
             for component in self.history_components:
-                if component in OBS_DIM_CFG:
-                    original_dim = OBS_DIM_CFG[component]
-                    OBS_DIM_CFG[component] = original_dim * self.num_samples
+                if component in ["ee_linvel", "ee_angvel"]:
+                    acc_component = component.replace("vel", "acc")
+                    if component in dim_cfg:
+                        dim_cfg[acc_component] = dim_cfg[component]
+                    elif component in component_dims:
+                        dim_cfg[acc_component] = component_dims[component] * self.num_samples
+                elif component == "force_torque":
+                    if component in dim_cfg:
+                        dim_cfg["force_jerk"] = dim_cfg[component]
+                        dim_cfg["force_snap"] = dim_cfg[component]
+                    elif component in component_dims:
+                        jerk_snap_dim = component_dims[component] * self.num_samples
+                        dim_cfg["force_jerk"] = jerk_snap_dim
+                        dim_cfg["force_snap"] = jerk_snap_dim
 
-                if component in STATE_DIM_CFG:
-                    original_dim = STATE_DIM_CFG[component]
-                    STATE_DIM_CFG[component] = original_dim * self.num_samples
+    def _update_environment_spaces(self, component_dims):
+        """Update environment observation and state spaces."""
+        if not hasattr(self.unwrapped, 'cfg'):
+            return
 
-            # Add acceleration components if enabled
+        cfg = self.unwrapped.cfg
+
+        # Calculate total dimensions based on observation order
+        if hasattr(cfg, 'obs_order'):
+            obs_total = 0
+            for obs_name in cfg.obs_order:
+                if obs_name in self.history_components:
+                    # History component - use scaled dimension
+                    base_dim = component_dims.get(obs_name, 0)
+                    obs_total += base_dim * self.num_samples
+                else:
+                    # Non-history component - use base dimension
+                    obs_total += component_dims.get(obs_name, 0)
+
+            # Add acceleration components
             if self.calc_acceleration:
                 for component in self.history_components:
                     if component in ["ee_linvel", "ee_angvel"]:
                         acc_component = component.replace("vel", "acc")
-                        OBS_DIM_CFG[acc_component] = OBS_DIM_CFG[component]
-                        STATE_DIM_CFG[acc_component] = STATE_DIM_CFG[component]
+                        if acc_component in cfg.obs_order:
+                            base_dim = component_dims.get(component, 0)
+                            obs_total += base_dim * self.num_samples
                     elif component == "force_torque":
-                        OBS_DIM_CFG["force_jerk"] = OBS_DIM_CFG[component]
-                        OBS_DIM_CFG["force_snap"] = OBS_DIM_CFG[component]
+                        for jerk_snap in ["force_jerk", "force_snap"]:
+                            if jerk_snap in cfg.obs_order:
+                                base_dim = component_dims.get(component, 0)
+                                obs_total += base_dim * self.num_samples
 
-            # Update environment observation space
-            if hasattr(self.unwrapped, 'cfg'):
-                obs_total = sum([OBS_DIM_CFG.get(obs, 0) for obs in self.unwrapped.cfg.obs_order])
-                state_total = sum([STATE_DIM_CFG.get(state, 0) for state in self.unwrapped.cfg.state_order])
+            # Update observation space
+            if hasattr(cfg, 'observation_space'):
+                cfg.observation_space = obs_total
 
-                self.unwrapped.cfg.observation_space = obs_total
-                self.unwrapped.cfg.state_space = state_total
+        # Do the same for state space
+        if hasattr(cfg, 'state_order'):
+            state_total = 0
+            for state_name in cfg.state_order:
+                if state_name in self.history_components:
+                    base_dim = component_dims.get(state_name, 0)
+                    state_total += base_dim * self.num_samples
+                else:
+                    state_total += component_dims.get(state_name, 0)
 
-                # Reconfigure gym env spaces
-                if hasattr(self.unwrapped, '_configure_gym_env_spaces'):
-                    self.unwrapped._configure_gym_env_spaces()
+            # Add acceleration components
+            if self.calc_acceleration:
+                for component in self.history_components:
+                    if component in ["ee_linvel", "ee_angvel"]:
+                        acc_component = component.replace("vel", "acc")
+                        if acc_component in cfg.state_order:
+                            base_dim = component_dims.get(component, 0)
+                            state_total += base_dim * self.num_samples
+                    elif component == "force_torque":
+                        for jerk_snap in ["force_jerk", "force_snap"]:
+                            if jerk_snap in cfg.state_order:
+                                base_dim = component_dims.get(component, 0)
+                                state_total += base_dim * self.num_samples
 
-        except ImportError:
-            print("Warning: Could not import OBS_DIM_CFG and STATE_DIM_CFG. Dimension updates skipped.")
+            # Update state space
+            if hasattr(cfg, 'state_space'):
+                cfg.state_space = state_total
+
+        # Reconfigure gym env spaces
+        if hasattr(self.unwrapped, '_configure_gym_env_spaces'):
+            try:
+                self.unwrapped._configure_gym_env_spaces()
+            except Exception:
+                # Silently continue if reconfiguration fails
+                pass
 
     def _initialize_wrapper(self):
         """Initialize wrapper by setting up buffers and overriding methods."""

@@ -1,0 +1,70 @@
+# Locomotion Environment Logging Configuration
+# Configuration for tracking locomotion-specific metrics
+
+# Wandb Settings
+wandb_entity: "your_entity"
+wandb_project: "locomotion"
+wandb_name: "locomotion_experiment"
+wandb_group: "baseline"
+wandb_tags: ["locomotion", "movement", "ppo"]
+
+# General Settings
+num_agents: 1
+clip_eps: 0.2
+
+# Tracking Flags
+track_learning_metrics: true
+track_action_metrics: true
+track_episodes: true
+track_rewards: true
+track_episode_length: true
+track_terminations: true
+
+# Tracked Metrics
+tracked_metrics:
+  # Core episode metrics
+  reward:
+    default_value: 0.0
+    metric_type: "scalar"
+    aggregation: "mean"
+    wandb_name: "Episode / Reward"
+    enabled: true
+
+  # Locomotion-specific metrics
+  distance_traveled:
+    default_value: 0.0
+    metric_type: "scalar"
+    aggregation: "mean"
+    wandb_name: "Locomotion / Distance Traveled"
+    enabled: true
+
+  velocity:
+    default_value: 0.0
+    metric_type: "scalar"
+    aggregation: "mean"
+    wandb_name: "Locomotion / Average Velocity"
+    enabled: true
+
+  energy_consumption:
+    default_value: 0.0
+    metric_type: "scalar"
+    aggregation: "sum"
+    wandb_name: "Locomotion / Energy Consumption"
+    normalize_by_episode_length: true
+    enabled: true
+
+  # Stability metrics
+  stability:
+    default_value: 0.0
+    metric_type: "scalar"
+    aggregation: "mean"
+    wandb_name: "Locomotion / Stability"
+    enabled: false  # Disabled by default, enable if available
+
+  # Fall detection
+  falls:
+    default_value: 0.0
+    metric_type: "boolean"
+    aggregation: "sum"
+    wandb_name: "Locomotion / Falls per Episode"
+    enabled: false  # Disabled by default, enable if available

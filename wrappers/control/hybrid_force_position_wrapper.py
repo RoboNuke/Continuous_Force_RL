@@ -65,7 +65,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         # Update action space to include selection matrix + position + force
         original_action_space = 6  # Original position + rotation actions
-        self.action_space_size = self.force_size + original_action_space + self.force_size
+        self.action_space_size = 2*self.force_size + original_action_space 
 
         # Update environment action space
         if hasattr(self.unwrapped, 'cfg'):
@@ -180,22 +180,6 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Update intermediate values
         if hasattr(self.unwrapped, '_compute_intermediate_values'):
             self.unwrapped._compute_intermediate_values(dt=self.unwrapped.physics_dt)
-
-        # Update smoothness metrics
-        if hasattr(self.unwrapped, 'ep_ssv'):
-            self.unwrapped.ep_ssv += torch.linalg.norm(self.unwrapped.ee_linvel_fd, axis=1)
-
-        if hasattr(self.unwrapped, 'ep_sum_force'):
-            self.unwrapped.ep_sum_force += torch.linalg.norm(self.unwrapped.robot_force_torque[:, :3], axis=1)
-            self.unwrapped.ep_sum_torque += torch.linalg.norm(self.unwrapped.robot_force_torque[:, 3:], axis=1)
-            self.unwrapped.ep_max_force = torch.max(
-                self.unwrapped.ep_max_force,
-                torch.linalg.norm(self.unwrapped.robot_force_torque[:, :3], axis=1)
-            )
-            self.unwrapped.ep_max_torque = torch.max(
-                self.unwrapped.ep_max_torque,
-                torch.linalg.norm(self.unwrapped.robot_force_torque[:, 3:])
-            )
 
     def _calc_ctrl_pos(self, min_idx=0, max_idx=3):
         """Calculate position control targets."""

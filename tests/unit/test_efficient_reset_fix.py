@@ -134,20 +134,53 @@ class TestEfficientResetMROFix:
         # Should call DirectRLEnv's method since our MRO logic should find it by name
         assert mock_env.directrl_reset_called
 
-    def test_fallback_behavior(self, mock_env):
+    def test_fallback_behavior(self):
         """Test fallback behavior when DirectRLEnv is not found."""
-        from wrappers.mechanics.efficient_reset_wrapper import EfficientResetWrapper
 
-        # Create a wrapper but patch the MRO to not contain DirectRLEnv
+        # Create a mock environment that doesn't inherit from DirectRLEnv
+        class MockNonDirectRLEnv(gym.Env):
+            def __init__(self):
+                observation_space = gym.spaces.Box(low=-1, high=1, shape=(10,))
+                action_space = gym.spaces.Box(low=-1, high=1, shape=(4,))
+                super().__init__()
+                self.observation_space = observation_space
+                self.action_space = action_space
+
+                self.num_envs = 4
+                self.device = torch.device('cpu')
+                self.scene = Mock()
+                self.scene.env_origins = torch.zeros((4, 3))
+                self.scene.articulations = {}
+                self.scene.get_state = Mock(return_value={})
+                self.reset_called = False
+
+            def _reset_idx(self, env_ids):
+                self.reset_called = True
+
+            def step(self, action):
+                obs = self.observation_space.sample()
+                return obs, 0.0, False, False, {}
+
+            def reset(self, **kwargs):
+                obs = self.observation_space.sample()
+                return obs, {}
+
+        mock_env = MockNonDirectRLEnv()
+
+        from wrappers.mechanics.efficient_reset_wrapper import EfficientResetWrapper
         wrapper = EfficientResetWrapper(mock_env)
 
-        # Mock the MRO to not contain DirectRLEnv
-        with patch.object(type(mock_env), '__mro__', [type(mock_env), object]):
-            with patch('wrappers.mechanics.efficient_reset_wrapper.DirectRLEnv', side_effect=ImportError):
-                fallback_method = wrapper._find_directrlenv_reset_method()
+        # Test that fallback works when DirectRLEnv is not in MRO
+        # (The warning messages show fallback is already triggered)
+        fallback_method = wrapper._find_directrlenv_reset_method()
 
-                # Should fallback to the environment's own method
-                assert fallback_method is mock_env._reset_idx
+        # Should fallback to the environment's own method
+        assert fallback_method is mock_env._reset_idx
+
+        # Test that it works when called
+        mock_env.reset_called = False
+        fallback_method([0, 1])
+        assert mock_env.reset_called
 
     def test_inheritance_chain_preserved(self, wrapper, mock_env):
         """Test that the inheritance chain and instance variables are preserved."""

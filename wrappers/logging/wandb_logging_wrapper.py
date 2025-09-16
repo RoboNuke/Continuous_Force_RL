@@ -1,11 +1,22 @@
 """
-Generic Wandb Logging Wrapper
+DEPRECATED: Legacy Wandb Logging Wrapper
 
-This wrapper provides environment-agnostic Wandb logging functionality for any environment,
-with support for multi-agent scenarios using static environment assignment.
+This wrapper is deprecated and retained only for backward compatibility.
+Please use the new configurable logging system instead:
 
-Extracted from: MultiWandbLoggerPPO.py and block_wandb_logger_PPO.py
-Key features:
+New Usage:
+    from wrappers.logging.factory_wandb_wrapper import FactoryWandbLoggingWrapper
+    from wrappers.logging.generic_wandb_wrapper import GenericWandbLoggingWrapper
+    from wrappers.logging.logging_config import LoggingConfigPresets
+
+    # For factory environments
+    wrapper = FactoryWandbLoggingWrapper(env, wandb_config)
+
+    # For other environments
+    config = LoggingConfigPresets.basic_config()
+    wrapper = GenericWandbLoggingWrapper(env, config)
+
+Original features (now deprecated):
 - Episode tracking and metrics
 - Learning metrics computation
 - Histogram tracking

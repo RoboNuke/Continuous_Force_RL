@@ -141,15 +141,7 @@ class HybridForcePosActionWrapper(gym.Wrapper):#FactoryWrapper):
         self._calc_ctrl_force()
 
         # update current values
-        self.unwrapped._compute_intermediate_values(dt=self.unwrapped.physics_dt) 
-
-        # smoothness metrics
-        self.unwrapped.ep_ssv += (torch.linalg.norm(self.unwrapped.ee_linvel_fd, axis=1))
-        if self.unwrapped.use_ft or self.unwrapped.fragile:
-            self.unwrapped.ep_sum_force += torch.linalg.norm(self.unwrapped.robot_force_torque[:,:3], axis=1)
-            self.unwrapped.ep_sum_torque += torch.linalg.norm(self.unwrapped.robot_force_torque[:,3:], axis=1)
-            self.unwrapped.ep_max_force = torch.max(self.unwrapped.ep_max_force, torch.linalg.norm(self.unwrapped.robot_force_torque[:,:3], axis=1 ))
-            self.unwrapped.ep_max_torque = torch.max(self.unwrapped.ep_max_torque, torch.linalg.norm(self.unwrapped.robot_force_torque[:,3:]))
+        self.unwrapped._compute_intermediate_values(dt=self.unwrapped.physics_dt)
 
     def get_target_out_of_bounds(self):
         #out_of_bounds = torch.zeros_like(self.sel_matrix)

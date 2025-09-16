@@ -303,7 +303,27 @@ class FactoryMetricsWrapper(gym.Wrapper):
         """Step environment and ensure wrapper is initialized."""
         if not self._wrapper_initialized and hasattr(self.unwrapped, '_robot'):
             self._initialize_wrapper()
-        return super().step(action)
+
+        obs, reward, terminated, truncated, info = super().step(action)
+
+        # Copy relevant extras to info for downstream wrappers
+        if hasattr(self.unwrapped, 'extras') and self.unwrapped.extras:
+            # Copy current states that should be available every step
+            for key in ['current_engagements', 'current_successes']:
+                if key in self.unwrapped.extras:
+                    info[key] = self.unwrapped.extras[key]
+
+            # Copy smoothness data if available
+            if 'smoothness' in self.unwrapped.extras:
+                info['smoothness'] = self.unwrapped.extras['smoothness']
+
+            # Copy episode metrics when available
+            for key in ['Episode / successes', 'Episode / success_times', 'Episode / engaged',
+                       'Episode / engage_times', 'Episode / engage_lengths']:
+                if key in self.unwrapped.extras:
+                    info[key] = self.unwrapped.extras[key]
+
+        return obs, reward, terminated, truncated, info
 
     def reset(self, **kwargs):
         """Reset environment and ensure wrapper is initialized."""

@@ -122,60 +122,73 @@ class TestHistoryObservationWrapper:
 
     def test_update_observation_dimensions(self, mock_env):
         """Test observation dimension updates."""
-        # Mock the import to avoid ImportError
-        with patch('builtins.__import__') as mock_import:
-            # Mock the module and its attributes
-            mock_module = Mock()
-            mock_module.OBS_DIM_CFG = {'force_torque': 6, 'ee_linvel': 3, 'ee_angvel': 3, 'fingertip_pos': 3}
-            mock_module.STATE_DIM_CFG = {'force_torque': 6, 'ee_linvel': 3, 'ee_angvel': 3, 'fingertip_pos': 3}
+        # Create wrapper to test dimension updates
+        wrapper = HistoryObservationWrapper(
+            mock_env,
+            history_components=["force_torque", "ee_linvel"],
+            history_samples=2
+        )
 
-            def side_effect(name, *args, **kwargs):
-                if name == 'envs.factory.factory_env_cfg':
-                    return mock_module
-                return __import__.__wrapped__(name, *args, **kwargs)
+        # Test that the wrapper was created successfully
+        assert wrapper.history_components == ["force_torque", "ee_linvel"]
+        assert wrapper.num_samples == 2
 
-            mock_import.side_effect = side_effect
+        # Test the dimension calculation logic directly
+        component_dims = {
+            "force_torque": 6,
+            "ee_linvel": 3,
+            "ee_angvel": 3,
+            "fingertip_pos": 3,
+        }
 
-            wrapper = HistoryObservationWrapper(
-                mock_env,
-                history_components=["force_torque", "ee_linvel"],
-                history_samples=2
-            )
+        # Create a test dimension config
+        test_dim_cfg = {'force_torque': 6, 'ee_linvel': 3, 'ee_angvel': 3, 'fingertip_pos': 3}
 
-            # force_torque: 6 * 2 = 12, ee_linvel: 3 * 2 = 6
-            assert mock_module.OBS_DIM_CFG['force_torque'] == 12
-            assert mock_module.OBS_DIM_CFG['ee_linvel'] == 6
-            assert mock_module.STATE_DIM_CFG['force_torque'] == 12
-            assert mock_module.STATE_DIM_CFG['ee_linvel'] == 6
+        # Test the scaling function directly
+        wrapper._apply_history_scaling(test_dim_cfg, component_dims)
+
+        # force_torque: 6 * 2 = 12, ee_linvel: 3 * 2 = 6
+        assert test_dim_cfg['force_torque'] == 12
+        assert test_dim_cfg['ee_linvel'] == 6
+        # Non-history components should remain unchanged
+        assert test_dim_cfg['ee_angvel'] == 3
 
     def test_update_observation_dimensions_with_acceleration(self, mock_env):
         """Test observation dimension updates with acceleration."""
-        # Mock the import to avoid ImportError
-        with patch('builtins.__import__') as mock_import:
-            # Mock the module and its attributes
-            mock_module = Mock()
-            mock_module.OBS_DIM_CFG = {'force_torque': 6, 'ee_linvel': 3, 'ee_angvel': 3}
-            mock_module.STATE_DIM_CFG = {'force_torque': 6, 'ee_linvel': 3, 'ee_angvel': 3}
+        # Create wrapper with acceleration enabled
+        wrapper = HistoryObservationWrapper(
+            mock_env,
+            history_components=["force_torque", "ee_linvel"],
+            history_samples=2,
+            calc_acceleration=True
+        )
 
-            def side_effect(name, *args, **kwargs):
-                if name == 'envs.factory.factory_env_cfg':
-                    return mock_module
-                return __import__.__wrapped__(name, *args, **kwargs)
+        # Test that the wrapper was created successfully
+        assert wrapper.history_components == ["force_torque", "ee_linvel"]
+        assert wrapper.num_samples == 2
+        assert wrapper.calc_acceleration == True
 
-            mock_import.side_effect = side_effect
+        # Test the dimension calculation logic directly
+        component_dims = {
+            "force_torque": 6,
+            "ee_linvel": 3,
+            "ee_angvel": 3,
+        }
 
-            wrapper = HistoryObservationWrapper(
-                mock_env,
-                history_components=["force_torque", "ee_linvel"],
-                history_samples=2,
-                calc_acceleration=True
-            )
+        # Create a test dimension config
+        test_dim_cfg = {'force_torque': 6, 'ee_linvel': 3, 'ee_angvel': 3}
 
-            # Check acceleration components are added
-            assert 'ee_linacc' in mock_module.OBS_DIM_CFG
-            assert 'force_jerk' in mock_module.OBS_DIM_CFG
-            assert 'force_snap' in mock_module.OBS_DIM_CFG
-            assert mock_module.OBS_DIM_CFG['ee_linacc'] == mock_module.OBS_DIM_CFG['ee_linvel']
+        # Test the scaling function directly
+        wrapper._apply_history_scaling(test_dim_cfg, component_dims)
+
+        # Original dimensions scaled
+        assert test_dim_cfg['force_torque'] == 12  # 6 * 2
+        assert test_dim_cfg['ee_linvel'] == 6  # 3 * 2
+
+        # Acceleration components added
+        assert test_dim_cfg['ee_linacc'] == 6  # Same as ee_linvel
+        assert test_dim_cfg['force_jerk'] == 12  # Same as force_torque
+        assert test_dim_cfg['force_snap'] == 12  # Same as force_torque
 
     def test_init_history_buffers(self, wrapper_custom):
         """Test initialization of history buffers."""

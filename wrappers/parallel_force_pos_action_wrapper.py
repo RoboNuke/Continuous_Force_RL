@@ -131,15 +131,7 @@ class ParallelForcePosActionWrapper(gym.ActionWrapper):
         self._calc_ctrl_force()
 
         # update current values
-        self.env.unwrapped._compute_intermediate_values(dt=self.env.unwrapped.physics_dt) 
-
-        # smoothness metrics
-        self.unwrapped.ep_ssv += (torch.linalg.norm(self.unwrapped.ee_linvel_fd, axis=1))
-        if self.unwrapped.use_ft or self.unwrapped.fragile:
-            self.unwrapped.ep_sum_force += torch.linalg.norm(self.unwrapped.robot_force_torque[:,:3], axis=1)
-            self.unwrapped.ep_sum_torque += torch.linalg.norm(self.unwrapped.robot_force_torque[:,3:], axis=1)
-            self.unwrapped.ep_max_force = torch.max(self.unwrapped.ep_max_force, torch.linalg.norm(self.unwrapped.robot_force_torque[:,:3], axis=1 ))
-            self.unwrapped.ep_max_torque = torch.max(self.unwrapped.ep_max_torque, torch.linalg.norm(self.unwrapped.robot_force_torque[:,3:]))
+        self.env.unwrapped._compute_intermediate_values(dt=self.env.unwrapped.physics_dt)
 
     def action(self, action):
         return action
