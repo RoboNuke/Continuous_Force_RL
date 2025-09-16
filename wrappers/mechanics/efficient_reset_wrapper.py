@@ -49,10 +49,50 @@ class EfficientResetWrapper(gym.Wrapper):
 
         # Store and override _reset_idx method
         if hasattr(self.unwrapped, '_reset_idx'):
-            self._original_reset_idx = self.unwrapped._reset_idx
+            # CRITICAL FIX: Use DirectRLEnv's _reset_idx instead of factory env's
+            # Factory env's _reset_idx does expensive operations not suitable for partial resets
+
+            # Find DirectRLEnv's _reset_idx in the method resolution order
+            self._original_reset_idx = self._find_directrlenv_reset_method()
             self.unwrapped._reset_idx = self._wrapped_reset_idx
 
         self._wrapper_initialized = True
+
+    def _find_directrlenv_reset_method(self):
+        """
+        Find DirectRLEnv's _reset_idx method in the inheritance chain.
+
+        This ensures we call the lightweight DirectRLEnv reset logic instead of
+        the expensive factory environment reset, while maintaining proper access
+        to all instance variables and the correct inheritance chain.
+        """
+        try:
+            # First, try to find DirectRLEnv in the MRO and use its method directly
+            for cls in type(self.unwrapped).__mro__:
+                if cls.__name__ == 'DirectRLEnv' and hasattr(cls, '_reset_idx'):
+                    # Found DirectRLEnv - bind its method to our environment instance
+                    return cls._reset_idx.__get__(self.unwrapped, type(self.unwrapped))
+
+            # If DirectRLEnv not found by name, look for it by import
+            from isaaclab.envs.direct_rl_env import DirectRLEnv
+            if isinstance(self.unwrapped, DirectRLEnv):
+                # Our environment inherits from DirectRLEnv, so we can use super() approach
+                # Find the factory env class and skip it
+                for i, cls in enumerate(type(self.unwrapped).__mro__):
+                    if 'Factory' in cls.__name__ or 'factory' in cls.__name__.lower():
+                        # Found factory env, get the next class in MRO (should be DirectRLEnv)
+                        if i + 1 < len(type(self.unwrapped).__mro__):
+                            parent_cls = type(self.unwrapped).__mro__[i + 1]
+                            if hasattr(parent_cls, '_reset_idx'):
+                                return parent_cls._reset_idx.__get__(self.unwrapped, type(self.unwrapped))
+                        break
+
+        except ImportError:
+            print("Warning: Could not import DirectRLEnv")
+
+        # Final fallback: use the environment's own method (preserves original behavior)
+        print("Warning: Using factory environment's _reset_idx. Efficient reset may be less efficient.")
+        return self.unwrapped._reset_idx
 
     def _wrapped_reset_idx(self, env_ids):
         """
