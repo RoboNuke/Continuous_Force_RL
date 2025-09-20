@@ -12,7 +12,7 @@ parser = argparse.ArgumentParser(description="Train an RL agent with configurati
 # Essential arguments
 parser.add_argument("--config", type=str, required=True, help="Path to configuration file")
 parser.add_argument("--task", type=str, default=None, help="Name of the task (defaults to config value)")
-parser.add_argument("--device", type=str, default=None, help="Device to run on")
+#parser.add_argument("--device", type=str, default=None, help="Device to run on")
 parser.add_argument("--seed", type=int, default=-1, help="Random seed for reproducibility (-1 for random)")
 parser.add_argument("--override", action="append", help="Override config values: key=value")
 
@@ -54,7 +54,6 @@ try:
         ManagerBasedRLEnvCfg,
     )
     import isaaclab_tasks  # noqa: F401
-    from isaaclab_tasks.utils.hydra import hydra_task_config
     from isaaclab_rl.skrl import SkrlVecEnvWrapper
     print("isaaclab successfully loaded")
 except:
@@ -66,7 +65,6 @@ except:
         ManagerBasedRLEnvCfg,
     )
     import omni.isaac.lab_tasks  # noqa: F401
-    from omni.isaac.lab_tasks.utils.hydra import hydra_task_config
     from omni.isaac.lab_tasks.utils.wrappers.skrl import SkrlVecEnvWrapper
     print("Fallback worked!")
 
@@ -104,25 +102,56 @@ print(f"  - Total environments: {derived['total_num_envs']}")
 print(f"  - Break forces: {primary['break_forces']}")
 print(f"  - Rollout steps: {derived['rollout_steps']}")
 
-if primary.get('debug_mode', False):
-    agent_cfg_entry_point = f"SimBaNet_debug_entry_point"
-else:
-    agent_cfg_entry_point = f"SimBaNet_ppo_cfg_entry_point"
-
 print("\n\nImports complete\n\n")
 
-@hydra_task_config(args_cli.task, agent_cfg_entry_point)
-def main(
-    env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
-    agent_cfg: dict
-):
+def main():
+    """Main training function using our configuration system instead of Hydra."""
+
+    # Create Isaac Lab environment configuration
+    # We'll create a basic ManagerBasedRLEnvCfg and then apply our configuration to it
+    try:
+        # Try to get the task environment configuration from Isaac Lab
+        import gymnasium as gym
+        import omni.isaac.lab_tasks  # This registers the tasks
+
+        # Get the environment configuration class for the task
+        env_spec = gym.spec(args_cli.task)
+        if hasattr(env_spec, 'kwargs') and 'cfg' in env_spec.kwargs:
+            # Use the default configuration from the task
+            env_cfg = env_spec.kwargs['cfg']()
+        else:
+            # Fallback to a basic configuration
+            env_cfg = ManagerBasedRLEnvCfg()
+
+    except Exception as e:
+        print(f"[INFO]: Could not get default environment config, using basic config: {e}")
+        env_cfg = ManagerBasedRLEnvCfg()
+
+    # Create basic agent configuration structure
+    agent_cfg = {
+        'agent': {
+            'class': 'PPO',
+            'disable_progressbar': True,
+        },
+        'models': {
+            'policy': {},
+            'value': {}
+        }
+    }
 
     print("Ckpt Path:", derived.get('ckpt_tracker_path', "/nfs/stak/users/brownhun/ckpt_tracker2.txt"))
 
     # Step 1: Apply basic configuration to Isaac Lab configs
     print("[INFO]: Step 1 - Applying basic configuration")
     ConfigManager.apply_to_isaac_lab(env_cfg, agent_cfg, resolved_config)
-    env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+
+    # Set device from configuration or default to cuda if available
+    if hasattr(env_cfg, 'sim') and hasattr(env_cfg.sim, 'device'):
+        if env_cfg.sim.device is None:
+            env_cfg.sim.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    else:
+        # If sim config doesn't exist, create it
+        env_cfg.sim = type('SimConfig', (), {'device': 'cuda' if torch.cuda.is_available() else 'cpu'})()
 
     # Step 2: Set break forces and agent distribution
     print("[INFO]: Step 2 - Setting break forces and agent distribution")
