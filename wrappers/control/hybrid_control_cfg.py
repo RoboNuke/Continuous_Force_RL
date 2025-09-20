@@ -17,8 +17,7 @@ except ImportError:
         from isaacsim.core.utils.configclass import configclass
     except ImportError:
         # Fallback to basic dataclass if Isaac Lab not available
-        def configclass(cls):
-            return dataclass(cls)
+        configclass = dataclass
 
 
 @configclass

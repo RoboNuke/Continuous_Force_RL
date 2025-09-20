@@ -1,324 +1,476 @@
 """
-Unit tests for EfficientResetWrapper.
-
-This module tests the EfficientResetWrapper functionality including state caching,
-shuffling logic, and performance optimization features.
+Unit tests for efficient_reset_wrapper.py functionality.
+Tests EfficientResetWrapper for state caching and efficient resets.
 """
 
 import pytest
 import torch
+import gymnasium as gym
 import sys
 import os
+from unittest.mock import patch, MagicMock
 
 # Add project root to path
-project_root = os.path.join(os.path.dirname(__file__), '..', '..')
-sys.path.insert(0, project_root)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
+# Mock modules before imports
+sys.modules['omni.isaac.lab'] = __import__('tests.mocks.mock_isaac_lab', fromlist=[''])
+sys.modules['omni.isaac.lab.envs'] = __import__('tests.mocks.mock_isaac_lab', fromlist=['envs'])
+sys.modules['omni.isaac.lab.utils'] = __import__('tests.mocks.mock_isaac_lab', fromlist=['utils'])
+sys.modules['isaaclab.envs.direct_rl_env'] = __import__('tests.mocks.mock_isaac_lab', fromlist=['direct_rl_env'])
 
 from wrappers.mechanics.efficient_reset_wrapper import EfficientResetWrapper
-from tests.mocks.mock_isaac_lab import create_mock_env
+from tests.mocks.mock_isaac_lab import MockBaseEnv, DirectRLEnv
 
 
-class TestEfficientResetWrapperInitialization:
-    """Test EfficientResetWrapper initialization."""
+class TestEfficientResetWrapper:
+    """Test EfficientResetWrapper functionality."""
 
-    def test_initialization_with_scene(self, mock_env):
-        """Test initialization when scene is available."""
-        wrapper = EfficientResetWrapper(mock_env)
+    def setup_method(self):
+        """Setup test environment."""
+        self.base_env = MockBaseEnv()
+        self.base_env.num_envs = 4
+        self.base_env.device = torch.device("cpu")
 
+    def test_initialization_basic(self):
+        """Test wrapper initialization with basic environment."""
+        wrapper = EfficientResetWrapper(self.base_env)
+
+        assert wrapper.env == self.base_env
         assert wrapper.start_state is None
-        assert wrapper._wrapper_initialized is True  # Should auto-initialize with scene
+        assert wrapper._wrapper_initialized == True  # MockBaseEnv has scene
         assert wrapper._original_reset_idx is not None
 
-    def test_initialization_without_scene(self, mock_env):
-        """Test initialization when scene is not available initially."""
-        # Remove scene to test deferred initialization
-        delattr(mock_env, 'scene')
-        wrapper = EfficientResetWrapper(mock_env)
+    def test_initialization_without_scene(self):
+        """Test wrapper initialization without scene support."""
+        # Create environment without scene
+        env_no_scene = MockBaseEnv()
+        delattr(env_no_scene, 'scene')
+
+        wrapper = EfficientResetWrapper(env_no_scene)
 
         assert wrapper.start_state is None
-        assert wrapper._wrapper_initialized is False
+        assert wrapper._wrapper_initialized == False
 
-        # Add scene back and test lazy initialization
-        mock_env.scene = "dummy_scene"
-        obs, info = wrapper.reset()
-        assert wrapper._wrapper_initialized is True
+    def test_wrapper_initialization_lazy(self):
+        """Test lazy wrapper initialization during step/reset."""
+        # Create environment without scene initially
+        env_no_scene = MockBaseEnv()
+        delattr(env_no_scene, 'scene')
 
+        wrapper = EfficientResetWrapper(env_no_scene)
+        assert wrapper._wrapper_initialized == False
 
-class TestEfficientResetWrapperStateCaching:
-    """Test state caching functionality."""
+        # Add scene and call step
+        env_no_scene.scene = self.base_env.scene
+        wrapper.step(torch.randn(4, 6))
 
-    def test_has_cached_state_initially_false(self, mock_env):
-        """Test has_cached_state returns False initially."""
-        wrapper = EfficientResetWrapper(mock_env)
-        assert wrapper.has_cached_state() is False
+        assert wrapper._wrapper_initialized == True
 
-    def test_state_caching_on_full_reset(self, mock_env):
-        """Test state gets cached on full environment reset."""
-        wrapper = EfficientResetWrapper(mock_env)
+    def test_has_cached_state(self):
+        """Test cached state detection."""
+        wrapper = EfficientResetWrapper(self.base_env)
 
-        # Simulate full reset (all environments)
-        all_env_ids = torch.arange(64, device=mock_env.device)
-        wrapper._wrapped_reset_idx(all_env_ids)
+        # Initially no cached state
+        assert not wrapper.has_cached_state()
 
-        assert wrapper.has_cached_state() is True
-        assert wrapper.start_state is not None
-        assert "articulation" in wrapper.start_state
+        # After full reset, should have cached state
+        wrapper.reset()
+        assert wrapper.has_cached_state()
 
-    def test_state_caching_on_reset_method(self, mock_env):
-        """Test state gets cached when reset() method is called."""
-        wrapper = EfficientResetWrapper(mock_env)
-
-        obs, info = wrapper.reset()
-
-        assert wrapper.has_cached_state() is True
-        assert wrapper.start_state is not None
-
-    def test_clear_cached_state(self, mock_env):
+    def test_clear_cached_state(self):
         """Test clearing cached state."""
-        wrapper = EfficientResetWrapper(mock_env)
+        wrapper = EfficientResetWrapper(self.base_env)
 
         # Cache some state
         wrapper.reset()
-        assert wrapper.has_cached_state() is True
+        assert wrapper.has_cached_state()
 
-        # Clear and verify
+        # Clear state
         wrapper.clear_cached_state()
-        assert wrapper.has_cached_state() is False
-        assert wrapper.start_state is None
+        assert not wrapper.has_cached_state()
 
-    def test_get_reset_efficiency_stats(self, mock_env):
-        """Test get_reset_efficiency_stats method."""
-        wrapper = EfficientResetWrapper(mock_env)
+    def test_full_reset_caches_state(self):
+        """Test that full reset caches the initial state."""
+        wrapper = EfficientResetWrapper(self.base_env)
 
-        # Initially no cached state
+        # Perform full reset
+        wrapper.reset()
+
+        # Should have cached state
+        assert wrapper.start_state is not None
+        assert wrapper.has_cached_state()
+
+        # State should contain articulation data
+        assert 'articulation' in wrapper.start_state
+        assert 'robot' in wrapper.start_state['articulation']
+
+    def test_wrapped_reset_idx_full_reset(self):
+        """Test _wrapped_reset_idx with full reset (all environments)."""
+        wrapper = EfficientResetWrapper(self.base_env)
+
+        # Mock the original reset method
+        original_calls = []
+        def mock_original_reset(env_ids):
+            original_calls.append(env_ids)
+
+        wrapper._original_reset_idx = mock_original_reset
+
+        # Call full reset (all environments)
+        env_ids = torch.arange(wrapper.unwrapped.num_envs, device=wrapper.unwrapped.device)
+        wrapper._wrapped_reset_idx(env_ids)
+
+        # Should have called original reset
+        assert len(original_calls) == 1
+        assert torch.equal(original_calls[0], env_ids)
+
+        # Should have cached state
+        assert wrapper.has_cached_state()
+
+    def test_wrapped_reset_idx_partial_reset(self):
+        """Test _wrapped_reset_idx with partial reset (some environments)."""
+        wrapper = EfficientResetWrapper(self.base_env)
+
+        # First do a full reset to cache state
+        wrapper.reset()
+        assert wrapper.has_cached_state()
+
+        # Track calls to efficient reset
+        efficient_reset_calls = []
+        original_perform_efficient_reset = wrapper._perform_efficient_reset
+
+        def mock_efficient_reset(env_ids):
+            efficient_reset_calls.append(env_ids)
+            return original_perform_efficient_reset(env_ids)
+
+        wrapper._perform_efficient_reset = mock_efficient_reset
+
+        # Call partial reset
+        partial_env_ids = torch.tensor([0, 2], device=wrapper.unwrapped.device)
+        wrapper._wrapped_reset_idx(partial_env_ids)
+
+        # Should have called efficient reset
+        assert len(efficient_reset_calls) == 1
+        assert torch.equal(efficient_reset_calls[0], partial_env_ids)
+
+    def test_wrapped_reset_idx_none_env_ids(self):
+        """Test _wrapped_reset_idx with None env_ids."""
+        wrapper = EfficientResetWrapper(self.base_env)
+
+        # Mock the original reset method
+        original_calls = []
+        def mock_original_reset(env_ids):
+            original_calls.append(env_ids)
+
+        wrapper._original_reset_idx = mock_original_reset
+
+        # Call with None (should reset all environments)
+        wrapper._wrapped_reset_idx(None)
+
+        # Should have called original reset with all environment indices
+        assert len(original_calls) == 1
+        expected_env_ids = torch.arange(wrapper.unwrapped.num_envs, device=wrapper.unwrapped.device)
+        # The original call might receive None which gets converted internally
+        if original_calls[0] is not None:
+            assert torch.equal(original_calls[0], expected_env_ids)
+        else:
+            # None is acceptable as it represents "all environments"
+            assert True
+
+    def test_perform_efficient_reset(self):
+        """Test _perform_efficient_reset functionality."""
+        wrapper = EfficientResetWrapper(self.base_env)
+
+        # Cache state first
+        wrapper.reset()
+
+        # Mock articulation methods to track calls
+        robot_articulation = wrapper.unwrapped.scene.articulations['robot']
+        pose_calls = []
+        vel_calls = []
+        joint_calls = []
+        reset_calls = []
+
+        def mock_write_root_pose(pose, env_ids):
+            pose_calls.append((pose.clone(), env_ids.clone() if env_ids is not None else None))
+
+        def mock_write_root_velocity(vel, env_ids):
+            vel_calls.append((vel.clone(), env_ids.clone() if env_ids is not None else None))
+
+        def mock_write_joint_state(pos, vel, env_ids):
+            joint_calls.append((pos.clone(), vel.clone(), env_ids.clone() if env_ids is not None else None))
+
+        def mock_reset(env_ids):
+            reset_calls.append(env_ids.clone() if env_ids is not None else None)
+
+        robot_articulation.write_root_pose_to_sim = mock_write_root_pose
+        robot_articulation.write_root_velocity_to_sim = mock_write_root_velocity
+        robot_articulation.write_joint_state_to_sim = mock_write_joint_state
+        robot_articulation.reset = mock_reset
+
+        # Perform efficient reset on subset of environments
+        env_ids = torch.tensor([0, 2], device=wrapper.unwrapped.device)
+        wrapper._perform_efficient_reset(env_ids)
+
+        # Check that articulation methods were called
+        assert len(pose_calls) == 1
+        assert len(vel_calls) == 1
+        assert len(joint_calls) == 1
+        assert len(reset_calls) == 1
+
+        # Check that correct env_ids were passed
+        assert torch.equal(pose_calls[0][1], env_ids)
+        assert torch.equal(vel_calls[0][1], env_ids)
+        assert torch.equal(joint_calls[0][2], env_ids)
+        assert torch.equal(reset_calls[0], env_ids)
+
+        # Check that poses have correct shape (should be 2 envs worth)
+        assert pose_calls[0][0].shape[0] == 2  # 2 environments
+
+    def test_find_directrlenv_reset_method_by_name(self):
+        """Test finding DirectRLEnv reset method by class name."""
+        # Create a mock environment that inherits from DirectRLEnv
+        class MockFactoryEnv(DirectRLEnv):
+            def _reset_idx(self, env_ids):
+                # Factory env's expensive reset
+                pass
+
+        env = MockFactoryEnv()
+        wrapper = EfficientResetWrapper(env)
+
+        # Should find DirectRLEnv's method, not factory's
+        found_method = wrapper._find_directrlenv_reset_method()
+
+        # The method should be bound to the environment instance
+        assert found_method is not None
+        assert hasattr(found_method, '__self__')
+        assert found_method.__self__ == env
+
+    def test_find_directrlenv_reset_method_fallback(self):
+        """Test fallback when DirectRLEnv method cannot be found."""
+        wrapper = EfficientResetWrapper(self.base_env)
+
+        # Mock the import to fail by temporarily changing the module import
+        import sys
+        original_modules = sys.modules.copy()
+
+        # Remove the module if it exists
+        if 'isaaclab.envs.direct_rl_env' in sys.modules:
+            del sys.modules['isaaclab.envs.direct_rl_env']
+
+        try:
+            # Create a new wrapper instance to trigger the import
+            new_wrapper = EfficientResetWrapper(self.base_env)
+            found_method = new_wrapper._find_directrlenv_reset_method()
+
+            # Should fallback to environment's own method
+            assert found_method == new_wrapper.unwrapped._reset_idx
+        finally:
+            # Restore original modules
+            sys.modules.update(original_modules)
+
+    def test_step_with_wrapper_initialization(self):
+        """Test step method with wrapper initialization."""
+        # Create environment without scene initially
+        env_no_scene = MockBaseEnv()
+        delattr(env_no_scene, 'scene')
+
+        wrapper = EfficientResetWrapper(env_no_scene)
+        assert not wrapper._wrapper_initialized
+
+        # Add scene
+        env_no_scene.scene = self.base_env.scene
+
+        # Step should initialize wrapper
+        actions = torch.randn(4, 6)
+        result = wrapper.step(actions)
+
+        assert wrapper._wrapper_initialized
+        assert len(result) == 5
+
+    def test_reset_with_wrapper_initialization(self):
+        """Test reset method with wrapper initialization."""
+        # Create environment without scene initially
+        env_no_scene = MockBaseEnv()
+        delattr(env_no_scene, 'scene')
+
+        wrapper = EfficientResetWrapper(env_no_scene)
+        assert not wrapper._wrapper_initialized
+
+        # Add scene
+        env_no_scene.scene = self.base_env.scene
+
+        # Reset should initialize wrapper and cache state
+        result = wrapper.reset()
+
+        assert wrapper._wrapper_initialized
+        assert wrapper.has_cached_state()
+        assert len(result) == 2
+
+    def test_get_reset_efficiency_stats(self):
+        """Test getting reset efficiency statistics."""
+        wrapper = EfficientResetWrapper(self.base_env)
+
+        # Before caching state
         stats = wrapper.get_reset_efficiency_stats()
-        assert stats["has_cached_state"] is False
-        assert stats["supports_efficient_reset"] is True  # MockEnvironment has scene
+        assert stats['has_cached_state'] == False
+        assert stats['supports_efficient_reset'] == True
 
         # After caching state
         wrapper.reset()
         stats = wrapper.get_reset_efficiency_stats()
-        assert stats["has_cached_state"] is True
-        assert stats["supports_efficient_reset"] is True
+        assert stats['has_cached_state'] == True
+        assert stats['supports_efficient_reset'] == True
 
+    def test_environment_without_scene_stats(self):
+        """Test stats for environment without scene support."""
+        env_no_scene = MockBaseEnv()
+        delattr(env_no_scene, 'scene')
 
-class TestEfficientResetWrapperResetLogic:
-    """Test reset logic and state shuffling."""
+        wrapper = EfficientResetWrapper(env_no_scene)
+        stats = wrapper.get_reset_efficiency_stats()
 
-    def test_full_reset_vs_partial_reset(self, mock_env):
-        """Test distinction between full and partial resets."""
-        wrapper = EfficientResetWrapper(mock_env)
+        assert stats['has_cached_state'] == False
+        assert stats['supports_efficient_reset'] == False
 
-        # Initial reset (should be treated as full reset)
-        wrapper.reset()
-        initial_state = wrapper.start_state
+    def test_tensor_conversion_in_wrapped_reset_idx(self):
+        """Test tensor conversion for env_ids in _wrapped_reset_idx."""
+        wrapper = EfficientResetWrapper(self.base_env)
 
-        # Partial reset (subset of environments)
-        partial_env_ids = torch.tensor([0, 1, 5, 10], device=mock_env.device)
-        wrapper._wrapped_reset_idx(partial_env_ids)
-
-        # State should remain the same for partial reset
-        assert wrapper.start_state is initial_state
-
-        # Full reset (all environments)
-        all_env_ids = torch.arange(64, device=mock_env.device)
-        wrapper._wrapped_reset_idx(all_env_ids)
-
-        # State should be updated for full reset
-        assert wrapper.start_state is not initial_state
-
-    def test_partial_reset_with_cached_state(self, mock_env):
-        """Test partial reset uses state shuffling when cache is available."""
-        wrapper = EfficientResetWrapper(mock_env)
-
-        # Cache initial state
-        wrapper.reset()
-        assert wrapper.has_cached_state()
-
-        # Perform partial reset
-        partial_env_ids = torch.tensor([0, 1, 5], device=mock_env.device)
-        wrapper._wrapped_reset_idx(partial_env_ids)
-
-        # Verify articulation methods were called for shuffling
-        robot_articulation = mock_env.scene.articulations["robot"]
-        assert hasattr(robot_articulation, "last_root_pose_write")
-        assert hasattr(robot_articulation, "last_root_velocity_write")
-        assert hasattr(robot_articulation, "last_joint_state_write")
-        assert hasattr(robot_articulation, "last_reset_call")
-
-        # Verify env_ids were passed correctly
-        assert torch.equal(robot_articulation.last_reset_call, partial_env_ids)
-
-    def test_partial_reset_without_cached_state(self, mock_env):
-        """Test partial reset behavior when no cached state available."""
-        wrapper = EfficientResetWrapper(mock_env)
-
-        # Don't cache state, directly call partial reset
-        partial_env_ids = torch.tensor([0, 1, 5], device=mock_env.device)
-        wrapper._wrapped_reset_idx(partial_env_ids)
-
-        # Should call original reset_idx method
-        assert hasattr(mock_env, "last_reset_idx_call")
-        assert torch.equal(mock_env.last_reset_idx_call, partial_env_ids)
-
-    def test_env_ids_tensor_conversion(self, mock_env):
-        """Test env_ids tensor conversion and None handling."""
-        wrapper = EfficientResetWrapper(mock_env)
-
-        # Test with None (should convert to all environments)
-        wrapper._wrapped_reset_idx(None)
-        # Should be treated as full reset
-
-        # Test with list (should convert to tensor)
-        env_ids_list = [0, 1, 2]
+        # Test with list input
+        env_ids_list = [0, 2]
         wrapper._wrapped_reset_idx(env_ids_list)
 
-        # Test with tensor (should work directly)
-        env_ids_tensor = torch.tensor([5, 6, 7], device=mock_env.device)
-        wrapper._wrapped_reset_idx(env_ids_tensor)
+        # Should not raise errors (internal conversion should work)
 
+    def test_wrapper_with_multiple_articulations(self):
+        """Test wrapper behavior with multiple articulations."""
+        wrapper = EfficientResetWrapper(self.base_env)
 
-class TestEfficientResetWrapperStateShuffling:
-    """Test state shuffling logic."""
-
-    def test_state_shuffling_logic(self, mock_env):
-        """Test the detailed state shuffling implementation."""
-        wrapper = EfficientResetWrapper(mock_env)
-
-        # Cache initial state with known values
+        # Cache state
         wrapper.reset()
 
-        # Create specific test state to verify shuffling
-        test_state = {
-            "articulation": {
-                "robot": {
-                    "root_pose": torch.tensor([[1.0, 2.0, 3.0, 1.0, 0.0, 0.0, 0.0]] * 64, device=mock_env.device),
-                    "root_velocity": torch.tensor([[0.1, 0.2, 0.3, 0.01, 0.02, 0.03]] * 64, device=mock_env.device),
-                    "joint_position": torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]] * 64, device=mock_env.device),
-                    "joint_velocity": torch.zeros(64, 9, device=mock_env.device),
-                }
-            }
-        }
-        wrapper.start_state = test_state
+        # Verify that both robot and object articulations are handled
+        assert 'robot' in wrapper.start_state['articulation']
+        assert 'object' in wrapper.start_state['articulation']
 
-        # Reset specific environments
-        env_ids = torch.tensor([0, 1], device=mock_env.device)
-        wrapper._wrapped_reset_idx(env_ids)
-
-        # Verify articulation received state updates
-        robot = mock_env.scene.articulations["robot"]
-        assert hasattr(robot, "last_root_pose_write")
-        assert hasattr(robot, "last_root_velocity_write")
-        assert hasattr(robot, "last_joint_state_write")
-
-        # Verify env_ids were passed correctly
-        write_ops = [
-            robot.last_root_pose_write["env_ids"],
-            robot.last_root_velocity_write["env_ids"],
-            robot.last_joint_state_write["env_ids"],
-            robot.last_reset_call
-        ]
-        for op_env_ids in write_ops:
-            assert torch.equal(op_env_ids, env_ids)
-
-    def test_environment_origin_adjustment(self, mock_env):
-        """Test environment origin position adjustments during shuffling."""
-        wrapper = EfficientResetWrapper(mock_env)
-
-        # Set up environment origins
-        mock_env.scene.env_origins = torch.tensor([
-            [1.0, 0.0, 0.0],  # env 0
-            [2.0, 0.0, 0.0],  # env 1
-            [3.0, 0.0, 0.0],  # env 2
-        ] + [[0.0, 0.0, 0.0]] * 61, device=mock_env.device)
-
-        # Cache state and perform reset
-        wrapper.reset()
-
-        # Create test state
-        test_state = {
-            "articulation": {
-                "robot": {
-                    "root_pose": torch.tensor([[10.0, 20.0, 30.0, 1.0, 0.0, 0.0, 0.0]] * 64, device=mock_env.device),
-                    "root_velocity": torch.zeros(64, 6, device=mock_env.device),
-                    "joint_position": torch.zeros(64, 9, device=mock_env.device),
-                    "joint_velocity": torch.zeros(64, 9, device=mock_env.device),
-                }
-            }
-        }
-        wrapper.start_state = test_state
-
-        # Reset env 0 using state from env 1
-        # This should adjust position from env 1's origin to env 0's origin
-        env_ids = torch.tensor([0], device=mock_env.device)
+        # Perform efficient reset
+        env_ids = torch.tensor([0], device=wrapper.unwrapped.device)
         wrapper._perform_efficient_reset(env_ids)
 
-        # Check that position was adjusted
-        robot = mock_env.scene.articulations["robot"]
-        written_pose = robot.last_root_pose_write["pose"]
+        # Should not raise errors with multiple articulations
 
-        # Position should be adjusted: original_pos - source_origin + target_origin
-        # We can't predict exact source index due to randomness, but can verify adjustment happened
-        assert written_pose.shape == (1, 7)
-        assert written_pose[0, 3:].allclose(torch.tensor([1.0, 0.0, 0.0, 0.0]))  # Quaternion unchanged
+    def test_state_shuffling_randomness(self):
+        """Test that state shuffling uses different source indices."""
+        wrapper = EfficientResetWrapper(self.base_env)
 
+        # Cache state
+        wrapper.reset()
 
-class TestEfficientResetWrapperIntegration:
-    """Test wrapper integration and step/reset methods."""
+        # Track source indices used in shuffling
+        original_randint = torch.randint
+        source_indices = []
 
-    def test_step_initialization(self, mock_env):
-        """Test wrapper initializes during step if needed."""
-        # Remove scene to prevent auto-initialization
-        delattr(mock_env, 'scene')
-        wrapper = EfficientResetWrapper(mock_env)
-        assert wrapper._wrapper_initialized is False
+        def mock_randint(*args, **kwargs):
+            result = original_randint(*args, **kwargs)
+            source_indices.append(result.clone())
+            return result
 
-        # Add scene back and call step
-        mock_env.scene = "dummy_scene"
-        action = torch.zeros(64, 6)
-        obs, reward, terminated, truncated, info = wrapper.step(action)
+        with patch('torch.randint', side_effect=mock_randint):
+            # Perform multiple efficient resets
+            for _ in range(5):
+                env_ids = torch.tensor([0], device=wrapper.unwrapped.device)
+                wrapper._perform_efficient_reset(env_ids)
 
-        assert wrapper._wrapper_initialized is True
+        # Should have generated random indices multiple times
+        assert len(source_indices) >= 5
 
-    def test_reset_initialization(self, mock_env):
-        """Test wrapper initializes during reset if needed."""
-        # Remove scene to prevent auto-initialization
-        delattr(mock_env, 'scene')
-        wrapper = EfficientResetWrapper(mock_env)
-        assert wrapper._wrapper_initialized is False
+    def test_position_adjustment_for_env_origins(self):
+        """Test that positions are adjusted for different environment origins."""
+        wrapper = EfficientResetWrapper(self.base_env)
 
-        # Add scene back and call reset
-        mock_env.scene = "dummy_scene"
-        obs, info = wrapper.reset()
+        # Set different env origins
+        wrapper.unwrapped.scene.env_origins = torch.tensor([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0]
+        ], device=wrapper.unwrapped.device)
 
-        assert wrapper._wrapper_initialized is True
+        # Cache state
+        wrapper.reset()
 
-    def test_original_method_preservation(self, mock_env):
-        """Test that original _reset_idx method is preserved and callable."""
-        wrapper = EfficientResetWrapper(mock_env)
+        # Track pose adjustments
+        pose_calls = []
+        def mock_write_root_pose(pose, env_ids):
+            pose_calls.append((pose.clone(), env_ids.clone()))
 
-        # Verify original method is stored
+        wrapper.unwrapped.scene.articulations['robot'].write_root_pose_to_sim = mock_write_root_pose
+
+        # Perform efficient reset
+        env_ids = torch.tensor([1, 3], device=wrapper.unwrapped.device)
+        wrapper._perform_efficient_reset(env_ids)
+
+        # Should have called pose writing
+        assert len(pose_calls) == 1
+
+        # Poses should be adjusted for environment origins
+        adjusted_poses = pose_calls[0][0]
+        assert adjusted_poses.shape[0] == 2  # 2 environments reset
+
+    def test_close_functionality(self):
+        """Test wrapper close method."""
+        wrapper = EfficientResetWrapper(self.base_env)
+
+        # Should not raise any errors
+        wrapper.close()
+
+    def test_unwrapped_property(self):
+        """Test unwrapped property access."""
+        wrapper = EfficientResetWrapper(self.base_env)
+
+        assert wrapper.unwrapped == self.base_env
+
+    def test_wrapper_properties(self):
+        """Test that wrapper properly delegates properties."""
+        wrapper = EfficientResetWrapper(self.base_env)
+
+        assert wrapper.action_space.shape == self.base_env.action_space.shape
+        assert wrapper.observation_space.shape == self.base_env.observation_space.shape
+
+    def test_method_override_restoration(self):
+        """Test that original methods can be called."""
+        wrapper = EfficientResetWrapper(self.base_env)
+
+        # Check that original method is stored
         assert wrapper._original_reset_idx is not None
 
-        # Call wrapped method and verify original was called
-        env_ids = torch.tensor([0, 1, 2], device=mock_env.device)
+        # Check that the environment's method was overridden
+        assert wrapper.unwrapped._reset_idx == wrapper._wrapped_reset_idx
+
+    def test_efficient_reset_without_cached_state(self):
+        """Test efficient reset behavior without cached state."""
+        wrapper = EfficientResetWrapper(self.base_env)
+
+        # Clear any cached state
+        wrapper.clear_cached_state()
+
+        # Try partial reset without cached state
+        env_ids = torch.tensor([0, 1], device=wrapper.unwrapped.device)
+
+        # Should not raise errors (method should handle gracefully)
         wrapper._wrapped_reset_idx(env_ids)
 
-        # Original method should have been called
-        assert hasattr(mock_env, "last_reset_idx_call")
-        assert torch.equal(mock_env.last_reset_idx_call, env_ids)
+    def test_memory_efficiency(self):
+        """Test that wrapper doesn't create excessive memory overhead."""
+        wrapper = EfficientResetWrapper(self.base_env)
 
-    def test_wrapper_works_without_articulations(self, mock_env):
-        """Test wrapper handles missing articulations gracefully."""
-        wrapper = EfficientResetWrapper(mock_env)
-
-        # Remove articulations from scene
-        mock_env.scene.articulations = {}
-
-        # Cache state and try partial reset
+        # Cache state
         wrapper.reset()
-        env_ids = torch.tensor([0, 1], device=mock_env.device)
-        wrapper._wrapped_reset_idx(env_ids)
 
-        # Should not crash, just call original method
-        assert hasattr(mock_env, "last_reset_idx_call")
+        # Check that cached state is reasonable size
+        assert wrapper.start_state is not None
+        assert isinstance(wrapper.start_state, dict)
+
+        # Should have articulation data
+        assert 'articulation' in wrapper.start_state

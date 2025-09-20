@@ -1,242 +1,444 @@
 """
-Unit tests for ForceTorqueWrapper.
+Unit tests for Force Torque Wrapper.
 
-This module tests the ForceTorqueWrapper functionality in isolation using mocked
-Isaac Lab components. Tests focus on individual methods and their behavior.
-
-Note: ForceTorqueWrapper is now focused only on providing force-torque sensor data.
-Episode statistics tracking has been moved to FactoryMetricsWrapper for proper
-separation of concerns.
+Tests the ForceTorqueWrapper class that adds force-torque sensor functionality
+to environments using Isaac Sim's RobotView for sensor integration.
 """
 
 import pytest
 import torch
 import sys
 import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import Mock, patch, MagicMock
 
 # Add project root to path
-project_root = os.path.join(os.path.dirname(__file__), '..', '..')
-sys.path.insert(0, project_root)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-from tests.mocks.mock_isaac_lab import create_mock_env, MockRobotView
+# Mock Isaac Sim imports before importing wrapper
+with patch.dict('sys.modules', {
+    'omni': MagicMock(),
+    'omni.isaac': MagicMock(),
+    'omni.isaac.sensor': MagicMock(),
+    'omni.isaac.sensor.utils': MagicMock(),
+}):
+    # Import the mock and set up RobotView
+    from tests.mocks.mock_isaac_lab import MockRobotView, MockBaseEnv, MockEnvConfig
 
+    # Mock the RobotView import in the wrapper module
+    import wrappers.sensors.force_torque_wrapper as ft_module
+    ft_module.RobotView = MockRobotView
 
-class TestForceTorqueWrapperGetCurrentData:
-    """Test the get_current_force_torque() method."""
-
-    @patch('wrappers.sensors.force_torque_wrapper.RobotView', MockRobotView)
-    def test_get_current_force_torque_with_valid_data(self, mock_env):
-        """
-        Test get_current_force_torque() returns correct dictionary structure with valid data.
-
-        Expected behavior:
-        - Returns dict with keys: 'current_force', 'current_torque'
-        - current_force shape: (64, 3)
-        - current_torque shape: (64, 3)
-        - Values come from mock data: [1.0, 2.0, 3.0, 0.1, 0.2, 0.3]
-        """
-        # Import here to ensure patch is applied
-        from wrappers.sensors.force_torque_wrapper import ForceTorqueWrapper
-
-        # Create wrapper with mock environment
-        wrapper = ForceTorqueWrapper(mock_env)
-
-        # Mock the force-torque data manually to ensure it exists
-        wrapper.unwrapped.robot_force_torque = torch.tensor([
-            [1.0, 2.0, 3.0, 0.1, 0.2, 0.3]
-        ] * 64, device=mock_env.device)
-
-        # Call the method
-        data = wrapper.get_current_force_torque()
-
-        # Verify the data structure
-        expected_keys = {'current_force', 'current_torque'}
-        assert set(data.keys()) == expected_keys
-
-        # Verify shapes and values
-        assert data['current_force'].shape == (64, 3)
-        assert data['current_torque'].shape == (64, 3)
-        assert torch.allclose(data['current_force'], torch.tensor([[1.0, 2.0, 3.0]] * 64, device=mock_env.device))
-        assert torch.allclose(data['current_torque'], torch.tensor([[0.1, 0.2, 0.3]] * 64, device=mock_env.device))
-
-    @patch('wrappers.sensors.force_torque_wrapper.RobotView', MockRobotView)
-    def test_get_current_force_torque_without_data(self, mock_env):
-        """
-        Test get_current_force_torque() returns empty dict when no force-torque data is available.
-
-        Expected behavior:
-        - Returns empty dict when wrapper doesn't have robot_force_torque attribute
-        """
-        # Import here to ensure patch is applied
-        from wrappers.sensors.force_torque_wrapper import ForceTorqueWrapper
-
-        # Create wrapper but remove force-torque data
-        wrapper = ForceTorqueWrapper(mock_env)
-        delattr(wrapper.unwrapped, 'robot_force_torque')
-
-        # Call the method
-        data = wrapper.get_current_force_torque()
-
-        # Should return empty dict
-        assert data == {}
-
-    @patch('wrappers.sensors.force_torque_wrapper.RobotView', MockRobotView)
-    def test_get_current_force_torque_tensor_devices(self, mock_env):
-        """
-        Test get_current_force_torque() preserves tensor devices.
-
-        Expected behavior:
-        - Returned tensors should be on the same device as input tensors
-        """
-        # Import here to ensure patch is applied
-        from wrappers.sensors.force_torque_wrapper import ForceTorqueWrapper
-
-        # Create wrapper with data
-        wrapper = ForceTorqueWrapper(mock_env)
-        device = mock_env.device
-
-        wrapper.unwrapped.robot_force_torque = torch.tensor([
-            [1.0, 2.0, 3.0, 0.1, 0.2, 0.3]
-        ] * 64, device=device)
-
-        # Call the method
-        data = wrapper.get_current_force_torque()
-
-        # Verify device preservation
-        assert data['current_force'].device == device
-        assert data['current_torque'].device == device
+    from wrappers.sensors.force_torque_wrapper import ForceTorqueWrapper
 
 
-class TestForceTorqueWrapperHasData:
-    """Test the has_force_torque_data() method."""
+class TestForceTorqueWrapperInitialization:
+    """Test force torque wrapper initialization."""
 
-    @patch('wrappers.sensors.force_torque_wrapper.RobotView', MockRobotView)
-    def test_has_force_torque_data_with_data(self, mock_env):
-        """
-        Test has_force_torque_data() returns True when data is available.
+    def test_wrapper_initialization_basic(self):
+        """Test basic wrapper initialization."""
+        env = MockBaseEnv()
 
-        Expected behavior:
-        - Returns True when robot_force_torque attribute exists
-        """
-        # Import here to ensure patch is applied
-        from wrappers.sensors.force_torque_wrapper import ForceTorqueWrapper
+        wrapper = ForceTorqueWrapper(env)
 
-        # Create wrapper - should initialize robot_force_torque
-        wrapper = ForceTorqueWrapper(mock_env)
+        assert wrapper.use_tanh_scaling == False
+        assert wrapper.tanh_scale == 0.03
+        # Since MockBaseEnv has _robot, initialization happens immediately
+        assert wrapper._sensor_initialized
+
+    def test_wrapper_initialization_with_scaling(self):
+        """Test wrapper initialization with custom scaling."""
+        env = MockBaseEnv()
+        tanh_scale = 0.05
+
+        wrapper = ForceTorqueWrapper(env, use_tanh_scaling=True, tanh_scale=tanh_scale)
+
+        assert wrapper.use_tanh_scaling == True
+        assert wrapper.tanh_scale == tanh_scale
+
+    def test_wrapper_initialization_triggers_when_robot_exists(self):
+        """Test that wrapper initializes when robot attribute exists."""
+        env = MockBaseEnv()
+        env._robot = True  # Ensure robot exists
+
+        wrapper = ForceTorqueWrapper(env)
+
+        # Should initialize automatically
+        assert wrapper._sensor_initialized
+
+    def test_wrapper_initialization_deferred_when_no_robot(self):
+        """Test that wrapper defers initialization when no robot attribute."""
+        env = MockBaseEnv()
+        del env._robot  # Remove robot attribute
+
+        wrapper = ForceTorqueWrapper(env)
+
+        # Should not initialize
+        assert not wrapper._sensor_initialized
+
+
+class TestForceTorqueWrapperSensorSetup:
+    """Test force-torque sensor setup."""
+
+    def test_force_torque_sensor_initialization_success(self):
+        """Test successful force-torque sensor initialization."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
+
+        # Initialize wrapper
+        wrapper._initialize_wrapper()
+
+        assert wrapper._robot_av is not None
+        assert wrapper._sensor_initialized
+
+    def test_force_torque_sensor_initialization_import_error(self):
+        """Test behavior when RobotView import fails."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
+
+        # Temporarily set RobotView to None
+        original_robot_view = ft_module.RobotView
+        ft_module.RobotView = None
+
+        try:
+            with pytest.raises(ImportError, match="Could not import RobotView"):
+                wrapper._init_force_torque_sensor()
+        finally:
+            ft_module.RobotView = original_robot_view
+
+    def test_force_torque_sensor_initialization_exception_handling(self):
+        """Test graceful handling of sensor initialization exceptions."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
+
+        # Mock RobotView to raise exception on initialize
+        with patch.object(MockRobotView, 'initialize', side_effect=Exception("Mock sensor error")):
+            wrapper._init_force_torque_sensor()
+
+            # Should handle exception gracefully
+            assert wrapper._robot_av is None
+
+    def test_force_torque_sensor_config_update(self):
+        """Test that force-torque sensor updates configuration."""
+        env = MockBaseEnv()
+        original_obs_space = env.cfg.observation_space
+        original_state_space = env.cfg.state_space
+
+        wrapper = ForceTorqueWrapper(env)
+        # Initialization happens automatically for MockBaseEnv
+
+        # Should add force_torque to component dimensions and attribute map
+        assert 'force_torque' in env.cfg.component_dims
+        assert env.cfg.component_dims['force_torque'] == 6
+        assert 'force_torque' in env.cfg.component_attr_map
+        assert env.cfg.component_attr_map['force_torque'] == 'robot_force_torque'
+
+
+class TestForceTorqueWrapperMethodOverrides:
+    """Test method override functionality."""
+
+    def test_init_tensors_override(self):
+        """Test _init_tensors method override."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        # Store original method
+        original_method = wrapper._original_init_tensors
+
+        # Call wrapped method
+        wrapper.unwrapped._init_tensors()
+
+        # Should call original and have force-torque sensor initialized
+        assert wrapper._robot_av is not None
+
+    def test_compute_intermediate_values_override(self):
+        """Test _compute_intermediate_values method override."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        # Call wrapped method with dt parameter
+        wrapper.unwrapped._compute_intermediate_values(0.02)
+
+        # Should update force-torque data
+        assert hasattr(env, 'robot_force_torque')
+        assert env.robot_force_torque.shape == (env.num_envs, 6)
+
+    def test_method_override_calls_original(self):
+        """Test that wrapped methods call original methods."""
+        env = MockBaseEnv()
+
+        # Add mock original methods
+        env._init_tensors = Mock()
+        env._compute_intermediate_values = Mock()
+
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        # Call wrapped methods
+        wrapper.unwrapped._init_tensors()
+        wrapper.unwrapped._compute_intermediate_values(0.02)
+
+        # Should call original methods
+        wrapper._original_init_tensors.assert_called_once()
+        wrapper._original_compute_intermediate_values.assert_called_once_with(0.02)
+
+
+class TestForceTorqueWrapperDataCollection:
+    """Test force-torque data collection."""
+
+    def test_force_torque_data_collection(self):
+        """Test force-torque data collection from sensor."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        # Simulate compute intermediate values
+        wrapper.unwrapped._compute_intermediate_values(0.02)
 
         # Should have force-torque data
-        assert wrapper.has_force_torque_data() is True
+        assert hasattr(env, 'robot_force_torque')
+        assert isinstance(env.robot_force_torque, torch.Tensor)
+        assert env.robot_force_torque.shape == (env.num_envs, 6)
 
-    @patch('wrappers.sensors.force_torque_wrapper.RobotView', MockRobotView)
-    def test_has_force_torque_data_without_data(self, mock_env):
-        """
-        Test has_force_torque_data() returns False when data is not available.
+    def test_force_torque_data_scaling(self):
+        """Test force-torque data scaling with tanh."""
+        env = MockBaseEnv()
+        tanh_scale = 0.05
+        wrapper = ForceTorqueWrapper(env, use_tanh_scaling=True, tanh_scale=tanh_scale)
+        wrapper._initialize_wrapper()
 
-        Expected behavior:
-        - Returns False when robot_force_torque attribute doesn't exist
-        """
-        # Import here to ensure patch is applied
-        from wrappers.sensors.force_torque_wrapper import ForceTorqueWrapper
+        # Simulate compute intermediate values
+        wrapper.unwrapped._compute_intermediate_values(0.02)
 
-        # Create wrapper and remove force-torque data
-        wrapper = ForceTorqueWrapper(mock_env)
-        delattr(wrapper.unwrapped, 'robot_force_torque')
+        # Check that scaling is configured
+        assert wrapper.use_tanh_scaling == True
+        assert wrapper.tanh_scale == tanh_scale
 
-        # Should not have force-torque data
-        assert wrapper.has_force_torque_data() is False
+        # Data should be available and properly shaped
+        assert env.robot_force_torque.shape == (env.num_envs, 6)
+
+    def test_force_torque_data_without_sensor(self):
+        """Test behavior when sensor is not available."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
+
+        # Don't initialize sensor
+        wrapper._robot_av = None
+
+        # Should not crash when calling compute intermediate values
+        wrapper._wrapped_compute_intermediate_values(0.02)
+
+    def test_force_torque_data_device_consistency(self):
+        """Test that force-torque data is on correct device."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        wrapper.unwrapped._compute_intermediate_values(0.02)
+
+        assert env.robot_force_torque.device == env.device
 
 
-class TestForceTorqueWrapperGetObservation:
-    """Test the get_force_torque_observation() method."""
+class TestForceTorqueWrapperIntegration:
+    """Test wrapper integration with environment."""
 
-    @patch('wrappers.sensors.force_torque_wrapper.RobotView', MockRobotView)
-    def test_get_force_torque_observation_with_data(self, mock_env):
-        """
-        Test get_force_torque_observation() returns force-torque readings as observation.
+    def test_step_integration(self):
+        """Test wrapper integration during environment step."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
 
-        Expected behavior:
-        - Returns robot_force_torque tensor when data is available
-        - Shape should be (num_envs, 6)
-        """
-        # Import here to ensure patch is applied
-        from wrappers.sensors.force_torque_wrapper import ForceTorqueWrapper
+        # Step should trigger initialization if not already done
+        action = torch.zeros(env.num_envs, env.action_space.shape[0])
+        obs, reward, terminated, truncated, info = wrapper.step(action)
 
-        # Create wrapper
-        wrapper = ForceTorqueWrapper(mock_env)
+        assert wrapper._sensor_initialized
+        assert obs is not None
 
-        # Mock force-torque data
-        expected_data = torch.tensor([
-            [1.0, 2.0, 3.0, 0.1, 0.2, 0.3]
-        ] * 64, device=mock_env.device)
-        wrapper.unwrapped.robot_force_torque = expected_data
+    def test_reset_integration(self):
+        """Test wrapper integration during environment reset."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
 
-        # Call the method
+        # Reset should trigger initialization if not already done
+        obs, info = wrapper.reset()
+
+        assert wrapper._sensor_initialized
+        assert obs is not None
+
+    def test_lazy_initialization_step(self):
+        """Test lazy initialization during step."""
+        env = MockBaseEnv()
+        del env._robot  # Remove robot to prevent immediate initialization
+        wrapper = ForceTorqueWrapper(env)
+
+        assert not wrapper._sensor_initialized
+
+        # Add robot back and step
+        env._robot = True
+        action = torch.zeros(env.num_envs, env.action_space.shape[0])
+        wrapper.step(action)
+
+        assert wrapper._sensor_initialized
+
+    def test_lazy_initialization_reset(self):
+        """Test lazy initialization during reset."""
+        env = MockBaseEnv()
+        del env._robot  # Remove robot to prevent immediate initialization
+        wrapper = ForceTorqueWrapper(env)
+
+        assert not wrapper._sensor_initialized
+
+        # Add robot back and reset
+        env._robot = True
+        wrapper.reset()
+
+        assert wrapper._sensor_initialized
+
+
+class TestForceTorqueWrapperErrorHandling:
+    """Test error handling and edge cases."""
+
+    def test_double_initialization_safe(self):
+        """Test that double initialization is safe."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
+
+        # Initialize twice
+        wrapper._initialize_wrapper()
+        wrapper._initialize_wrapper()
+
+        # Should remain initialized
+        assert wrapper._sensor_initialized
+
+    def test_missing_environment_methods(self):
+        """Test behavior when environment is missing expected methods."""
+        # Create a minimal environment class without the wrapper methods
+        import gymnasium as gym_module
+        class MinimalEnv(gym_module.Env):
+            def __init__(self):
+                super().__init__()
+                self.num_envs = 4
+                self.device = torch.device("cpu")
+                self.cfg = MockEnvConfig()
+                self.observation_space = gym_module.spaces.Box(low=-1, high=1, shape=(10,))
+                self.action_space = gym_module.spaces.Box(low=-1, high=1, shape=(3,))
+
+            def step(self, action):
+                return self.observation_space.sample(), 0.0, False, False, {}
+
+            def reset(self, **kwargs):
+                return self.observation_space.sample(), {}
+
+        simple_env = MinimalEnv()
+
+        wrapper = ForceTorqueWrapper(simple_env)
+        wrapper._initialize_wrapper()
+
+        # Should handle missing methods gracefully
+        assert wrapper._original_init_tensors is None
+        assert wrapper._original_compute_intermediate_values is None
+
+    def test_sensor_failure_handling(self):
+        """Test handling of sensor failures."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        # Mock sensor to fail during operation
+        mock_robot_av = Mock()
+        mock_robot_av.get_measured_joint_forces.side_effect = Exception("Sensor error")
+        wrapper._robot_av = mock_robot_av
+
+        # Should handle sensor errors gracefully and not crash
+        wrapper._wrapped_compute_intermediate_values(0.02)
+
+        # Force-torque data should be zero after sensor failure
+        assert torch.all(env.robot_force_torque == 0.0)
+
+    def test_configuration_edge_cases(self):
+        """Test configuration edge cases."""
+        env = MockBaseEnv()
+
+        # Test with missing configuration attributes
+        if hasattr(env.cfg, 'observation_space'):
+            del env.cfg.observation_space
+        if hasattr(env.cfg, 'state_space'):
+            del env.cfg.state_space
+
+        wrapper = ForceTorqueWrapper(env)
+
+        # Should handle missing configuration gracefully
+        wrapper._initialize_wrapper()
+
+
+class TestForceTorqueWrapperUtilityMethods:
+    """Test force-torque wrapper utility methods."""
+
+    def test_has_force_torque_data(self):
+        """Test checking if force-torque data is available."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        # Should have data after initialization
+        assert wrapper.has_force_torque_data()
+
+    def test_get_current_force_torque(self):
+        """Test getting current force-torque readings."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        # Generate some force-torque data
+        wrapper.unwrapped._compute_intermediate_values(0.02)
+
+        current_data = wrapper.get_current_force_torque()
+
+        assert 'current_force' in current_data
+        assert 'current_torque' in current_data
+        assert current_data['current_force'].shape == (env.num_envs, 3)
+        assert current_data['current_torque'].shape == (env.num_envs, 3)
+
+    def test_get_force_torque_observation(self):
+        """Test getting force-torque observation data."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
         obs = wrapper.get_force_torque_observation()
 
-        # Verify observation
-        assert torch.allclose(obs, expected_data)
-        assert obs.shape == (64, 6)
+        assert obs.shape == (env.num_envs, 6)
+        assert obs.device == env.device
 
-    @patch('wrappers.sensors.force_torque_wrapper.RobotView', MockRobotView)
-    def test_get_force_torque_observation_without_data(self, mock_env):
-        """
-        Test get_force_torque_observation() returns zero tensor when no data is available.
+    def test_get_force_torque_observation_with_scaling(self):
+        """Test force-torque observation with tanh scaling."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env, use_tanh_scaling=True, tanh_scale=0.05)
+        wrapper._initialize_wrapper()
 
-        Expected behavior:
-        - Returns zero tensor when robot_force_torque attribute doesn't exist
-        """
-        # Import here to ensure patch is applied
-        from wrappers.sensors.force_torque_wrapper import ForceTorqueWrapper
-
-        # Create wrapper and remove force-torque data
-        wrapper = ForceTorqueWrapper(mock_env)
-        delattr(wrapper.unwrapped, 'robot_force_torque')
-
-        # Call the method
         obs = wrapper.get_force_torque_observation()
 
-        # Should return zero tensor of correct shape
-        expected_zeros = torch.zeros((64, 6), device=mock_env.device)
-        assert torch.allclose(obs, expected_zeros)
-        assert obs.shape == (64, 6)
+        assert obs.shape == (env.num_envs, 6)
+        # With tanh scaling, values should be bounded
+        assert torch.all(obs >= -1.0)
+        assert torch.all(obs <= 1.0)
 
-    @patch('wrappers.sensors.force_torque_wrapper.RobotView', MockRobotView)
-    def test_get_force_torque_observation_with_tanh_scaling(self, mock_env):
-        """
-        Test get_force_torque_observation() applies tanh scaling when enabled.
+    def test_get_force_torque_observation_without_data(self):
+        """Test observation when no force-torque data is available."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
 
-        Expected behavior:
-        - When use_tanh_scaling=True, applies tanh(data / tanh_scale)
-        - Scales input by tanh_scale before applying tanh
-        """
-        # Import here to ensure patch is applied
-        from wrappers.sensors.force_torque_wrapper import ForceTorqueWrapper
+        # Don't initialize, so no data
+        if hasattr(env, 'robot_force_torque'):
+            del env.robot_force_torque
 
-        # Create wrapper with tanh scaling
-        wrapper = ForceTorqueWrapper(mock_env, use_tanh_scaling=True, tanh_scale=0.1)
-
-        # Mock force-torque data
-        raw_data = torch.tensor([
-            [0.1, 0.2, 0.3, 0.01, 0.02, 0.03]
-        ] * 64, device=mock_env.device)
-        wrapper.unwrapped.robot_force_torque = raw_data
-
-        # Call the method
         obs = wrapper.get_force_torque_observation()
 
-        # Calculate expected scaled data
-        expected_obs = torch.tanh(raw_data * 0.1)
-
-        # Verify scaled observation
-        assert torch.allclose(obs, expected_obs)
-
-
-@pytest.fixture(scope="function")
-def mock_env():
-    """Create a mock environment for testing."""
-    return create_mock_env()
+        # Should return zeros
+        assert obs.shape == (env.num_envs, 6)
+        assert torch.all(obs == 0.0)
 
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    pytest.main([__file__])

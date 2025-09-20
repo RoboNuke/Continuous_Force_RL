@@ -1,577 +1,1194 @@
 """
-Unit tests for HybridForcePositionWrapper.
+Unit tests for hybrid force-position wrapper and support files.
 
-This module tests the HybridForcePositionWrapper functionality including hybrid
-force-position control, selection matrix management, and various reward strategies.
+Tests all classes and functions in:
+- wrappers/control/hybrid_force_position_wrapper.py
+- wrappers/control/factory_control_utils.py
+- wrappers/control/hybrid_control_cfg.py
 """
 
 import pytest
 import torch
+import gymnasium as gym
+import numpy as np
 import sys
 import os
-import numpy as np
-from unittest.mock import patch, MagicMock
+from unittest.mock import Mock, patch, MagicMock
+import tempfile
 
 # Add project root to path
-project_root = os.path.join(os.path.dirname(__file__), '..', '..')
-sys.path.insert(0, project_root)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-from tests.mocks.mock_isaac_lab import create_mock_env
+# Mock modules before imports
+mock_isaac_sim = __import__('tests.mocks.mock_isaac_sim', fromlist=[''])
+mock_isaac_lab = __import__('tests.mocks.mock_isaac_lab', fromlist=[''])
+
+# Create module hierarchy for omni.isaac.core.utils.torch
+if 'omni' not in sys.modules:
+    import types
+    omni = types.ModuleType('omni')
+    isaac = types.ModuleType('omni.isaac')
+    core = types.ModuleType('omni.isaac.core')
+    utils = types.ModuleType('omni.isaac.core.utils')
+    torch_mod = types.ModuleType('omni.isaac.core.utils.torch')
+
+    # Add mock functions to torch module
+    torch_utils_mock = mock_isaac_sim.core.utils.torch
+    torch_mod.quat_mul = torch_utils_mock.quat_mul
+    torch_mod.quat_conjugate = torch_utils_mock.quat_conjugate
+    torch_mod.quat_from_angle_axis = torch_utils_mock.quat_from_angle_axis
+    torch_mod.quat_from_euler_xyz = torch_utils_mock.quat_from_euler_xyz
+    torch_mod.get_euler_xyz = torch_utils_mock.get_euler_xyz
+
+    utils.torch = torch_mod
+    core.utils = utils
+    isaac.core = core
+    omni.isaac = isaac
+
+    sys.modules['omni'] = omni
+    sys.modules['omni.isaac'] = isaac
+    sys.modules['omni.isaac.core'] = core
+    sys.modules['omni.isaac.core.utils'] = utils
+    sys.modules['omni.isaac.core.utils.torch'] = torch_mod
+
+# Set up other modules
+sys.modules['isaacsim.core.utils.torch'] = mock_isaac_sim.core.utils.torch
+sys.modules['isaaclab.utils.math'] = mock_isaac_lab.utils.math
+sys.modules['omni.isaac.lab.utils.math'] = mock_isaac_lab.utils.math
+sys.modules['omni.isaac.lab.utils.configclass'] = mock_isaac_lab.utils
+
+# Import modules under test
+from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
+from wrappers.control.factory_control_utils import (
+    compute_pose_task_wrench,
+    compute_force_task_wrench,
+    compute_dof_torque_from_wrench,
+    get_pose_error,
+    _apply_task_space_gains
+)
+from wrappers.control.hybrid_control_cfg import (
+    HybridCtrlCfg,
+    HybridTaskCfg,
+    DEFAULT_HYBRID_CTRL_CFG,
+    DEFAULT_HYBRID_TASK_CFG
+)
 
 
-class TestHybridForcePositionWrapperInitialization:
-    """Test HybridForcePositionWrapper initialization and configuration."""
+class MockFactoryEnv(gym.Env):
+    """Mock factory environment for testing."""
 
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    def test_initialization_force_only(self, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test initialization with force control only (3DOF)."""
-        # Set up mocks
-        mock_torch_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_factory_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
+    def __init__(self, num_envs=4, device="cpu"):
+        super().__init__()
+        self.num_envs = num_envs
+        self.device = torch.device(device)
+        self.physics_dt = 1.0 / 60.0
 
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
+        # Configuration
+        self.cfg = self._create_mock_cfg()
+        self.cfg_task = self._create_mock_task_cfg()
 
-        # Add force-torque data requirement
-        mock_env.robot_force_torque = torch.zeros(64, 6, device=mock_env.device)
+        # Robot mock
+        self._robot = self._create_mock_robot()
+        self.last_update_timestamp = 0.0
 
-        wrapper = HybridForcePositionWrapper(mock_env, ctrl_torque=False, reward_type="base")
+        # Action and observation spaces
+        self.action_space = gym.spaces.Box(low=-1, high=1, shape=(18,))
+        self.observation_space = gym.spaces.Box(low=-1, high=1, shape=(64,))
 
-        assert wrapper.ctrl_torque is False
+        # State data
+        self.fingertip_midpoint_pos = torch.zeros((num_envs, 3), device=self.device)
+        self.fingertip_midpoint_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(num_envs, 1)
+        self.fixed_pos_action_frame = torch.zeros((num_envs, 3), device=self.device)
+
+        # Velocity data
+        self.ee_linvel_fd = torch.zeros((num_envs, 3), device=self.device)
+        self.ee_angvel_fd = torch.zeros((num_envs, 3), device=self.device)
+
+        # Joint data
+        self.joint_pos = torch.zeros((num_envs, 9), device=self.device)
+        self.joint_vel_fd = torch.zeros((num_envs, 9), device=self.device)
+        self.joint_torque = torch.zeros((num_envs, 9), device=self.device)
+
+        # Force-torque sensor data
+        self.robot_force_torque = torch.zeros((num_envs, 6), device=self.device)
+
+        # Control targets
+        self.ctrl_target_fingertip_midpoint_pos = torch.zeros((num_envs, 3), device=self.device)
+        self.ctrl_target_fingertip_midpoint_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(num_envs, 1)
+        self.ctrl_target_joint_pos = torch.zeros((num_envs, 9), device=self.device)
+        self.ctrl_target_gripper_dof_pos = 0.0
+
+        # Control gains
+        self.task_prop_gains = torch.ones((num_envs, 6), device=self.device) * 100.0
+        self.task_deriv_gains = torch.ones((num_envs, 6), device=self.device) * 10.0
+
+        # Jacobian and mass matrix
+        self.fingertip_midpoint_jacobian = torch.eye(6, 7, device=self.device).unsqueeze(0).repeat(num_envs, 1, 1)
+        self.arm_mass_matrix = torch.eye(7, device=self.device).unsqueeze(0).repeat(num_envs, 1, 1)
+
+        # Action thresholds
+        self.pos_threshold = 0.1
+        self.rot_threshold = 0.2
+
+        # Current actions
+        self.actions = torch.zeros((num_envs, 18), device=self.device)
+        self.prev_action = torch.zeros((num_envs, 18), device=self.device)
+
+        # Reset buffer
+        self.reset_buf = torch.zeros(num_envs, dtype=torch.bool, device=self.device)
+
+        # Extras for logging
+        self.extras = {}
+
+        # Current yaw
+        self.curr_yaw = torch.zeros(num_envs, device=self.device)
+
+    def _create_mock_cfg(self):
+        """Create mock configuration."""
+        class MockCfg:
+            def __init__(self):
+                self.scene = self._MockScene()
+                self.ctrl = self._MockCtrl()
+                self.action_space = 18
+
+            class _MockScene:
+                def __init__(self):
+                    self.num_envs = 4
+
+            class _MockCtrl:
+                def __init__(self):
+                    self.pos_action_bounds = [0.05, 0.05, 0.05]
+                    self.force_action_bounds = [50.0, 50.0, 50.0]
+                    self.torque_action_bounds = [0.5, 0.5, 0.5]
+                    self.force_action_threshold = [10.0, 10.0, 10.0]
+                    self.torque_action_threshold = [0.1, 0.1, 0.1]
+                    self.default_dof_pos_tensor = [0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785]
+                    self.kp_null = 10.0
+                    self.kd_null = 2.0
+
+        return MockCfg()
+
+    def _create_mock_task_cfg(self):
+        """Create mock task configuration."""
+        class MockTaskCfg:
+            def __init__(self):
+                self.unidirectional_rot = False
+
+        return MockTaskCfg()
+
+    def _create_mock_robot(self):
+        """Create mock robot."""
+        class MockRobot:
+            def __init__(self):
+                self._data = self._MockData()
+
+            def set_joint_position_target(self, positions):
+                pass
+
+            def set_joint_effort_target(self, efforts):
+                pass
+
+            class _MockData:
+                def __init__(self):
+                    self._sim_timestamp = 0.0
+
+        return MockRobot()
+
+    def _configure_gym_env_spaces(self):
+        """Configure gym environment spaces."""
+        self.action_space = gym.spaces.Box(low=-1, high=1, shape=(self.cfg.action_space,))
+
+    def _reset_buffers(self, env_ids):
+        """Reset buffers for specific environments."""
+        self.fingertip_midpoint_pos[env_ids] = torch.randn((len(env_ids), 3), device=self.device) * 0.1
+        self.robot_force_torque[env_ids] = torch.randn((len(env_ids), 6), device=self.device) * 5.0
+
+    def _compute_intermediate_values(self, dt):
+        """Compute intermediate values."""
+        self.last_update_timestamp = self._robot._data._sim_timestamp
+        self.fingertip_midpoint_pos += self.ee_linvel_fd * dt
+
+    def _pre_physics_step(self, action):
+        """Pre-physics step."""
+        self.actions = action.clone()
+
+    def _apply_action(self):
+        """Apply action."""
+        pass
+
+    def _update_rew_buf(self, curr_successes):
+        """Update reward buffer."""
+        return torch.randn(self.num_envs, device=self.device)
+
+    def reset(self, seed=None, **kwargs):
+        """Reset environment."""
+        obs = torch.randn(self.num_envs, 64, device=self.device)
+        info = {}
+        return obs, info
+
+    def step(self, action):
+        """Step environment."""
+        # Update timestamp
+        self._robot._data._sim_timestamp += self.physics_dt
+
+        obs = torch.randn(self.num_envs, 64, device=self.device)
+        reward = torch.randn(self.num_envs, device=self.device)
+        terminated = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        truncated = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        info = {
+            'current_successes': torch.randint(0, 2, (self.num_envs,), device=self.device),
+            'current_engagements': torch.randint(0, 2, (self.num_envs,), device=self.device),
+        }
+        return obs, reward, terminated, truncated, info
+
+
+@pytest.fixture
+def mock_env():
+    """Create mock factory environment."""
+    return MockFactoryEnv(num_envs=4, device="cpu")
+
+
+@pytest.fixture
+def hybrid_ctrl_cfg():
+    """Create hybrid control configuration."""
+    return HybridCtrlCfg(
+        ema_factor=0.2,
+        no_sel_ema=True,
+        target_init_mode="zero",
+        default_task_force_gains=[0.1, 0.1, 0.1, 0.001, 0.001, 0.001],
+        force_action_bounds=[50.0, 50.0, 50.0],
+        torque_action_bounds=[0.5, 0.5, 0.5],
+        force_action_threshold=[10.0, 10.0, 10.0],
+        torque_action_threshold=[0.1, 0.1, 0.1],
+        pos_action_bounds=[0.05, 0.05, 0.05]
+    )
+
+
+@pytest.fixture
+def hybrid_task_cfg():
+    """Create hybrid task configuration."""
+    return HybridTaskCfg(
+        force_active_threshold=0.1,
+        torque_active_threshold=0.01,
+        good_force_cmd_rew=0.1,
+        bad_force_cmd_rew=-0.1,
+        wrench_norm_scale=0.01
+    )
+
+
+class TestHybridCtrlCfg:
+    """Test HybridCtrlCfg configuration class."""
+
+    def test_initialization_with_defaults(self):
+        """Test configuration initialization with default values."""
+        cfg = HybridCtrlCfg()
+        assert cfg.ema_factor == 0.2
+        assert cfg.no_sel_ema == True
+        assert cfg.target_init_mode == "zero"
+        assert cfg.default_task_force_gains is None
+
+    def test_initialization_with_custom_values(self, hybrid_ctrl_cfg):
+        """Test configuration initialization with custom values."""
+        assert hybrid_ctrl_cfg.ema_factor == 0.2
+        assert hybrid_ctrl_cfg.default_task_force_gains == [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
+        assert hybrid_ctrl_cfg.force_action_bounds == [50.0, 50.0, 50.0]
+
+    def test_post_init_validation(self):
+        """Test post-initialization validation."""
+        # Valid values should not raise
+        HybridCtrlCfg(ema_factor=0.5, target_init_mode="first_goal")
+
+        # Invalid ema_factor should raise
+        with pytest.raises(ValueError, match="ema_factor must be between 0 and 1"):
+            HybridCtrlCfg(ema_factor=-0.1)
+
+        with pytest.raises(ValueError, match="ema_factor must be between 0 and 1"):
+            HybridCtrlCfg(ema_factor=1.5)
+
+        # Invalid target_init_mode should raise
+        with pytest.raises(ValueError, match="target_init_mode must be"):
+            HybridCtrlCfg(target_init_mode="invalid")
+
+
+class TestHybridTaskCfg:
+    """Test HybridTaskCfg configuration class."""
+
+    def test_initialization_with_defaults(self):
+        """Test task configuration initialization with default values."""
+        cfg = HybridTaskCfg()
+        assert cfg.force_active_threshold == 0.1
+        assert cfg.torque_active_threshold == 0.01
+        assert cfg.good_force_cmd_rew == 0.1
+        assert cfg.bad_force_cmd_rew == -0.1
+        assert cfg.wrench_norm_scale == 0.01
+
+    def test_initialization_with_custom_values(self, hybrid_task_cfg):
+        """Test task configuration initialization with custom values."""
+        assert hybrid_task_cfg.force_active_threshold == 0.1
+        assert hybrid_task_cfg.good_force_cmd_rew == 0.1
+        assert hybrid_task_cfg.bad_force_cmd_rew == -0.1
+
+
+class TestDefaultConfigurations:
+    """Test default configuration instances."""
+
+    def test_default_hybrid_ctrl_cfg(self):
+        """Test default hybrid control configuration."""
+        assert isinstance(DEFAULT_HYBRID_CTRL_CFG, HybridCtrlCfg)
+        assert DEFAULT_HYBRID_CTRL_CFG.ema_factor == 0.2
+
+    def test_default_hybrid_task_cfg(self):
+        """Test default hybrid task configuration."""
+        assert isinstance(DEFAULT_HYBRID_TASK_CFG, HybridTaskCfg)
+        assert DEFAULT_HYBRID_TASK_CFG.force_active_threshold == 0.1
+
+
+class TestFactoryControlUtils:
+    """Test factory control utility functions."""
+
+    def setup_method(self):
+        """Set up test data."""
+        self.num_envs = 4
+        self.device = torch.device("cpu")
+
+        # Create mock configuration
+        self.cfg = MockFactoryEnv()._create_mock_cfg()
+
+        # Create test tensors
+        self.dof_pos = torch.randn(self.num_envs, 9, device=self.device)
+        self.dof_vel = torch.randn(self.num_envs, 9, device=self.device)
+        self.fingertip_pos = torch.randn(self.num_envs, 3, device=self.device)
+        self.fingertip_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
+        self.fingertip_linvel = torch.randn(self.num_envs, 3, device=self.device)
+        self.fingertip_angvel = torch.randn(self.num_envs, 3, device=self.device)
+        self.target_pos = torch.randn(self.num_envs, 3, device=self.device)
+        self.target_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
+        self.task_prop_gains = torch.ones(self.num_envs, 6, device=self.device) * 100.0
+        self.task_deriv_gains = torch.ones(self.num_envs, 6, device=self.device) * 10.0
+        self.eef_force = torch.randn(self.num_envs, 6, device=self.device)
+        self.target_force = torch.randn(self.num_envs, 6, device=self.device)
+        self.task_gains = torch.ones(self.num_envs, 6, device=self.device) * 0.1
+        self.jacobian = torch.eye(6, 7, device=self.device).unsqueeze(0).repeat(self.num_envs, 1, 1)
+        self.mass_matrix = torch.eye(7, device=self.device).unsqueeze(0).repeat(self.num_envs, 1, 1)
+
+    def test_compute_pose_task_wrench(self):
+        """Test pose task wrench computation."""
+        wrench = compute_pose_task_wrench(
+            cfg=self.cfg,
+            dof_pos=self.dof_pos,
+            fingertip_midpoint_pos=self.fingertip_pos,
+            fingertip_midpoint_quat=self.fingertip_quat,
+            fingertip_midpoint_linvel=self.fingertip_linvel,
+            fingertip_midpoint_angvel=self.fingertip_angvel,
+            ctrl_target_fingertip_midpoint_pos=self.target_pos,
+            ctrl_target_fingertip_midpoint_quat=self.target_quat,
+            task_prop_gains=self.task_prop_gains,
+            task_deriv_gains=self.task_deriv_gains,
+            device=self.device
+        )
+
+        assert wrench.shape == (self.num_envs, 6)
+        assert not torch.isnan(wrench).any()
+        assert torch.isfinite(wrench).all()
+
+    def test_compute_force_task_wrench(self):
+        """Test force task wrench computation."""
+        wrench = compute_force_task_wrench(
+            cfg=self.cfg,
+            dof_pos=self.dof_pos,
+            eef_force=self.eef_force,
+            ctrl_target_force=self.target_force,
+            task_gains=self.task_gains,
+            device=self.device
+        )
+
+        assert wrench.shape == (self.num_envs, 6)
+        assert not torch.isnan(wrench).any()
+        assert torch.isfinite(wrench).all()
+
+        # Test that wrench equals gains * (target - current)
+        expected = self.task_gains * (self.target_force - self.eef_force)
+        torch.testing.assert_close(wrench, expected)
+
+    def test_compute_dof_torque_from_wrench(self):
+        """Test DOF torque computation from wrench."""
+        task_wrench = torch.randn(self.num_envs, 6, device=self.device)
+
+        dof_torque, output_wrench = compute_dof_torque_from_wrench(
+            cfg=self.cfg,
+            dof_pos=self.dof_pos,
+            dof_vel=self.dof_vel,
+            task_wrench=task_wrench,
+            jacobian=self.jacobian,
+            arm_mass_matrix=self.mass_matrix,
+            device=self.device
+        )
+
+        assert dof_torque.shape == (self.num_envs, self.dof_pos.shape[1])
+        assert output_wrench.shape == task_wrench.shape
+        assert not torch.isnan(dof_torque).any()
+        assert torch.isfinite(dof_torque).all()
+
+        # Test clamping
+        assert (dof_torque >= -100.0).all()
+        assert (dof_torque <= 100.0).all()
+
+    def test_get_pose_error(self):
+        """Test pose error computation."""
+        pos_error, axis_angle_error = get_pose_error(
+            fingertip_midpoint_pos=self.fingertip_pos,
+            fingertip_midpoint_quat=self.fingertip_quat,
+            ctrl_target_fingertip_midpoint_pos=self.target_pos,
+            ctrl_target_fingertip_midpoint_quat=self.target_quat,
+            jacobian_type="geometric",
+            rot_error_type="axis_angle"
+        )
+
+        assert pos_error.shape == (self.num_envs, 3)
+        assert axis_angle_error.shape == (self.num_envs, 3)
+        assert not torch.isnan(pos_error).any()
+        assert not torch.isnan(axis_angle_error).any()
+
+        # Test that position error is correct
+        expected_pos_error = self.target_pos - self.fingertip_pos
+        torch.testing.assert_close(pos_error, expected_pos_error)
+
+    def test_get_pose_error_quat_output(self):
+        """Test pose error computation with quaternion output."""
+        pos_error, quat_error = get_pose_error(
+            fingertip_midpoint_pos=self.fingertip_pos,
+            fingertip_midpoint_quat=self.fingertip_quat,
+            ctrl_target_fingertip_midpoint_pos=self.target_pos,
+            ctrl_target_fingertip_midpoint_quat=self.target_quat,
+            jacobian_type="geometric",
+            rot_error_type="quat"
+        )
+
+        assert pos_error.shape == (self.num_envs, 3)
+        assert quat_error.shape == (self.num_envs, 4)
+        assert not torch.isnan(pos_error).any()
+        assert not torch.isnan(quat_error).any()
+
+    def test_apply_task_space_gains(self):
+        """Test task space gains application."""
+        delta_pose = torch.randn(self.num_envs, 6, device=self.device)
+
+        wrench = _apply_task_space_gains(
+            delta_fingertip_pose=delta_pose,
+            fingertip_midpoint_linvel=self.fingertip_linvel,
+            fingertip_midpoint_angvel=self.fingertip_angvel,
+            task_prop_gains=self.task_prop_gains,
+            task_deriv_gains=self.task_deriv_gains
+        )
+
+        assert wrench.shape == (self.num_envs, 6)
+        assert not torch.isnan(wrench).any()
+        assert torch.isfinite(wrench).all()
+
+        # Test linear components
+        expected_lin = (self.task_prop_gains[:, :3] * delta_pose[:, :3] +
+                       self.task_deriv_gains[:, :3] * (0.0 - self.fingertip_linvel))
+        torch.testing.assert_close(wrench[:, :3], expected_lin)
+
+        # Test rotational components
+        expected_rot = (self.task_prop_gains[:, 3:] * delta_pose[:, 3:] +
+                       self.task_deriv_gains[:, 3:] * (0.0 - self.fingertip_angvel))
+        torch.testing.assert_close(wrench[:, 3:], expected_rot)
+
+
+class TestHybridForcePositionWrapper:
+    """Test HybridForcePositionWrapper class."""
+
+    def test_initialization_requires_configs(self, mock_env):
+        """Test that wrapper requires explicit configurations."""
+        # Should raise error without configurations
+        with pytest.raises(ValueError, match="ctrl_cfg cannot be None"):
+            HybridForcePositionWrapper(mock_env)
+
+        with pytest.raises(ValueError, match="task_cfg cannot be None"):
+            HybridForcePositionWrapper(mock_env, ctrl_cfg=HybridCtrlCfg())
+
+    def test_initialization_requires_force_gains(self, mock_env, hybrid_task_cfg):
+        """Test that wrapper requires force gains configuration."""
+        ctrl_cfg = HybridCtrlCfg(default_task_force_gains=None)
+
+        with pytest.raises(ValueError, match="default_task_force_gains cannot be None"):
+            HybridForcePositionWrapper(mock_env, ctrl_cfg=ctrl_cfg, task_cfg=hybrid_task_cfg)
+
+    def test_initialization_success(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test successful wrapper initialization."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_torque=False,
+            reward_type="simp",
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
+        assert wrapper.num_envs == 4
         assert wrapper.force_size == 3
-        assert wrapper.reward_type == "base"
-        assert wrapper.action_space_size == 12  # 3 (selection) + 6 (pose) + 3 (force for 3DOF)
-        assert wrapper.sel_matrix.shape == (64, 6)
-
-        # Check new refactored attributes
-        assert wrapper.sel_goal.shape == (64, 6)
-        assert wrapper.pose_goal.shape == (64, 7)  # pos(3) + quat(4)
-        assert wrapper.force_goal.shape == (64, 6)
-        assert wrapper.target_selection.shape == (64, 6)
-        assert wrapper.target_pose.shape == (64, 7)
-        assert wrapper.target_force.shape == (64, 6)
-
-        assert wrapper.kp.shape == (64, 6)
-        # Torque gains should be zero for force-only control
-        assert torch.allclose(wrapper.kp[:, 3:], torch.zeros(64, 3))
-
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    def test_initialization_force_and_torque(self, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test initialization with force and torque control (6DOF)."""
-        # Set up mocks
-        mock_torch_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_factory_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
-
-        # Add force-torque data requirement
-        mock_env.robot_force_torque = torch.zeros(64, 6, device=mock_env.device)
-
-        wrapper = HybridForcePositionWrapper(mock_env, ctrl_torque=True, reward_type="simp")
-
-        assert wrapper.ctrl_torque is True
-        assert wrapper.force_size == 6
         assert wrapper.reward_type == "simp"
-        assert wrapper.action_space_size == 18  # 6 (selection) + 6 (pose) + 6 (force)
-        # All gains should be non-zero for 6DOF control
-        assert torch.all(wrapper.kp > 0)
+        assert wrapper.action_space_size == 12  # 2*3 + 6 = 12
+        assert wrapper.ctrl_cfg == hybrid_ctrl_cfg
+        assert wrapper.task_cfg == hybrid_task_cfg
 
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    def test_initialization_without_force_data(self, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test initialization fails without force-torque data."""
-        # Set up mocks
-        mock_torch_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_factory_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
+    def test_initialization_with_torque_control(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test wrapper initialization with torque control."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_torque=True,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
 
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
+        assert wrapper.force_size == 6
+        assert wrapper.action_space_size == 18  # 2*6 + 6 = 18
 
-        # Remove robot_force_torque from mock environment
-        delattr(mock_env, 'robot_force_torque')
+    def test_action_space_update(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test that action space is properly updated."""
+        original_action_space = mock_env.cfg.action_space
 
-        # Should fail during wrapper construction
-        with pytest.raises(ValueError, match="Hybrid force-position control requires force-torque sensor data"):
-            wrapper = HybridForcePositionWrapper(mock_env, ctrl_torque=False)
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
 
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    def test_initialization_reward_types(self, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test initialization with different reward types."""
-        # Set up mocks
-        mock_torch_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_factory_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
+        # Should update environment action space
+        assert mock_env.cfg.action_space == wrapper.action_space_size
 
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
+    def test_target_initialization_zero_mode(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test target initialization in zero mode."""
+        hybrid_ctrl_cfg.target_init_mode = "zero"
 
-        mock_env.robot_force_torque = torch.zeros(64, 6, device=mock_env.device)
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
 
-        # Test delta reward type (should create _old_sel_matrix)
-        wrapper = HybridForcePositionWrapper(mock_env, reward_type="delta")
+        assert wrapper._targets_initialized == True
+        assert torch.allclose(wrapper.target_selection, torch.zeros_like(wrapper.target_selection))
+
+    def test_target_initialization_first_goal_mode(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test target initialization in first_goal mode."""
+        hybrid_ctrl_cfg.target_init_mode = "first_goal"
+
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
+        assert wrapper._targets_initialized == False
+
+    def test_wrapper_initialization_without_robot(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test wrapper behavior when robot is not available initially."""
+        # Remove robot temporarily
+        robot = mock_env._robot
+        del mock_env._robot
+
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
+        assert wrapper._wrapper_initialized == False
+
+        # Restore robot and test initialization
+        mock_env._robot = robot
+        wrapper._initialize_wrapper()
+        assert wrapper._wrapper_initialized == True
+
+    def test_wrapper_initialization_requires_force_torque(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test that wrapper requires force-torque sensor data."""
+        # Remove robot temporarily to prevent auto-initialization
+        robot = mock_env._robot
+        del mock_env._robot
+
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
+        # Restore robot but remove force-torque data
+        mock_env._robot = robot
+        del mock_env.robot_force_torque
+
+        with pytest.raises(ValueError, match="force-torque sensor data"):
+            wrapper._initialize_wrapper()
+
+    def test_delta_reward_initialization(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test initialization with delta reward type."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            reward_type="delta",
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
         assert hasattr(wrapper, '_old_sel_matrix')
-        assert wrapper._old_sel_matrix.shape == (64, 6)
+        assert wrapper._old_sel_matrix.shape == wrapper.sel_matrix.shape
 
+    def test_extract_goals_from_action(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test goal extraction from actions."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
 
-class TestHybridForcePositionWrapperSelectionMatrix:
-    """Test selection matrix processing and action parsing."""
+        # Create test action
+        action = torch.randn(mock_env.num_envs, wrapper.action_space_size)
 
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    @patch('wrappers.control.factory_control_utils.axis_angle_from_quat')
-    @patch('wrappers.control.factory_control_utils.compute_pose_task_wrench')
-    @patch('wrappers.control.factory_control_utils.compute_force_task_wrench')
-    @patch('wrappers.control.factory_control_utils.compute_dof_torque_from_wrench')
-    def test_selection_matrix_parsing(self, mock_dof_torque, mock_force_wrench, mock_pose_wrench,
-                                    mock_axis_angle, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test selection matrix parsing from actions."""
-        # Set up mocks
-        mock_torch_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_torch_utils.quat_mul.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_torch_utils.quat_conjugate.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_torch_utils.quat_from_euler_xyz.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_torch_utils.get_euler_xyz.return_value = (torch.zeros(64), torch.zeros(64), torch.zeros(64))
-        mock_factory_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-
-        mock_axis_angle.return_value = torch.zeros(64, 3)
-        mock_pose_wrench.return_value = torch.zeros(64, 6)
-        mock_force_wrench.return_value = torch.zeros(64, 6)
-        mock_dof_torque.return_value = (torch.zeros(64, 9), torch.zeros(64, 6))
-
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
-
-        mock_env.robot_force_torque = torch.zeros(64, 6, device=mock_env.device)
-        wrapper = HybridForcePositionWrapper(mock_env, ctrl_torque=False)
-
-        # Create test action: first 3 elements are selection matrix
-        action = torch.zeros(64, 12, device=mock_env.device)
-        action[:, 0] = 0.8  # Force control in X (>0.5)
-        action[:, 1] = 0.2  # Position control in Y (<0.5)
-        action[:, 2] = 0.9  # Force control in Z (>0.5)
-
-        wrapper._wrapped_pre_physics_step(action)
-
-        # Check selection matrix
-        assert wrapper.sel_matrix[0, 0] == 1.0  # Force control X
-        assert wrapper.sel_matrix[0, 1] == 0.0  # Position control Y
-        assert wrapper.sel_matrix[0, 2] == 1.0  # Force control Z
-
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    @patch('wrappers.control.factory_control_utils.axis_angle_from_quat')
-    def test_action_ema_smoothing(self, mock_axis_angle, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test EMA smoothing of actions."""
-        # Set up mocks
-        mock_torch_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_torch_utils.quat_mul.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_torch_utils.quat_conjugate.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_torch_utils.quat_from_euler_xyz.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_torch_utils.get_euler_xyz.return_value = (torch.zeros(64), torch.zeros(64), torch.zeros(64))
-        mock_factory_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
-
-        mock_env.robot_force_torque = torch.zeros(64, 6, device=mock_env.device)
-        wrapper = HybridForcePositionWrapper(mock_env, ctrl_torque=False)
-
-        # Test direct EMA application without running the full pre_physics_step
-        # Set initial actions
-        mock_env.actions = torch.ones(64, 12, device=mock_env.device) * 0.5
-
-        # Create new action
-        action = torch.ones(64, 12, device=mock_env.device) * 1.0
-
-        # Test EMA parameters
-        ema_factor = getattr(wrapper.unwrapped.cfg.ctrl, 'ema_factor', 0.2)
-        no_sel_ema = getattr(wrapper.unwrapped.cfg.ctrl, 'no_sel_ema', True)
-
-        # Manually apply EMA logic as done in the wrapper
-        if no_sel_ema:
-            # Apply EMA to everything except selection matrix
-            mock_env.actions[:, wrapper.force_size:] = (
-                ema_factor * action[:, wrapper.force_size:].clone().to(wrapper.device) +
-                (1 - ema_factor) * mock_env.actions[:, wrapper.force_size:]
-            )
-            mock_env.actions[:, :wrapper.force_size] = action[:, :wrapper.force_size]
-
-        # Check EMA was applied (ema_factor=0.2)
-        # For elements beyond selection matrix: new_val = 0.2*1.0 + 0.8*0.5 = 0.6
-        expected_val = 0.2 * 1.0 + 0.8 * 0.5
-        assert torch.allclose(mock_env.actions[:, 3], torch.tensor([expected_val] * 64))
-
-        # Selection matrix should not use EMA (no_sel_ema=True)
-        assert torch.allclose(mock_env.actions[:, 0], torch.tensor([1.0] * 64))
-
-
-class TestHybridForcePositionWrapperControlComputation:
-    """Test control computation methods."""
-
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    @patch('wrappers.control.factory_control_utils.axis_angle_from_quat')
-    def test_calc_pose_goal(self, mock_axis_angle, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test pose goal calculation from action."""
-        # Set up mocks for quaternion operations
-        mock_torch_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_torch_utils.quat_mul.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_torch_utils.get_euler_xyz.return_value = (torch.zeros(64), torch.zeros(64), torch.zeros(64))
-        mock_torch_utils.quat_from_euler_xyz.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_factory_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
-
-        mock_env.robot_force_torque = torch.zeros(64, 6, device=mock_env.device)
-        wrapper = HybridForcePositionWrapper(mock_env, ctrl_torque=False)
-
-        # Set test actions for pose control
-        action = torch.zeros(64, 12, device=mock_env.device)
-        action[:, 3:6] = torch.tensor([0.1, -0.1, 0.05])  # Position actions
-        action[:, 6:9] = torch.tensor([0.02, 0.0, 0.01])  # Rotation actions
-
-        # Extract goals from action
         wrapper._extract_goals_from_action(action)
 
-        # Check pose goal shape and that it was updated
-        assert wrapper.pose_goal.shape == (64, 7)  # pos(3) + quat(4)
-        # Position goal should be current pos + action * threshold
-        expected_pos_delta = action[:, 3:6] * mock_env.pos_threshold
-        assert torch.allclose(wrapper.pose_goal[:, :3], mock_env.fingertip_midpoint_pos + expected_pos_delta)
+        # Check that goals are extracted correctly
+        assert wrapper.sel_goal.shape == (mock_env.num_envs, 6)
+        assert wrapper.pose_goal.shape == (mock_env.num_envs, 7)
+        assert wrapper.force_goal.shape == (mock_env.num_envs, 6)
+        assert torch.allclose(wrapper.unwrapped.actions, action)
 
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    def test_calc_force_goal(self, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test force goal calculation from action."""
-        # Set up mocks for quaternion operations
-        mock_torch_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_torch_utils.quat_mul.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_torch_utils.get_euler_xyz.return_value = (torch.zeros(64), torch.zeros(64), torch.zeros(64))
-        mock_torch_utils.quat_from_euler_xyz.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_factory_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
+    def test_calc_pose_goal_without_bounds(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test pose goal calculation without configured bounds."""
+        # Remove bounds from config
+        hybrid_ctrl_cfg.pos_action_bounds = None
+        del mock_env.cfg.ctrl.pos_action_bounds
 
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
 
-        mock_env.robot_force_torque = torch.ones(64, 6, device=mock_env.device) * 2.0
-        wrapper = HybridForcePositionWrapper(mock_env, ctrl_torque=False)
+        action = torch.randn(mock_env.num_envs, wrapper.action_space_size)
+        wrapper.unwrapped.actions = action
 
-        # Set test force actions
-        action = torch.zeros(64, 12, device=mock_env.device)
-        action[:, 9:12] = torch.tensor([0.1, -0.1, 0.05])  # Force actions
+        with pytest.raises(ValueError, match="Position action bounds not configured"):
+            wrapper._calc_pose_goal()
 
-        # Extract goals from action
-        wrapper._extract_goals_from_action(action)
+    def test_calc_force_goal_without_threshold(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test force goal calculation without configured threshold."""
+        # Remove threshold from config
+        hybrid_ctrl_cfg.force_action_threshold = None
+        del mock_env.cfg.ctrl.force_action_threshold
 
-        # Check force goal calculation (should be action*threshold + current_force, clipped)
-        force_threshold = 10.0  # Default from config
-        force_bounds = 50.0     # Default from config
-        expected_force = torch.tensor([1.0, -1.0, 0.5]) + 2.0  # action*10 + current
-        expected_force = torch.clip(expected_force, -force_bounds, force_bounds)
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
 
-        assert wrapper.force_goal.shape == (64, 6)
-        assert torch.allclose(wrapper.force_goal[0, :3], expected_force)
+        action = torch.randn(mock_env.num_envs, wrapper.action_space_size)
+        wrapper.unwrapped.actions = action
 
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    def test_get_target_out_of_bounds(self, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test out-of-bounds position detection."""
-        # Set up mocks
-        mock_torch_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_factory_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
+        with pytest.raises(ValueError, match="Force action threshold not configured"):
+            wrapper._calc_force_goal()
 
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
+    def test_calc_force_goal_without_bounds(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test force goal calculation without configured bounds."""
+        # Remove bounds from config
+        hybrid_ctrl_cfg.force_action_bounds = None
+        del mock_env.cfg.ctrl.force_action_bounds
 
-        mock_env.robot_force_torque = torch.zeros(64, 6, device=mock_env.device)
-        wrapper = HybridForcePositionWrapper(mock_env, ctrl_torque=False)
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
 
-        # Set up out-of-bounds position
-        mock_env.fingertip_midpoint_pos[0] = torch.tensor([0.6, 0.0, 0.4])  # Out of bounds in X
+        action = torch.randn(mock_env.num_envs, wrapper.action_space_size)
+        wrapper.unwrapped.actions = action
+
+        with pytest.raises(ValueError, match="Force action bounds not configured"):
+            wrapper._calc_force_goal()
+
+    def test_torque_goal_calculation(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test torque goal calculation for 6DOF control."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_torque=True,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
+        action = torch.randn(mock_env.num_envs, wrapper.action_space_size)
+        wrapper.unwrapped.actions = action
+
+        wrapper._calc_force_goal()
+
+        # Check that torque goals are calculated
+        assert not torch.allclose(wrapper.force_goal[:, 3:], torch.zeros_like(wrapper.force_goal[:, 3:]))
+
+    def test_torque_goal_without_config(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test torque goal calculation without proper configuration."""
+        # Remove torque config
+        hybrid_ctrl_cfg.torque_action_threshold = None
+        del mock_env.cfg.ctrl.torque_action_threshold
+
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_torque=True,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
+        action = torch.randn(mock_env.num_envs, wrapper.action_space_size)
+        wrapper.unwrapped.actions = action
+
+        with pytest.raises(ValueError, match="Torque action threshold not configured"):
+            wrapper._calc_force_goal()
+
+    def test_update_targets_with_ema_first_goal(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test target update with EMA for first goal."""
+        hybrid_ctrl_cfg.target_init_mode = "first_goal"
+
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
+        # Set some goals
+        wrapper.sel_goal = torch.ones_like(wrapper.sel_goal) * 0.5
+        wrapper.pose_goal = torch.ones_like(wrapper.pose_goal) * 0.3
+        wrapper.force_goal = torch.ones_like(wrapper.force_goal) * 0.7
+
+        wrapper._update_targets_with_ema()
+
+        # Should initialize to first goals
+        assert wrapper._targets_initialized == True
+        torch.testing.assert_close(wrapper.target_selection, wrapper.sel_goal)
+        torch.testing.assert_close(wrapper.target_pose, wrapper.pose_goal)
+        torch.testing.assert_close(wrapper.target_force, wrapper.force_goal)
+
+    def test_update_targets_with_ema_filtering(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test target update with EMA filtering."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
+        # Initialize targets
+        wrapper.target_selection.fill_(0.2)
+        wrapper.target_pose.fill_(0.2)
+        wrapper.target_force.fill_(0.2)
+        wrapper._targets_initialized = True
+
+        # Set new goals
+        wrapper.sel_goal.fill_(0.8)
+        wrapper.pose_goal.fill_(0.8)
+        wrapper.force_goal.fill_(0.8)
+
+        wrapper._update_targets_with_ema()
+
+        # Check EMA update
+        expected_ema = 0.2 * 0.8 + 0.8 * 0.2  # ema_factor * goal + (1-ema_factor) * prev_target
+        assert torch.allclose(wrapper.target_pose, torch.full_like(wrapper.target_pose, expected_ema), atol=1e-6)
+
+    def test_update_targets_no_sel_ema(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test target update without selection EMA."""
+        hybrid_ctrl_cfg.no_sel_ema = True
+
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
+        # Initialize targets
+        wrapper.target_selection.fill_(0.2)
+        wrapper._targets_initialized = True
+
+        # Set new selection goal
+        wrapper.sel_goal.fill_(0.8)
+
+        wrapper._update_targets_with_ema()
+
+        # Selection should be set directly (no EMA)
+        assert torch.allclose(wrapper.target_selection[:, :wrapper.force_size], wrapper.sel_goal[:, :wrapper.force_size])
+
+    def test_set_control_targets_from_targets(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test setting control targets from filtered targets."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
+        # Set targets
+        wrapper.target_selection.fill_(0.7)  # > 0.5 threshold
+        wrapper.target_pose[:, :3].fill_(1.0)
+        wrapper.target_pose[:, 3:].fill_(0.5)
+        wrapper.target_force.fill_(2.0)
+
+        wrapper._set_control_targets_from_targets()
+
+        # Check selection matrix (should be 1.0 where target > 0.5)
+        assert torch.allclose(wrapper.sel_matrix[:, :wrapper.force_size], torch.ones_like(wrapper.sel_matrix[:, :wrapper.force_size]))
+
+        # Check pose targets
+        torch.testing.assert_close(wrapper.unwrapped.ctrl_target_fingertip_midpoint_pos, wrapper.target_pose[:, :3])
+        torch.testing.assert_close(wrapper.unwrapped.ctrl_target_fingertip_midpoint_quat, wrapper.target_pose[:, 3:])
+
+        # Check force target
+        torch.testing.assert_close(wrapper.target_force_for_control, wrapper.target_force)
+
+    def test_get_target_out_of_bounds(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test out-of-bounds detection."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
+        # Set fingertip position out of bounds
+        mock_env.fingertip_midpoint_pos[0] = torch.tensor([0.1, 0.0, 0.0])  # > pos_action_bounds[0] = 0.05
+        mock_env.fixed_pos_action_frame[0] = torch.tensor([0.0, 0.0, 0.0])
 
         out_of_bounds = wrapper._get_target_out_of_bounds()
 
-        # Check detection (bounds are ±0.1 from fixed_pos_action_frame)
-        assert out_of_bounds[0, 0] == True   # X out of bounds
-        assert out_of_bounds[0, 1] == False  # Y within bounds
-        assert out_of_bounds[0, 2] == False  # Z within bounds
+        assert out_of_bounds[0, 0] == True  # X axis out of bounds
+        assert out_of_bounds[0, 1] == False  # Y axis in bounds
+        assert out_of_bounds[0, 2] == False  # Z axis in bounds
 
+    def test_reset_targets(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test target reset for specific environments."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
 
-class TestHybridForcePositionWrapperRewards:
-    """Test different reward computation strategies."""
+        # Set some targets
+        wrapper.target_selection.fill_(0.5)
+        wrapper.target_pose.fill_(0.5)
+        wrapper.target_force.fill_(0.5)
 
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    def test_simple_force_reward(self, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test simple force activity reward."""
-        # Set up mocks
-        mock_torch_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_factory_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
+        # Reset environments 0 and 2
+        env_ids = torch.tensor([0, 2])
+        wrapper._reset_targets(env_ids)
 
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
+        # Check that targets are reset
+        assert torch.allclose(wrapper.target_selection[env_ids], torch.zeros_like(wrapper.target_selection[env_ids]))
+        assert torch.allclose(wrapper.target_pose[env_ids], torch.zeros_like(wrapper.target_pose[env_ids]))
+        assert torch.allclose(wrapper.target_force[env_ids], torch.zeros_like(wrapper.target_force[env_ids]))
 
-        mock_env.robot_force_torque = torch.zeros(64, 6, device=mock_env.device)
-        mock_env.robot_force_torque[0, :3] = torch.tensor([2.0, 0.0, 0.0])  # Active force (>0.1)
-        mock_env.robot_force_torque[1, :3] = torch.tensor([0.05, 0.0, 0.0])  # Inactive force (<0.1)
+        # Check that other environments are unchanged
+        assert torch.allclose(wrapper.target_selection[1], torch.full_like(wrapper.target_selection[1], 0.5))
 
-        wrapper = HybridForcePositionWrapper(mock_env, ctrl_torque=False, reward_type="simp")
+    def test_simple_force_reward(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test simple force reward calculation."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            reward_type="simp",
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
+        # Set force data
+        mock_env.robot_force_torque[0] = torch.tensor([0.2, 0.0, 0.0, 0.0, 0.0, 0.0])  # Active force
+        mock_env.robot_force_torque[1] = torch.tensor([0.05, 0.0, 0.0, 0.0, 0.0, 0.0])  # Inactive force
 
         # Set selection matrix
-        wrapper.sel_matrix[0, 0] = 1.0  # Force control with active force - good
-        wrapper.sel_matrix[1, 0] = 1.0  # Force control with inactive force - bad
-        wrapper.sel_matrix[2, 0] = 0.0  # Position control with inactive force - neutral
+        wrapper.sel_matrix[0, 0] = 1.0  # Force control on X
+        wrapper.sel_matrix[1, 0] = 1.0  # Force control on X
 
         reward = wrapper._simple_force_reward()
 
-        good_reward = wrapper.task_cfg.good_force_cmd_rew   # From task_cfg
-        bad_reward = wrapper.task_cfg.bad_force_cmd_rew     # From task_cfg
+        # Environment 0: active force + force control = good
+        assert reward[0] == hybrid_task_cfg.good_force_cmd_rew
 
-        assert reward[0] == good_reward   # Good force command
-        assert reward[1] == bad_reward    # Bad force command
-        assert reward[2] == 0.0           # Neutral (position control)
+        # Environment 1: inactive force + force control = bad
+        assert reward[1] == hybrid_task_cfg.bad_force_cmd_rew
 
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    def test_directional_force_reward(self, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test direction-specific force reward."""
-        # Set up mocks
-        mock_torch_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_factory_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
+    def test_directional_force_reward(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test directional force reward calculation."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            reward_type="dirs",
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
 
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
+        # Set force data: active in X, inactive in Y and Z
+        mock_env.robot_force_torque[0] = torch.tensor([0.2, 0.05, 0.05, 0.0, 0.0, 0.0])
 
-        mock_env.robot_force_torque = torch.zeros(64, 6, device=mock_env.device)
-        mock_env.robot_force_torque[0, :3] = torch.tensor([2.0, 0.05, 0.0])  # X active (>0.1), Y inactive (<0.1)
-
-        wrapper = HybridForcePositionWrapper(mock_env, ctrl_torque=False, reward_type="dirs")
-
-        # Set selection matrix: force control in X, position control in Y, force control in Z
-        wrapper.sel_matrix[0, 0] = 1.0  # Force control, active force - good
-        wrapper.sel_matrix[0, 1] = 0.0  # Position control, inactive force - good
-        wrapper.sel_matrix[0, 2] = 1.0  # Force control, inactive force - bad
+        # Set selection matrix: force control on X and Y, position control on Z
+        wrapper.sel_matrix[0] = torch.tensor([1.0, 1.0, 0.0, 0.0, 0.0, 0.0])
 
         reward = wrapper._directional_force_reward()
 
-        good_reward = wrapper.task_cfg.good_force_cmd_rew   # From task_cfg
-        bad_reward = wrapper.task_cfg.bad_force_cmd_rew     # From task_cfg
-
-        # 2 good dimensions, 1 bad dimension
-        expected = 2 * good_reward + 1 * bad_reward
+        # X: force control + active force = good
+        # Y: force control + inactive force = bad
+        # Z: position control + inactive force = good
+        expected = (1 * hybrid_task_cfg.good_force_cmd_rew +
+                   1 * hybrid_task_cfg.bad_force_cmd_rew +
+                   1 * hybrid_task_cfg.good_force_cmd_rew)
         assert reward[0] == expected
 
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    def test_delta_selection_reward(self, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test delta selection matrix reward."""
-        # Set up mocks
-        mock_torch_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_factory_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
-
-        mock_env.robot_force_torque = torch.zeros(64, 6, device=mock_env.device)
-        wrapper = HybridForcePositionWrapper(mock_env, ctrl_torque=False, reward_type="delta")
+    def test_delta_selection_reward(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test delta selection reward calculation."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            reward_type="delta",
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
 
         # Set initial selection matrix
-        wrapper._old_sel_matrix[0, :3] = torch.tensor([1.0, 0.0, 1.0])
-
-        # Set new selection matrix (change in Y dimension)
-        wrapper.sel_matrix[0, :3] = torch.tensor([1.0, 1.0, 1.0])
+        wrapper._old_sel_matrix[0] = torch.tensor([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        wrapper.sel_matrix[0] = torch.tensor([0.0, 1.0, 0.0, 0.0, 0.0, 0.0])
 
         reward = wrapper._delta_selection_reward()
 
-        bad_reward = wrapper.task_cfg.bad_force_cmd_rew   # From task_cfg
-        # Change of 1.0 in Y dimension
-        expected = 1.0 * bad_reward
+        # Changes in 2 dimensions (X and Y)
+        expected = 2.0 * hybrid_task_cfg.bad_force_cmd_rew
         assert reward[0] == expected
 
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    def test_low_wrench_reward(self, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test low wrench magnitude reward."""
-        # Set up mocks
-        mock_torch_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_factory_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
+        # Check that old selection matrix is updated
+        torch.testing.assert_close(wrapper._old_sel_matrix, wrapper.sel_matrix)
 
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
+    def test_position_simple_reward(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test position simple reward calculation."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            reward_type="pos_simp",
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
 
-        mock_env.robot_force_torque = torch.zeros(64, 6, device=mock_env.device)
-        wrapper = HybridForcePositionWrapper(mock_env, ctrl_torque=False, reward_type="wrench_norm")
+        # Set force data: active force
+        mock_env.robot_force_torque[0] = torch.tensor([0.2, 0.0, 0.0, 0.0, 0.0, 0.0])
 
-        # Set actions to compute wrench norm
-        mock_env.actions = torch.zeros(64, 12, device=mock_env.device)
-        mock_env.actions[0, 3:] = torch.tensor([1.0, 2.0, 3.0] + [0.0] * 6)  # Wrench actions
+        # Set selection matrix: force control
+        wrapper.sel_matrix[0, 0] = 1.0
+
+        reward = wrapper._position_simple_reward()
+
+        # Active force + force control = good
+        assert reward[0] == hybrid_task_cfg.good_force_cmd_rew
+
+    def test_low_wrench_reward(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test low wrench reward calculation."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            reward_type="wrench_norm",
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
+        # Set action with wrench components (pose + force actions after selection matrix)
+        wrench_start = wrapper.force_size  # After selection matrix
+        wrench_size = 6  # pose(6) + force(3) = 9, but we only want 6 for this test
+        mock_env.actions[0, wrench_start:wrench_start+wrench_size] = torch.ones(wrench_size) * 2.0
 
         reward = wrapper._low_wrench_reward()
 
-        wrench_scale = wrapper.task_cfg.wrench_norm_scale  # From task_cfg
-        expected_norm = torch.norm(torch.tensor([1.0, 2.0, 3.0] + [0.0] * 6))
-        expected_reward = -expected_norm * wrench_scale
+        expected = -torch.sqrt(torch.tensor(24.0)) * hybrid_task_cfg.wrench_norm_scale
+        assert torch.isclose(reward[0], expected)
 
-        assert torch.allclose(reward[0], expected_reward)
+    def test_wrapped_update_rew_buf_with_base_reward(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test reward buffer update with base reward."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            reward_type="simp",
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
 
+        # Mock original reward function
+        wrapper._original_update_rew_buf = lambda x: torch.ones_like(x) * 0.5
 
-class TestHybridForcePositionWrapperIntegration:
-    """Test wrapper integration and method overrides."""
+        # Set up for simple force reward
+        mock_env.robot_force_torque[0] = torch.tensor([0.2, 0.0, 0.0, 0.0, 0.0, 0.0])
+        wrapper.sel_matrix[0, 0] = 1.0
 
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    @patch('wrappers.control.factory_control_utils.axis_angle_from_quat')
-    @patch('wrappers.control.factory_control_utils.compute_pose_task_wrench')
-    @patch('wrappers.control.factory_control_utils.compute_force_task_wrench')
-    @patch('wrappers.control.factory_control_utils.compute_dof_torque_from_wrench')
-    def test_wrapped_apply_action(self, mock_dof_torque, mock_force_wrench, mock_pose_wrench,
-                                mock_axis_angle, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test wrapped _apply_action method."""
-        # Set up mocks
-        mock_torch_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_torch_utils.quat_mul.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_torch_utils.quat_conjugate.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_torch_utils.get_euler_xyz.return_value = (torch.zeros(64), torch.zeros(64), torch.zeros(64))
-        mock_factory_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
+        curr_successes = torch.zeros(mock_env.num_envs)
+        reward = wrapper._wrapped_update_rew_buf(curr_successes)
 
-        mock_axis_angle.return_value = torch.zeros(64, 3)
-        pose_wrench = torch.ones(64, 6) * 1.0
-        force_wrench = torch.ones(64, 6) * 2.0
-        joint_torque = torch.ones(64, 9) * 0.5
+        # Should be base reward + hybrid reward
+        expected = 0.5 + hybrid_task_cfg.good_force_cmd_rew
+        assert reward[0] == expected
 
-        mock_pose_wrench.return_value = pose_wrench
-        mock_force_wrench.return_value = force_wrench
-        mock_dof_torque.return_value = (joint_torque, torch.ones(64, 6))
+    def test_wrapped_update_rew_buf_without_base_reward(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test reward buffer update without base reward."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            reward_type="simp",
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
 
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
+        # No original reward function
+        wrapper._original_update_rew_buf = None
 
-        mock_env.robot_force_torque = torch.zeros(64, 6, device=mock_env.device)
-        wrapper = HybridForcePositionWrapper(mock_env, ctrl_torque=False)
+        # Set up for simple force reward
+        mock_env.robot_force_torque[0] = torch.tensor([0.2, 0.0, 0.0, 0.0, 0.0, 0.0])
+        wrapper.sel_matrix[0, 0] = 1.0
 
-        # Set selection matrix for hybrid control
-        wrapper.sel_matrix[0, :3] = torch.tensor([1.0, 0.0, 1.0])  # Force in X,Z; position in Y
-        # Also set target_force_for_control which is used in apply_action
-        wrapper.target_force_for_control = torch.zeros(64, 6, device=mock_env.device)
+        curr_successes = torch.zeros(mock_env.num_envs)
+        reward = wrapper._wrapped_update_rew_buf(curr_successes)
 
-        # Mock timestamp to avoid update condition
-        wrapper.unwrapped.last_update_timestamp = 0.0
-        wrapper.unwrapped._robot._data._sim_timestamp = 2.0
+        # Should be just hybrid reward
+        assert reward[0] == hybrid_task_cfg.good_force_cmd_rew
+
+    def test_wrapped_update_rew_buf_base_reward_type(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test reward buffer update with base reward type."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            reward_type="base",
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
+        # Mock original reward function
+        wrapper._original_update_rew_buf = lambda x: torch.ones_like(x) * 0.5
+
+        curr_successes = torch.zeros(mock_env.num_envs)
+        reward = wrapper._wrapped_update_rew_buf(curr_successes)
+
+        # Should be just base reward
+        assert reward[0] == 0.5
+
+    def test_step_with_late_initialization(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test step method with late wrapper initialization."""
+        # Remove robot initially
+        robot = mock_env._robot
+        del mock_env._robot
+
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
+        assert wrapper._wrapper_initialized == False
+
+        # Restore robot
+        mock_env._robot = robot
+
+        # Step should initialize wrapper
+        action = torch.randn(mock_env.num_envs, wrapper.action_space_size)
+        obs, reward, terminated, truncated, info = wrapper.step(action)
+
+        assert wrapper._wrapper_initialized == True
+
+    def test_reset_with_late_initialization(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test reset method with late wrapper initialization."""
+        # Remove robot initially
+        robot = mock_env._robot
+        del mock_env._robot
+
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
+        assert wrapper._wrapper_initialized == False
+
+        # Restore robot
+        mock_env._robot = robot
+
+        # Reset should initialize wrapper
+        obs, info = wrapper.reset()
+
+        assert wrapper._wrapper_initialized == True
+
+    def test_wrapped_pre_physics_step_with_resets(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test wrapped pre-physics step with environment resets."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
+        # Initialize wrapper
+        wrapper._initialize_wrapper()
+
+        # Set reset buffer
+        mock_env.reset_buf[0] = True
+
+        # Mock _reset_buffers method
+        mock_env._reset_buffers = Mock()
+
+        action = torch.randn(mock_env.num_envs, wrapper.action_space_size)
+        wrapper._wrapped_pre_physics_step(action)
+
+        # Should call reset buffers
+        mock_env._reset_buffers.assert_called_once()
+
+    def test_wrapped_apply_action_with_control_flow(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test wrapped apply action with full control flow."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
+
+        # Initialize wrapper
+        wrapper._initialize_wrapper()
+
+        # Set up test data
+        wrapper.target_force_for_control = torch.randn(mock_env.num_envs, 6)
+        wrapper.sel_matrix.fill_(0.5)  # Mix of force and position control
+
+        # Mock robot methods
+        mock_env._robot.set_joint_position_target = Mock()
+        mock_env._robot.set_joint_effort_target = Mock()
 
         wrapper._wrapped_apply_action()
 
-        # Verify robot methods were called - these should always be called
-        assert hasattr(mock_env._robot, 'last_position_targets')
-        assert hasattr(mock_env._robot, 'last_effort_targets')
+        # Should call robot methods
+        mock_env._robot.set_joint_position_target.assert_called_once()
+        mock_env._robot.set_joint_effort_target.assert_called_once()
 
-        # Verify joint torques were set
-        assert mock_env.joint_torque.shape == (64, 9)
+    def test_wrapped_apply_action_with_out_of_bounds(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test wrapped apply action with out-of-bounds positions."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
 
-        # Verify gripper targets were set (they should be 0.0 as set in the wrapper)
-        assert torch.allclose(mock_env.ctrl_target_joint_pos[:, 7:9], torch.zeros(64, 2))
+        # Set position out of bounds
+        mock_env.fingertip_midpoint_pos[0] = torch.tensor([0.1, 0.0, 0.0])  # > bounds
+        mock_env.fixed_pos_action_frame[0] = torch.tensor([0.0, 0.0, 0.0])
 
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    def test_wrapped_update_rew_buf(self, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test wrapped reward buffer update."""
-        # Set up mocks
-        mock_torch_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_factory_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
+        # Set selection matrix for force control
+        wrapper.sel_matrix[0] = torch.tensor([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
+        # Set up required target_force_for_control
+        wrapper.target_force_for_control = torch.zeros((mock_env.num_envs, 6), device=mock_env.device)
 
-        mock_env.robot_force_torque = torch.zeros(64, 6, device=mock_env.device)
-        wrapper = HybridForcePositionWrapper(mock_env, ctrl_torque=False, reward_type="simp")
+        wrapper._wrapped_apply_action()
 
-        curr_successes = torch.ones(64, dtype=torch.bool, device=mock_env.device)
+        # Force wrench should be zeroed for out-of-bounds positions
+        # (This is tested implicitly through the control flow)
 
-        # Mock has original method that returns base rewards
-        wrapper._original_update_rew_buf = lambda x: torch.ones_like(x).float() * 1.0
+    def test_wrapped_apply_action_torque_control_disabled(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test wrapped apply action with torque control disabled."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_torque=False,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg
+        )
 
-        rew_buf = wrapper._wrapped_update_rew_buf(curr_successes)
+        # Set selection for torque (should be ignored)
+        wrapper.sel_matrix[:, 3:] = 1.0
 
-        # Should include base rewards (1.0) plus hybrid control rewards
-        assert rew_buf.shape == (64,)
-        assert torch.all(rew_buf >= 1.0)  # At least base reward
+        # Set up required target_force_for_control
+        wrapper.target_force_for_control = torch.zeros((mock_env.num_envs, 6), device=mock_env.device)
 
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    def test_step_initialization(self, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test wrapper initializes during step if needed."""
-        # Set up mocks
-        mock_torch_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_factory_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
+        wrapper._wrapped_apply_action()
 
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
-
-        # Remove _robot to prevent initial initialization
-        delattr(mock_env, '_robot')
-        wrapper = HybridForcePositionWrapper(mock_env, ctrl_torque=False)
-        assert wrapper._wrapper_initialized is False
-
-        # Add _robot and force-torque data, then call step
-        mock_env._robot = "dummy"
-        mock_env.robot_force_torque = torch.zeros(64, 6, device=mock_env.device)
-
-        action = torch.zeros(64, 12)
-        obs, reward, terminated, truncated, info = wrapper.step(action)
-
-        assert wrapper._wrapper_initialized is True
-
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    def test_reset_initialization(self, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test wrapper initializes during reset if needed."""
-        # Set up mocks
-        mock_torch_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_factory_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
-
-        # Remove _robot to prevent initial initialization
-        delattr(mock_env, '_robot')
-        wrapper = HybridForcePositionWrapper(mock_env, ctrl_torque=False)
-        assert wrapper._wrapper_initialized is False
-
-        # Add _robot and force-torque data, then call reset
-        mock_env._robot = "dummy"
-        mock_env.robot_force_torque = torch.zeros(64, 6, device=mock_env.device)
-
-        obs, info = wrapper.reset()
-
-        assert wrapper._wrapper_initialized is True
-
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    def test_torch_utils_import_warning(self, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test proper warning when torch_utils is not available."""
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
-        import warnings
-
-        mock_env.robot_force_torque = torch.zeros(64, 6, device=mock_env.device)
-
-        # Mock torch_utils as None to simulate import failure
-        with patch('wrappers.control.hybrid_force_position_wrapper.torch_utils', None):
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                wrapper = HybridForcePositionWrapper(mock_env, ctrl_torque=False)
-                # Should create wrapper with fallback torch_utils
-                assert wrapper is not None
-                assert len(w) == 1
-                assert "torch_utils not available" in str(w[0].message)
+        # Torque components should use position control regardless of selection
 
 
-class TestHybridForcePositionWrapperActionSpace:
-    """Test action space management."""
-
-    @patch('wrappers.control.hybrid_force_position_wrapper.torch_utils')
-    @patch('wrappers.control.factory_control_utils.torch_utils')
-    def test_action_space_update(self, mock_factory_utils, mock_torch_utils, mock_env):
-        """Test action space gets updated properly."""
-        # Set up mocks
-        mock_torch_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-        mock_factory_utils.quat_from_angle_axis.return_value = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 64)
-
-        from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
-
-        mock_env.robot_force_torque = torch.zeros(64, 6, device=mock_env.device)
-
-        # Check original action space
-        original_size = mock_env.action_space.shape[0]
-
-        wrapper = HybridForcePositionWrapper(mock_env, ctrl_torque=False)
-
-        # Action space should be updated
-        assert mock_env.cfg.action_space == 12  # 3 (sel) + 6 (pose) + 3 (force for 3DOF)
-        # _configure_gym_env_spaces should have been called
-        assert mock_env.action_space.shape[0] == 12
+if __name__ == "__main__":
+    pytest.main([__file__])

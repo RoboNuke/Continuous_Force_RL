@@ -9,7 +9,6 @@ The new system replaces the previous hardcoded, factory-specific logging with a 
 - **Factory Metrics Wrapper**: Computes factory-specific metrics and puts them in the `info` dictionary
 - **Generic Wandb Wrapper**: Truly environment-agnostic logging that tracks only configured metrics from `info`
 - **Configuration System**: YAML/JSON-based configuration for flexible metric tracking
-- **Backward Compatibility**: Legacy wrapper still works but is deprecated
 
 ## Architecture
 
@@ -55,9 +54,9 @@ The new system replaces the previous hardcoded, factory-specific logging with a 
 ### Factory Environments
 
 ```python
-from wrappers.logging.generic_wandb_wrapper import GenericWandbLoggingWrapper
+from wrappers.logging.wandb_wrapper import GenericWandbLoggingWrapper
 from wrappers.logging.factory_metrics_wrapper import FactoryMetricsWrapper
-from wrappers.logging.logging_config import LoggingConfigPresets
+from configs.config_manager import LoggingConfigPresets
 
 # Wrap environment with factory metrics computation
 env = FactoryMetricsWrapper(env)
@@ -74,8 +73,8 @@ env = GenericWandbLoggingWrapper(env, config)
 ### Generic Environments
 
 ```python
-from wrappers.logging.generic_wandb_wrapper import GenericWandbLoggingWrapper
-from wrappers.logging.logging_config import LoggingConfigPresets
+from wrappers.logging.wandb_wrapper import GenericWandbLoggingWrapper
+from configs.config_manager import LoggingConfigPresets
 
 # Use preset configuration
 config = LoggingConfigPresets.basic_config()
@@ -86,9 +85,9 @@ env = GenericWandbLoggingWrapper(env, config)
 ### Configuration Files
 
 ```python
-from wrappers.logging.generic_wandb_wrapper import GenericWandbLoggingWrapper
+from wrappers.logging.wandb_wrapper import GenericWandbLoggingWrapper
 from wrappers.logging.factory_metrics_wrapper import FactoryMetricsWrapper
-from wrappers.logging.logging_config import load_config_from_file
+from configs.config_manager import load_config_from_file
 
 # Wrap with factory metrics first
 env = FactoryMetricsWrapper(env)
@@ -135,7 +134,7 @@ tracked_metrics:
 ### Python Configuration
 
 ```python
-from wrappers.logging.logging_config import LoggingConfig, MetricConfig
+from configs.config_manager import LoggingConfig, MetricConfig
 
 config = LoggingConfig()
 config.wandb_project = "my_project"
@@ -189,16 +188,6 @@ Minimal configuration for simple environments:
 config = LoggingConfigPresets.basic_config()
 ```
 
-### Locomotion Configuration
-Optimized for locomotion tasks:
-- Distance traveled
-- Velocity tracking
-- Energy consumption
-- Stability metrics
-
-```python
-config = LoggingConfigPresets.locomotion_config()
-```
 
 ## Multi-Agent Support
 
@@ -217,72 +206,142 @@ assignments = env.get_agent_assignment()
 # Metrics are automatically split and tracked per agent
 ```
 
-## Migration Guide
-
-### From Legacy Wrapper
-
-**Old (Deprecated):**
-```python
-from wrappers.logging.wandb_logging_wrapper import WandbLoggingWrapper
-env = WandbLoggingWrapper(env, wandb_config)
-```
-
-**New (Recommended):**
-```python
-from wrappers.logging.generic_wandb_wrapper import GenericWandbLoggingWrapper
-from wrappers.logging.factory_metrics_wrapper import FactoryMetricsWrapper
-from wrappers.logging.logging_config import LoggingConfigPresets
-
-env = FactoryMetricsWrapper(env)
-config = LoggingConfigPresets.factory_config()
-config.wandb_entity = wandb_config['entity']
-config.wandb_project = wandb_config['project']
-config.wandb_name = wandb_config['name']
-env = GenericWandbLoggingWrapper(env, config)
-```
-
-### Benefits of Migration
-
-1. **No Hardcoded Assumptions**: Generic wrapper works with any environment
-2. **Configurable Metrics**: Track only what you need
-3. **Better Performance**: Reduced overhead from unused features
-4. **Cleaner Code**: Proper separation of concerns
-5. **Future-Proof**: Extensible configuration system
 
 ## API Reference
 
 ### GenericWandbLoggingWrapper
 
+**Core Wandb Integration Wrapper**
+
+Provides multi-agent Wandb logging with static environment assignment and episode tracking.
+
 ```python
 class GenericWandbLoggingWrapper(gym.Wrapper):
-    def __init__(self, env, logging_config, num_agents=1)
-    def add_metric(self, tag, value)
-    def log_learning_metrics(self, **kwargs)
-    def log_action_metrics(self, actions, global_step=-1)
-    def publish_metrics(self)
-    def get_agent_assignment(self)
+    def __init__(self, env: gym.Env, num_agents: int = 1, env_cfg: Any = None)
+    def add_metrics(self, metrics: Dict[str, torch.Tensor])
+    def log_minibatch_update(self, learning_data: Dict[str, torch.Tensor])
+    def add_onetime_learning_metrics(self, learning_metrics: Dict[str, torch.Tensor])
+    def step(self, action)
     def close(self)
 ```
 
+**Key Features:**
+- Multi-agent support with static environment assignment
+- Automatic episode tracking and aggregation
+- Separate Wandb runs per agent
+- Metric splitting by environment/agent assignment
+- Learning metrics integration
+
+**Dependencies:**
+- Requires `env_cfg` with `agent_configs` containing Wandb configuration per agent
+- Environment division must be evenly divisible by number of agents
+
+### SimpleEpisodeTracker
+
+**Individual Agent Episode Tracking**
+
+Tracks metrics and publishes to individual agent Wandb runs.
+
+```python
+class SimpleEpisodeTracker:
+    def __init__(self, num_envs: int, device: torch.device, agent_config: Dict[str, Any], env_config: Any)
+    def increment_steps(self)
+    def add_metrics(self, metrics: Dict[str, torch.Tensor])
+    def log_minibatch_update(self, learning_data: Dict[str, torch.Tensor])
+    def add_onetime_learning_metrics(self, learning_metrics: Dict[str, torch.Tensor])
+    def close(self)
+```
+
+**Key Features:**
+- Per-agent metric accumulation
+- Wandb run management
+- Step counting for x-axis
+- Learning metrics aggregation
+- Automatic cleanup on publish
+
 ### FactoryMetricsWrapper
+
+**Factory-Specific Metrics Computation**
+
+Computes and tracks factory manipulation task metrics including success, engagement, smoothness, and force/torque statistics.
 
 ```python
 class FactoryMetricsWrapper(gym.Wrapper):
     def __init__(self, env, num_agents=1)
-    def get_success_stats(self)
-    def get_smoothness_stats(self)
-    def get_agent_metrics(self, agent_id)
-    def get_agent_assignment(self)
+    def step(self, action)
+    def reset(self, **kwargs)
+    def close(self)
 ```
 
-### LoggingConfig
+**Tracked Metrics:**
+- `ep_succeeded`: Boolean success tracking per environment
+- `ep_success_times`: Time to success per environment
+- `ep_engaged`: Boolean engagement tracking per environment
+- `ep_engaged_times`: Time to engagement per environment
+- `ep_engaged_length`: Total engagement duration per environment
+- `ep_ssv`: Sum squared velocity (smoothness metric)
+- `ep_ssjv`: Sum squared joint velocity (smoothness metric)
+- `ep_max_force`, `ep_max_torque`: Force/torque maximums (if available)
+- `ep_sum_force`, `ep_sum_torque`: Force/torque sums (if available)
+
+**Dependencies:**
+- Requires an environment with `add_metrics` method (e.g., GenericWandbLoggingWrapper)
+- Optionally detects `robot_force_torque` attribute for force/torque tracking
+- Optionally detects `_robot` attribute for advanced wrapper initialization
+
+### EnhancedActionLoggingWrapper
+
+**Detailed Action Component Analysis**
+
+Provides comprehensive action statistics tracking with configurable component-wise analysis.
 
 ```python
-class LoggingConfig:
-    def add_metric(self, metric: MetricConfig)
-    def remove_metric(self, metric_name: str)
-    def enable_metric(self, metric_name: str, enabled: bool = True)
-    def to_wandb_config(self) -> Dict[str, Any]
+class EnhancedActionLoggingWrapper(gym.Wrapper):
+    def __init__(self, env, track_selection=True, track_pos=True, track_rot=True,
+                 track_force=True, track_torque=True, force_size=6, logging_frequency=100)
+    def step(self, action)
+    def reset(self, **kwargs)
+    def close(self)
+```
+
+**Configuration Options:**
+- `track_selection`: Track selection component statistics
+- `track_pos`: Track position component statistics
+- `track_rot`: Track rotation component statistics
+- `track_force`: Track force component statistics
+- `track_torque`: Track torque component statistics
+- `force_size`: Action space force configuration (0, 3, or 6)
+- `logging_frequency`: How often to collect and log statistics
+
+**Key Features:**
+- Configurable component tracking
+- Automatic action space layout detection
+- Component-wise statistics (mean, std, min, max, abs_mean, magnitude)
+- Flexible force/torque configuration
+- Step-based logging frequency control
+
+**Dependencies:**
+- Requires an environment with `add_metrics` method in the wrapper chain
+- Validates wrapper chain for Wandb integration
+
+### Configuration Classes
+
+**MockEnvConfig (for testing)**
+
+```python
+class MockEnvConfig:
+    def __init__(self):
+        self.num_envs = 4
+        self.device = torch.device("cpu")
+        self.agent_configs = {
+            'agent_0': {
+                'wandb_entity': 'test_entity',
+                'wandb_project': 'test_project',
+                'wandb_name': 'test_agent_0',
+                'wandb_group': 'test_group',
+                'wandb_tags': ['test']
+            }
+        }
 ```
 
 ## File Structure
@@ -290,15 +349,14 @@ class LoggingConfig:
 ```
 wrappers/logging/
 ├── README.md                     # This file
-├── logging_config.py             # Configuration system
-├── generic_wandb_wrapper.py      # Generic wrapper
-├── factory_metrics_wrapper.py    # Factory metrics computation
-└── wandb_logging_wrapper.py      # Legacy wrapper (deprecated)
+├── wandb_wrapper.py               # Generic wandb wrapper
+└── factory_metrics_wrapper.py    # Factory metrics computation
 
-configs/logging/
-├── factory_logging.yaml          # Factory preset
-├── basic_logging.yaml            # Basic preset
-└── locomotion_logging.yaml       # Locomotion preset
+configs/
+├── config_manager.py             # Unified configuration system (includes logging)
+└── logging/
+    ├── factory_logging.yaml      # Factory preset
+    └── basic_logging.yaml        # Basic preset
 
 tests/unit/
 ├── test_logging_config.py        # Configuration tests
@@ -374,7 +432,7 @@ Run the test suite:
 # Unit tests
 python -m pytest tests/unit/test_logging_config.py -v
 python -m pytest tests/unit/test_generic_wandb_wrapper.py -v
-python -m pytest tests/unit/test_factory_wandb_wrapper.py -v
+python -m pytest tests/unit/test_factory_metrics_wrapper.py -v
 
 # Integration tests
 python -m pytest tests/integration/test_logging_integration.py -v
@@ -403,8 +461,6 @@ When adding new metric types or features:
 **Issue**: Multi-agent assignment errors
 **Solution**: Ensure `num_envs` is divisible by `num_agents`
 
-**Issue**: Import errors for legacy wrapper
-**Solution**: Update to new wrapper system following migration guide
 
 **Issue**: Configuration file not loading
 **Solution**: Check file format (YAML/JSON) and install required dependencies (`PyYAML`)

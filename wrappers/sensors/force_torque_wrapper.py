@@ -94,58 +94,45 @@ class ForceTorqueWrapper(gym.Wrapper):
         self._update_gym_spaces()
 
     def _update_dimension_configs(self, env_cfg):
-        """Update dimension configurations using multiple fallback approaches."""
+        """
+        Update dimension configurations for force-torque sensor integration.
 
-        # Approach 1: Try to import and update the config that the environment actually uses
-        try:
-            # Get the module that the environment was defined in
-            env_module = self.unwrapped.__class__.__module__
-            if env_module:
-                import importlib
-                module = importlib.import_module(env_module)
+        Requires explicit environment configuration with component_dims and
+        component_attr_map dictionaries to properly integrate force-torque
+        sensor data into the observation pipeline.
 
-                # Look for dimension config dictionaries in the environment's module
-                for attr_name in ['OBS_DIM_CFG', 'STATE_DIM_CFG']:
-                    if hasattr(module, attr_name):
-                        dim_cfg = getattr(module, attr_name)
-                        if isinstance(dim_cfg, dict):
-                            dim_cfg['force_torque'] = 6
+        Args:
+            env_cfg: Environment configuration object containing component definitions
 
-        except (ImportError, AttributeError):
-            pass
+        Raises:
+            ValueError: If required configuration dictionaries are missing
+        """
 
-        # Approach 2: Try to find Isaac Lab's built-in factory environment config
-        try:
-            # Look for Isaac Lab's factory environment configuration
-            from isaaclab.envs.manipulation.factory import factory_env_cfg
-            if hasattr(factory_env_cfg, 'OBS_DIM_CFG'):
-                factory_env_cfg.OBS_DIM_CFG['force_torque'] = 6
-            if hasattr(factory_env_cfg, 'STATE_DIM_CFG'):
-                factory_env_cfg.STATE_DIM_CFG['force_torque'] = 6
-        except (ImportError, AttributeError, ModuleNotFoundError):
-            pass
+        # Check if environment has required configuration
+        if not (hasattr(env_cfg, 'component_dims') and hasattr(env_cfg, 'component_attr_map')):
+            raise ValueError(
+                "Environment configuration must have 'component_dims' and 'component_attr_map' "
+                "for force-torque sensor integration. Please ensure the environment configuration "
+                "includes: component_dims={'force_torque': 6, ...} and "
+                "component_attr_map={'force_torque': 'robot_force_torque', ...}"
+            )
 
-        # Approach 3: Try alternative Isaac Lab paths
-        try:
-            from omni.isaac.lab.envs.manipulation.factory import factory_env_cfg
-            if hasattr(factory_env_cfg, 'OBS_DIM_CFG'):
-                factory_env_cfg.OBS_DIM_CFG['force_torque'] = 6
-            if hasattr(factory_env_cfg, 'STATE_DIM_CFG'):
-                factory_env_cfg.STATE_DIM_CFG['force_torque'] = 6
-        except (ImportError, AttributeError, ModuleNotFoundError):
-            pass
+        # Add force_torque to component dimensions if not already present
+        if 'force_torque' not in env_cfg.component_dims:
+            env_cfg.component_dims['force_torque'] = 6
 
-        # Approach 4: Create local dimension mapping if environment supports it
-        if hasattr(env_cfg, 'obs_dims') or hasattr(self.unwrapped, 'obs_dims'):
-            obs_dims = getattr(env_cfg, 'obs_dims', getattr(self.unwrapped, 'obs_dims', {}))
-            obs_dims['force_torque'] = 6
-
-        if hasattr(env_cfg, 'state_dims') or hasattr(self.unwrapped, 'state_dims'):
-            state_dims = getattr(env_cfg, 'state_dims', getattr(self.unwrapped, 'state_dims', {}))
-            state_dims['force_torque'] = 6
+        # Add force_torque attribute mapping if not already present
+        if 'force_torque' not in env_cfg.component_attr_map:
+            env_cfg.component_attr_map['force_torque'] = 'robot_force_torque'
 
     def _update_gym_spaces(self):
-        """Update gym environment spaces if needed."""
+        """
+        Update gymnasium environment spaces if needed.
+
+        Attempts to reconfigure the environment's observation and action spaces
+        to account for the additional force-torque sensor dimensions. Silently
+        continues if reconfiguration fails to maintain compatibility.
+        """
         if hasattr(self.unwrapped, '_configure_gym_env_spaces'):
             try:
                 self.unwrapped._configure_gym_env_spaces()
@@ -154,7 +141,18 @@ class ForceTorqueWrapper(gym.Wrapper):
                 pass
 
     def _initialize_wrapper(self):
-        """Initialize the wrapper after the base environment is set up."""
+        """
+        Initialize the wrapper after the base environment is set up.
+
+        This method performs lazy initialization by overriding environment methods
+        and setting up the force-torque sensor interface. It's called automatically
+        when the environment's robot attribute is detected or during first step/reset.
+
+        The initialization includes:
+        - Storing and overriding environment methods (_init_tensors, _compute_intermediate_values, etc.)
+        - Initializing the Isaac Sim RobotView for force-torque sensor access
+        - Setting up sensor data buffers
+        """
         if self._sensor_initialized:
             return
 
@@ -180,7 +178,20 @@ class ForceTorqueWrapper(gym.Wrapper):
         self._sensor_initialized = True
 
     def _init_force_torque_sensor(self):
-        """Initialize the force-torque sensor interface."""
+        """
+        Initialize the force-torque sensor interface using Isaac Sim's RobotView.
+
+        Creates a RobotView instance to access joint force measurements from the
+        Isaac Sim physics simulation. The sensor targets joint 8 (end-effector)
+        to provide 6-DOF force-torque measurements.
+
+        Raises:
+            ImportError: If RobotView cannot be imported from Isaac Sim
+
+        Note:
+            Gracefully handles initialization failures by setting _robot_av to None
+            and printing a warning message.
+        """
         if RobotView is None:
             raise ImportError("Could not import RobotView. Please ensure Isaac Sim is properly installed.")
 
@@ -192,7 +203,16 @@ class ForceTorqueWrapper(gym.Wrapper):
             self._robot_av = None
 
     def _wrapped_init_tensors(self):
-        """Initialize tensors including force-torque sensor data."""
+        """
+        Initialize tensors including force-torque sensor data.
+
+        This method wraps the environment's original _init_tensors method and
+        additionally initializes the robot_force_torque tensor for storing
+        6-DOF force-torque measurements (3 force + 3 torque components).
+
+        The force-torque tensor is initialized as zeros with shape (num_envs, 6)
+        on the same device as the environment.
+        """
         # Call original initialization
         if self._original_init_tensors:
             self._original_init_tensors()
@@ -208,7 +228,23 @@ class ForceTorqueWrapper(gym.Wrapper):
 
 
     def _wrapped_compute_intermediate_values(self, dt):
-        """Compute intermediate values including force-torque measurements."""
+        """
+        Compute intermediate values including force-torque measurements.
+
+        This method wraps the environment's original _compute_intermediate_values
+        method and additionally updates force-torque sensor readings from the
+        Isaac Sim physics simulation.
+
+        Args:
+            dt (float): Physics simulation timestep
+
+        The method:
+        1. Calls the original compute intermediate values method
+        2. Retrieves joint forces from the RobotView sensor interface
+        3. Extracts force-torque data from joint 8 (end-effector)
+        4. Updates the environment's robot_force_torque tensor
+        5. Gracefully handles sensor failures by setting data to zeros
+        """
         # Call original computation
         if self._original_compute_intermediate_values:
             self._original_compute_intermediate_values(dt)
@@ -228,7 +264,16 @@ class ForceTorqueWrapper(gym.Wrapper):
                 self.unwrapped.robot_force_torque.fill_(0.0)
 
     def _wrapped_reset_buffers(self, env_ids):
-        """Reset force-torque buffers."""
+        """
+        Reset force-torque buffers for specified environments.
+
+        This method wraps the environment's original _reset_buffers method
+        and additionally resets force-torque sensor readings to zero for
+        the specified environment indices.
+
+        Args:
+            env_ids (torch.Tensor): Indices of environments to reset
+        """
         # Call original reset
         if self._original_reset_buffers:
             self._original_reset_buffers(env_ids)
@@ -262,7 +307,15 @@ class ForceTorqueWrapper(gym.Wrapper):
         return obs, info
 
     def get_current_force_torque(self):
-        """Get current force-torque readings."""
+        """
+        Get current force-torque readings split into force and torque components.
+
+        Returns:
+            dict: Dictionary containing:
+                - 'current_force': Force components (Nx3 tensor)
+                - 'current_torque': Torque components (Nx3 tensor)
+                Empty dict if no force-torque data is available
+        """
         if hasattr(self.unwrapped, 'robot_force_torque'):
             return {
                 'current_force': self.unwrapped.robot_force_torque[:, :3],
@@ -271,11 +324,31 @@ class ForceTorqueWrapper(gym.Wrapper):
         return {}
 
     def has_force_torque_data(self):
-        """Check if force-torque data is available."""
+        """
+        Check if force-torque data is available in the environment.
+
+        Returns:
+            bool: True if robot_force_torque attribute exists, False otherwise
+        """
         return hasattr(self.unwrapped, 'robot_force_torque')
 
     def get_force_torque_observation(self):
-        """Get force-torque data formatted for observations."""
+        """
+        Get force-torque data formatted for observations.
+
+        Retrieves the current force-torque sensor readings and optionally
+        applies tanh scaling for bounded output values. This method is
+        suitable for including force-torque data in observation vectors.
+
+        Returns:
+            torch.Tensor: Force-torque observation data with shape (num_envs, 6)
+                         Optionally scaled with tanh if use_tanh_scaling is True.
+                         Returns zeros if no sensor data is available.
+
+        Note:
+            When tanh scaling is enabled, the output values are bounded to [-1, 1]
+            using the formula: tanh(tanh_scale * force_torque_data)
+        """
         if self.has_force_torque_data():
             force_torque_obs = self.unwrapped.robot_force_torque.clone()
 

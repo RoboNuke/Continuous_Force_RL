@@ -1,754 +1,498 @@
 """
-Unit tests for ObservationManagerWrapper.
-
-Tests the observation management including format standardization,
-noise injection, observation composition, and validation.
+Unit tests for observation_manager_wrapper.py functionality.
+Tests ObservationManagerWrapper for Isaac Lab format conversion and SKRL compatibility.
 """
 
 import pytest
 import torch
-from unittest.mock import Mock, patch, MagicMock
+import gymnasium as gym
 import sys
 import os
+from unittest.mock import patch, MagicMock
 
-# Add the project root to the Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+# Add project root to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from tests.mocks.mock_isaac_lab import MockEnvironment, MockConfig
+# Mock modules before imports
+sys.modules['omni.isaac.lab'] = __import__('tests.mocks.mock_isaac_lab', fromlist=[''])
+sys.modules['omni.isaac.lab.envs'] = __import__('tests.mocks.mock_isaac_lab', fromlist=['envs'])
+sys.modules['omni.isaac.lab.utils'] = __import__('tests.mocks.mock_isaac_lab', fromlist=['utils'])
+
 from wrappers.observations.observation_manager_wrapper import ObservationManagerWrapper
+from tests.mocks.mock_isaac_lab import MockBaseEnv, MockEnvConfig
 
 
 class TestObservationManagerWrapper:
-    """Test suite for ObservationManagerWrapper."""
+    """Test ObservationManagerWrapper functionality."""
 
-    @pytest.fixture
-    def mock_env(self):
-        """Create a mock environment for testing."""
-        env = MockEnvironment(num_envs=4, device='cpu')
+    def setup_method(self):
+        """Setup test environment."""
+        self.cfg = MockEnvConfig()
+        self.base_env = MockBaseEnv(self.cfg)
+        self.base_env.num_envs = 4
+        self.base_env.device = torch.device("cpu")
 
-        # Add configuration for observation manager
-        env.cfg.obs_order = ["fingertip_pos", "force_torque", "ee_linvel"]
-        env.cfg.state_order = ["fingertip_pos", "force_torque", "ee_linvel", "fingertip_quat"]
-        env.cfg.observation_space = 12  # 3 + 6 + 3
-        env.cfg.state_space = 16  # 3 + 6 + 3 + 4
+    def test_initialization_basic(self):
+        """Test wrapper initialization with default settings."""
+        wrapper = ObservationManagerWrapper(self.base_env)
 
-        # Add noise configuration
-        env.cfg.obs_noise_mean = {
-            "force_torque": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            "policy": [0.0] * 12
-        }
-        env.cfg.obs_noise_std = {
-            "force_torque": [0.1, 0.1, 0.1, 0.01, 0.01, 0.01],
-            "policy": [0.05] * 12
-        }
-
-        # Add robot for initialization
-        env._robot = Mock()
-
-        return env
-
-    @pytest.fixture
-    def wrapper_no_noise(self, mock_env):
-        """Create wrapper without noise."""
-        return ObservationManagerWrapper(mock_env, use_obs_noise=False)
-
-    @pytest.fixture
-    def wrapper_with_noise(self, mock_env):
-        """Create wrapper with noise enabled."""
-        return ObservationManagerWrapper(mock_env, use_obs_noise=True)
-
-    def test_initialization_no_noise(self, wrapper_no_noise):
-        """Test wrapper initialization without noise."""
-        wrapper = wrapper_no_noise
-
-        assert wrapper.use_obs_noise == False
+        assert wrapper.env == self.base_env
+        assert wrapper.merge_strategy == "concatenate"
         assert wrapper.num_envs == 4
-        assert str(wrapper.device) == 'cpu'
-        assert wrapper._wrapper_initialized == True
-        assert len(wrapper.obs_noise_mean) > 0
-        assert len(wrapper.obs_noise_std) > 0
-
-    def test_initialization_with_noise(self, wrapper_with_noise):
-        """Test wrapper initialization with noise enabled."""
-        wrapper = wrapper_with_noise
-
-        assert wrapper.use_obs_noise == True
-        assert wrapper.num_envs == 4
-        assert str(wrapper.device) == 'cpu'
+        assert wrapper.device == torch.device("cpu")
         assert wrapper._wrapper_initialized == True
 
-    def test_initialization_without_robot(self, mock_env):
-        """Test initialization when robot is not available initially."""
-        delattr(mock_env, '_robot')
-        wrapper = ObservationManagerWrapper(mock_env)
+    def test_initialization_with_merge_strategy(self):
+        """Test wrapper initialization with different merge strategies."""
+        strategies = ["concatenate", "policy_only", "critic_only", "average"]
+
+        for strategy in strategies:
+            wrapper = ObservationManagerWrapper(self.base_env, merge_strategy=strategy)
+            assert wrapper.merge_strategy == strategy
+
+    def test_initialization_without_robot(self):
+        """Test wrapper initialization without robot attribute."""
+        env_no_robot = MockBaseEnv(self.cfg)
+        delattr(env_no_robot, '_robot')
+
+        wrapper = ObservationManagerWrapper(env_no_robot)
+        assert wrapper._wrapper_initialized == False
+
+    def test_lazy_wrapper_initialization(self):
+        """Test lazy wrapper initialization during step/reset."""
+        env_no_robot = MockBaseEnv(self.cfg)
+        delattr(env_no_robot, '_robot')
+
+        wrapper = ObservationManagerWrapper(env_no_robot)
         assert not wrapper._wrapper_initialized
 
-    def test_initialization_without_noise_config(self, mock_env):
-        """Test initialization without noise configuration."""
-        delattr(mock_env.cfg, 'obs_noise_mean')
-        delattr(mock_env.cfg, 'obs_noise_std')
+        # Add robot and call step
+        env_no_robot._robot = True
+        wrapper.step(torch.randn(4, 6))
 
-        wrapper = ObservationManagerWrapper(mock_env, use_obs_noise=True)
+        assert wrapper._wrapper_initialized
 
-        assert wrapper.obs_noise_mean == {}
-        assert wrapper.obs_noise_std == {}
+    def test_convert_to_single_tensor_concatenate(self):
+        """Test conversion with concatenate strategy."""
+        wrapper = ObservationManagerWrapper(self.base_env, merge_strategy="concatenate")
 
-    def test_wrapper_initialization(self, wrapper_no_noise):
-        """Test wrapper method override initialization."""
-        wrapper = wrapper_no_noise
-
-        # Should be initialized since robot exists
-        assert wrapper._wrapper_initialized == True
-
-        # Check that method is stored and overridden (if it exists)
-        if hasattr(wrapper.unwrapped, '_get_observations'):
-            assert wrapper._original_get_observations is not None
-
-    def test_wrapped_get_observations_standard_format(self, wrapper_no_noise):
-        """Test wrapped get observations with standard format input."""
-        wrapper = wrapper_no_noise
-
-        # Mock original get_observations to return standard format
-        standard_obs = {
-            "policy": torch.randn(4, 12, device='cpu'),
-            "critic": torch.randn(4, 16, device='cpu')
+        # Test factory format conversion
+        obs_dict = {
+            "policy": torch.randn(4, 32),
+            "critic": torch.randn(4, 48)
         }
-        wrapper._original_get_observations = Mock(return_value=standard_obs)
 
-        result = wrapper._wrapped_get_observations()
+        result = wrapper._convert_to_single_tensor(obs_dict)
+        assert isinstance(result, torch.Tensor)
+        assert result.shape == (4, 80)  # 32 + 48
+        assert torch.allclose(result[:, :32], obs_dict["policy"])
+        assert torch.allclose(result[:, 32:], obs_dict["critic"])
 
-        # Should return the same observations
-        assert 'policy' in result
-        assert 'critic' in result
-        torch.testing.assert_close(result['policy'], standard_obs['policy'])
-        torch.testing.assert_close(result['critic'], standard_obs['critic'])
+    def test_convert_to_single_tensor_policy_only(self):
+        """Test conversion with policy_only strategy."""
+        wrapper = ObservationManagerWrapper(self.base_env, merge_strategy="policy_only")
 
-    def test_wrapped_get_observations_tensor_input(self, wrapper_no_noise):
-        """Test wrapped get observations with tensor input."""
-        wrapper = wrapper_no_noise
-
-        # Mock original get_observations to return tensor
-        tensor_obs = torch.randn(4, 10, device='cpu')
-        wrapper._original_get_observations = Mock(return_value=tensor_obs)
-
-        result = wrapper._wrapped_get_observations()
-
-        # Should convert to standard format
-        assert 'policy' in result
-        assert 'critic' in result
-        torch.testing.assert_close(result['policy'], tensor_obs)
-        torch.testing.assert_close(result['critic'], tensor_obs)
-
-    def test_wrapped_get_observations_dict_input(self, wrapper_no_noise):
-        """Test wrapped get observations with dictionary input."""
-        wrapper = wrapper_no_noise
-
-        # Mock original get_observations to return dict
-        dict_obs = {
-            "fingertip_pos": torch.randn(4, 3, device='cpu'),
-            "force_torque": torch.randn(4, 6, device='cpu'),
-            "ee_linvel": torch.randn(4, 3, device='cpu'),
-            "fingertip_quat": torch.randn(4, 4, device='cpu')
+        obs_dict = {
+            "policy": torch.randn(4, 32),
+            "critic": torch.randn(4, 48)
         }
-        wrapper._original_get_observations = Mock(return_value=dict_obs)
+
+        result = wrapper._convert_to_single_tensor(obs_dict)
+        assert isinstance(result, torch.Tensor)
+        assert result.shape == (4, 32)
+        assert torch.allclose(result, obs_dict["policy"])
+
+    def test_convert_to_single_tensor_critic_only(self):
+        """Test conversion with critic_only strategy."""
+        wrapper = ObservationManagerWrapper(self.base_env, merge_strategy="critic_only")
+
+        obs_dict = {
+            "policy": torch.randn(4, 32),
+            "critic": torch.randn(4, 48)
+        }
+
+        result = wrapper._convert_to_single_tensor(obs_dict)
+        assert isinstance(result, torch.Tensor)
+        assert result.shape == (4, 48)
+        assert torch.allclose(result, obs_dict["critic"])
+
+    def test_convert_to_single_tensor_average_same_shape(self):
+        """Test conversion with average strategy and same shapes."""
+        wrapper = ObservationManagerWrapper(self.base_env, merge_strategy="average")
+
+        obs_dict = {
+            "policy": torch.ones(4, 32),
+            "critic": torch.ones(4, 32) * 2
+        }
+
+        result = wrapper._convert_to_single_tensor(obs_dict)
+        assert isinstance(result, torch.Tensor)
+        assert result.shape == (4, 32)
+        # Should be average: (1 + 2) / 2 = 1.5
+        assert torch.allclose(result, torch.ones(4, 32) * 1.5)
+
+    def test_convert_to_single_tensor_average_different_shapes(self):
+        """Test conversion with average strategy and different shapes."""
+        wrapper = ObservationManagerWrapper(self.base_env, merge_strategy="average")
+
+        obs_dict = {
+            "policy": torch.randn(4, 32),
+            "critic": torch.randn(4, 48)
+        }
+
+        with patch('builtins.print') as mock_print:
+            result = wrapper._convert_to_single_tensor(obs_dict)
+
+            # Should fallback to policy only and print warning
+            assert isinstance(result, torch.Tensor)
+            assert result.shape == (4, 32)
+            assert torch.allclose(result, obs_dict["policy"])
+            mock_print.assert_called_once()
+
+    def test_convert_to_single_tensor_already_tensor(self):
+        """Test conversion when input is already a tensor."""
+        wrapper = ObservationManagerWrapper(self.base_env)
+
+        obs_tensor = torch.randn(4, 64)
+        result = wrapper._convert_to_single_tensor(obs_tensor)
+
+        assert isinstance(result, torch.Tensor)
+        assert torch.allclose(result, obs_tensor)
+
+    def test_convert_to_single_tensor_unknown_strategy(self):
+        """Test conversion with unknown merge strategy."""
+        wrapper = ObservationManagerWrapper(self.base_env, merge_strategy="unknown")
+
+        obs_dict = {
+            "policy": torch.randn(4, 32),
+            "critic": torch.randn(4, 48)
+        }
+
+        with patch('builtins.print') as mock_print:
+            result = wrapper._convert_to_single_tensor(obs_dict)
+
+            # Should fallback to policy only and print warning
+            assert isinstance(result, torch.Tensor)
+            assert result.shape == (4, 32)
+            assert torch.allclose(result, obs_dict["policy"])
+            mock_print.assert_called_once()
+
+    def test_convert_to_single_tensor_unknown_format(self):
+        """Test conversion with unknown observation format."""
+        wrapper = ObservationManagerWrapper(self.base_env)
+
+        with patch('builtins.print') as mock_print:
+            result = wrapper._convert_to_single_tensor("unknown_format")
+
+            # Should return zeros and print warning
+            assert isinstance(result, torch.Tensor)
+            assert result.shape == (4, 1)
+            assert torch.allclose(result, torch.zeros(4, 1))
+            mock_print.assert_called_once()
+
+    def test_compose_single_tensor_from_dict_with_order(self):
+        """Test composition from dict using obs_order."""
+        wrapper = ObservationManagerWrapper(self.base_env)
+
+        obs_dict = {
+            "fingertip_pos": torch.randn(4, 3),
+            "ee_linvel": torch.randn(4, 3),
+            "joint_pos": torch.randn(4, 7)
+        }
+
+        result = wrapper._compose_single_tensor_from_dict(obs_dict)
+        assert isinstance(result, torch.Tensor)
+        assert result.shape == (4, 13)  # 3 + 3 + 7
+
+    def test_compose_single_tensor_from_dict_no_order(self):
+        """Test composition from dict without obs_order."""
+        wrapper = ObservationManagerWrapper(self.base_env)
+        # Remove obs_order from config
+        delattr(wrapper.unwrapped.cfg, 'obs_order')
+
+        obs_dict = {
+            "component1": torch.randn(4, 5),
+            "component2": torch.randn(4, 3)
+        }
+
+        result = wrapper._compose_single_tensor_from_dict(obs_dict)
+        assert isinstance(result, torch.Tensor)
+        assert result.shape == (4, 8)  # 5 + 3
+
+    def test_compose_single_tensor_from_dict_empty(self):
+        """Test composition from empty dict."""
+        wrapper = ObservationManagerWrapper(self.base_env)
+
+        result = wrapper._compose_single_tensor_from_dict({})
+        assert isinstance(result, torch.Tensor)
+        assert result.shape == (4, 1)
+        assert torch.allclose(result, torch.zeros(4, 1))
+
+    def test_validate_observations_valid(self):
+        """Test observation validation with valid tensor."""
+        wrapper = ObservationManagerWrapper(self.base_env)
+
+        obs = torch.randn(4, 64)
+        # Should not raise any exceptions
+        wrapper._validate_observations(obs)
+
+    def test_validate_observations_invalid_type(self):
+        """Test observation validation with invalid type."""
+        wrapper = ObservationManagerWrapper(self.base_env)
+
+        with pytest.raises(ValueError, match="Observations must be a torch.Tensor"):
+            wrapper._validate_observations([1, 2, 3])
+
+    def test_validate_observations_wrong_num_envs(self):
+        """Test observation validation with wrong number of environments."""
+        wrapper = ObservationManagerWrapper(self.base_env)
+
+        obs = torch.randn(8, 64)  # Wrong first dimension
+        with pytest.raises(ValueError, match="Observation first dimension must match num_envs"):
+            wrapper._validate_observations(obs)
+
+    def test_validate_observations_wrong_shape(self):
+        """Test observation validation with wrong shape."""
+        wrapper = ObservationManagerWrapper(self.base_env)
+
+        obs = torch.randn(4, 64, 32)  # 3D instead of 2D
+        with pytest.raises(ValueError, match="Observation must be 2D"):
+            wrapper._validate_observations(obs)
+
+    def test_validate_observations_nan_values(self):
+        """Test observation validation with NaN values."""
+        wrapper = ObservationManagerWrapper(self.base_env)
+
+        obs = torch.randn(4, 64)
+        obs[0, 0] = float('nan')
+
+        with patch('builtins.print') as mock_print:
+            wrapper._validate_observations(obs)
+            mock_print.assert_called_with("Warning: NaN values detected in observations")
+
+    def test_validate_observations_inf_values(self):
+        """Test observation validation with infinite values."""
+        wrapper = ObservationManagerWrapper(self.base_env)
+
+        obs = torch.randn(4, 64)
+        obs[0, 0] = float('inf')
+
+        with patch('builtins.print') as mock_print:
+            wrapper._validate_observations(obs)
+            mock_print.assert_called_with("Warning: Inf values detected in observations")
+
+    def test_wrapped_get_observations(self):
+        """Test wrapped get observations method."""
+        wrapper = ObservationManagerWrapper(self.base_env, merge_strategy="concatenate")
+
+        # Mock original method to return factory format
+        def mock_get_observations():
+            return {
+                "policy": torch.ones(4, 32),
+                "critic": torch.ones(4, 48) * 2
+            }
+
+        wrapper._original_get_observations = mock_get_observations
 
         result = wrapper._wrapped_get_observations()
+        assert isinstance(result, torch.Tensor)
+        assert result.shape == (4, 80)
+        assert torch.allclose(result[:, :32], torch.ones(4, 32))
+        assert torch.allclose(result[:, 32:], torch.ones(4, 48) * 2)
 
-        # Should compose observations according to order
-        assert 'policy' in result
-        assert 'critic' in result
-        # Policy: fingertip_pos + force_torque + ee_linvel = 3 + 6 + 3 = 12
-        assert result['policy'].shape == (4, 12)
-        # Critic: fingertip_pos + force_torque + ee_linvel + fingertip_quat = 3 + 6 + 3 + 4 = 16
-        assert result['critic'].shape == (4, 16)
-
-    def test_wrapped_get_observations_no_original(self, wrapper_no_noise):
+    def test_wrapped_get_observations_no_original(self):
         """Test wrapped get observations without original method."""
-        wrapper = wrapper_no_noise
+        wrapper = ObservationManagerWrapper(self.base_env)
         wrapper._original_get_observations = None
 
         result = wrapper._wrapped_get_observations()
-
-        # Should return default empty observations
-        assert 'policy' in result
-        assert 'critic' in result
-        assert result['policy'].shape == (4, 1)
-        assert result['critic'].shape == (4, 1)
-
-    def test_wrapped_get_observations_with_noise(self, wrapper_with_noise):
-        """Test wrapped get observations with noise applied."""
-        wrapper = wrapper_with_noise
-
-        # Mock original get_observations
-        standard_obs = {
-            "policy": torch.zeros(4, 12, device='cpu'),
-            "critic": torch.zeros(4, 16, device='cpu')
-        }
-        wrapper._original_get_observations = Mock(return_value=standard_obs)
-
-        result = wrapper._wrapped_get_observations()
-
-        # Should have noise applied (non-zero values)
-        assert 'policy' in result
-        assert 'critic' in result
-        # Due to noise, should not be exactly equal to original zeros
-        assert not torch.allclose(result['policy'], standard_obs['policy'], atol=1e-6)
-
-    def test_convert_to_standard_format_dict(self, wrapper_no_noise):
-        """Test conversion from dictionary to standard format."""
-        wrapper = wrapper_no_noise
-
-        obs_dict = {
-            "fingertip_pos": torch.randn(4, 3, device='cpu'),
-            "force_torque": torch.randn(4, 6, device='cpu'),
-            "ee_linvel": torch.randn(4, 3, device='cpu'),
-            "fingertip_quat": torch.randn(4, 4, device='cpu')
-        }
-
-        result = wrapper._convert_to_standard_format(obs_dict)
-
-        assert 'policy' in result
-        assert 'critic' in result
-        assert result['policy'].shape == (4, 12)  # 3 + 6 + 3
-        assert result['critic'].shape == (4, 16)  # 3 + 6 + 3 + 4
-
-    def test_convert_to_standard_format_tensor(self, wrapper_no_noise):
-        """Test conversion from tensor to standard format."""
-        wrapper = wrapper_no_noise
-
-        tensor_obs = torch.randn(4, 10, device='cpu')
-        result = wrapper._convert_to_standard_format(tensor_obs)
-
-        assert 'policy' in result
-        assert 'critic' in result
-        torch.testing.assert_close(result['policy'], tensor_obs)
-        torch.testing.assert_close(result['critic'], tensor_obs)
-
-    def test_convert_to_standard_format_already_standard(self, wrapper_no_noise):
-        """Test conversion when already in standard format."""
-        wrapper = wrapper_no_noise
-
-        standard_obs = {
-            "policy": torch.randn(4, 12, device='cpu'),
-            "critic": torch.randn(4, 16, device='cpu')
-        }
-
-        result = wrapper._convert_to_standard_format(standard_obs)
-
-        # Should return unchanged
-        assert result is standard_obs
-
-    def test_convert_to_standard_format_unknown(self, wrapper_no_noise):
-        """Test conversion from unknown format."""
-        wrapper = wrapper_no_noise
-
-        unknown_obs = "invalid"
-        result = wrapper._convert_to_standard_format(unknown_obs)
-
-        assert 'policy' in result
-        assert 'critic' in result
-        assert result['policy'].shape == (4, 1)
-        assert result['critic'].shape == (4, 1)
-        assert torch.all(result['policy'] == 0)
-        assert torch.all(result['critic'] == 0)
-
-    def test_compose_observations_from_dict(self, wrapper_no_noise):
-        """Test observation composition from dictionary."""
-        wrapper = wrapper_no_noise
-
-        obs_dict = {
-            "fingertip_pos": torch.tensor([[1.0, 2.0, 3.0]] * 4, device='cpu'),
-            "force_torque": torch.tensor([[4.0, 5.0, 6.0, 7.0, 8.0, 9.0]] * 4, device='cpu'),
-            "ee_linvel": torch.tensor([[10.0, 11.0, 12.0]] * 4, device='cpu'),
-            "fingertip_quat": torch.tensor([[13.0, 14.0, 15.0, 16.0]] * 4, device='cpu'),
-            "extra": torch.tensor([[17.0, 18.0]] * 4, device='cpu')  # Not in order
-        }
-
-        result = wrapper._compose_observations_from_dict(obs_dict)
-
-        # Policy should follow obs_order: fingertip_pos + force_torque + ee_linvel
-        expected_policy = torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0]] * 4, device='cpu')
-        torch.testing.assert_close(result['policy'], expected_policy)
-
-        # Critic should follow state_order: fingertip_pos + force_torque + ee_linvel + fingertip_quat
-        expected_critic = torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0]] * 4, device='cpu')
-        torch.testing.assert_close(result['critic'], expected_critic)
-
-    def test_compose_observations_no_order_config(self, mock_env):
-        """Test observation composition without order configuration."""
-        # Remove order configuration
-        delattr(mock_env.cfg, 'obs_order')
-        delattr(mock_env.cfg, 'state_order')
-
-        wrapper = ObservationManagerWrapper(mock_env)
-
-        obs_dict = {
-            "tensor1": torch.tensor([[1.0, 2.0]] * 4, device='cpu'),
-            "tensor2": torch.tensor([[3.0, 4.0, 5.0]] * 4, device='cpu'),
-            "non_tensor": "invalid"
-        }
-
-        result = wrapper._compose_observations_from_dict(obs_dict)
-
-        # Should use all tensors
-        assert result['policy'].shape[1] == 5  # 2 + 3
-        assert result['critic'].shape[1] == 5  # 2 + 3
-
-    def test_compose_observations_empty_dict(self, wrapper_no_noise):
-        """Test observation composition with empty dictionary."""
-        wrapper = wrapper_no_noise
-
-        result = wrapper._compose_observations_from_dict({})
-
-        assert result['policy'].shape == (4, 1)
-        assert result['critic'].shape == (4, 1)
-        assert torch.all(result['policy'] == 0)
-        assert torch.all(result['critic'] == 0)
-
-    def test_apply_observation_noise_disabled(self, wrapper_no_noise):
-        """Test noise application when disabled."""
-        wrapper = wrapper_no_noise
-
-        obs = {
-            "policy": torch.ones(4, 12, device='cpu'),
-            "critic": torch.ones(4, 16, device='cpu')
-        }
-
-        result = wrapper._apply_observation_noise(obs)
-
-        # Should return unchanged
-        torch.testing.assert_close(result['policy'], obs['policy'])
-        torch.testing.assert_close(result['critic'], obs['critic'])
-
-    def test_apply_observation_noise_enabled(self, wrapper_with_noise):
-        """Test noise application when enabled."""
-        wrapper = wrapper_with_noise
-
-        # Override noise config to match tensor dimensions
-        wrapper.obs_noise_mean = {"policy": [0.0] * 12, "critic": [0.0] * 16}
-        wrapper.obs_noise_std = {"policy": [0.1] * 12, "critic": [0.05] * 16}
-
-        obs = {
-            "policy": torch.zeros(4, 12, device='cpu'),
-            "critic": torch.zeros(4, 16, device='cpu')
-        }
-
-        result = wrapper._apply_observation_noise(obs)
-
-        # Should have noise applied (non-zero values)
-        assert not torch.allclose(result['policy'], obs['policy'], atol=1e-6)
-        assert not torch.allclose(result['critic'], obs['critic'], atol=1e-6)
-
-    def test_apply_observation_noise_zero_std(self, wrapper_with_noise):
-        """Test noise application with zero standard deviation."""
-        wrapper = wrapper_with_noise
-
-        # Override noise config with zero std
-        wrapper.obs_noise_std = {"policy": [0.0] * 12, "critic": [0.0] * 16}
-
-        obs = {
-            "policy": torch.ones(4, 12, device='cpu'),
-            "critic": torch.ones(4, 16, device='cpu')
-        }
-
-        result = wrapper._apply_observation_noise(obs)
-
-        # Should return unchanged due to zero std
-        torch.testing.assert_close(result['policy'], obs['policy'])
-        torch.testing.assert_close(result['critic'], obs['critic'])
-
-    def test_get_noise_config_direct_match(self, wrapper_with_noise):
-        """Test noise configuration retrieval with direct key match."""
-        wrapper = wrapper_with_noise
-
-        # Test direct match
-        mean_config = wrapper._get_noise_config('force_torque', 'mean', 6)
-        std_config = wrapper._get_noise_config('force_torque', 'std', 6)
-
-        assert mean_config == [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        assert std_config == [0.1, 0.1, 0.1, 0.01, 0.01, 0.01]
-
-    def test_get_noise_config_partial_match(self, wrapper_with_noise):
-        """Test noise configuration retrieval with partial key match."""
-        wrapper = wrapper_with_noise
-
-        # Test partial match (policy should match for any key containing 'policy')
-        mean_config = wrapper._get_noise_config('policy_obs', 'mean', 12)
-        std_config = wrapper._get_noise_config('obs_policy', 'std', 12)
-
-        assert len(mean_config) == 12
-        assert len(std_config) == 12
-
-    def test_get_noise_config_no_match(self, wrapper_with_noise):
-        """Test noise configuration retrieval with no match."""
-        wrapper = wrapper_with_noise
-
-        # Test no match - should return zeros
-        mean_config = wrapper._get_noise_config('unknown', 'mean', 8)
-        std_config = wrapper._get_noise_config('unknown', 'std', 8)
-
-        assert mean_config == [0.0] * 8
-        assert std_config == [0.0] * 8
-
-    def test_validate_observations_valid(self, wrapper_no_noise):
-        """Test observation validation with valid observations."""
-        wrapper = wrapper_no_noise
-
-        valid_obs = {
-            "policy": torch.randn(4, 12, device='cpu'),
-            "critic": torch.randn(4, 16, device='cpu')
-        }
-
-        # Should not raise any exception
-        wrapper._validate_observations(valid_obs)
-
-    def test_validate_observations_not_dict(self, wrapper_no_noise):
-        """Test observation validation with non-dictionary input."""
-        wrapper = wrapper_no_noise
-
-        with pytest.raises(ValueError, match="Observations must be in dictionary format"):
-            wrapper._validate_observations(torch.randn(4, 10))
-
-    def test_validate_observations_missing_keys(self, wrapper_no_noise):
-        """Test observation validation with missing keys."""
-        wrapper = wrapper_no_noise
-
-        invalid_obs = {"policy": torch.randn(4, 12, device='cpu')}
-
-        with pytest.raises(ValueError, match="Observations must contain 'policy' and 'critic' keys"):
-            wrapper._validate_observations(invalid_obs)
-
-    def test_validate_observations_non_tensor(self, wrapper_no_noise):
-        """Test observation validation with non-tensor values."""
-        wrapper = wrapper_no_noise
-
-        invalid_obs = {
-            "policy": torch.randn(4, 12, device='cpu'),
-            "critic": "not_a_tensor"
-        }
-
-        with pytest.raises(ValueError, match="Observation 'critic' must be a torch.Tensor"):
-            wrapper._validate_observations(invalid_obs)
-
-    def test_validate_observations_wrong_shape(self, wrapper_no_noise):
-        """Test observation validation with wrong tensor shapes."""
-        wrapper = wrapper_no_noise
-
-        # Wrong first dimension
-        invalid_obs = {
-            "policy": torch.randn(3, 12, device='cpu'),  # Should be 4
-            "critic": torch.randn(4, 16, device='cpu')
-        }
-
-        with pytest.raises(ValueError, match="Observation 'policy' first dimension must match num_envs"):
-            wrapper._validate_observations(invalid_obs)
-
-        # Wrong number of dimensions
-        invalid_obs = {
-            "policy": torch.randn(4, 12, 3, device='cpu'),  # Should be 2D
-            "critic": torch.randn(4, 16, device='cpu')
-        }
-
-        with pytest.raises(ValueError, match="Observation 'policy' must be 2D"):
-            wrapper._validate_observations(invalid_obs)
-
-    def test_validate_observations_nan_inf_warnings(self, wrapper_no_noise, capsys):
-        """Test observation validation with NaN and Inf values."""
-        wrapper = wrapper_no_noise
-
-        obs_with_nan = {
-            "policy": torch.tensor([[float('nan'), 1.0]] * 4, device='cpu'),
-            "critic": torch.tensor([[float('inf'), 1.0]] * 4, device='cpu')
-        }
-
-        wrapper._validate_observations(obs_with_nan)
-
-        # Check that warnings were printed
-        captured = capsys.readouterr()
-        assert "Warning: NaN values detected in observation 'policy'" in captured.out
-        assert "Warning: Inf values detected in observation 'critic'" in captured.out
-
-    def test_get_observation_info(self, wrapper_no_noise):
-        """Test getting observation information."""
-        wrapper = wrapper_no_noise
-
-        # Mock get_observations
-        mock_obs = {
-            "policy": torch.tensor([[1.0, 2.0, 3.0]] * 4, device='cpu'),
-            "critic": torch.tensor([[4.0, 5.0]] * 4, device='cpu')
-        }
-        wrapper.unwrapped._get_observations = Mock(return_value=mock_obs)
+        assert isinstance(result, torch.Tensor)
+        assert result.shape == (4, 1)
+        assert torch.allclose(result, torch.zeros(4, 1))
+
+    def test_get_observation_info_success(self):
+        """Test getting observation info successfully."""
+        wrapper = ObservationManagerWrapper(self.base_env)
+
+        # Mock wrapped method to return valid tensor
+        def mock_wrapped_get_observations():
+            return torch.randn(4, 64)
+
+        wrapper._wrapped_get_observations = mock_wrapped_get_observations
 
         info = wrapper.get_observation_info()
+        assert 'observation' in info
+        assert 'shape' in info['observation']
+        assert 'dtype' in info['observation']
+        assert 'device' in info['observation']
+        assert 'merge_strategy' in info
+        assert info['observation']['shape'] == [4, 64]
 
-        assert 'policy' in info
-        assert 'critic' in info
-        assert info['policy']['shape'] == [4, 3]
-        assert info['critic']['shape'] == [4, 2]
-        assert 'min' in info['policy']
-        assert 'max' in info['policy']
-        assert 'mean' in info['policy']
-        assert 'std' in info['policy']
+    def test_get_observation_info_error(self):
+        """Test getting observation info with error."""
+        wrapper = ObservationManagerWrapper(self.base_env)
 
-    def test_get_observation_info_non_dict(self, wrapper_no_noise):
-        """Test getting observation information with non-dictionary observations."""
-        wrapper = wrapper_no_noise
+        # Mock wrapped method to raise exception
+        def mock_wrapped_get_observations():
+            raise RuntimeError("Test error")
 
-        # Mock get_observations to return tensor
-        wrapper.unwrapped._get_observations = Mock(return_value=torch.randn(4, 10))
-
-        info = wrapper.get_observation_info()
-
-        assert 'error' in info
-        assert "not in expected dictionary format" in info['error']
-
-    def test_get_observation_info_exception(self, wrapper_no_noise):
-        """Test getting observation information when exception occurs."""
-        wrapper = wrapper_no_noise
-
-        # Mock get_observations to raise exception
-        wrapper.unwrapped._get_observations = Mock(side_effect=Exception("Test error"))
+        wrapper._wrapped_get_observations = mock_wrapped_get_observations
 
         info = wrapper.get_observation_info()
-
         assert 'error' in info
         assert "Failed to get observation info" in info['error']
 
-    def test_get_observation_space_info(self, wrapper_no_noise):
-        """Test getting observation space configuration info."""
-        wrapper = wrapper_no_noise
+    def test_get_observation_space_info(self):
+        """Test getting observation space info."""
+        wrapper = ObservationManagerWrapper(self.base_env)
 
         info = wrapper.get_observation_space_info()
-
         assert 'obs_order' in info
         assert 'state_order' in info
         assert 'observation_space' in info
         assert 'state_space' in info
-        assert info['obs_order'] == ["fingertip_pos", "force_torque", "ee_linvel"]
-        assert info['observation_space'] == 12
-        assert info['state_space'] == 16
 
-    def test_get_observation_space_info_missing_config(self, mock_env):
-        """Test getting observation space info with missing configuration."""
-        # Remove some config attributes
-        delattr(mock_env.cfg, 'obs_order')
-        delattr(mock_env.cfg, 'observation_space')
+    def test_validate_wrapper_stack_success(self):
+        """Test wrapper stack validation success."""
+        wrapper = ObservationManagerWrapper(self.base_env)
 
-        wrapper = ObservationManagerWrapper(mock_env)
-        info = wrapper.get_observation_space_info()
-
-        assert 'obs_order' not in info
-        assert 'observation_space' not in info
-        assert 'state_order' in info  # Should still have this
-        assert 'state_space' in info   # Should still have this
-
-    def test_validate_wrapper_stack_valid(self, wrapper_no_noise):
-        """Test wrapper stack validation with valid configuration."""
-        wrapper = wrapper_no_noise
-
-        # Mock get_observations to return valid format
-        wrapper.unwrapped._get_observations = Mock(return_value={
-            "policy": torch.randn(4, 12),
-            "critic": torch.randn(4, 16)
-        })
-
-        with patch('builtins.__import__') as mock_import:
-            mock_module = Mock()
-            mock_module.OBS_DIM_CFG = {"fingertip_pos": 3, "force_torque": 6, "ee_linvel": 3}
-
-            def side_effect(name, *args, **kwargs):
-                if name == 'envs.factory.factory_env_cfg':
-                    return mock_module
-                return __import__.__wrapped__(name, *args, **kwargs)
-
-            mock_import.side_effect = side_effect
-
-            issues = wrapper.validate_wrapper_stack()
-
+        issues = wrapper.validate_wrapper_stack()
+        assert isinstance(issues, list)
+        # Should be empty if no issues
         assert len(issues) == 0
 
-    def test_validate_wrapper_stack_missing_keys(self, wrapper_no_noise):
-        """Test wrapper stack validation with missing observation keys."""
-        wrapper = wrapper_no_noise
+    def test_validate_wrapper_stack_failure(self):
+        """Test wrapper stack validation with failures."""
+        wrapper = ObservationManagerWrapper(self.base_env)
 
-        # Mock get_observations to return missing keys
-        wrapper.unwrapped._get_observations = Mock(return_value={
-            "policy": torch.randn(4, 12)
-            # Missing "critic"
-        })
+        # Mock wrapped method to return invalid observations
+        def mock_wrapped_get_observations():
+            return "invalid_format"
 
-        issues = wrapper.validate_wrapper_stack()
-
-        assert len(issues) > 0
-        assert any("Missing 'policy' or 'critic'" in issue for issue in issues)
-
-    def test_validate_wrapper_stack_non_dict_obs(self, wrapper_no_noise):
-        """Test wrapper stack validation with non-dictionary observations."""
-        wrapper = wrapper_no_noise
-
-        # Mock get_observations to return tensor
-        wrapper.unwrapped._get_observations = Mock(return_value=torch.randn(4, 10))
+        wrapper._wrapped_get_observations = mock_wrapped_get_observations
 
         issues = wrapper.validate_wrapper_stack()
-
+        assert isinstance(issues, list)
         assert len(issues) > 0
-        assert any("not in dictionary format" in issue for issue in issues)
 
-    def test_validate_wrapper_stack_missing_config(self, mock_env):
-        """Test wrapper stack validation with missing configuration."""
-        # Remove config attributes
-        delattr(mock_env.cfg, 'obs_order')
-        delattr(mock_env.cfg, 'state_order')
+    def test_step_functionality(self):
+        """Test step method functionality."""
+        wrapper = ObservationManagerWrapper(self.base_env)
 
-        wrapper = ObservationManagerWrapper(mock_env)
-        issues = wrapper.validate_wrapper_stack()
+        actions = torch.randn(4, 6)
+        result = wrapper.step(actions)
 
-        assert len(issues) > 0
-        assert any("Missing 'obs_order'" in issue for issue in issues)
-        assert any("Missing 'state_order'" in issue for issue in issues)
+        assert len(result) == 5
+        obs, reward, terminated, truncated, info = result
+        assert obs.shape[0] == 4
 
-    def test_validate_wrapper_stack_dimension_mismatch(self, wrapper_no_noise):
-        """Test wrapper stack validation with dimension mismatch."""
-        wrapper = wrapper_no_noise
+    def test_step_with_lazy_initialization(self):
+        """Test step method with lazy initialization."""
+        env_no_robot = MockBaseEnv(self.cfg)
+        delattr(env_no_robot, '_robot')
 
-        # Mock valid observations
-        wrapper.unwrapped._get_observations = Mock(return_value={
-            "policy": torch.randn(4, 12),
-            "critic": torch.randn(4, 16)
-        })
-
-        # Mock import with wrong dimensions
-        with patch('builtins.__import__') as mock_import:
-            mock_module = Mock()
-            mock_module.OBS_DIM_CFG = {"fingertip_pos": 3, "force_torque": 6, "ee_linvel": 5}  # Wrong dimension
-
-            def side_effect(name, *args, **kwargs):
-                if name == 'envs.factory.factory_env_cfg':
-                    return mock_module
-                return __import__.__wrapped__(name, *args, **kwargs)
-
-            mock_import.side_effect = side_effect
-
-            issues = wrapper.validate_wrapper_stack()
-
-        assert len(issues) > 0
-        assert any("Observation space mismatch" in issue for issue in issues)
-
-    def test_validate_wrapper_stack_import_error(self, wrapper_no_noise):
-        """Test wrapper stack validation with import error."""
-        wrapper = wrapper_no_noise
-
-        # Mock valid observations
-        wrapper.unwrapped._get_observations = Mock(return_value={
-            "policy": torch.randn(4, 12),
-            "critic": torch.randn(4, 16)
-        })
-
-        # Mock import to raise ImportError
-        with patch('builtins.__import__', side_effect=ImportError("Test import error")):
-            issues = wrapper.validate_wrapper_stack()
-
-        assert len(issues) > 0
-        assert any("Could not import OBS_DIM_CFG" in issue for issue in issues)
-
-    def test_validate_wrapper_stack_observation_exception(self, wrapper_no_noise):
-        """Test wrapper stack validation when getting observations raises exception."""
-        wrapper = wrapper_no_noise
-
-        # Mock get_observations to raise exception
-        wrapper.unwrapped._get_observations = Mock(side_effect=Exception("Test observation error"))
-
-        issues = wrapper.validate_wrapper_stack()
-
-        assert len(issues) > 0
-        assert any("Failed to get observations" in issue for issue in issues)
-
-    def test_step_initialization(self, mock_env):
-        """Test step method initializes wrapper when robot becomes available."""
-        # Start without robot
-        delattr(mock_env, '_robot')
-
-        wrapper = ObservationManagerWrapper(mock_env)
+        wrapper = ObservationManagerWrapper(env_no_robot)
         assert not wrapper._wrapper_initialized
 
         # Add robot and call step
-        mock_env._robot = Mock()
-        action = torch.zeros((4, 6), device='cpu')
-
-        with patch.object(wrapper.env, 'step', return_value=({"policy": torch.zeros(4, 10), "critic": torch.zeros(4, 10)}, torch.zeros(4), torch.zeros(4, dtype=torch.bool), torch.zeros(4, dtype=torch.bool), {})):
-            wrapper.step(action)
+        env_no_robot._robot = True
+        actions = torch.randn(4, 6)
+        wrapper.step(actions)
 
         assert wrapper._wrapper_initialized
 
-    def test_reset_initialization(self, mock_env):
-        """Test reset method initializes wrapper when robot becomes available."""
-        # Start without robot
-        delattr(mock_env, '_robot')
+    def test_reset_functionality(self):
+        """Test reset method functionality."""
+        wrapper = ObservationManagerWrapper(self.base_env)
 
-        wrapper = ObservationManagerWrapper(mock_env)
+        result = wrapper.reset()
+        assert len(result) == 2
+        obs, info = result
+        assert obs.shape[0] == 4
+
+    def test_reset_with_lazy_initialization(self):
+        """Test reset method with lazy initialization."""
+        env_no_robot = MockBaseEnv(self.cfg)
+        delattr(env_no_robot, '_robot')
+
+        wrapper = ObservationManagerWrapper(env_no_robot)
         assert not wrapper._wrapper_initialized
 
         # Add robot and call reset
-        mock_env._robot = Mock()
-
-        with patch.object(wrapper.env, 'reset', return_value=({"policy": torch.zeros(4, 10), "critic": torch.zeros(4, 10)}, {})):
-            wrapper.reset()
+        env_no_robot._robot = True
+        wrapper.reset()
 
         assert wrapper._wrapper_initialized
 
-    def test_integration_full_cycle(self, wrapper_with_noise):
-        """Test full integration cycle with different input formats."""
-        wrapper = wrapper_with_noise
+    def test_wrapper_properties(self):
+        """Test that wrapper properly delegates properties."""
+        wrapper = ObservationManagerWrapper(self.base_env)
 
-        # Test with dictionary input
-        dict_obs = {
-            "fingertip_pos": torch.randn(4, 3, device='cpu'),
-            "force_torque": torch.randn(4, 6, device='cpu'),
-            "ee_linvel": torch.randn(4, 3, device='cpu'),
-            "fingertip_quat": torch.randn(4, 4, device='cpu')
-        }
-        wrapper._original_get_observations = Mock(return_value=dict_obs)
+        assert wrapper.action_space.shape == self.base_env.action_space.shape
+        assert wrapper.observation_space.shape == self.base_env.observation_space.shape
 
-        result = wrapper._wrapped_get_observations()
+    def test_unwrapped_property(self):
+        """Test unwrapped property access."""
+        wrapper = ObservationManagerWrapper(self.base_env)
 
-        # Should compose, apply noise, and validate
-        assert 'policy' in result
-        assert 'critic' in result
-        assert result['policy'].shape == (4, 12)
-        assert result['critic'].shape == (4, 16)
+        assert wrapper.unwrapped == self.base_env
 
-        # Test with tensor input - temporarily disable noise to avoid dimension issues
-        wrapper.use_obs_noise = False
-        tensor_obs = torch.ones(4, 8, device='cpu')
-        wrapper._original_get_observations = Mock(return_value=tensor_obs)
+    def test_close_functionality(self):
+        """Test wrapper close method."""
+        wrapper = ObservationManagerWrapper(self.base_env)
 
-        result = wrapper._wrapped_get_observations()
+        # Should not raise any errors
+        wrapper.close()
 
-        # Should convert to standard format
-        assert 'policy' in result
-        assert 'critic' in result
-        assert result['policy'].shape == tensor_obs.shape
-        assert result['critic'].shape == tensor_obs.shape
-        wrapper.use_obs_noise = True  # Restore for next test
+    def test_device_consistency(self):
+        """Test that device is consistent throughout wrapper."""
+        wrapper = ObservationManagerWrapper(self.base_env)
 
-        # Test with already standard format
-        # Override noise config to match tensor dimensions
-        wrapper.obs_noise_mean = {"policy": [0.0] * 12, "critic": [0.0] * 16}
-        wrapper.obs_noise_std = {"policy": [0.1] * 12, "critic": [0.05] * 16}
+        assert wrapper.device == self.base_env.device
 
-        standard_obs = {
-            "policy": torch.zeros(4, 12, device='cpu'),
-            "critic": torch.zeros(4, 16, device='cpu')
-        }
-        wrapper._original_get_observations = Mock(return_value=standard_obs)
+        # Test with GPU device if available
+        if torch.cuda.is_available():
+            self.base_env.device = torch.device("cuda:0")
+            wrapper_gpu = ObservationManagerWrapper(self.base_env)
+            assert wrapper_gpu.device == torch.device("cuda:0")
 
-        result = wrapper._wrapped_get_observations()
+    def test_multiple_step_calls(self):
+        """Test multiple consecutive step calls."""
+        wrapper = ObservationManagerWrapper(self.base_env)
 
-        # Should apply noise only
-        assert 'policy' in result
-        assert 'critic' in result
-        assert not torch.allclose(result['policy'], standard_obs['policy'], atol=1e-6)
+        actions = torch.randn(4, 6)
 
+        # Call step multiple times
+        for i in range(5):
+            result = wrapper.step(actions)
+            assert len(result) == 5
 
-if __name__ == '__main__':
-    pytest.main([__file__])
+    def test_wrapper_chain_compatibility(self):
+        """Test that wrapper works in a chain with other wrappers."""
+        # Create a simple wrapper chain
+        intermediate_wrapper = gym.Wrapper(self.base_env)
+        wrapper = ObservationManagerWrapper(intermediate_wrapper)
+
+        assert wrapper.unwrapped == self.base_env
+
+        actions = torch.randn(4, 6)
+        result = wrapper.step(actions)
+        assert len(result) == 5
+
+    def test_different_merge_strategies_integration(self):
+        """Test different merge strategies in actual step/reset."""
+        strategies = ["concatenate", "policy_only", "critic_only", "average"]
+
+        for strategy in strategies:
+            wrapper = ObservationManagerWrapper(self.base_env, merge_strategy=strategy)
+
+            # Test reset
+            obs, info = wrapper.reset()
+            assert isinstance(obs, torch.Tensor)
+            assert obs.shape[0] == 4
+
+            # Test step
+            actions = torch.randn(4, 6)
+            obs, reward, terminated, truncated, info = wrapper.step(actions)
+            assert isinstance(obs, torch.Tensor)
+            assert obs.shape[0] == 4

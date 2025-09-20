@@ -1,12 +1,9 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import os
 from models.SimBa import SimBaNet
 from typing import Any, Mapping, Tuple, Union
 from skrl.models.torch import DeterministicMixin, GaussianMixin, Model
 import math
-from models.feature_net import NatureCNN, layer_init, he_layer_init
 
 # -----------------------------
 #  Block Linear Layer

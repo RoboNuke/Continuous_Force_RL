@@ -1,683 +1,532 @@
 """
-Unit tests for HistoryObservationWrapper.
-
-Tests the selective historical observation tracking including history buffers,
-acceleration calculations, and observation space management.
+Unit tests for history_observation_wrapper.py functionality.
+Tests HistoryObservationWrapper for selective historical observation tracking.
 """
 
 import pytest
 import torch
-from unittest.mock import Mock, patch, MagicMock
+import gymnasium as gym
 import sys
 import os
+from unittest.mock import patch, MagicMock
 
-# Add the project root to the Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+# Add project root to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from tests.mocks.mock_isaac_lab import MockEnvironment, MockConfig
+# Mock modules before imports
+sys.modules['omni.isaac.lab'] = __import__('tests.mocks.mock_isaac_lab', fromlist=[''])
+sys.modules['omni.isaac.lab.envs'] = __import__('tests.mocks.mock_isaac_lab', fromlist=['envs'])
+sys.modules['omni.isaac.lab.utils'] = __import__('tests.mocks.mock_isaac_lab', fromlist=['utils'])
+
 from wrappers.observations.history_observation_wrapper import HistoryObservationWrapper
+from tests.mocks.mock_isaac_lab import MockBaseEnv, MockEnvConfig
 
 
 class TestHistoryObservationWrapper:
-    """Test suite for HistoryObservationWrapper."""
+    """Test HistoryObservationWrapper functionality."""
 
-    @pytest.fixture
-    def mock_env(self):
-        """Create a mock environment for testing."""
-        env = MockEnvironment(num_envs=4, device='cpu')
+    def setup_method(self):
+        """Setup test environment."""
+        self.cfg = MockEnvConfig()
+        self.base_env = MockBaseEnv(self.cfg)
+        self.base_env.num_envs = 4
+        self.base_env.device = torch.device("cpu")
 
-        # Add configuration for history wrapper
-        env.cfg.decimation = 8
-        env.cfg.history_samples = 4
-        env.cfg.sim = Mock()
-        env.cfg.sim.dt = 1/120
+    def test_initialization_requires_explicit_components(self):
+        """Test wrapper initialization requires explicit history components."""
+        with pytest.raises(ValueError, match="history_components cannot be None"):
+            HistoryObservationWrapper(self.base_env, history_components=None)
 
-        # Add observation and state orders
-        env.cfg.obs_order = ["fingertip_pos", "force_torque", "ee_linvel"]
-        env.cfg.state_order = ["fingertip_pos", "force_torque", "ee_linvel", "fingertip_quat"]
-        env.cfg.observation_space = 12
-        env.cfg.state_space = 16
+    def test_initialization_empty_components_list(self):
+        """Test wrapper initialization with empty components list."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=[])
 
-        # Add robot and observation data
-        env._robot = Mock()
-        env.fingertip_midpoint_pos = torch.tensor([[0.5, 0.0, 0.5]] * 4, device='cpu')
-        env.fingertip_midpoint_quat = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 4, device='cpu')
-        env.ee_linvel_fd = torch.tensor([[0.1, 0.0, 0.0]] * 4, device='cpu')
-        env.ee_angvel_fd = torch.tensor([[0.0, 0.1, 0.0]] * 4, device='cpu')
-        env.robot_force_torque = torch.tensor([[1.0, 2.0, 3.0, 0.1, 0.2, 0.3]] * 4, device='cpu')
-        env.held_pos = torch.tensor([[0.6, 0.1, 0.6]] * 4, device='cpu')
-        env.held_quat = torch.tensor([[0.9, 0.1, 0.0, 0.0]] * 4, device='cpu')
-        env.fixed_pos_obs_frame = torch.tensor([[0.5, 0.0, 0.5]] * 4, device='cpu')
-        env.init_fixed_pos_obs_noise = torch.tensor([[0.01, 0.01, 0.01]] * 4, device='cpu')
+        assert wrapper.history_components == []
+        assert wrapper.num_envs == 4
+        assert wrapper.device == torch.device("cpu")
+        assert wrapper.history_length == 8  # From cfg.decimation
 
-        return env
+    def test_initialization_valid_components(self):
+        """Test wrapper initialization with valid components."""
+        components = ["fingertip_pos", "ee_linvel"]
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=components)
 
-    @pytest.fixture
-    def wrapper_default(self, mock_env):
-        """Create wrapper with default settings."""
-        return HistoryObservationWrapper(mock_env)
+        assert wrapper.history_components == components
+        assert wrapper.history_length == 8
+        assert wrapper.num_samples == 4  # From cfg.history_samples
 
-    @pytest.fixture
-    def wrapper_custom(self, mock_env):
-        """Create wrapper with custom settings."""
-        return HistoryObservationWrapper(
-            mock_env,
-            history_components=["force_torque", "ee_linvel"],
-            history_length=6,
-            history_samples=3,
-            calc_acceleration=True
+    def test_initialization_with_custom_parameters(self):
+        """Test wrapper initialization with custom parameters."""
+        components = ["fingertip_pos"]
+        wrapper = HistoryObservationWrapper(
+            self.base_env,
+            history_components=components,
+            history_length=10,
+            history_samples=5
         )
 
-    def test_initialization_default(self, wrapper_default):
-        """Test wrapper initialization with default settings."""
-        wrapper = wrapper_default
+        assert wrapper.history_length == 10
+        assert wrapper.num_samples == 5
 
-        assert wrapper.history_components == ["force_torque", "ee_linvel", "ee_angvel"]
-        assert wrapper.history_length == 8  # From mock env decimation
-        assert wrapper.num_samples == 4  # From mock env history_samples
-        assert wrapper.calc_acceleration == False
-        assert wrapper.num_envs == 4
-        assert str(wrapper.device) == 'cpu'
-        assert wrapper._wrapper_initialized == True
+    def test_initialization_single_sample(self):
+        """Test wrapper initialization with single sample."""
+        components = ["fingertip_pos"]
+        wrapper = HistoryObservationWrapper(
+            self.base_env,
+            history_components=components,
+            history_samples=1
+        )
 
-    def test_initialization_custom(self, wrapper_custom):
-        """Test wrapper initialization with custom settings."""
-        wrapper = wrapper_custom
-
-        assert wrapper.history_components == ["force_torque", "ee_linvel"]
-        assert wrapper.history_length == 6
-        assert wrapper.num_samples == 3
-        assert wrapper.calc_acceleration == True
-        assert wrapper.num_envs == 4
-        assert str(wrapper.device) == 'cpu'
-        assert wrapper._wrapper_initialized == True
-
-    def test_initialization_without_robot(self, mock_env):
-        """Test initialization when robot is not available initially."""
-        delattr(mock_env, '_robot')
-        wrapper = HistoryObservationWrapper(mock_env)
-        assert not wrapper._wrapper_initialized
-
-    def test_keep_indices_calculation(self, wrapper_custom):
-        """Test calculation of keep indices for history sampling."""
-        wrapper = wrapper_custom
-
-        # With history_length=6 and num_samples=3, should sample indices 0, 2.5, 5 -> 0, 2, 5
-        expected_indices = torch.tensor([0, 2, 5], dtype=torch.int32)
-        torch.testing.assert_close(wrapper.keep_idxs, expected_indices)
-
-    def test_keep_indices_single_sample(self, mock_env):
-        """Test keep indices when only one sample is requested."""
-        wrapper = HistoryObservationWrapper(mock_env, history_samples=1)
-
-        # Should always take the last value (history_length - 1)
+        assert wrapper.num_samples == 1
+        # Should use last index for single sample
         assert wrapper.keep_idxs[0] == wrapper.history_length - 1
 
-    def test_keep_indices_full_history(self, mock_env):
-        """Test keep indices when samples equal history length."""
-        wrapper = HistoryObservationWrapper(mock_env, history_length=4, history_samples=4)
+    def test_validate_components_missing(self):
+        """Test component validation with missing components."""
+        with pytest.raises(ValueError, match="History components .* not found"):
+            HistoryObservationWrapper(
+                self.base_env,
+                history_components=["nonexistent_component"]
+            )
 
-        expected_indices = torch.tensor([0, 1, 2, 3], dtype=torch.int32)
-        torch.testing.assert_close(wrapper.keep_idxs, expected_indices)
+    def test_validate_components_no_config(self):
+        """Test component validation without component_dims config."""
+        # Remove component_dims from config
+        delattr(self.base_env.cfg, 'component_dims')
 
-    def test_update_observation_dimensions(self, mock_env):
-        """Test observation dimension updates."""
-        # Create wrapper to test dimension updates
+        with pytest.raises(ValueError, match="Environment configuration must have 'component_dims'"):
+            HistoryObservationWrapper(
+                self.base_env,
+                history_components=["fingertip_pos"]
+            )
+
+    def test_get_component_dimensions_invalid_config(self):
+        """Test component dimensions with invalid config."""
+        # Set invalid component_dims
+        self.base_env.cfg.component_dims = "invalid"
+
+        with pytest.raises(ValueError, match="'component_dims' must be a dictionary"):
+            HistoryObservationWrapper(
+                self.base_env,
+                history_components=["fingertip_pos"]
+            )
+
+    def test_get_component_dimensions_empty_config(self):
+        """Test component dimensions with empty config."""
+        # Set empty component_dims
+        self.base_env.cfg.component_dims = {}
+
+        with pytest.raises(ValueError, match="'component_dims' cannot be empty"):
+            HistoryObservationWrapper(
+                self.base_env,
+                history_components=["fingertip_pos"]
+            )
+
+    def test_update_observation_dimensions(self):
+        """Test observation space dimension updates."""
+        components = ["fingertip_pos", "ee_linvel"]  # 3 + 3 = 6 dims per sample
         wrapper = HistoryObservationWrapper(
-            mock_env,
-            history_components=["force_torque", "ee_linvel"],
-            history_samples=2
+            self.base_env,
+            history_components=components,
+            history_samples=3
         )
 
-        # Test that the wrapper was created successfully
-        assert wrapper.history_components == ["force_torque", "ee_linvel"]
-        assert wrapper.num_samples == 2
+        # Should add (3-1) * 6 = 12 additional dimensions
+        expected_additional = (3 - 1) * 6
+        assert self.base_env.cfg.observation_space == 32 + expected_additional
 
-        # Test the dimension calculation logic directly
-        component_dims = {
-            "force_torque": 6,
-            "ee_linvel": 3,
-            "ee_angvel": 3,
-            "fingertip_pos": 3,
-        }
-
-        # Create a test dimension config
-        test_dim_cfg = {'force_torque': 6, 'ee_linvel': 3, 'ee_angvel': 3, 'fingertip_pos': 3}
-
-        # Test the scaling function directly
-        wrapper._apply_history_scaling(test_dim_cfg, component_dims)
-
-        # force_torque: 6 * 2 = 12, ee_linvel: 3 * 2 = 6
-        assert test_dim_cfg['force_torque'] == 12
-        assert test_dim_cfg['ee_linvel'] == 6
-        # Non-history components should remain unchanged
-        assert test_dim_cfg['ee_angvel'] == 3
-
-    def test_update_observation_dimensions_with_acceleration(self, mock_env):
-        """Test observation dimension updates with acceleration."""
-        # Create wrapper with acceleration enabled
+    def test_update_observation_dimensions_state_space(self):
+        """Test state space dimension updates."""
+        components = ["fingertip_pos"]  # In state_order
         wrapper = HistoryObservationWrapper(
-            mock_env,
-            history_components=["force_torque", "ee_linvel"],
-            history_samples=2,
-            calc_acceleration=True
+            self.base_env,
+            history_components=components,
+            history_samples=4
         )
 
-        # Test that the wrapper was created successfully
-        assert wrapper.history_components == ["force_torque", "ee_linvel"]
-        assert wrapper.num_samples == 2
-        assert wrapper.calc_acceleration == True
-
-        # Test the dimension calculation logic directly
-        component_dims = {
-            "force_torque": 6,
-            "ee_linvel": 3,
-            "ee_angvel": 3,
-        }
-
-        # Create a test dimension config
-        test_dim_cfg = {'force_torque': 6, 'ee_linvel': 3, 'ee_angvel': 3}
-
-        # Test the scaling function directly
-        wrapper._apply_history_scaling(test_dim_cfg, component_dims)
-
-        # Original dimensions scaled
-        assert test_dim_cfg['force_torque'] == 12  # 6 * 2
-        assert test_dim_cfg['ee_linvel'] == 6  # 3 * 2
-
-        # Acceleration components added
-        assert test_dim_cfg['ee_linacc'] == 6  # Same as ee_linvel
-        assert test_dim_cfg['force_jerk'] == 12  # Same as force_torque
-        assert test_dim_cfg['force_snap'] == 12  # Same as force_torque
-
-    def test_init_history_buffers(self, wrapper_custom):
-        """Test initialization of history buffers."""
-        wrapper = wrapper_custom
-
-        # Should have buffers for force_torque and ee_linvel
-        assert 'force_torque' in wrapper.history_buffers
-        assert 'ee_linvel' in wrapper.history_buffers
-        assert 'ee_angvel' not in wrapper.history_buffers
-
-        # Check buffer shapes
-        assert wrapper.history_buffers['force_torque'].shape == (4, 6, 6)  # (num_envs, history_length, dim)
-        assert wrapper.history_buffers['ee_linvel'].shape == (4, 6, 3)
-
-        # Should have acceleration buffers since calc_acceleration=True
-        assert 'ee_linacc' in wrapper.acceleration_buffers
-        assert 'force_jerk' in wrapper.acceleration_buffers
-        assert 'force_snap' in wrapper.acceleration_buffers
-
-    def test_init_history_buffers_no_acceleration(self, wrapper_default):
-        """Test initialization of history buffers without acceleration."""
-        wrapper = wrapper_default
-
-        # Should have history buffers
-        assert len(wrapper.history_buffers) == 3
-        assert 'force_torque' in wrapper.history_buffers
-        assert 'ee_linvel' in wrapper.history_buffers
-        assert 'ee_angvel' in wrapper.history_buffers
-
-        # Should not have acceleration buffers
-        assert len(wrapper.acceleration_buffers) == 0
-
-    def test_wrapper_initialization(self, wrapper_default):
-        """Test wrapper method override initialization."""
-        wrapper = wrapper_default
-
-        # Should be initialized since robot exists
-        assert wrapper._wrapper_initialized == True
-
-        # Check that methods are stored and overridden (if they exist)
-        # Note: MockEnvironment doesn't have all methods, so some may be None
-        if hasattr(wrapper.unwrapped, '_get_observations'):
-            assert wrapper._original_get_observations is not None
-        if hasattr(wrapper.unwrapped, '_reset_idx'):
-            assert wrapper._original_reset_idx is not None
-        if hasattr(wrapper.unwrapped, '_pre_physics_step'):
-            assert wrapper._original_pre_physics_step is not None
-
-    def test_get_current_observations(self, wrapper_default):
-        """Test getting current observations from environment."""
-        wrapper = wrapper_default
-
-        obs = wrapper._get_current_observations()
-
-        # Check that observations are extracted correctly
-        assert 'fingertip_pos' in obs
-        assert 'fingertip_quat' in obs
-        assert 'ee_linvel' in obs
-        assert 'ee_angvel' in obs
-        assert 'force_torque' in obs
-        assert 'held_pos' in obs
-        assert 'held_quat' in obs
-
-        # Check relative positions are calculated
-        assert 'fingertip_pos_rel_fixed' in obs
-        assert 'held_pos_rel_fixed' in obs
-
-        # Check values
-        torch.testing.assert_close(obs['fingertip_pos'], wrapper.unwrapped.fingertip_midpoint_pos)
-        torch.testing.assert_close(obs['force_torque'], wrapper.unwrapped.robot_force_torque)
-
-    def test_get_current_observations_missing_attributes(self, mock_env):
-        """Test getting observations when some environment attributes are missing."""
-        # Remove some attributes
-        delattr(mock_env, 'held_pos')
-        delattr(mock_env, 'held_quat')
-        delattr(mock_env, 'fixed_pos_obs_frame')
-
-        wrapper = HistoryObservationWrapper(mock_env)
-        obs = wrapper._get_current_observations()
-
-        # Should still work without missing attributes
-        assert 'fingertip_pos' in obs
-        assert 'force_torque' in obs
-        assert 'held_pos' not in obs
-        assert 'held_quat' not in obs
-        assert 'fingertip_pos_rel_fixed' not in obs
-
-    def test_update_history_initial(self, wrapper_custom):
-        """Test initial history update (reset=True)."""
-        wrapper = wrapper_custom
-
-        # Initial update should fill entire history with current values
-        wrapper._update_history(reset=True)
-
-        # Check that all history steps have the same value
-        for component in wrapper.history_components:
-            if component in wrapper.history_buffers:
-                buffer = wrapper.history_buffers[component]
-                # All time steps should have the same value (current observation)
-                first_step = buffer[:, 0, :]
-                last_step = buffer[:, -1, :]
-                torch.testing.assert_close(first_step, last_step)
-
-    def test_update_history_step(self, wrapper_custom):
-        """Test history update during stepping."""
-        wrapper = wrapper_custom
-
-        # Initialize history
-        wrapper._update_history(reset=True)
-
-        # Get initial state
-        initial_force = wrapper.history_buffers['force_torque'][:, -1, :].clone()
-
-        # Change environment state
-        wrapper.unwrapped.robot_force_torque = torch.tensor([[2.0, 3.0, 4.0, 0.2, 0.3, 0.4]] * 4, device='cpu')
-
-        # Update history
-        wrapper._update_history(reset=False)
-
-        # Check that history was rolled and new value added
-        new_force = wrapper.history_buffers['force_torque'][:, -1, :]
-        old_force = wrapper.history_buffers['force_torque'][:, -2, :]
-
-        torch.testing.assert_close(old_force, initial_force)
-        torch.testing.assert_close(new_force, wrapper.unwrapped.robot_force_torque)
-
-    def test_update_history_acceleration(self, wrapper_custom):
-        """Test acceleration calculation during history update."""
-        wrapper = wrapper_custom
-
-        # Initialize history
-        wrapper._update_history(reset=True)
-
-        # Acceleration buffers should be zero after reset
-        assert torch.all(wrapper.acceleration_buffers['ee_linacc'] == 0)
-        assert torch.all(wrapper.acceleration_buffers['force_jerk'] == 0)
-        assert torch.all(wrapper.acceleration_buffers['force_snap'] == 0)
-
-        # Change environment state
-        wrapper.unwrapped.ee_linvel_fd = torch.tensor([[0.2, 0.1, 0.0]] * 4, device='cpu')
-        wrapper.unwrapped.robot_force_torque = torch.tensor([[2.0, 3.0, 4.0, 0.2, 0.3, 0.4]] * 4, device='cpu')
-
-        # Update history
-        wrapper._update_history(reset=False)
-
-        # Check that acceleration was calculated
-        assert not torch.all(wrapper.acceleration_buffers['ee_linacc'][:, -1, :] == 0)
-        assert not torch.all(wrapper.acceleration_buffers['force_jerk'][:, -1, :] == 0)
-
-    def test_finite_difference(self, wrapper_custom):
-        """Test finite difference calculation."""
-        wrapper = wrapper_custom
-
-        # Create test history buffer
-        history_buffer = torch.zeros((4, 3, 6), device='cpu')
-        history_buffer[:, 0, :] = 1.0
-        history_buffer[:, 1, :] = 2.0
-        history_buffer[:, 2, :] = 4.0
-
-        # Calculate finite difference
-        diff = wrapper._finite_difference(history_buffer)
-
-        # Expected: (4.0 - 2.0) / dt = 2.0 / (1/120) = 240.0
-        dt = 1/120
-        expected_diff = torch.full((4, 6), 240.0, device='cpu')
-        torch.testing.assert_close(diff, expected_diff)
-
-    def test_finite_difference_insufficient_history(self, wrapper_custom):
-        """Test finite difference with insufficient history."""
-        wrapper = wrapper_custom
-
-        # Create history buffer with only one timestep
-        history_buffer = torch.zeros((4, 1, 6), device='cpu')
-
-        # Should return zeros
-        diff = wrapper._finite_difference(history_buffer)
-        expected_diff = torch.zeros((4, 6), device='cpu')
-        torch.testing.assert_close(diff, expected_diff)
-
-    def test_build_observation_dicts(self, wrapper_custom):
-        """Test building observation dictionaries."""
-        wrapper = wrapper_custom
-
-        # Initialize history
-        wrapper._update_history(reset=True)
-
-        # Build observation dictionaries
-        obs_dict, state_dict = wrapper._build_observation_dicts()
-
-        # Check that history components use history data
-        assert 'force_torque' in obs_dict
-        assert 'ee_linvel' in obs_dict
-
-        # Check that non-history components use current data
-        assert 'fingertip_pos' in obs_dict
-        torch.testing.assert_close(obs_dict['fingertip_pos'], wrapper.unwrapped.fingertip_midpoint_pos)
-
-        # Check acceleration components
-        assert 'ee_linacc' in obs_dict
-        assert 'force_jerk' in obs_dict
-        assert 'force_snap' in obs_dict
-
-        # Check shapes - history components should be flattened
-        # force_torque: (4, 3, 6) -> (4, 18) where 3 is num_samples, 6 is force dimension
-        assert obs_dict['force_torque'].shape == (4, 18)
-        # ee_linvel: (4, 3, 3) -> (4, 9)
-        assert obs_dict['ee_linvel'].shape == (4, 9)
-
-    def test_process_dict_observations(self, wrapper_default):
-        """Test processing observations in dictionary format."""
-        wrapper = wrapper_default
-
-        # Mock original observations
-        original_obs = {
-            "policy": torch.randn(4, 10, device='cpu'),
-            "critic": torch.randn(4, 12, device='cpu')
-        }
-
-        # Mock methods
-        wrapper._build_observation_dicts = Mock(return_value=({
-            'fingertip_pos': torch.randn(4, 3, device='cpu'),
-            'force_torque': torch.randn(4, 24, device='cpu'),  # 6 * 4 samples
-            'ee_linvel': torch.randn(4, 12, device='cpu'),     # 3 * 4 samples
-        }, {
-            'fingertip_pos': torch.randn(4, 3, device='cpu'),
-            'force_torque': torch.randn(4, 24, device='cpu'),
-            'ee_linvel': torch.randn(4, 12, device='cpu'),
-            'fingertip_quat': torch.randn(4, 4, device='cpu'),
-        }))
-
-        result = wrapper._process_dict_observations(original_obs)
-
-        # Should return dictionary with policy and critic keys
-        assert 'policy' in result
-        assert 'critic' in result
-
-        # Check that observations are concatenated according to order
-        # obs_order = ["fingertip_pos", "force_torque", "ee_linvel"] = 3 + 24 + 12 = 39
-        assert result['policy'].shape == (4, 39)
-        # state_order includes fingertip_quat too: 3 + 24 + 12 + 4 = 43
-        assert result['critic'].shape == (4, 43)
-
-    def test_wrapped_get_observations(self, wrapper_default):
-        """Test wrapped get observations method."""
-        wrapper = wrapper_default
-
-        # Mock original get_observations
-        wrapper._original_get_observations = Mock(return_value={
-            "policy": torch.randn(4, 10, device='cpu'),
-            "critic": torch.randn(4, 12, device='cpu')
-        })
-
-        # Mock process method
-        expected_result = {
-            "policy": torch.randn(4, 20, device='cpu'),
-            "critic": torch.randn(4, 25, device='cpu')
-        }
-        wrapper._process_dict_observations = Mock(return_value=expected_result)
-
-        result = wrapper._wrapped_get_observations()
-
-        # Should call process method and return its result
-        wrapper._process_dict_observations.assert_called_once()
-        assert result == expected_result
-
-    def test_wrapped_get_observations_no_original(self, wrapper_default):
-        """Test wrapped get observations without original method."""
-        wrapper = wrapper_default
-        wrapper._original_get_observations = None
-
-        # Mock process method
-        expected_result = {
-            "policy": torch.randn(4, 20, device='cpu'),
-            "critic": torch.randn(4, 25, device='cpu')
-        }
-        wrapper._process_dict_observations = Mock(return_value=expected_result)
-
-        result = wrapper._wrapped_get_observations()
-
-        # Should call process method - check it was called (tensor comparison is tricky with empty tensors)
-        wrapper._process_dict_observations.assert_called_once()
-        assert result == expected_result
-
-    def test_wrapped_get_observations_non_dict(self, wrapper_default):
-        """Test wrapped get observations with non-dictionary return."""
-        wrapper = wrapper_default
-
-        # Mock original get_observations to return non-dict
-        tensor_obs = torch.randn(4, 10, device='cpu')
-        wrapper._original_get_observations = Mock(return_value=tensor_obs)
-
-        result = wrapper._wrapped_get_observations()
-
-        # Should return original tensor unchanged
-        torch.testing.assert_close(result, tensor_obs)
-
-    def test_wrapped_reset_idx(self, wrapper_default):
-        """Test wrapped reset idx method."""
-        wrapper = wrapper_default
-
-        # Mock original reset_idx
-        wrapper._original_reset_idx = Mock()
-
-        # Mock update_history
-        wrapper._update_history = Mock()
-
-        env_ids = torch.tensor([0, 1])
-        wrapper._wrapped_reset_idx(env_ids)
-
-        # Should call original method and update history
-        wrapper._original_reset_idx.assert_called_once_with(env_ids)
-        wrapper._update_history.assert_called_once_with(reset=True)
-
-    def test_wrapped_reset_idx_no_original(self, wrapper_default):
-        """Test wrapped reset idx without original method."""
-        wrapper = wrapper_default
-        wrapper._original_reset_idx = None
-
-        # Mock update_history
-        wrapper._update_history = Mock()
-
-        env_ids = torch.tensor([0, 1])
-        wrapper._wrapped_reset_idx(env_ids)
-
-        # Should still update history
-        wrapper._update_history.assert_called_once_with(reset=True)
-
-    def test_wrapped_pre_physics_step(self, wrapper_default):
-        """Test wrapped pre-physics step method."""
-        wrapper = wrapper_default
-
-        # Mock original pre_physics_step
-        wrapper._original_pre_physics_step = Mock()
-
-        # Mock update_history
-        wrapper._update_history = Mock()
-
-        action = torch.randn(4, 6, device='cpu')
-        wrapper._wrapped_pre_physics_step(action)
-
-        # Should call original method and update history
-        wrapper._original_pre_physics_step.assert_called_once_with(action)
-        wrapper._update_history.assert_called_once_with(reset=False)
-
-    def test_wrapped_pre_physics_step_no_original(self, wrapper_default):
-        """Test wrapped pre-physics step without original method."""
-        wrapper = wrapper_default
-        wrapper._original_pre_physics_step = None
-
-        # Mock update_history
-        wrapper._update_history = Mock()
-
-        action = torch.randn(4, 6, device='cpu')
-        wrapper._wrapped_pre_physics_step(action)
-
-        # Should still update history
-        wrapper._update_history.assert_called_once_with(reset=False)
-
-    def test_step_initialization(self, mock_env):
-        """Test step method initializes wrapper when robot becomes available."""
-        # Start without robot
-        delattr(mock_env, '_robot')
-
-        wrapper = HistoryObservationWrapper(mock_env)
+        # Should add (4-1) * 3 = 9 additional dimensions to state space
+        expected_additional = (4 - 1) * 3
+        assert self.base_env.cfg.state_space == 48 + expected_additional
+
+    def test_initialization_without_robot(self):
+        """Test wrapper initialization without robot attribute."""
+        env_no_robot = MockBaseEnv(self.cfg)
+        delattr(env_no_robot, '_robot')
+
+        wrapper = HistoryObservationWrapper(env_no_robot, history_components=["fingertip_pos"])
+        assert wrapper._wrapper_initialized == False
+
+    def test_lazy_wrapper_initialization(self):
+        """Test lazy wrapper initialization during step/reset."""
+        env_no_robot = MockBaseEnv(self.cfg)
+        delattr(env_no_robot, '_robot')
+
+        wrapper = HistoryObservationWrapper(env_no_robot, history_components=["fingertip_pos"])
         assert not wrapper._wrapper_initialized
 
         # Add robot and call step
-        mock_env._robot = Mock()
-        action = torch.zeros((4, 6), device='cpu')
-
-        with patch.object(wrapper.env, 'step', return_value=(torch.zeros(4, 10), torch.zeros(4), torch.zeros(4, dtype=torch.bool), torch.zeros(4, dtype=torch.bool), {})):
-            wrapper.step(action)
+        env_no_robot._robot = True
+        wrapper.step(torch.randn(4, 6))
 
         assert wrapper._wrapper_initialized
 
-    def test_reset_initialization(self, mock_env):
-        """Test reset method initializes wrapper when robot becomes available."""
-        # Start without robot
-        delattr(mock_env, '_robot')
+    def test_init_history_buffers(self):
+        """Test history buffer initialization."""
+        components = ["fingertip_pos", "ee_linvel"]
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=components)
 
-        wrapper = HistoryObservationWrapper(mock_env)
+        assert len(wrapper.history_buffers) == 2
+        assert wrapper.history_buffers["fingertip_pos"].shape == (4, 8, 3)
+        assert wrapper.history_buffers["ee_linvel"].shape == (4, 8, 3)
+
+    def test_wrapped_get_observations(self):
+        """Test wrapped get observations method."""
+        components = ["fingertip_pos", "ee_linvel"]
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=components)
+
+        # Mock original method
+        def mock_get_observations():
+            return {"existing_obs": torch.randn(4, 10)}
+
+        wrapper._original_get_observations = mock_get_observations
+
+        obs = wrapper._wrapped_get_observations()
+        assert isinstance(obs, dict)
+        assert "existing_obs" in obs
+        assert "fingertip_pos" in obs
+        assert "ee_linvel" in obs
+
+    def test_get_observation_value_basic(self):
+        """Test getting observation value for basic component."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+
+        value = wrapper._get_observation_value("fingertip_pos")
+        assert isinstance(value, torch.Tensor)
+        assert value.shape == (4, 3)
+
+    def test_get_observation_value_relative_position(self):
+        """Test getting observation value for relative position components."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+
+        # Test relative position calculation
+        value = wrapper._get_observation_value("fingertip_pos_rel_fixed")
+        assert isinstance(value, torch.Tensor)
+        assert value.shape == (4, 3)
+
+    def test_get_observation_value_missing_fixed_frame(self):
+        """Test getting observation value without fixed frame."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+
+        # Remove fixed frame
+        delattr(wrapper.unwrapped, 'fixed_pos_obs_frame')
+
+        with pytest.raises(ValueError, match="Cannot compute .* fixed_pos_obs_frame not available"):
+            wrapper._get_observation_value("fingertip_pos_rel_fixed")
+
+    def test_get_observation_value_missing_attribute(self):
+        """Test getting observation value for missing attribute."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+
+        with pytest.raises(ValueError, match="Environment attribute .* not found"):
+            wrapper._get_observation_value("nonexistent_component")
+
+    def test_component_attr_mapping_missing(self):
+        """Test component attribute mapping missing."""
+        # Remove component_attr_map
+        delattr(self.base_env.cfg, 'component_attr_map')
+
+        with pytest.raises(ValueError, match="Environment configuration must have 'component_attr_map'"):
+            wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+            wrapper._get_component_attr_mapping()
+
+    def test_component_attr_mapping_invalid(self):
+        """Test component attribute mapping invalid type."""
+        # Set invalid component_attr_map
+        self.base_env.cfg.component_attr_map = "invalid"
+
+        with pytest.raises(ValueError, match="'component_attr_map' must be a dictionary"):
+            wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+            wrapper._get_component_attr_mapping()
+
+    def test_wrapped_reset_idx(self):
+        """Test wrapped reset index method."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+
+        # Initialize buffers with some data
+        wrapper.history_buffers["fingertip_pos"].fill_(1.0)
+
+        # Reset specific environments
+        env_ids = torch.tensor([0, 2])
+        wrapper._wrapped_reset_idx(env_ids)
+
+        # Should reset buffers for specified environments
+        assert torch.allclose(wrapper.history_buffers["fingertip_pos"][0], torch.zeros(8, 3))
+        assert torch.allclose(wrapper.history_buffers["fingertip_pos"][2], torch.zeros(8, 3))
+        # Other environments should remain unchanged
+        assert torch.allclose(wrapper.history_buffers["fingertip_pos"][1], torch.ones(8, 3))
+
+    def test_wrapped_reset_idx_empty(self):
+        """Test wrapped reset with empty environment IDs."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+
+        # Initialize buffers with some data
+        wrapper.history_buffers["fingertip_pos"].fill_(1.0)
+
+        # Reset with empty list
+        wrapper._wrapped_reset_idx(torch.tensor([]))
+
+        # Buffers should remain unchanged
+        assert torch.allclose(wrapper.history_buffers["fingertip_pos"], torch.ones(4, 8, 3))
+
+    def test_wrapped_pre_physics_step(self):
+        """Test wrapped pre-physics step method."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+
+        # Mock original pre-physics step
+        original_called = False
+        def mock_pre_physics_step(actions):
+            nonlocal original_called
+            original_called = True
+
+        wrapper._original_pre_physics_step = mock_pre_physics_step
+
+        actions = torch.randn(4, 6)
+        wrapper._wrapped_pre_physics_step(actions)
+
+        assert original_called
+
+    def test_update_history(self):
+        """Test history buffer update."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+
+        # Set known values for fingertip_pos
+        test_value = torch.ones(4, 3) * 5.0
+        wrapper.unwrapped.fingertip_pos = test_value
+
+        # Update history
+        wrapper._update_history()
+
+        # Check that the value was added to the buffer (last position)
+        assert torch.allclose(wrapper.history_buffers["fingertip_pos"][:, -1, :], test_value)
+
+    def test_update_history_rolling(self):
+        """Test history buffer rolling update."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+
+        # Fill buffer with known pattern
+        for i in range(wrapper.history_length):
+            wrapper.history_buffers["fingertip_pos"][:, i, :] = i
+
+        # Set new value
+        new_value = torch.ones(4, 3) * 99.0
+        wrapper.unwrapped.fingertip_pos = new_value
+
+        # Update history (should roll and add new value)
+        wrapper._update_history()
+
+        # Check rolling: first position should now have value 1 (was 0)
+        assert torch.allclose(wrapper.history_buffers["fingertip_pos"][:, 0, :], torch.ones(4, 3) * 1.0)
+        # Last position should have new value
+        assert torch.allclose(wrapper.history_buffers["fingertip_pos"][:, -1, :], new_value)
+
+    def test_get_history_stats(self):
+        """Test getting history statistics."""
+        components = ["fingertip_pos", "ee_linvel"]
+        wrapper = HistoryObservationWrapper(
+            self.base_env,
+            history_components=components,
+            history_length=10,
+            history_samples=5
+        )
+
+        stats = wrapper.get_history_stats()
+        assert stats['history_components'] == components
+        assert stats['history_length'] == 10
+        assert stats['num_samples'] == 5
+        assert stats['wrapper_initialized'] == True
+        assert stats['buffer_count'] == 2
+        assert 'fingertip_pos_buffer_shape' in stats
+        assert 'ee_linvel_buffer_shape' in stats
+
+    def test_get_component_history(self):
+        """Test getting component history."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+
+        # Fill buffer with test data
+        test_data = torch.randn(4, 8, 3)
+        wrapper.history_buffers["fingertip_pos"] = test_data
+
+        history = wrapper.get_component_history("fingertip_pos")
+        assert torch.allclose(history, test_data)
+        # Should be a clone, not the same object
+        assert history is not test_data
+
+    def test_get_component_history_missing(self):
+        """Test getting history for missing component."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+
+        with pytest.raises(ValueError, match="Component .* not found in history buffers"):
+            wrapper.get_component_history("nonexistent_component")
+
+    def test_step_functionality(self):
+        """Test step method functionality."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+
+        actions = torch.randn(4, 6)
+        result = wrapper.step(actions)
+
+        assert len(result) == 5
+        obs, reward, terminated, truncated, info = result
+
+    def test_step_with_lazy_initialization(self):
+        """Test step method with lazy initialization."""
+        env_no_robot = MockBaseEnv(self.cfg)
+        delattr(env_no_robot, '_robot')
+
+        wrapper = HistoryObservationWrapper(env_no_robot, history_components=["fingertip_pos"])
+        assert not wrapper._wrapper_initialized
+
+        # Add robot and call step
+        env_no_robot._robot = True
+        actions = torch.randn(4, 6)
+        wrapper.step(actions)
+
+        assert wrapper._wrapper_initialized
+
+    def test_reset_functionality(self):
+        """Test reset method functionality."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+
+        result = wrapper.reset()
+        assert len(result) == 2
+        obs, info = result
+
+    def test_reset_with_lazy_initialization(self):
+        """Test reset method with lazy initialization."""
+        env_no_robot = MockBaseEnv(self.cfg)
+        delattr(env_no_robot, '_robot')
+
+        wrapper = HistoryObservationWrapper(env_no_robot, history_components=["fingertip_pos"])
         assert not wrapper._wrapper_initialized
 
         # Add robot and call reset
-        mock_env._robot = Mock()
-
-        with patch.object(wrapper.env, 'reset', return_value=(torch.zeros(4, 10), {})):
-            wrapper.reset()
+        env_no_robot._robot = True
+        wrapper.reset()
 
         assert wrapper._wrapper_initialized
 
-    def test_get_history_stats(self, wrapper_custom):
-        """Test getting history statistics."""
-        wrapper = wrapper_custom
+    def test_keep_indices_calculation(self):
+        """Test keep indices calculation for sampling."""
+        wrapper = HistoryObservationWrapper(
+            self.base_env,
+            history_components=["fingertip_pos"],
+            history_length=8,
+            history_samples=4
+        )
+
+        # Should create evenly spaced indices
+        expected = torch.linspace(0, 7, 4).type(torch.int32)
+        assert torch.equal(wrapper.keep_idxs, expected)
+
+    def test_wrapper_properties(self):
+        """Test that wrapper properly delegates properties."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+
+        assert wrapper.action_space.shape == self.base_env.action_space.shape
+        assert wrapper.observation_space.shape == self.base_env.observation_space.shape
+
+    def test_unwrapped_property(self):
+        """Test unwrapped property access."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+
+        assert wrapper.unwrapped == self.base_env
+
+    def test_close_functionality(self):
+        """Test wrapper close method."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+
+        # Should not raise any errors
+        wrapper.close()
+
+    def test_device_consistency(self):
+        """Test that device is consistent throughout wrapper."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+
+        assert wrapper.device == self.base_env.device
+
+        # Check buffer devices
+        for buffer in wrapper.history_buffers.values():
+            assert buffer.device == wrapper.device
+
+    def test_multiple_step_calls_with_history_update(self):
+        """Test multiple step calls update history correctly."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
+
+        actions = torch.randn(4, 6)
+
+        # Call step multiple times and check history updates
+        for i in range(5):
+            # Set unique value for this step
+            unique_value = torch.ones(4, 3) * i
+            wrapper.unwrapped.fingertip_pos = unique_value
+
+            # Directly call the history update method to test it
+            wrapper._update_history()
+
+            # Check that the value was recorded in history
+            # The value should be in the last position after the update
+            assert torch.allclose(wrapper.history_buffers["fingertip_pos"][:, -1, :], unique_value)
+
+    def test_wrapper_chain_compatibility(self):
+        """Test that wrapper works in a chain with other wrappers."""
+        # Create a simple wrapper chain
+        intermediate_wrapper = gym.Wrapper(self.base_env)
+        wrapper = HistoryObservationWrapper(intermediate_wrapper, history_components=["fingertip_pos"])
+
+        assert wrapper.unwrapped == self.base_env
+
+        actions = torch.randn(4, 6)
+        result = wrapper.step(actions)
+        assert len(result) == 5
+
+    def test_empty_components_list_functionality(self):
+        """Test functionality with empty components list."""
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=[])
+
+        # Should work normally but with no history tracking
+        assert len(wrapper.history_buffers) == 0
+
+        actions = torch.randn(4, 6)
+        result = wrapper.step(actions)
+        assert len(result) == 5
 
         stats = wrapper.get_history_stats()
+        assert stats['buffer_count'] == 0
 
-        expected_stats = {
-            'history_components': ["force_torque", "ee_linvel"],
-            'history_length': 6,
-            'num_samples': 3,
-            'calc_acceleration': True,
-            'buffer_count': 2,  # force_torque, ee_linvel
-            'acceleration_buffer_count': 3,  # ee_linacc, force_jerk, force_snap
-        }
+    def test_large_history_buffer(self):
+        """Test with large history buffer."""
+        wrapper = HistoryObservationWrapper(
+            self.base_env,
+            history_components=["fingertip_pos"],
+            history_length=100,
+            history_samples=20
+        )
 
-        assert stats == expected_stats
+        assert wrapper.history_length == 100
+        assert wrapper.num_samples == 20
+        assert wrapper.history_buffers["fingertip_pos"].shape == (4, 100, 3)
 
-    def test_get_component_history(self, wrapper_custom):
-        """Test getting history for specific components."""
-        wrapper = wrapper_custom
+    def test_single_environment_history(self):
+        """Test history tracking with single environment."""
+        self.base_env.num_envs = 1
+        self.base_env.cfg.num_envs = 1
+        # Update observation data for single environment
+        self.base_env._setup_observation_data()
 
-        # Initialize history
-        wrapper._update_history(reset=True)
+        wrapper = HistoryObservationWrapper(self.base_env, history_components=["fingertip_pos"])
 
-        # Test getting history buffer
-        force_history = wrapper.get_component_history('force_torque')
-        assert force_history is not None
-        assert force_history.shape == (4, 6, 6)
-        # Check that returned history is a copy (different data pointers)
-        assert force_history.data_ptr() != wrapper.history_buffers['force_torque'].data_ptr()
+        assert wrapper.history_buffers["fingertip_pos"].shape == (1, 8, 3)
 
-        # Test getting acceleration buffer
-        acc_history = wrapper.get_component_history('ee_linacc')
-        assert acc_history is not None
-        assert acc_history.shape == (4, 6, 3)
-
-        # Test getting non-existent component
-        no_history = wrapper.get_component_history('nonexistent')
-        assert no_history is None
-
-    def test_integration_full_cycle(self, wrapper_custom):
-        """Test full integration cycle with step and reset."""
-        wrapper = wrapper_custom
-
-        # Initialize
-        wrapper._update_history(reset=True)
-
-        # Simulate several steps
-        for i in range(5):
-            # Change environment state
-            wrapper.unwrapped.robot_force_torque = torch.tensor([[float(i), float(i+1), float(i+2), 0.1*i, 0.1*(i+1), 0.1*(i+2)]] * 4, device='cpu')
-            wrapper.unwrapped.ee_linvel_fd = torch.tensor([[0.1*i, 0.1*(i+1), 0.1*(i+2)]] * 4, device='cpu')
-
-            # Update history
-            wrapper._wrapped_pre_physics_step(torch.zeros(4, 6, device='cpu'))
-
-        # Check that history contains different values
-        force_buffer = wrapper.history_buffers['force_torque']
-        first_step = force_buffer[:, 0, :]
-        last_step = force_buffer[:, -1, :]
-
-        # Should be different (not all the same due to rolling)
-        assert not torch.allclose(first_step, last_step)
-
-        # Check acceleration calculation
-        acc_buffer = wrapper.acceleration_buffers['ee_linacc']
-        assert not torch.all(acc_buffer == 0)
-
-        # Test reset
-        wrapper._wrapped_reset_idx(torch.tensor([0, 1]))
-
-        # After reset, all history steps should have current value
-        force_buffer_after = wrapper.history_buffers['force_torque']
-        first_step_after = force_buffer_after[:, 0, :]
-        last_step_after = force_buffer_after[:, -1, :]
-        torch.testing.assert_close(first_step_after, last_step_after)
-
-    def test_integration_with_observations(self, wrapper_default):
-        """Test integration with observation generation."""
-        wrapper = wrapper_default
-
-        # Mock original get_observations
-        wrapper._original_get_observations = Mock(return_value={
-            "policy": torch.randn(4, 15, device='cpu'),
-            "critic": torch.randn(4, 19, device='cpu')
-        })
-
-        # Initialize and get observations
-        wrapper._update_history(reset=True)
-        obs = wrapper._wrapped_get_observations()
-
-        # Should return observations
-        assert 'policy' in obs
-        assert 'critic' in obs
-        assert obs['policy'].shape[0] == 4
-        assert obs['critic'].shape[0] == 4
-
-
-if __name__ == '__main__':
-    pytest.main([__file__])
+        actions = torch.randn(1, 6)
+        result = wrapper.step(actions)
+        assert len(result) == 5

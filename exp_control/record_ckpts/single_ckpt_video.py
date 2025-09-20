@@ -42,7 +42,7 @@ from skrl.agents.torch.ppo import PPO, PPO_DEFAULT_CONFIG
 from skrl.resources.preprocessors.torch import RunningStandardScaler
 
 #from wrappers.smoothness_obs_wrapper import SmoothnessObservationWrapper
-from wrappers.close_gripper_action_wrapper import GripperCloseEnv
+from wrappers.mechanics.close_gripper_action_wrapper import GripperCloseEnv
 from models.default_mixin import Shared
 #from models.bro_model import BroAgent
 #from wrappers.DMP_observation_wrapper import DMPObservationWrapper

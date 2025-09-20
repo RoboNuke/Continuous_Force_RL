@@ -54,27 +54,37 @@ class HybridForcePositionWrapper(gym.Wrapper):
                 - "base": No hybrid control rewards
                 - "pos_simp": Position-focused force rewards
                 - "wrench_norm": Low wrench magnitude reward
-            ctrl_cfg: HybridCtrlCfg instance. If None, uses defaults.
-            task_cfg: HybridTaskCfg instance. If None, uses defaults.
+            ctrl_cfg: HybridCtrlCfg instance. Must be provided - no defaults.
+            task_cfg: HybridTaskCfg instance. Must be provided - no defaults.
         """
         super().__init__(env)
 
+        # Require explicit configuration - no fallback defaults
+        if ctrl_cfg is None:
+            raise ValueError(
+                "ctrl_cfg cannot be None. Please provide a HybridCtrlCfg instance with "
+                "explicit configuration. Example: ctrl_cfg = HybridCtrlCfg(ema_factor=0.2, ...)"
+            )
+        if task_cfg is None:
+            raise ValueError(
+                "task_cfg cannot be None. Please provide a HybridTaskCfg instance with "
+                "explicit configuration. Example: task_cfg = HybridTaskCfg(force_active_threshold=0.1, ...)"
+            )
+
         if torch_utils is None:
-            # For testing, allow torch_utils to be None and provide fallback behavior
-            import warnings
-            warnings.warn("torch_utils not available. Some functionality may be limited.")
-            # Create fallback torch_utils
-            self._create_torch_utils_fallback()
-        else:
-            self.torch_utils = torch_utils
+            raise ImportError(
+                "torch_utils not available. This wrapper requires Isaac Sim/Lab torch utilities. "
+                "Please ensure Isaac Sim is properly installed and accessible."
+            )
+        self.torch_utils = torch_utils
 
         self.ctrl_torque = ctrl_torque
         self.force_size = 6 if ctrl_torque else 3
         self.reward_type = reward_type
 
-        # Configuration setup
-        self.ctrl_cfg = ctrl_cfg if ctrl_cfg is not None else HybridCtrlCfg()
-        self.task_cfg = task_cfg if task_cfg is not None else HybridTaskCfg()
+        # Store explicit configuration (no fallbacks)
+        self.ctrl_cfg = ctrl_cfg
+        self.task_cfg = task_cfg
 
         # Cache config values for faster access
         self.ema_factor = self.ctrl_cfg.ema_factor
@@ -108,12 +118,13 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Selection matrix for control (derived from target_selection)
         self.sel_matrix = torch.zeros((self.num_envs, 6), device=self.device)
 
-        # Force gains (from config or environment defaults)
-        force_task_gains = self.ctrl_cfg.default_task_force_gains
-        if force_task_gains is None:
-            force_task_gains = getattr(env.unwrapped.cfg.ctrl, 'default_task_force_gains',
-                                     [0.1, 0.1, 0.1, 0.001, 0.001, 0.001])
-        self.kp = torch.tensor(force_task_gains, device=self.device).repeat((self.num_envs, 1))
+        # Force gains (must be explicitly configured)
+        if self.ctrl_cfg.default_task_force_gains is None:
+            raise ValueError(
+                "ctrl_cfg.default_task_force_gains cannot be None. Please provide explicit force gains "
+                "in your HybridCtrlCfg. Example: default_task_force_gains=[0.1, 0.1, 0.1, 0.001, 0.001, 0.001]"
+            )
+        self.kp = torch.tensor(self.ctrl_cfg.default_task_force_gains, device=self.device).repeat((self.num_envs, 1))
 
         # Zero out torque gains if not controlling torques
         if not ctrl_torque:
@@ -165,38 +176,6 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         self._wrapper_initialized = True
 
-    def _create_torch_utils_fallback(self):
-        """Create fallback torch_utils for testing when Isaac Sim is not available."""
-        class FallbackTorchUtils:
-            @staticmethod
-            def get_euler_xyz(quat):
-                """Simple fallback - return zeros."""
-                batch_size = quat.shape[0]
-                device = quat.device
-                return (torch.zeros(batch_size, device=device),
-                       torch.zeros(batch_size, device=device),
-                       torch.zeros(batch_size, device=device))
-
-            @staticmethod
-            def quat_from_angle_axis(angle, axis):
-                """Simple fallback - return identity quaternions."""
-                batch_size = angle.shape[0]
-                device = angle.device
-                return torch.tensor([1.0, 0.0, 0.0, 0.0], device=device).repeat(batch_size, 1)
-
-            @staticmethod
-            def quat_mul(q1, q2):
-                """Simple fallback - return first quaternion."""
-                return q1
-
-            @staticmethod
-            def quat_from_euler_xyz(roll, pitch, yaw):
-                """Simple fallback - return identity quaternions."""
-                batch_size = roll.shape[0]
-                device = roll.device
-                return torch.tensor([1.0, 0.0, 0.0, 0.0], device=device).repeat(batch_size, 1)
-
-        self.torch_utils = FallbackTorchUtils()
 
     def _wrapped_pre_physics_step(self, action):
         """Process actions through goal->target->control flow."""
@@ -266,9 +245,17 @@ class HybridForcePositionWrapper(gym.Wrapper):
         pos_actions = self.unwrapped.actions[:, self.force_size:self.force_size+3] * self.unwrapped.pos_threshold
         pos_goal = self.unwrapped.fingertip_midpoint_pos + pos_actions
 
-        # Enforce position bounds for goal
+        # Enforce position bounds for goal - require explicit configuration
         delta_pos = pos_goal - self.unwrapped.fixed_pos_action_frame
-        pos_bounds = getattr(self.unwrapped.cfg.ctrl, 'pos_action_bounds', [0.05, 0.05, 0.05])
+        if self.ctrl_cfg.pos_action_bounds is None:
+            if not hasattr(self.unwrapped.cfg.ctrl, 'pos_action_bounds'):
+                raise ValueError(
+                    "Position action bounds not configured. Please set ctrl_cfg.pos_action_bounds "
+                    "or ensure environment has cfg.ctrl.pos_action_bounds. Example: pos_action_bounds=[0.05, 0.05, 0.05]"
+                )
+            pos_bounds = self.unwrapped.cfg.ctrl.pos_action_bounds
+        else:
+            pos_bounds = self.ctrl_cfg.pos_action_bounds
         pos_error_clipped = torch.clip(delta_pos, -pos_bounds[0], pos_bounds[1])
         self.pose_goal[:, :3] = self.unwrapped.fixed_pos_action_frame + pos_error_clipped
 
@@ -307,21 +294,54 @@ class HybridForcePositionWrapper(gym.Wrapper):
         min_idx = self.force_size + 6
         max_idx = min_idx + self.force_size
 
-        # Extract force actions and scale by threshold
-        force_threshold = getattr(self.unwrapped.cfg.ctrl, 'force_action_threshold', [10, 10, 10])
+        # Extract force actions and scale by threshold - require explicit configuration
+        if self.ctrl_cfg.force_action_threshold is None:
+            if not hasattr(self.unwrapped.cfg.ctrl, 'force_action_threshold'):
+                raise ValueError(
+                    "Force action threshold not configured. Please set ctrl_cfg.force_action_threshold "
+                    "or ensure environment has cfg.ctrl.force_action_threshold. Example: force_action_threshold=[10, 10, 10]"
+                )
+            force_threshold = self.unwrapped.cfg.ctrl.force_action_threshold
+        else:
+            force_threshold = self.ctrl_cfg.force_action_threshold
         force_delta = self.unwrapped.actions[:, min_idx:max_idx] * force_threshold[0]
 
-        # Add current force to get absolute goal
-        force_bounds = getattr(self.unwrapped.cfg.ctrl, 'force_action_bounds', [50, 50, 50])
+        # Add current force to get absolute goal - require explicit bounds
+        if self.ctrl_cfg.force_action_bounds is None:
+            if not hasattr(self.unwrapped.cfg.ctrl, 'force_action_bounds'):
+                raise ValueError(
+                    "Force action bounds not configured. Please set ctrl_cfg.force_action_bounds "
+                    "or ensure environment has cfg.ctrl.force_action_bounds. Example: force_action_bounds=[50, 50, 50]"
+                )
+            force_bounds = self.unwrapped.cfg.ctrl.force_action_bounds
+        else:
+            force_bounds = self.ctrl_cfg.force_action_bounds
         self.force_goal[:, :3] = torch.clip(
-            force_delta + self.unwrapped.robot_force_torque[:, :3],
+            force_delta[:, :3] + self.unwrapped.robot_force_torque[:, :3],
             -force_bounds[0], force_bounds[0]
         )
 
-        # Handle torque if enabled
+        # Handle torque if enabled - require explicit configuration
         if self.force_size > 3:
-            torque_threshold = getattr(self.unwrapped.cfg.ctrl, 'torque_action_threshold', [0.1, 0.1, 0.1])
-            torque_bounds = getattr(self.unwrapped.cfg.ctrl, 'torque_action_bounds', [0.5, 0.5, 0.5])
+            if self.ctrl_cfg.torque_action_threshold is None:
+                if not hasattr(self.unwrapped.cfg.ctrl, 'torque_action_threshold'):
+                    raise ValueError(
+                        "Torque action threshold not configured for 6DOF control. Please set ctrl_cfg.torque_action_threshold "
+                        "or ensure environment has cfg.ctrl.torque_action_threshold. Example: torque_action_threshold=[0.1, 0.1, 0.1]"
+                    )
+                torque_threshold = self.unwrapped.cfg.ctrl.torque_action_threshold
+            else:
+                torque_threshold = self.ctrl_cfg.torque_action_threshold
+
+            if self.ctrl_cfg.torque_action_bounds is None:
+                if not hasattr(self.unwrapped.cfg.ctrl, 'torque_action_bounds'):
+                    raise ValueError(
+                        "Torque action bounds not configured for 6DOF control. Please set ctrl_cfg.torque_action_bounds "
+                        "or ensure environment has cfg.ctrl.torque_action_bounds. Example: torque_action_bounds=[0.5, 0.5, 0.5]"
+                    )
+                torque_bounds = self.unwrapped.cfg.ctrl.torque_action_bounds
+            else:
+                torque_bounds = self.ctrl_cfg.torque_action_bounds
 
             torque_delta = force_delta[:, 3:] * torque_threshold[0] / force_threshold[0]
             self.force_goal[:, 3:] = torch.clip(

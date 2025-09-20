@@ -1,16 +1,15 @@
 """
-Selective History Observation Wrapper
+Simplified History Observation Wrapper
 
-This wrapper provides selective historical observation tracking, where only specified
-observation components maintain history buffers while others remain current-only.
+This wrapper provides selective historical observation tracking for specified
+observation components, using the environment's configuration to determine
+component dimensions.
 
-Extracted from: obs_factory_env.py
-Key features:
-- Configurable history components
-- Acceleration calculation for specified components
-- History buffer management
-- Observation space resizing for history components
-- Support for force jerk/snap calculations
+Key principles:
+- Uses environment configuration for component dimensions (no hardcoded values)
+- Only tracks history for explicitly specified components
+- No acceleration calculation (unrelated to history tracking)
+- Simple, single-purpose methods
 """
 
 import torch
@@ -23,34 +22,38 @@ class HistoryObservationWrapper(gym.Wrapper):
 
     Features:
     - Only tracks history for specified observation components
+    - Uses environment configuration for component dimensions
     - Configurable history length and sampling
-    - Acceleration calculation for specified components
-    - Maintains original observation structure with expanded tensors
-    - Support for force derivative calculations (jerk, snap)
+    - Simple history buffer management
     """
 
-    def __init__(self, env, history_components=None, history_length=None, history_samples=None, calc_acceleration=False):
+    def __init__(self, env, history_components=None, history_length=None, history_samples=None):
         """
         Initialize history observation wrapper.
 
         Args:
             env: Base environment to wrap
             history_components: List of observation component names to track history for
-                               If None, defaults to common components
+                               Must be explicitly specified (cannot be None)
             history_length: Length of history buffer (if None, uses decimation from config)
             history_samples: Number of samples to keep from history (if None, uses config)
-            calc_acceleration: Whether to calculate acceleration for specified components
         """
         super().__init__(env)
 
-        # Set default history components if not provided
+        # Require explicit history components - no silent defaults
         if history_components is None:
-            history_components = ["force_torque", "ee_linvel", "ee_angvel"]
+            raise ValueError(
+                "history_components cannot be None. Please explicitly specify which observation "
+                "components should track history, e.g., ['force_torque', 'ee_linvel', 'ee_angvel']. "
+                "Use an empty list [] if no history tracking is needed."
+            )
         self.history_components = history_components
+
+        # Validate that all requested components exist in environment configuration
+        self._validate_components()
 
         # Set history parameters
         self.history_length = history_length or getattr(env.unwrapped.cfg, 'decimation', 8)
-        self.calc_acceleration = calc_acceleration
 
         # Configure history sampling
         self.num_samples = history_samples
@@ -68,12 +71,11 @@ class HistoryObservationWrapper(gym.Wrapper):
         self.num_envs = env.unwrapped.num_envs
         self.device = env.unwrapped.device
 
-        # Update observation space dimensions
+        # Update observation space dimensions for history components
         self._update_observation_dimensions()
 
-        # History buffers (will be initialized later)
+        # History buffers (will be initialized when wrapper is activated)
         self.history_buffers = {}
-        self.acceleration_buffers = {}
 
         # Store original methods
         self._original_get_observations = None
@@ -85,189 +87,88 @@ class HistoryObservationWrapper(gym.Wrapper):
         if hasattr(self.unwrapped, '_robot'):
             self._initialize_wrapper()
 
-    def _update_observation_dimensions(self):
-        """Update observation space dimensions for history components using Isaac Lab's native approach."""
+    def _validate_components(self):
+        """Validate that all requested history components exist in environment configuration."""
+        if not self.history_components:
+            return  # Empty list is valid
 
-        # Define default component dimensions
-        component_dims = {
-            "fingertip_pos": 3,
-            "fingertip_pos_rel_fixed": 3,
-            "fingertip_quat": 4,
-            "ee_linvel": 3,
-            "ee_angvel": 3,
-            "force_torque": 6,
-            "held_pos": 3,
-            "held_pos_rel_fixed": 3,
-            "held_quat": 4,
-        }
+        # Get component dimensions from environment configuration
+        component_dims = self._get_component_dimensions_from_config()
 
-        # Try multiple approaches to update dimensions
-        self._update_config_dimensions(component_dims)
-        self._update_environment_spaces(component_dims)
-
-    def _update_config_dimensions(self, component_dims):
-        """Update dimension configurations using multiple fallback approaches."""
-
-        # Approach 1: Try to find and update the environment's own dimension config
-        try:
-            # Get the module that the environment was defined in
-            env_module = self.unwrapped.__class__.__module__
-            if env_module:
-                import importlib
-                module = importlib.import_module(env_module)
-
-                # Look for dimension config dictionaries in the environment's module
-                for attr_name in ['OBS_DIM_CFG', 'STATE_DIM_CFG']:
-                    if hasattr(module, attr_name):
-                        dim_cfg = getattr(module, attr_name)
-                        if isinstance(dim_cfg, dict):
-                            self._apply_history_scaling(dim_cfg, component_dims)
-
-        except (ImportError, AttributeError):
-            pass
-
-        # Approach 2: Try to find Isaac Lab's built-in factory environment config
-        try:
-            from isaaclab.envs.manipulation.factory import factory_env_cfg
-            if hasattr(factory_env_cfg, 'OBS_DIM_CFG'):
-                self._apply_history_scaling(factory_env_cfg.OBS_DIM_CFG, component_dims)
-            if hasattr(factory_env_cfg, 'STATE_DIM_CFG'):
-                self._apply_history_scaling(factory_env_cfg.STATE_DIM_CFG, component_dims)
-        except (ImportError, AttributeError, ModuleNotFoundError):
-            pass
-
-        # Approach 3: Try alternative Isaac Lab paths
-        try:
-            from omni.isaac.lab.envs.manipulation.factory import factory_env_cfg
-            if hasattr(factory_env_cfg, 'OBS_DIM_CFG'):
-                self._apply_history_scaling(factory_env_cfg.OBS_DIM_CFG, component_dims)
-            if hasattr(factory_env_cfg, 'STATE_DIM_CFG'):
-                self._apply_history_scaling(factory_env_cfg.STATE_DIM_CFG, component_dims)
-        except (ImportError, AttributeError, ModuleNotFoundError):
-            pass
-
-        # Approach 4: Create local dimension mapping if environment supports it
-        if hasattr(self.unwrapped, 'cfg'):
-            cfg = self.unwrapped.cfg
-
-            # Update obs_dims/state_dims if they exist
-            for dims_attr in ['obs_dims', 'state_dims']:
-                if hasattr(cfg, dims_attr) or hasattr(self.unwrapped, dims_attr):
-                    dims = getattr(cfg, dims_attr, getattr(self.unwrapped, dims_attr, {}))
-                    self._apply_history_scaling(dims, component_dims)
-
-    def _apply_history_scaling(self, dim_cfg, component_dims):
-        """Apply history scaling to dimension configuration."""
-        if not isinstance(dim_cfg, dict):
-            return
-
-        # Update dimensions for history components
+        # Check that all requested components are available
+        missing_components = []
         for component in self.history_components:
-            if component in dim_cfg:
-                original_dim = dim_cfg[component]
-                dim_cfg[component] = original_dim * self.num_samples
-            elif component in component_dims:
-                # Use default dimension if not in config
-                dim_cfg[component] = component_dims[component] * self.num_samples
+            if component not in component_dims:
+                missing_components.append(component)
 
-        # Add acceleration components if enabled
-        if self.calc_acceleration:
-            for component in self.history_components:
-                if component in ["ee_linvel", "ee_angvel"]:
-                    acc_component = component.replace("vel", "acc")
-                    if component in dim_cfg:
-                        dim_cfg[acc_component] = dim_cfg[component]
-                    elif component in component_dims:
-                        dim_cfg[acc_component] = component_dims[component] * self.num_samples
-                elif component == "force_torque":
-                    if component in dim_cfg:
-                        dim_cfg["force_jerk"] = dim_cfg[component]
-                        dim_cfg["force_snap"] = dim_cfg[component]
-                    elif component in component_dims:
-                        jerk_snap_dim = component_dims[component] * self.num_samples
-                        dim_cfg["force_jerk"] = jerk_snap_dim
-                        dim_cfg["force_snap"] = jerk_snap_dim
+        if missing_components:
+            available_components = list(component_dims.keys())
+            raise ValueError(
+                f"History components {missing_components} not found in environment configuration. "
+                f"Available components: {available_components}"
+            )
 
-    def _update_environment_spaces(self, component_dims):
-        """Update environment observation and state spaces."""
-        if not hasattr(self.unwrapped, 'cfg'):
+    def _get_component_dimensions_from_config(self):
+        """Get component dimensions from environment configuration."""
+        # Require explicit component dimension configuration
+        if not hasattr(self.unwrapped.cfg, 'component_dims'):
+            raise ValueError(
+                "Environment configuration must have 'component_dims' dictionary defining "
+                "dimensions for each observation component. Example: "
+                "cfg.component_dims = {'force_torque': 6, 'ee_linvel': 3, 'fingertip_pos': 3}"
+            )
+
+        component_dims = self.unwrapped.cfg.component_dims
+
+        if not isinstance(component_dims, dict):
+            raise ValueError(
+                "Environment configuration 'component_dims' must be a dictionary mapping "
+                "component names to their dimensions."
+            )
+
+        if not component_dims:
+            raise ValueError(
+                "Environment configuration 'component_dims' cannot be empty. "
+                "Must define dimensions for observation components."
+            )
+
+        return component_dims
+
+    def _update_observation_dimensions(self):
+        """Update observation space dimensions for history components."""
+        if not self.history_components:
             return
 
-        cfg = self.unwrapped.cfg
+        component_dims = self._get_component_dimensions_from_config()
 
-        # Calculate total dimensions based on observation order
-        if hasattr(cfg, 'obs_order'):
-            obs_total = 0
-            for obs_name in cfg.obs_order:
-                if obs_name in self.history_components:
-                    # History component - use scaled dimension
-                    base_dim = component_dims.get(obs_name, 0)
-                    obs_total += base_dim * self.num_samples
-                else:
-                    # Non-history component - use base dimension
-                    obs_total += component_dims.get(obs_name, 0)
-
-            # Add acceleration components
-            if self.calc_acceleration:
+        # Update observation space dimensions
+        try:
+            if hasattr(self.unwrapped.cfg, 'observation_space'):
+                additional_dims = 0
                 for component in self.history_components:
-                    if component in ["ee_linvel", "ee_angvel"]:
-                        acc_component = component.replace("vel", "acc")
-                        if acc_component in cfg.obs_order:
-                            base_dim = component_dims.get(component, 0)
-                            obs_total += base_dim * self.num_samples
-                    elif component == "force_torque":
-                        for jerk_snap in ["force_jerk", "force_snap"]:
-                            if jerk_snap in cfg.obs_order:
-                                base_dim = component_dims.get(component, 0)
-                                obs_total += base_dim * self.num_samples
+                    base_dim = component_dims[component]
+                    # Add (num_samples - 1) * base_dim for history
+                    additional_dims += (self.num_samples - 1) * base_dim
 
-            # Update observation space
-            if hasattr(cfg, 'observation_space'):
-                cfg.observation_space = obs_total
+                self.unwrapped.cfg.observation_space += additional_dims
 
-        # Do the same for state space
-        if hasattr(cfg, 'state_order'):
-            state_total = 0
-            for state_name in cfg.state_order:
-                if state_name in self.history_components:
-                    base_dim = component_dims.get(state_name, 0)
-                    state_total += base_dim * self.num_samples
-                else:
-                    state_total += component_dims.get(state_name, 0)
-
-            # Add acceleration components
-            if self.calc_acceleration:
+            if hasattr(self.unwrapped.cfg, 'state_space'):
+                additional_dims = 0
                 for component in self.history_components:
-                    if component in ["ee_linvel", "ee_angvel"]:
-                        acc_component = component.replace("vel", "acc")
-                        if acc_component in cfg.state_order:
-                            base_dim = component_dims.get(component, 0)
-                            state_total += base_dim * self.num_samples
-                    elif component == "force_torque":
-                        for jerk_snap in ["force_jerk", "force_snap"]:
-                            if jerk_snap in cfg.state_order:
-                                base_dim = component_dims.get(component, 0)
-                                state_total += base_dim * self.num_samples
+                    if component in getattr(self.unwrapped.cfg, 'state_order', []):
+                        base_dim = component_dims[component]
+                        # Add (num_samples - 1) * base_dim for history
+                        additional_dims += (self.num_samples - 1) * base_dim
 
-            # Update state space
-            if hasattr(cfg, 'state_space'):
-                cfg.state_space = state_total
+                self.unwrapped.cfg.state_space += additional_dims
 
-        # Reconfigure gym env spaces
-        if hasattr(self.unwrapped, '_configure_gym_env_spaces'):
-            try:
-                self.unwrapped._configure_gym_env_spaces()
-            except Exception:
-                # Silently continue if reconfiguration fails
-                pass
+        except Exception as e:
+            print(f"Warning: Could not update observation dimensions: {e}")
 
     def _initialize_wrapper(self):
-        """Initialize wrapper by setting up buffers and overriding methods."""
+        """Initialize wrapper by overriding environment methods."""
         if self._wrapper_initialized:
             return
-
-        # Initialize history buffers
-        self._init_history_buffers()
 
         # Store and override methods
         if hasattr(self.unwrapped, '_get_observations'):
@@ -282,235 +183,186 @@ class HistoryObservationWrapper(gym.Wrapper):
             self._original_pre_physics_step = self.unwrapped._pre_physics_step
             self.unwrapped._pre_physics_step = self._wrapped_pre_physics_step
 
+        # Initialize history buffers
+        self._init_history_buffers()
+
         self._wrapper_initialized = True
 
     def _init_history_buffers(self):
         """Initialize history buffers for specified components."""
-        # Map component names to their dimensions
-        component_dims = {
-            "fingertip_pos": 3,
-            "fingertip_pos_rel_fixed": 3,
-            "fingertip_quat": 4,
-            "ee_linvel": 3,
-            "ee_angvel": 3,
-            "force_torque": 6,
-            "held_pos": 3,
-            "held_pos_rel_fixed": 3,
-            "held_quat": 4,
-        }
+        if not self.history_components:
+            return
 
-        # Initialize buffers for each history component
+        component_dims = self._get_component_dimensions_from_config()
+
         for component in self.history_components:
-            if component in component_dims:
-                dim = component_dims[component]
-                self.history_buffers[component] = torch.zeros(
-                    (self.num_envs, self.history_length, dim), device=self.device
-                )
-
-                # Initialize acceleration buffers if needed
-                if self.calc_acceleration:
-                    if component in ["ee_linvel", "ee_angvel"]:
-                        acc_component = component.replace("vel", "acc")
-                        self.acceleration_buffers[acc_component] = torch.zeros(
-                            (self.num_envs, self.history_length, dim), device=self.device
-                        )
-                    elif component == "force_torque":
-                        self.acceleration_buffers["force_jerk"] = torch.zeros(
-                            (self.num_envs, self.history_length, 6), device=self.device
-                        )
-                        self.acceleration_buffers["force_snap"] = torch.zeros(
-                            (self.num_envs, self.history_length, 6), device=self.device
-                        )
+            dim = component_dims[component]
+            self.history_buffers[component] = torch.zeros(
+                (self.num_envs, self.history_length, dim), device=self.device
+            )
 
     def _wrapped_get_observations(self):
-        """Get observations with history for specified components."""
-        # Get original observations
-        original_obs = self._original_get_observations() if self._original_get_observations else {"policy": torch.zeros(0), "critic": torch.zeros(0)}
+        """Get observations with history components."""
+        # Get base observations
+        obs_dict = self._original_get_observations() if self._original_get_observations else {}
 
-        # If original returns dict format, work with that
-        if isinstance(original_obs, dict):
-            return self._process_dict_observations(original_obs)
-        else:
-            # Fallback for other formats
-            return original_obs
+        # Add history for specified components
+        if self.history_components and self.history_buffers:
+            obs_dict.update(self._get_history_observations())
 
-    def _process_dict_observations(self, original_obs):
-        """Process observations in dictionary format."""
-        # Build observation dictionary with history
-        obs_dict, state_dict = self._build_observation_dicts()
+        return obs_dict
 
-        # Concatenate based on configured order
-        if hasattr(self.unwrapped.cfg, 'obs_order'):
-            obs_tensors = []
-            for obs_name in self.unwrapped.cfg.obs_order:
-                if obs_name in obs_dict:
-                    obs_tensors.append(obs_dict[obs_name])
-
-            if obs_tensors:
-                obs_concat = torch.cat(obs_tensors, dim=-1)
-            else:
-                obs_concat = original_obs.get("policy", torch.zeros(self.num_envs, 1, device=self.device))
-        else:
-            obs_concat = original_obs.get("policy", torch.zeros(self.num_envs, 1, device=self.device))
-
-        if hasattr(self.unwrapped.cfg, 'state_order'):
-            state_tensors = []
-            for state_name in self.unwrapped.cfg.state_order:
-                if state_name in state_dict:
-                    state_tensors.append(state_dict[state_name])
-
-            if state_tensors:
-                state_concat = torch.cat(state_tensors, dim=-1)
-            else:
-                state_concat = original_obs.get("critic", torch.zeros(self.num_envs, 1, device=self.device))
-        else:
-            state_concat = original_obs.get("critic", torch.zeros(self.num_envs, 1, device=self.device))
-
-        return {"policy": obs_concat, "critic": state_concat}
-
-    def _build_observation_dicts(self):
-        """Build observation dictionaries with history data."""
-        obs_dict = {}
-        state_dict = {}
-
-        # Get current observations from environment
-        current_obs = self._get_current_observations()
-
-        # Process each observation component
-        for component, data in current_obs.items():
-            if component in self.history_components and component in self.history_buffers:
-                # Use history data
-                history_data = self.history_buffers[component][:, self.keep_idxs, :].view(self.num_envs, -1)
-                obs_dict[component] = history_data
-                state_dict[component] = history_data
-            else:
-                # Use current data
-                obs_dict[component] = data
-                state_dict[component] = data
-
-        # Add acceleration components if enabled
-        if self.calc_acceleration:
-            for acc_component, acc_buffer in self.acceleration_buffers.items():
-                acc_data = acc_buffer[:, self.keep_idxs, :].view(self.num_envs, -1)
-                obs_dict[acc_component] = acc_data
-                state_dict[acc_component] = acc_data
-
-        return obs_dict, state_dict
-
-    def _get_current_observations(self):
-        """Get current observation data from the environment."""
+    def _get_history_observations(self):
+        """Get current observations for history tracking components."""
         obs = {}
 
-        # Get basic observations if available
-        if hasattr(self.unwrapped, 'fingertip_midpoint_pos'):
-            obs["fingertip_pos"] = self.unwrapped.fingertip_midpoint_pos
-
-        if hasattr(self.unwrapped, 'fingertip_midpoint_quat'):
-            obs["fingertip_quat"] = self.unwrapped.fingertip_midpoint_quat
-
-        if hasattr(self.unwrapped, 'ee_linvel_fd'):
-            obs["ee_linvel"] = self.unwrapped.ee_linvel_fd
-
-        if hasattr(self.unwrapped, 'ee_angvel_fd'):
-            obs["ee_angvel"] = self.unwrapped.ee_angvel_fd
-
-        if hasattr(self.unwrapped, 'robot_force_torque'):
-            obs["force_torque"] = self.unwrapped.robot_force_torque
-
-        if hasattr(self.unwrapped, 'held_pos'):
-            obs["held_pos"] = self.unwrapped.held_pos
-
-        if hasattr(self.unwrapped, 'held_quat'):
-            obs["held_quat"] = self.unwrapped.held_quat
-
-        # Add relative positions
-        if hasattr(self.unwrapped, 'fixed_pos_obs_frame'):
-            if "fingertip_pos" in obs:
-                noisy_fixed_pos = self.unwrapped.fixed_pos_obs_frame
-                if hasattr(self.unwrapped, 'init_fixed_pos_obs_noise'):
-                    noisy_fixed_pos = noisy_fixed_pos + self.unwrapped.init_fixed_pos_obs_noise
-                obs["fingertip_pos_rel_fixed"] = obs["fingertip_pos"] - noisy_fixed_pos
-
-            if "held_pos" in obs:
-                obs["held_pos_rel_fixed"] = obs["held_pos"] - self.unwrapped.fixed_pos_obs_frame
+        # Get observations based on environment's configured observation sources
+        for component in self.history_components:
+            if self._has_observation_source(component):
+                obs[component] = self._get_observation_value(component)
 
         return obs
 
-    def _update_history(self, reset=False):
-        """Update history buffers."""
-        current_obs = self._get_current_observations()
+    def _get_component_attr_mapping(self):
+        """Get component to environment attribute mapping from configuration."""
+        # Require explicit component attribute mapping
+        if not hasattr(self.unwrapped.cfg, 'component_attr_map'):
+            raise ValueError(
+                "Environment configuration must have 'component_attr_map' dictionary defining "
+                "mapping from component names to environment attributes. Example: "
+                "cfg.component_attr_map = {'force_torque': 'robot_force_torque', 'ee_linvel': 'ee_linvel_fd'}"
+            )
 
-        for component in self.history_components:
-            if component in self.history_buffers and component in current_obs:
-                if reset:
-                    # Fill entire history with current value
-                    self.history_buffers[component][:, :, :] = current_obs[component][:, None, :]
-                else:
-                    # Roll buffer and add new value
-                    self.history_buffers[component] = torch.roll(self.history_buffers[component], -1, 1)
-                    self.history_buffers[component][:, -1, :] = current_obs[component]
+        component_attr_map = self.unwrapped.cfg.component_attr_map
 
-        # Update acceleration buffers if enabled
-        if self.calc_acceleration:
-            for component in self.history_components:
-                if component in ["ee_linvel", "ee_angvel"]:
-                    acc_component = component.replace("vel", "acc")
-                    if acc_component in self.acceleration_buffers:
-                        if reset:
-                            self.acceleration_buffers[acc_component][:, :, :] = 0
-                        else:
-                            self.acceleration_buffers[acc_component] = torch.roll(
-                                self.acceleration_buffers[acc_component], -1, 1
-                            )
-                            self.acceleration_buffers[acc_component][:, -1, :] = self._finite_difference(
-                                self.history_buffers[component]
-                            )
+        if not isinstance(component_attr_map, dict):
+            raise ValueError(
+                "Environment configuration 'component_attr_map' must be a dictionary mapping "
+                "component names to environment attribute names."
+            )
 
-                elif component == "force_torque" and component in self.history_buffers:
-                    if "force_jerk" in self.acceleration_buffers:
-                        if reset:
-                            self.acceleration_buffers["force_jerk"][:, :, :] = 0
-                            self.acceleration_buffers["force_snap"][:, :, :] = 0
-                        else:
-                            self.acceleration_buffers["force_jerk"] = torch.roll(
-                                self.acceleration_buffers["force_jerk"], -1, 1
-                            )
-                            self.acceleration_buffers["force_jerk"][:, -1, :] = self._finite_difference(
-                                self.history_buffers[component]
-                            )
+        return component_attr_map
 
-                            self.acceleration_buffers["force_snap"] = torch.roll(
-                                self.acceleration_buffers["force_snap"], -1, 1
-                            )
-                            self.acceleration_buffers["force_snap"][:, -1, :] = self._finite_difference(
-                                self.acceleration_buffers["force_jerk"]
-                            )
+    def _has_observation_source(self, component):
+        """Check if environment has the observation source for a component."""
+        component_attr_map = self._get_component_attr_mapping()
+        attr_name = component_attr_map.get(component, component)
+        return hasattr(self.unwrapped, attr_name)
 
-    def _finite_difference(self, history_buffer):
-        """Calculate finite difference for acceleration."""
-        if history_buffer.shape[1] < 2:
-            return torch.zeros_like(history_buffer[:, -1, :])
+    def _get_observation_value(self, component):
+        """Get the observation value for a component."""
+        component_attr_map = self._get_component_attr_mapping()
+        attr_name = component_attr_map.get(component, component)
 
-        dt = getattr(self.unwrapped.cfg.sim, 'dt', 1/120)
-        return (history_buffer[:, -1, :] - history_buffer[:, -2, :]) / dt
+        # Handle special computed components first
+        if component == "fingertip_pos_rel_fixed":
+            return self._get_relative_position("fingertip_pos", "fingertip_midpoint_pos")
+        elif component == "held_pos_rel_fixed":
+            return self._get_relative_position("held_pos", "held_pos")
+
+        # Get basic attribute value
+        if hasattr(self.unwrapped, attr_name):
+            return getattr(self.unwrapped, attr_name)
+        else:
+            raise ValueError(f"Environment attribute '{attr_name}' for component '{component}' not found")
+
+    def _get_relative_position(self, component_name, attr_name):
+        """Get relative position component."""
+        if not hasattr(self.unwrapped, 'fixed_pos_obs_frame'):
+            raise ValueError(f"Cannot compute {component_name}_rel_fixed: fixed_pos_obs_frame not available")
+
+        base_pos = getattr(self.unwrapped, attr_name)
+        fixed_pos = self.unwrapped.fixed_pos_obs_frame
+
+        # Add noise if available
+        if hasattr(self.unwrapped, 'init_fixed_pos_obs_noise'):
+            fixed_pos = fixed_pos + self.unwrapped.init_fixed_pos_obs_noise
+
+        return base_pos - fixed_pos
 
     def _wrapped_reset_idx(self, env_ids):
-        """Reset with history initialization."""
+        """Reset history buffers for specified environments."""
         # Call original reset
         if self._original_reset_idx:
             self._original_reset_idx(env_ids)
 
-        # Reset history buffers
-        self._update_history(reset=True)
+        # Reset history buffers for specified environments
+        if self.history_buffers and len(env_ids) > 0:
+            for buffer in self.history_buffers.values():
+                buffer[env_ids] = 0
 
-    def _wrapped_pre_physics_step(self, action):
-        """Update history during pre-physics step."""
+    def _wrapped_pre_physics_step(self, actions):
+        """Update history buffers before physics step."""
         # Call original pre-physics step
         if self._original_pre_physics_step:
-            self._original_pre_physics_step(action)
+            self._original_pre_physics_step(actions)
 
-        # Update history
-        self._update_history(reset=False)
+        # Update history buffers
+        self._update_history()
+
+    def _update_history(self):
+        """Update history buffers with current observations."""
+        if not self.history_buffers:
+            return
+
+        current_obs = self._get_history_observations()
+
+        for component, obs_value in current_obs.items():
+            if component in self.history_buffers:
+                # Roll buffer (move history back) and add new observation
+                self.history_buffers[component] = torch.roll(
+                    self.history_buffers[component], -1, 1
+                )
+                self.history_buffers[component][:, -1, :] = obs_value
+
+    def get_history_stats(self):
+        """
+        Get statistics about current history buffers.
+
+        Returns:
+            dict: Statistics including:
+                - history_components: List of components being tracked
+                - history_length: Length of history buffer
+                - num_samples: Number of samples kept from history
+                - keep_indices: Indices used for sampling
+                - wrapper_initialized: Whether wrapper is initialized
+                - buffer_count: Number of active history buffers
+                - {component}_buffer_shape: Shape of each component's buffer
+        """
+        stats = {
+            'history_components': self.history_components,
+            'history_length': self.history_length,
+            'num_samples': self.num_samples,
+            'keep_indices': self.keep_idxs.tolist(),
+            'wrapper_initialized': self._wrapper_initialized,
+            'buffer_count': len(self.history_buffers),
+        }
+
+        if self.history_buffers:
+            for component, buffer in self.history_buffers.items():
+                stats[f'{component}_buffer_shape'] = list(buffer.shape)
+
+        return stats
+
+    def get_component_history(self, component):
+        """
+        Get history buffer for a specific component.
+
+        Args:
+            component (str): Name of the component to get history for.
+                           Must be in history_components list.
+
+        Returns:
+            torch.Tensor: Clone of the history buffer for the component.
+                         Shape: (num_envs, history_length, component_dim)
+
+        Raises:
+            ValueError: If component is not found in history buffers.
+        """
+        if component not in self.history_buffers:
+            raise ValueError(f"Component '{component}' not found in history buffers")
+
+        return self.history_buffers[component].clone()
 
     def step(self, action):
         """Step environment and ensure wrapper is initialized."""
@@ -524,24 +376,3 @@ class HistoryObservationWrapper(gym.Wrapper):
         if not self._wrapper_initialized and hasattr(self.unwrapped, '_robot'):
             self._initialize_wrapper()
         return obs, info
-
-    def get_history_stats(self):
-        """Get statistics about history buffers."""
-        stats = {
-            'history_components': self.history_components,
-            'history_length': self.history_length,
-            'num_samples': self.num_samples,
-            'calc_acceleration': self.calc_acceleration,
-            'buffer_count': len(self.history_buffers),
-            'acceleration_buffer_count': len(self.acceleration_buffers),
-        }
-        return stats
-
-    def get_component_history(self, component):
-        """Get history for a specific component."""
-        if component in self.history_buffers:
-            return self.history_buffers[component].clone()
-        elif component in self.acceleration_buffers:
-            return self.acceleration_buffers[component].clone()
-        else:
-            return None

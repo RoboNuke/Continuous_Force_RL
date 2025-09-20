@@ -1,0 +1,273 @@
+# Base Factory Configuration
+# This configuration captures defaults for factory environment training with multi-agent setup
+
+# PRIMARY PARAMETERS (single source of truth)
+primary:
+  agents_per_break_force: 2  # Number of agents per break force condition
+  num_envs_per_agent: 256    # Environments per individual agent
+  break_forces: -1  # Break force conditions (-1 = unbreakable)
+  # Derived: total_agents = len(break_forces) * agents_per_break_force = 5 * 2 = 10 agents
+  # Derived: total_envs = total_agents * num_envs_per_agent = 10 * 256 = 2560 envs
+  episode_length_s: 12.0
+  decimation: 4
+  policy_hz: 15
+  max_steps: 10240000
+  debug_mode: false
+  seed: -1
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_tracker2.txt"
+
+# DEFAULT VALUES (moved from hardcoded constants)
+defaults:
+  task_name: "Isaac-Factory-PegInsert-Local-v0"  # Default Isaac Lab task
+
+# ENVIRONMENT OVERRIDES (Isaac Lab FactoryEnvCfg parameters)
+environment:
+  episode_length_s: ${primary.episode_length_s}
+  decimation: ${primary.decimation}
+  filter_collisions: true
+
+  # History observation wrapper configuration
+  # NOTE: prev_actions dimension is automatically updated by control wrappers:
+  # - Base Isaac Lab action space: 6 (position + rotation)
+  # - HybridForcePositionWrapper: 12 (force-only) or 18 (force+torque)
+  component_dims:
+    fingertip_pos: 3
+    fingertip_pos_rel_fixed: 3
+    fingertip_quat: 4
+    ee_linvel: 3
+    ee_angvel: 3
+    prev_actions: 6                    # Base action size (updated dynamically by control wrappers)
+    force_torque: 6                    # Custom addition for force sensor
+    held_pos: 3                       # Custom addition for held object
+    held_pos_rel_fixed: 3             # Custom addition for held object relative
+    held_quat: 4                      # Custom addition for held object orientation
+
+  component_attr_map:
+    fingertip_pos: "fingertip_midpoint_pos"
+    fingertip_pos_rel_fixed: "fingertip_pos_rel_fixed"  # Added missing mapping
+    fingertip_quat: "fingertip_midpoint_quat"
+    ee_linvel: "ee_linvel_fd"
+    ee_angvel: "ee_angvel_fd"
+    prev_actions: "prev_actions"       # Added missing Isaac Lab component mapping
+    force_torque: "robot_force_torque"
+    held_pos: "held_pos"
+    held_pos_rel_fixed: "held_pos_rel_fixed"  # Added missing mapping
+    held_quat: "held_quat"
+
+  # Factory task configuration (required for factory metrics wrapper)
+  cfg_task:
+    success_threshold: 0.02
+    engage_threshold: 0.05
+    name: "factory_task"  # Used for task-specific logic
+
+  # Control configuration (required for hybrid control wrapper)
+  cfg_ctrl:
+    pos_action_bounds: [0.05, 0.05, 0.05]
+    force_action_bounds: [50.0, 50.0, 50.0]
+    torque_action_bounds: [0.5, 0.5, 0.5]
+    force_action_threshold: [10.0, 10.0, 10.0]
+    torque_action_threshold: [0.1, 0.1, 0.1]
+    default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
+
+# LEARNING CONFIGURATION (PPO + custom parameters)
+learning:
+  # Standard PPO parameters
+  rollouts: null  # Auto-calculated from episode timing
+  learning_epochs: 4
+  mini_batches: null  # Auto-calculated to match rollouts
+  discount_factor: 0.99
+  lambda: 0.95
+  random_timesteps: 0
+  learning_starts: 0
+  mixed_precision: false
+
+  # Custom learning rates (replaces standard learning_rate)
+  policy_learning_rate: 1.0e-6
+  critic_learning_rate: 1.0e-5
+  value_update_ratio: 2
+
+  # Optimizer parameters (moved from hardcoded constants)
+  optimizer:
+    betas: [0.999, 0.999]  # Adam beta parameters
+    eps: 1.0e-8           # Adam epsilon
+    weight_decay: 0       # Adam weight decay
+
+  # Loss and clipping
+  use_huber_value_loss: true
+  grad_norm_clip: 0.5
+  ratio_clip: 0.2
+  clip_predicted_values: false
+  value_clip: 0.2
+  entropy_loss_scale: 0.0
+  value_loss_scale: 1.0
+  kl_threshold: 0.05
+  time_limit_bootstrap: true
+
+  # Reward shaping
+  reward_shaper_type: 'const_scale'
+  rewards_shaper_scale: 0.1
+
+  # Preprocessors
+  state_preprocessor: true
+  value_preprocessor: true
+
+  # Learning rate scheduler
+  learning_rate_scheduler: "KLAdaptiveLR"
+  klAdaptive_lr_scheduler_kwargs:
+    kl_threshold: 0.01
+    min_lr: 1.0e-9
+  linear_warmup_learning_rate_scheduler_kwargs:
+    start_factor: 1.0e-7
+    end_factor: 1.0
+    total_iters: 80
+
+  # Value training
+  random_value_timesteps: 150
+
+# MODEL CONFIGURATION (SimBa architecture parameters)
+model:
+  # Standard model parameters
+  force_encoding: null
+  last_layer_scale: 1.0
+  act_init_std: 1.0
+  critic_output_init_mean: 50
+
+  # Actor architecture (SimBa policy network)
+  actor:
+    n: 1  # Number of SimBa layers
+    latent_size: 256  # Hidden dimension
+
+  # Critic architecture (SimBa value network)
+  critic:
+    n: 3  # Number of SimBa layers
+    latent_size: 1024  # Hidden dimension
+
+  # Hybrid agent configuration (used when use_hybrid_agent is true)
+  use_hybrid_agent: false
+  hybrid_agent:
+    ctrl_torque: false
+    unit_std_init: true
+    pos_init_std: 1.0
+    rot_init_std: 1.0
+    force_init_std: 1.0
+    pos_scale: 1.0
+    rot_scale: 1.0
+    force_scale: 1.0
+    torque_scale: 1.0
+    selection_adjustment_types: 'none'
+    init_scale_weights_factor: 0.1
+    init_bias: -2.5
+    pre_layer_scale_factor: 0.1
+    init_scale_last_layer: true
+    init_layer_scale: 1.0
+    uniform_sampling_rate: 0.0
+
+# WRAPPERS CONFIGURATION (all wrappers with enable/disable and defaults)
+wrappers:
+  # Fragile object behavior
+  fragile_objects:
+    enabled: true
+    break_force: ${primary.break_forces}
+    num_agents: ${derived.total_agents}
+
+  # Efficient environment resetting
+  efficient_reset:
+    enabled: True
+
+  # Force-torque sensor
+  force_torque_sensor:
+    enabled: false
+    use_tanh_scaling: false
+    tanh_scale: 0.03
+
+  # Observation format conversion (Isaac Lab dict -> single tensor)
+  observation_manager:
+    enabled: true
+    merge_strategy: "concatenate"
+
+  # Domain randomization noise
+  observation_noise:
+    enabled: false
+    global_noise_scale: 1.0
+    apply_to_critic: true
+    seed: null
+    noise_groups:
+      fingertip_pos:
+        noise_type: "gaussian"
+        std: 0.01
+        mean: 0.0
+        enabled: true
+        timing: "step"
+      joint_pos:
+        noise_type: "gaussian"
+        std: 0.005
+        mean: 0.0
+        enabled: true
+        timing: "step"
+      ee_linvel:
+        noise_type: "gaussian"
+        std: 0.02
+        mean: 0.0
+        enabled: true
+        timing: "step"
+
+  # Hybrid force-position control
+  hybrid_control:
+    enabled: false
+    ctrl_torque: false
+    reward_type: "simp"
+
+  # Factory-specific metrics tracking
+  factory_metrics:
+    enabled: true
+    num_agents: ${derived.total_agents}
+
+  # Wandb logging with factory metrics
+  wandb_logging:
+    enabled: true
+    wandb_project: "Continuous_Force_RL"
+    wandb_entity: "hur"
+    wandb_name: null
+    wandb_group: null
+    wandb_tags: null
+
+  # Enhanced action logging
+  action_logging:
+    enabled: false
+    track_selection: true
+    track_pos: true
+    track_rot: true
+    track_force: true
+    track_torque: true
+    force_size: 6
+    logging_frequency: 100
+
+# EXPERIMENT CONFIGURATION
+experiment:
+  name: "factory_base"
+  tags: ["baseline", "factory"]
+  group: "factory_experiments"
+  wandb_project: "Continuous_Force_RL"
+  wandb_entity: "hur"
+
+# AGENT CONFIGURATION (additional parameters for MultiWandbLoggerPPO compatibility)
+agent:
+  class: "PPO"
+  agent_is_list: false
+  disable_progressbar: true
+
+  # Checkpoint and experiment tracking
+  track_ckpts: true
+  ckpt_tracker_path: ${primary.ckpt_tracker_path}
+
+  # Experiment logging (will be updated by launch_utils)
+  experiment:
+    directory: "DEFAULT_DIRECTORY"
+    experiment_name: "DEFAULT_EXP_NAME"
+    write_interval: 150  # Will be set by launch_utils
+    checkpoint_interval: 1500  # Will be set by launch_utils
+    project: "OVERRIDE_WITH_ARG"
+    tags: []
+    group: ""
+
+

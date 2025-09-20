@@ -45,6 +45,17 @@ class FactoryMetricsWrapper(gym.Wrapper):
 
         self.envs_per_agent = self.num_envs // self.num_agents
 
+        # Validate that the wandb wrapper is present and has required functions
+        # Check both env.unwrapped and env itself (for wrapper chain)
+        if not (hasattr(self.env.unwrapped, 'add_metrics') or hasattr(self.env, 'add_metrics')):
+            raise ValueError(
+                "Factory Metrics Wrapper requires GenericWandbLoggingWrapper to be applied first. "
+                "The environment must have an 'add_metrics' method. "
+                "Make sure wandb_logging wrapper is enabled and applied before this wrapper."
+            )
+
+        print(f"[INFO]: Factory Metrics Wrapper - Wandb integration validated ✓")
+
         # Initialize tracking variables
         self._init_tracking_variables()
 
@@ -71,6 +82,7 @@ class FactoryMetricsWrapper(gym.Wrapper):
 
         # Smoothness metrics
         self.ep_ssv = torch.zeros((self.num_envs,), device=self.device)  # Sum squared velocity
+        self.ep_ssjv = torch.zeros((self.num_envs,), device=self.device)  # Sum squared joint velocity
 
         # Force/torque metrics (if available)
         self.has_force_data = False
@@ -115,6 +127,7 @@ class FactoryMetricsWrapper(gym.Wrapper):
         self.ep_engaged_length[env_ids] = 0
 
         self.ep_ssv[env_ids] = 0
+        self.ep_ssjv[env_ids] = 0
 
         if self.has_force_data:
             self.ep_max_force[env_ids] = 0
@@ -131,6 +144,11 @@ class FactoryMetricsWrapper(gym.Wrapper):
         # Update smoothness metrics
         if hasattr(self.unwrapped, 'ee_linvel_fd'):
             self.ep_ssv += torch.linalg.norm(self.unwrapped.ee_linvel_fd, axis=1)
+
+        # Update sum squared joint velocity (ssjv) from robot data
+        if hasattr(self.unwrapped, '_robot') and hasattr(self.unwrapped._robot, 'data') and hasattr(self.unwrapped._robot.data, 'joint_vel'):
+            joint_vel = self.unwrapped._robot.data.joint_vel
+            self.ep_ssjv += torch.linalg.norm(joint_vel * joint_vel, axis=1)
 
         # Update force/torque metrics if available
         if self.has_force_data and hasattr(self.unwrapped, 'robot_force_torque'):
@@ -161,23 +179,41 @@ class FactoryMetricsWrapper(gym.Wrapper):
         curr_successes = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         curr_engaged = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
-        # Try to get from environment methods
+        # Try to get from environment methods - require explicit configuration
         if hasattr(self.unwrapped, '_get_curr_successes'):
             try:
-                # This might require specific parameters for different factory tasks
-                success_threshold = getattr(self.unwrapped.cfg_task, 'success_threshold', 0.02)
+                # Require explicit task configuration
+                if not hasattr(self.unwrapped, 'cfg_task'):
+                    raise ValueError(
+                        "Environment must have cfg_task attribute for factory metrics. "
+                        "Please ensure environment configuration includes task parameters."
+                    )
+
+                if not hasattr(self.unwrapped.cfg_task, 'success_threshold'):
+                    raise ValueError(
+                        "Environment cfg_task must have 'success_threshold' parameter. "
+                        "Example: cfg_task.success_threshold = 0.02"
+                    )
+
+                success_threshold = self.unwrapped.cfg_task.success_threshold
                 check_rot = getattr(self.unwrapped.cfg_task, 'name', '') == "nut_thread"
                 curr_successes = self.unwrapped._get_curr_successes(success_threshold, check_rot)
-            except:
-                pass
+            except Exception as e:
+                print(f"Warning: Could not get success status: {e}")
 
         if hasattr(self.unwrapped, '_get_curr_successes'):
             try:
-                # Try to get engagement status
-                engage_threshold = getattr(self.unwrapped.cfg_task, 'engage_threshold', 0.05)
+                # Require explicit engagement threshold
+                if not hasattr(self.unwrapped.cfg_task, 'engage_threshold'):
+                    raise ValueError(
+                        "Environment cfg_task must have 'engage_threshold' parameter for engagement tracking. "
+                        "Example: cfg_task.engage_threshold = 0.05"
+                    )
+
+                engage_threshold = self.unwrapped.cfg_task.engage_threshold
                 curr_engaged = self.unwrapped._get_curr_successes(engage_threshold, False)
-            except:
-                pass
+            except Exception as e:
+                print(f"Warning: Could not get engagement status: {e}")
 
         # Update success tracking
         first_success = torch.logical_and(curr_successes, torch.logical_not(self.ep_succeeded))
@@ -228,6 +264,7 @@ class FactoryMetricsWrapper(gym.Wrapper):
             # Smoothness metrics
             self.unwrapped.extras['smoothness'] = {}
             self.unwrapped.extras['smoothness']['Smoothness / Sum Square Velocity'] = self.ep_ssv
+            self.unwrapped.extras['smoothness']['Smoothness / Sum Square Joint Velocity'] = self.ep_ssjv
 
             # Force/torque metrics if available
             if self.has_force_data:
@@ -240,6 +277,53 @@ class FactoryMetricsWrapper(gym.Wrapper):
                 self.unwrapped.extras['smoothness']['Smoothness / Max Force'] = self.ep_max_force
                 self.unwrapped.extras['smoothness']['Smoothness / Avg Torque'] = self.ep_sum_torque / norm_factor
                 self.unwrapped.extras['smoothness']['Smoothness / Max Torque'] = self.ep_max_torque
+
+    def _collect_factory_metrics(self):
+        """Collect factory metrics for wandb logging."""
+        metrics = {}
+
+        # Check if we should collect metrics (typically on timeout/truncation)
+        should_collect = False
+        if hasattr(self.unwrapped, '_get_dones'):
+            try:
+                _, time_out = self.unwrapped._get_dones()
+                should_collect = torch.any(time_out)
+            except:
+                # Fallback - collect current state metrics only
+                should_collect = False
+
+        # Always provide current engagement and success states
+        if hasattr(self.unwrapped, 'extras') and 'current_engagements' in self.unwrapped.extras:
+            metrics['current_engagements'] = self.unwrapped.extras['current_engagements']
+        if hasattr(self.unwrapped, 'extras') and 'current_successes' in self.unwrapped.extras:
+            metrics['current_successes'] = self.unwrapped.extras['current_successes']
+
+        # Collect episode metrics when episodes complete
+        if should_collect:
+            # Episode metrics
+            metrics['Episode/successes'] = self.ep_succeeded.float()
+            metrics['Episode/success_times'] = self.ep_success_times.float()
+            metrics['Episode/engaged'] = self.ep_engaged.float()
+            metrics['Episode/engage_times'] = self.ep_engaged_times.float()
+            metrics['Episode/engage_lengths'] = self.ep_engaged_length.float()
+
+            # Smoothness metrics
+            metrics['Smoothness/Sum_Square_Velocity'] = self.ep_ssv
+            metrics['Smoothness/Sum_Square_Joint_Velocity'] = self.ep_ssjv
+
+            # Force/torque metrics if available
+            if self.has_force_data:
+                # Calculate averages based on episode length
+                episode_length = getattr(self.unwrapped, 'max_episode_length', 1)
+                decimation = getattr(self.unwrapped.cfg, 'decimation', 1)
+                norm_factor = decimation * episode_length
+
+                metrics['Smoothness/Avg_Force'] = self.ep_sum_force / norm_factor
+                metrics['Smoothness/Max_Force'] = self.ep_max_force
+                metrics['Smoothness/Avg_Torque'] = self.ep_sum_torque / norm_factor
+                metrics['Smoothness/Max_Torque'] = self.ep_max_torque
+
+        return metrics
 
     def get_agent_assignment(self):
         """Get environment indices assigned to each agent."""
@@ -265,6 +349,8 @@ class FactoryMetricsWrapper(gym.Wrapper):
         stats = {
             'avg_ssv': self.ep_ssv.mean().item(),
             'std_ssv': self.ep_ssv.std().item(),
+            'avg_ssjv': self.ep_ssjv.mean().item(),
+            'std_ssjv': self.ep_ssjv.std().item(),
         }
 
         if self.has_force_data:
@@ -289,6 +375,7 @@ class FactoryMetricsWrapper(gym.Wrapper):
             'success_rate': self.ep_succeeded[start_idx:end_idx].float().mean().item(),
             'engagement_rate': self.ep_engaged[start_idx:end_idx].float().mean().item(),
             'avg_ssv': self.ep_ssv[start_idx:end_idx].mean().item(),
+            'avg_ssjv': self.ep_ssjv[start_idx:end_idx].mean().item(),
         }
 
         if self.has_force_data:
@@ -306,22 +393,35 @@ class FactoryMetricsWrapper(gym.Wrapper):
 
         obs, reward, terminated, truncated, info = super().step(action)
 
-        # Copy relevant extras to info for downstream wrappers
-        if hasattr(self.unwrapped, 'extras') and self.unwrapped.extras:
-            # Copy current states that should be available every step
-            for key in ['current_engagements', 'current_successes']:
-                if key in self.unwrapped.extras:
-                    info[key] = self.unwrapped.extras[key]
+        # Check if wandb wrapper is available (check both env.unwrapped and env)
+        add_metrics_target = None
+        if hasattr(self.env.unwrapped, 'add_metrics'):
+            add_metrics_target = self.env.unwrapped
+        elif hasattr(self.env, 'add_metrics'):
+            add_metrics_target = self.env
 
-            # Copy smoothness data if available
-            if 'smoothness' in self.unwrapped.extras:
-                info['smoothness'] = self.unwrapped.extras['smoothness']
+        if add_metrics_target:
+            # Collect factory metrics and send to wandb wrapper
+            factory_metrics = self._collect_factory_metrics()
+            if factory_metrics:
+                add_metrics_target.add_metrics(factory_metrics)
+        else:
+            # Fallback: Copy relevant extras to info for downstream wrappers
+            if hasattr(self.unwrapped, 'extras') and self.unwrapped.extras:
+                # Copy current states that should be available every step
+                for key in ['current_engagements', 'current_successes']:
+                    if key in self.unwrapped.extras:
+                        info[key] = self.unwrapped.extras[key]
 
-            # Copy episode metrics when available
-            for key in ['Episode / successes', 'Episode / success_times', 'Episode / engaged',
-                       'Episode / engage_times', 'Episode / engage_lengths']:
-                if key in self.unwrapped.extras:
-                    info[key] = self.unwrapped.extras[key]
+                # Copy smoothness data if available
+                if 'smoothness' in self.unwrapped.extras:
+                    info['smoothness'] = self.unwrapped.extras['smoothness']
+
+                # Copy episode metrics when available
+                for key in ['Episode / successes', 'Episode / success_times', 'Episode / engaged',
+                           'Episode / engage_times', 'Episode / engage_lengths']:
+                    if key in self.unwrapped.extras:
+                        info[key] = self.unwrapped.extras[key]
 
         return obs, reward, terminated, truncated, info
 

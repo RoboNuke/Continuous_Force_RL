@@ -1,0 +1,79 @@
+# Debug Experiment Configuration
+# Extends base factory configuration with easy mode settings for debugging and development
+
+# Inherit from base configuration
+base: "base/factory_base"
+
+# Override primary parameters for debug mode
+primary:
+  agents_per_break_force: 1  # 1 agent per break force for fast debugging
+  num_envs_per_agent: 128    # Fewer environments for faster iteration
+  break_forces: -1  # Break force condition (-1 = unbreakable)
+  episode_length_s: 10.0  # Shorter episodes for quick feedback
+  max_steps: 2048000  # Fewer steps for quick testing
+  debug_mode: true  # Enable debug mode
+
+# Environment overrides for easy mode (from your original easy mode setup)
+environment:
+  episode_length_s: ${primary.episode_length_s}
+  # Easy mode task settings - these will be applied by launch_utils when debug_mode is true
+  # Based on set_easy_mode in your launch_utils.py
+
+# Learning configuration for faster debugging
+learning:
+  policy_learning_rate: 1.0e-5  # Higher learning rate for faster learning
+  critic_learning_rate: 5.0e-5
+  learning_epochs: 3  # Fewer epochs for faster iterations
+  rollouts: null  # Will be auto-calculated to smaller value due to shorter episodes
+
+  # More aggressive value learning for debug
+  random_value_timesteps: 1500  # More value-only updates (from debug_SimBa_cfg.yaml)
+
+# Model configuration using debug values
+model:
+  critic_output_init_mean: 60  # Higher initial estimate (from debug_SimBa_cfg.yaml)
+
+  # Slightly larger networks for debug visibility
+  actor:
+    latent_size: 256
+  critic:
+    latent_size: 1024
+
+# Wrapper configuration for debugging
+wrappers:
+  # Disable complex wrappers for clean debugging
+  observation_noise:
+    enabled: false  # No noise for clean debugging
+
+  force_torque_sensor:
+    enabled: false  # Keep simple for debugging
+
+  hybrid_control:
+    enabled: false  # Disable complex control for debugging
+
+  # Enable enhanced logging for debugging
+  action_logging:
+    enabled: true
+    track_action_histograms: true
+    track_observation_histograms: true  # Enable obs histograms for debugging
+    logging_frequency: 25  # Frequent logging for debugging
+
+  # Keep metrics tracking for debugging insights
+  factory_metrics:
+    enabled: true
+
+  wandb_logging:
+    enabled: true
+    wandb_project: "Continuous_Force_RL_Debug"  # Separate project for debug runs
+
+# Agent configuration for debugging
+agent:
+  disable_progressbar: false  # Enable progress bar for debugging visibility
+
+# Experiment metadata
+experiment:
+  name: "debug_exp"
+  tags: ["debug", "easy_mode", "development"]
+  group: "debug_experiments"
+  wandb_project: "Continuous_Force_RL_Debug"
+  wandb_entity: "hur"

@@ -29,7 +29,10 @@ except ImportError:
     try:
         from omni.isaac.lab.utils.math import axis_angle_from_quat
     except ImportError:
-        axis_angle_from_quat = None
+        try:
+            from omni.isaac.lab.utils.math import axis_angle_from_quat
+        except ImportError:
+            axis_angle_from_quat = None
 
 
 def compute_pose_task_wrench(

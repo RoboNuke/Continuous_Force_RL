@@ -1,14 +1,14 @@
 """
 Observation Manager Wrapper
 
-This wrapper enforces the standard {"policy": tensor, "critic": tensor} observation format
-and handles observation component composition, noise injection, and observation space validation.
+This wrapper handles Isaac Lab factory environment observations and converts them
+from {"policy": tensor, "critic": tensor} format to single tensor format for SKRL compatibility.
 
 Features:
-- Standard observation format enforcement
-- Observation component composition using obs_order and state_order
-- Noise injection management
-- Dynamic observation space validation
+- Converts factory environment dict observations to single tensor
+- Handles observation component composition using obs_order and state_order
+- Configurable observation merging strategies
+- Clean format conversion without noise injection (use ObservationNoiseWrapper for noise)
 """
 
 import torch
@@ -18,36 +18,59 @@ import numpy as np
 
 class ObservationManagerWrapper(gym.Wrapper):
     """
-    Wrapper that manages observation composition and format standardization.
+    Wrapper that converts Isaac Lab factory environment observations to SKRL-compatible format.
 
-    Features:
-    - Enforces standard {"policy": tensor, "critic": tensor} format
-    - Handles observation component composition
-    - Manages noise injection for observations
-    - Validates observation space consistency
+    The factory environment outputs {"policy": tensor, "critic": tensor} but SKRL and
+    original BlockSimBa models expect single tensor observations. This wrapper handles
+    the conversion with configurable merging strategies.
+
+    Key Features:
+    - Converts Isaac Lab dict observations to single tensor format
+    - Supports multiple merge strategies (concatenate, policy_only, critic_only, average)
+    - Handles observation component composition using env configuration
+    - Validates observation format and provides diagnostic information
+    - Lazy initialization for compatibility with wrapper chains
+
+    Args:
+        env (gym.Env): Base environment to wrap. Should output Isaac Lab format observations.
+        merge_strategy (str): Strategy for merging policy/critic observations:
+            - "concatenate": Concatenate policy and critic observations (default)
+            - "policy_only": Use only policy observations
+            - "critic_only": Use only critic observations
+            - "average": Average policy and critic observations (requires same dimensions)
+
+    Example:
+        >>> env = FactoryEnv()  # Outputs {"policy": tensor, "critic": tensor}
+        >>> wrapped_env = ObservationManagerWrapper(env, merge_strategy="concatenate")
+        >>> obs, info = wrapped_env.reset()
+        >>> # obs is now a single tensor instead of dict
+
+    Note:
+        - Requires environment to have _get_observations method that returns Isaac Lab format
+        - Uses lazy initialization to work with environments that aren't fully initialized
+        - Provides validation methods to check wrapper stack compatibility
     """
 
-    def __init__(self, env, use_obs_noise=False):
+    def __init__(self, env, merge_strategy="concatenate"):
         """
         Initialize observation manager wrapper.
 
         Args:
-            env: Base environment to wrap
-            use_obs_noise: Whether to apply observation noise
+            env (gym.Env): Base environment to wrap. Should have _get_observations method.
+            merge_strategy (str): How to merge policy/critic observations:
+                - "concatenate": Concatenate policy and critic observations (default)
+                - "policy_only": Use only policy observations
+                - "critic_only": Use only critic observations
+                - "average": Average policy and critic observations (same dimensions)
+
+        Raises:
+            ValueError: If environment doesn't have required attributes after initialization.
         """
         super().__init__(env)
 
-        self.use_obs_noise = use_obs_noise
+        self.merge_strategy = merge_strategy
         self.num_envs = env.unwrapped.num_envs
         self.device = env.unwrapped.device
-
-        # Store noise configuration if available
-        self.obs_noise_mean = {}
-        self.obs_noise_std = {}
-        if hasattr(env.unwrapped.cfg, 'obs_noise_mean'):
-            self.obs_noise_mean = env.unwrapped.cfg.obs_noise_mean
-        if hasattr(env.unwrapped.cfg, 'obs_noise_std'):
-            self.obs_noise_std = env.unwrapped.cfg.obs_noise_std
 
         # Store original methods
         self._original_get_observations = None
@@ -70,164 +93,131 @@ class ObservationManagerWrapper(gym.Wrapper):
         self._wrapper_initialized = True
 
     def _wrapped_get_observations(self):
-        """Get observations in standard format with noise injection."""
-        # Get base observations
+        """Get observations and convert to single tensor format for SKRL compatibility."""
+        # Get base observations from factory environment
         obs = self._original_get_observations() if self._original_get_observations else {}
 
-        # Ensure standard format
-        if not isinstance(obs, dict) or "policy" not in obs or "critic" not in obs:
-            obs = self._convert_to_standard_format(obs)
+        # Convert factory dict format to single tensor
+        single_tensor_obs = self._convert_to_single_tensor(obs)
 
-        # Apply noise if enabled
-        if self.use_obs_noise:
-            obs = self._apply_observation_noise(obs)
+        return single_tensor_obs
 
-        # Validate observation format
-        self._validate_observations(obs)
-
-        return obs
-
-    def _convert_to_standard_format(self, obs):
-        """Convert observations to standard {"policy": tensor, "critic": tensor} format."""
+    def _convert_to_single_tensor(self, obs):
+        """Convert factory environment observations to single tensor format."""
         if isinstance(obs, dict) and "policy" in obs and "critic" in obs:
-            # Already in correct format
-            return obs
+            # Factory environment format - merge according to strategy
+            policy_obs = obs["policy"]
+            critic_obs = obs["critic"]
+
+            if self.merge_strategy == "policy_only":
+                return policy_obs
+            elif self.merge_strategy == "critic_only":
+                return critic_obs
+            elif self.merge_strategy == "concatenate":
+                return torch.cat([policy_obs, critic_obs], dim=-1)
+            elif self.merge_strategy == "average":
+                # Only works if policy and critic have same dimensions
+                if policy_obs.shape == critic_obs.shape:
+                    return (policy_obs + critic_obs) / 2.0
+                else:
+                    print(f"Warning: Cannot average different shapes {policy_obs.shape} vs {critic_obs.shape}, using policy only")
+                    return policy_obs
+            else:
+                print(f"Warning: Unknown merge strategy '{self.merge_strategy}', using policy only")
+                return policy_obs
+
         elif isinstance(obs, torch.Tensor):
-            # Single tensor - use for both policy and critic
-            return {"policy": obs, "critic": obs}
+            # Already single tensor
+            return obs
         elif isinstance(obs, dict):
-            # Dict format - try to compose tensors
-            return self._compose_observations_from_dict(obs)
+            # Try to compose from other dict format
+            return self._compose_single_tensor_from_dict(obs)
         else:
             # Unknown format - create zeros
-            return {
-                "policy": torch.zeros((self.num_envs, 1), device=self.device),
-                "critic": torch.zeros((self.num_envs, 1), device=self.device)
-            }
+            print(f"Warning: Unknown observation format {type(obs)}, returning zeros")
+            return torch.zeros((self.num_envs, 1), device=self.device)
 
-    def _compose_observations_from_dict(self, obs_dict):
-        """Compose observations from dictionary format using configured order."""
-        policy_tensors = []
-        critic_tensors = []
+    def _compose_single_tensor_from_dict(self, obs_dict):
+        """Compose single tensor from dictionary format using configured order."""
+        tensors = []
 
-        # Use configured observation order if available
+        # Try to use observation order first
         if hasattr(self.unwrapped.cfg, 'obs_order'):
             for obs_name in self.unwrapped.cfg.obs_order:
                 if obs_name in obs_dict:
                     tensor = obs_dict[obs_name]
                     if isinstance(tensor, torch.Tensor):
-                        policy_tensors.append(tensor)
-
-        # Use configured state order if available
-        if hasattr(self.unwrapped.cfg, 'state_order'):
-            for state_name in self.unwrapped.cfg.state_order:
-                if state_name in obs_dict:
-                    tensor = obs_dict[state_name]
-                    if isinstance(tensor, torch.Tensor):
-                        critic_tensors.append(tensor)
+                        tensors.append(tensor)
 
         # Fallback: use all available tensors if no order specified
-        if not policy_tensors:
-            policy_tensors = [v for v in obs_dict.values() if isinstance(v, torch.Tensor)]
-        if not critic_tensors:
-            critic_tensors = [v for v in obs_dict.values() if isinstance(v, torch.Tensor)]
+        if not tensors:
+            tensors = [v for v in obs_dict.values() if isinstance(v, torch.Tensor)]
 
-        # Concatenate tensors
-        policy_obs = torch.cat(policy_tensors, dim=-1) if policy_tensors else torch.zeros((self.num_envs, 1), device=self.device)
-        critic_obs = torch.cat(critic_tensors, dim=-1) if critic_tensors else torch.zeros((self.num_envs, 1), device=self.device)
+        # Concatenate all tensors
+        if tensors:
+            return torch.cat(tensors, dim=-1)
+        else:
+            return torch.zeros((self.num_envs, 1), device=self.device)
 
-        return {"policy": policy_obs, "critic": critic_obs}
-
-    def _apply_observation_noise(self, obs):
-        """Apply noise to observations."""
-        if not self.use_obs_noise:
-            return obs
-
-        noisy_obs = {}
-        for key, tensor in obs.items():
-            if isinstance(tensor, torch.Tensor):
-                # Apply noise if configuration is available
-                noise_mean = self._get_noise_config(key, 'mean', tensor.shape[-1])
-                noise_std = self._get_noise_config(key, 'std', tensor.shape[-1])
-
-                if noise_std is not None and torch.any(torch.tensor(noise_std) > 0):
-                    noise = torch.randn_like(tensor) * torch.tensor(noise_std, device=self.device)
-                    if noise_mean is not None:
-                        noise += torch.tensor(noise_mean, device=self.device)
-                    noisy_obs[key] = tensor + noise
-                else:
-                    noisy_obs[key] = tensor
-            else:
-                noisy_obs[key] = tensor
-
-        return noisy_obs
-
-    def _get_noise_config(self, obs_key, noise_type, tensor_dim):
-        """Get noise configuration for a specific observation component."""
-        config_dict = self.obs_noise_mean if noise_type == 'mean' else self.obs_noise_std
-
-        # Try direct key lookup
-        if obs_key in config_dict:
-            return config_dict[obs_key]
-
-        # Try to find matching component
-        for config_key, config_value in config_dict.items():
-            if config_key in obs_key or obs_key in config_key:
-                return config_value
-
-        # Default to zeros
-        return [0.0] * tensor_dim
 
     def _validate_observations(self, obs):
-        """Validate observation format and dimensions."""
-        if not isinstance(obs, dict):
-            raise ValueError("Observations must be in dictionary format")
+        """Validate single tensor observation format and dimensions."""
+        if not isinstance(obs, torch.Tensor):
+            raise ValueError("Observations must be a torch.Tensor")
 
-        if "policy" not in obs or "critic" not in obs:
-            raise ValueError("Observations must contain 'policy' and 'critic' keys")
+        if obs.shape[0] != self.num_envs:
+            raise ValueError(f"Observation first dimension must match num_envs ({self.num_envs})")
 
-        for key, tensor in obs.items():
-            if not isinstance(tensor, torch.Tensor):
-                raise ValueError(f"Observation '{key}' must be a torch.Tensor")
-
-            if tensor.shape[0] != self.num_envs:
-                raise ValueError(f"Observation '{key}' first dimension must match num_envs ({self.num_envs})")
-
-            if len(tensor.shape) != 2:
-                raise ValueError(f"Observation '{key}' must be 2D (num_envs, features)")
+        if len(obs.shape) != 2:
+            raise ValueError("Observation must be 2D (num_envs, features)")
 
         # Check for NaN or inf values
-        for key, tensor in obs.items():
-            if torch.isnan(tensor).any():
-                print(f"Warning: NaN values detected in observation '{key}'")
-            if torch.isinf(tensor).any():
-                print(f"Warning: Inf values detected in observation '{key}'")
+        if torch.isnan(obs).any():
+            print("Warning: NaN values detected in observations")
+        if torch.isinf(obs).any():
+            print("Warning: Inf values detected in observations")
 
     def get_observation_info(self):
-        """Get information about current observation format."""
+        """
+        Get information about current observation format.
+
+        Returns:
+            dict: Information about observation format including:
+                - observation: Dict with shape, dtype, device, min, max, mean, std
+                - merge_strategy: Current merge strategy being used
+                - error: Error message if observation retrieval fails
+        """
         try:
-            obs = self.unwrapped._get_observations()
-            if isinstance(obs, dict):
-                info = {}
-                for key, tensor in obs.items():
-                    if isinstance(tensor, torch.Tensor):
-                        info[key] = {
-                            'shape': list(tensor.shape),
-                            'dtype': str(tensor.dtype),
-                            'device': str(tensor.device),
-                            'min': tensor.min().item(),
-                            'max': tensor.max().item(),
-                            'mean': tensor.mean().item(),
-                            'std': tensor.std().item()
-                        }
-                return info
+            obs = self._wrapped_get_observations()
+            if isinstance(obs, torch.Tensor):
+                return {
+                    'observation': {
+                        'shape': list(obs.shape),
+                        'dtype': str(obs.dtype),
+                        'device': str(obs.device),
+                        'min': obs.min().item(),
+                        'max': obs.max().item(),
+                        'mean': obs.mean().item(),
+                        'std': obs.std().item()
+                    },
+                    'merge_strategy': self.merge_strategy
+                }
             else:
-                return {"error": "Observations not in expected dictionary format"}
+                return {"error": f"Observations not in expected tensor format, got {type(obs)}"}
         except Exception as e:
             return {"error": f"Failed to get observation info: {e}"}
 
     def get_observation_space_info(self):
-        """Get information about configured observation spaces."""
+        """
+        Get information about configured observation spaces.
+
+        Returns:
+            dict: Configuration information including:
+                - obs_order: List of observation component names for policy
+                - state_order: List of observation component names for critic
+                - observation_space: Policy observation space size
+                - state_space: Critic observation space size
+        """
         info = {}
 
         if hasattr(self.unwrapped.cfg, 'obs_order'):
@@ -242,35 +232,39 @@ class ObservationManagerWrapper(gym.Wrapper):
         return info
 
     def validate_wrapper_stack(self):
-        """Validate that the wrapper stack is properly configured."""
+        """
+        Validate that the wrapper stack is properly configured.
+
+        Checks that observations can be retrieved and converted properly,
+        and that the base environment produces expected Isaac Lab format.
+
+        Returns:
+            list: List of validation issues found. Empty list means no issues.
+        """
         issues = []
 
-        # Check for required observation components
+        # Check that we can get observations
         try:
-            obs = self.unwrapped._get_observations()
-            if not isinstance(obs, dict):
-                issues.append("Observations not in dictionary format")
-            elif "policy" not in obs or "critic" not in obs:
-                issues.append("Missing 'policy' or 'critic' in observations")
+            obs = self._wrapped_get_observations()
+            if not isinstance(obs, torch.Tensor):
+                issues.append(f"Expected tensor observations, got {type(obs)}")
+            else:
+                self._validate_observations(obs)
         except Exception as e:
-            issues.append(f"Failed to get observations: {e}")
+            issues.append(f"Failed to get or validate observations: {e}")
 
-        # Check observation space configuration
-        if not hasattr(self.unwrapped.cfg, 'obs_order'):
-            issues.append("Missing 'obs_order' in configuration")
-        if not hasattr(self.unwrapped.cfg, 'state_order'):
-            issues.append("Missing 'state_order' in configuration")
-
-        # Check for dimension consistency
+        # Check that base environment produces factory format
         try:
-            if hasattr(self.unwrapped.cfg, 'obs_order'):
-                from envs.factory.factory_env_cfg import OBS_DIM_CFG
-                expected_obs_dim = sum([OBS_DIM_CFG.get(obs, 0) for obs in self.unwrapped.cfg.obs_order])
-                if hasattr(self.unwrapped.cfg, 'observation_space'):
-                    if expected_obs_dim != self.unwrapped.cfg.observation_space:
-                        issues.append(f"Observation space mismatch: expected {expected_obs_dim}, got {self.unwrapped.cfg.observation_space}")
-        except ImportError:
-            issues.append("Could not import OBS_DIM_CFG for validation")
+            base_obs = self._original_get_observations() if self._original_get_observations else None
+            if base_obs is not None:
+                if isinstance(base_obs, dict) and "policy" in base_obs and "critic" in base_obs:
+                    policy_shape = base_obs["policy"].shape
+                    critic_shape = base_obs["critic"].shape
+                    print(f"✓ Factory format detected: policy={policy_shape}, critic={critic_shape}")
+                else:
+                    issues.append("Base environment doesn't produce factory {'policy': tensor, 'critic': tensor} format")
+        except Exception as e:
+            issues.append(f"Failed to check base environment format: {e}")
 
         return issues
 

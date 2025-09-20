@@ -11,9 +11,9 @@ from unittest.mock import Mock
 # Example 1: Basic usage with factory environments
 def example_factory_environment_logging():
     """Example: Using factory metrics wrapper with generic wandb logging."""
-    from wrappers.logging.generic_wandb_wrapper import GenericWandbLoggingWrapper
+    from wrappers.logging.wandb_wrapper import GenericWandbLoggingWrapper
     from wrappers.logging.factory_metrics_wrapper import FactoryMetricsWrapper
-    from wrappers.logging.logging_config import LoggingConfigPresets
+    from configs.config_manager import LoggingConfigPresets
 
     # Create your factory environment
     env = create_factory_environment()  # Your factory env creation
@@ -50,9 +50,9 @@ def example_factory_environment_logging():
 # Example 2: Using configuration files
 def example_config_file_usage():
     """Example: Using YAML configuration for flexible metric tracking."""
-    from wrappers.logging.generic_wandb_wrapper import GenericWandbLoggingWrapper
+    from wrappers.logging.wandb_wrapper import GenericWandbLoggingWrapper
     from wrappers.logging.factory_metrics_wrapper import FactoryMetricsWrapper
-    from wrappers.logging.logging_config import load_config_from_file
+    from configs.config_manager import load_config_from_file
 
     env = create_factory_environment()
 
@@ -69,8 +69,8 @@ def example_config_file_usage():
 # Example 3: Generic wrapper with custom configuration
 def example_generic_wrapper_custom_config():
     """Example: Using generic wrapper with custom metric configuration."""
-    from wrappers.logging.generic_wandb_wrapper import GenericWandbLoggingWrapper
-    from wrappers.logging.logging_config import LoggingConfig, MetricConfig
+    from wrappers.logging.wandb_wrapper import GenericWandbLoggingWrapper
+    from configs.config_manager import LoggingConfig, MetricConfig
 
     env = create_any_environment()  # Any gymnasium environment
 
@@ -101,9 +101,9 @@ def example_generic_wrapper_custom_config():
 # Example 4: Multi-agent factory environment
 def example_multi_agent_factory():
     """Example: Multi-agent factory environment with per-agent logging."""
-    from wrappers.logging.generic_wandb_wrapper import GenericWandbLoggingWrapper
+    from wrappers.logging.wandb_wrapper import GenericWandbLoggingWrapper
     from wrappers.logging.factory_metrics_wrapper import FactoryMetricsWrapper
-    from wrappers.logging.logging_config import LoggingConfigPresets
+    from configs.config_manager import LoggingConfigPresets
 
     # Create environment with multiple agents (e.g., 1024 envs, 4 agents)
     env = create_factory_environment(num_envs=1024)
@@ -137,8 +137,8 @@ def example_multi_agent_factory():
 # Example 5: Locomotion environment with preset configuration
 def example_locomotion_environment():
     """Example: Using locomotion preset for walking/running tasks."""
-    from wrappers.logging.generic_wandb_wrapper import GenericWandbLoggingWrapper
-    from wrappers.logging.logging_config import LoggingConfigPresets
+    from wrappers.logging.wandb_wrapper import GenericWandbLoggingWrapper
+    from configs.config_manager import LoggingConfigPresets
 
     env = create_locomotion_environment()  # Your locomotion env
 
@@ -158,41 +158,14 @@ def example_locomotion_environment():
     env = GenericWandbLoggingWrapper(env, config)
 
 
-# Example 6: Backward compatibility with legacy code
-def example_backward_compatibility():
-    """Example: Using legacy wrapper (deprecated but still works)."""
-    from wrappers.logging.wandb_logging_wrapper import WandbLoggingWrapper
-
-    env = create_factory_environment()
-
-    # Legacy usage still works but shows deprecation warning
-    wandb_config = {
-        'entity': 'your_entity',
-        'project': 'legacy_project',
-        'name': 'legacy_experiment'
-    }
-
-    # This still works but is deprecated
-    env = WandbLoggingWrapper(env, wandb_config)
-
-    # Recommended migration:
-    # from wrappers.logging.generic_wandb_wrapper import GenericWandbLoggingWrapper
-    # from wrappers.logging.factory_metrics_wrapper import FactoryMetricsWrapper
-    # from wrappers.logging.logging_config import LoggingConfigPresets
-    # env = FactoryMetricsWrapper(env)
-    # config = LoggingConfigPresets.factory_config()
-    # config.wandb_entity = wandb_config['entity']
-    # config.wandb_project = wandb_config['project']
-    # config.wandb_name = wandb_config['name']
-    # env = GenericWandbLoggingWrapper(env, config)
 
 
 # Example 7: Advanced configuration with flags
 def example_advanced_factory_config():
     """Example: Advanced factory configuration with custom metrics."""
-    from wrappers.logging.generic_wandb_wrapper import GenericWandbLoggingWrapper
+    from wrappers.logging.wandb_wrapper import GenericWandbLoggingWrapper
     from wrappers.logging.factory_metrics_wrapper import FactoryMetricsWrapper
-    from wrappers.logging.logging_config import LoggingConfigPresets, MetricConfig
+    from configs.config_manager import LoggingConfigPresets, MetricConfig
 
     env = create_factory_environment()
 
@@ -222,8 +195,8 @@ def example_advanced_factory_config():
 # Example 8: Custom metric extraction from environment
 def example_custom_metric_extraction():
     """Example: Environment that provides custom metrics in info dict."""
-    from wrappers.logging.generic_wandb_wrapper import GenericWandbLoggingWrapper
-    from wrappers.logging.logging_config import LoggingConfig, MetricConfig
+    from wrappers.logging.wandb_wrapper import GenericWandbLoggingWrapper
+    from configs.config_manager import LoggingConfig, MetricConfig
 
     class CustomEnvironment:
         """Example environment that provides custom metrics."""
