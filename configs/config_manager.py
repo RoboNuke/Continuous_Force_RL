@@ -71,24 +71,34 @@ class ConfigManager:
         environment = resolved_config.get('environment', {})
         primary = resolved_config.get('primary', {})
 
+        # Isaac Lab attribute name mapping (our config name -> Isaac Lab attribute name)
+        isaac_lab_attr_mapping = {
+            'task': 'task',  # Our 'task' config maps to Isaac Lab's 'task' attribute
+            'ctrl': 'ctrl'   # Our 'ctrl' config maps to Isaac Lab's 'ctrl' attribute
+        }
+
         # Validate critical Isaac Lab configuration objects before applying overrides
-        ConfigManager._validate_isaac_lab_config_objects(env_cfg, environment)
+        ConfigManager._validate_isaac_lab_config_objects(env_cfg, environment, isaac_lab_attr_mapping)
 
         # Apply environment overrides
         for key, value in environment.items():
             # Handle critical Isaac Lab configuration objects specially
             if key in ['task', 'ctrl'] and isinstance(value, dict):
-                existing_config = getattr(env_cfg, key, None)
+                # Map to correct Isaac Lab attribute name
+                isaac_lab_attr = isaac_lab_attr_mapping.get(key, key)
+                existing_config = getattr(env_cfg, isaac_lab_attr, None)
+
                 if existing_config is not None:
-                    print(f"[CONFIG]: Merging {key} parameters into existing Isaac Lab {key} object")
+                    print(f"[CONFIG]: Merging {key} parameters into existing Isaac Lab {isaac_lab_attr} object")
                     for prop_key, prop_value in value.items():
                         if hasattr(existing_config, prop_key):
-                            print(f"[CONFIG]:   Updating {key}.{prop_key}: {getattr(existing_config, prop_key)} -> {prop_value}")
+                            print(f"[CONFIG]:   Updating {isaac_lab_attr}.{prop_key}: {getattr(existing_config, prop_key)} -> {prop_value}")
                         else:
-                            print(f"[CONFIG]:   Adding new {key}.{prop_key} = {prop_value}")
+                            print(f"[CONFIG]:   Adding new {isaac_lab_attr}.{prop_key} = {prop_value}")
                         setattr(existing_config, prop_key, prop_value)
                 else:
-                    print(f"[CONFIG]: WARNING - Isaac Lab {key} object not found, cannot merge {key} parameters")
+                    print(f"[CONFIG]: WARNING - Isaac Lab {isaac_lab_attr} object not found, cannot merge {key} parameters")
+                    # Don't create a fallback object for critical Isaac Lab configs
                 continue
 
             # Log what we're applying for other keys
@@ -125,7 +135,7 @@ class ConfigManager:
                     setattr(env_cfg, key, value)
 
     @staticmethod
-    def _validate_isaac_lab_config_objects(env_cfg, environment_overrides):
+    def _validate_isaac_lab_config_objects(env_cfg, environment_overrides, isaac_lab_attr_mapping):
         """
         Validate that Isaac Lab environment has required configuration objects.
 
@@ -137,6 +147,7 @@ class ConfigManager:
         Args:
             env_cfg: Isaac Lab environment configuration object
             environment_overrides: Dictionary of environment configuration overrides
+            isaac_lab_attr_mapping: Mapping from config key to Isaac Lab attribute name
 
         Raises:
             ValueError: If required configuration objects are missing or invalid
@@ -149,19 +160,22 @@ class ConfigManager:
                            if key in environment_overrides and isinstance(environment_overrides[key], dict)]
 
         for key in keys_to_validate:
-            if not hasattr(env_cfg, key):
+            # Map to correct Isaac Lab attribute name
+            isaac_lab_attr = isaac_lab_attr_mapping.get(key, key)
+
+            if not hasattr(env_cfg, isaac_lab_attr):
                 raise ValueError(
-                    f"Isaac Lab environment configuration is missing required '{key}' attribute. "
-                    f"This suggests the environment was not properly initialized with Isaac Lab defaults. "
-                    f"Cannot safely merge custom configuration."
+                    f"Isaac Lab environment configuration is missing required '{isaac_lab_attr}' attribute "
+                    f"(mapped from config key '{key}'). This suggests the environment was not properly "
+                    f"initialized with Isaac Lab defaults. Cannot safely merge custom configuration."
                 )
 
-            existing_obj = getattr(env_cfg, key)
+            existing_obj = getattr(env_cfg, isaac_lab_attr)
 
             # Check that it's not a plain dictionary (should be a proper config object)
             if isinstance(existing_obj, dict):
                 raise ValueError(
-                    f"Isaac Lab environment '{key}' configuration is a dictionary instead of a proper "
+                    f"Isaac Lab environment '{isaac_lab_attr}' configuration is a dictionary instead of a proper "
                     f"configuration object. This suggests Isaac Lab was not properly loaded. "
                     f"Expected a configclass or similar object with attributes, got: {type(existing_obj)}"
                 )
