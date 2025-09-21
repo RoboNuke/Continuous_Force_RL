@@ -872,6 +872,10 @@ class TestBlockPPOPreprocessing:
         invalid_env.unwrapped = Mock()
         # The Mock automatically has add_metrics as a mock attribute, so we need to delete it
         del invalid_env.unwrapped.add_metrics
+        # Also delete add_metrics from the main env mock since _find_wandb_wrapper checks current_env directly
+        del invalid_env.add_metrics
+        # Ensure env attribute doesn't exist to stop wrapper traversal
+        del invalid_env.env
 
         # This will fail during init due to validation, so we need to catch that
         with pytest.raises(ValueError):

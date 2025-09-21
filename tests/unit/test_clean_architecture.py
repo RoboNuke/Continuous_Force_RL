@@ -34,6 +34,11 @@ class MockCtrlConfig:
     default_task_prop_gains: list = None
     default_task_force_gains: list = None
     pos_action_bounds: list = None
+    # Add extended ctrl attributes for ExtendedCtrlCfg compatibility
+    force_action_bounds: list = None
+    torque_action_bounds: list = None
+    force_action_threshold: list = None
+    torque_action_threshold: list = None
 
     def __post_init__(self):
         if self.default_task_prop_gains is None:
@@ -42,6 +47,14 @@ class MockCtrlConfig:
             self.default_task_force_gains = [0.1, 0.1, 0.1]
         if self.pos_action_bounds is None:
             self.pos_action_bounds = [0.05, 0.05, 0.05]
+        if self.force_action_bounds is None:
+            self.force_action_bounds = [50.0, 50.0, 50.0]
+        if self.torque_action_bounds is None:
+            self.torque_action_bounds = [0.5, 0.5, 0.5]
+        if self.force_action_threshold is None:
+            self.force_action_threshold = [10.0, 10.0, 10.0]
+        if self.torque_action_threshold is None:
+            self.torque_action_threshold = [0.1, 0.1, 0.1]
 
 
 class MockEnvConfig:
@@ -88,7 +101,8 @@ class TestCleanArchitecture:
             },
             'primary': {
                 'break_forces': -1,
-                'debug_mode': False
+                'debug_mode': False,
+                'agents_per_break_force': 2
             },
             'derived': {
                 'total_agents': 2,
@@ -141,7 +155,7 @@ class TestCleanArchitecture:
 
         resolved_config = {
             'environment': {'episode_length_s': 20.0},
-            'primary': {'break_forces': [10.0, 20.0], 'debug_mode': True},
+            'primary': {'break_forces': [10.0, 20.0], 'debug_mode': True, 'agents_per_break_force': 2},
             'derived': {'total_agents': 4, 'total_num_envs': 1024},
             'model': {'use_hybrid_agent': False, 'critic_output_init_mean': 100},
             'wrappers': {'force_torque_sensor': {'enabled': True}},
@@ -166,7 +180,7 @@ class TestCleanArchitecture:
 
         resolved_config = {
             'environment': {},
-            'primary': {'debug_mode': True, 'break_forces': -1},
+            'primary': {'debug_mode': True, 'break_forces': -1, 'agents_per_break_force': 2},
             'derived': {'total_agents': 1, 'total_num_envs': 128},
             'model': {},
             'wrappers': {},
@@ -188,7 +202,7 @@ class TestCleanArchitecture:
 
         resolved_config = {
             'environment': {},
-            'primary': {'break_forces': -1},
+            'primary': {'break_forces': -1, 'agents_per_break_force': 2},
             'derived': {'total_agents': 1, 'total_num_envs': 128},
             'model': {},
             'wrappers': {},
@@ -229,7 +243,7 @@ class TestCleanArchitecture:
             'environment': {
                 'task': {'custom_param': 'test_value'}
             },
-            'primary': {'break_forces': -1},
+            'primary': {'break_forces': -1, 'agents_per_break_force': 2},
             'derived': {'total_agents': 1, 'total_num_envs': 128},
             'model': {},
             'wrappers': {},
