@@ -1384,6 +1384,9 @@ def _configure_hybrid_agent_parameters(env_cfg, agent_cfg, model_config, wrapper
     """Configure hybrid agent initialization parameters."""
 
     # Copy hybrid agent configuration from model config to agent config
+    if 'hybrid_agent' not in agent_cfg['agent']:
+        agent_cfg['agent']['hybrid_agent'] = {}
+
     if 'hybrid_agent' in model_config:
         for key, value in model_config['hybrid_agent'].items():
             agent_cfg['agent']['hybrid_agent'][key] = value
