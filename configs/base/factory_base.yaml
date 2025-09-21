@@ -58,7 +58,7 @@ environment:
   task:
     success_threshold: 0.02
     engage_threshold: 0.05
-    name: "factory_task"  # Used for task-specific logic
+    name: "peg_insert"  # Used for task-specific logic
 
   # Control configuration (will be merged into Isaac Lab's ctrl config)
   ctrl:
