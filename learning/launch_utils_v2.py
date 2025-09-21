@@ -1167,6 +1167,15 @@ def create_block_ppo_agents(env_cfg, agent_cfg, env, models, memory, derived):
     # Update agent_cfg with preprocessor configs
     agent_cfg['agent'].update(preprocessor_configs)
 
+    # Resolve learning rate scheduler from string to actual class
+    if 'learning_rate_scheduler' in agent_cfg['agent']:
+        scheduler_name = agent_cfg['agent']['learning_rate_scheduler']
+        if scheduler_name == "KLAdaptiveLR":
+            agent_cfg['agent']['learning_rate_scheduler'] = KLAdaptiveLR
+            print(f"  - Resolved learning_rate_scheduler: {scheduler_name} -> {KLAdaptiveLR}")
+        else:
+            print(f"  - WARNING: Unknown learning_rate_scheduler: {scheduler_name}")
+
     # Copy experiment configs for checkpoint tracking (needed by BlockPPO)
     agent_exp_cfgs = []
     if 'agent_0' in agent_cfg['agent']:
