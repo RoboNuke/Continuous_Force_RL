@@ -18,7 +18,7 @@ primary:
 
 # DEFAULT VALUES (moved from hardcoded constants)
 defaults:
-  task_name: "Isaac-Factory-PegInsert-Local-v0"  # Default Isaac Lab task
+  task_name: "Isaac-Factory-PegInsert-Direct-v0"  # Default Isaac Lab task
 
 # ENVIRONMENT OVERRIDES (Isaac Lab FactoryEnvCfg parameters)
 environment:
