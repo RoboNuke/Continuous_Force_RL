@@ -90,12 +90,14 @@ class ConfigManager:
 
                 if existing_config is not None:
                     print(f"[CONFIG]: Merging {key} parameters into existing Isaac Lab {isaac_lab_attr} object")
+                    print(f"[CONFIG]: BEFORE - {isaac_lab_attr} type: {type(existing_config)}")
                     for prop_key, prop_value in value.items():
                         if hasattr(existing_config, prop_key):
                             print(f"[CONFIG]:   Updating {isaac_lab_attr}.{prop_key}: {getattr(existing_config, prop_key)} -> {prop_value}")
                         else:
                             print(f"[CONFIG]:   Adding new {isaac_lab_attr}.{prop_key} = {prop_value}")
                         setattr(existing_config, prop_key, prop_value)
+                    print(f"[CONFIG]: AFTER - {isaac_lab_attr} type: {type(existing_config)}")
                 else:
                     print(f"[CONFIG]: WARNING - Isaac Lab {isaac_lab_attr} object not found, cannot merge {key} parameters")
                     # Don't create a fallback object for critical Isaac Lab configs
