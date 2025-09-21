@@ -26,21 +26,8 @@ environment:
   decimation: ${primary.decimation}
   filter_collisions: true
 
-  # History observation wrapper configuration
-  # NOTE: prev_actions dimension is automatically updated by control wrappers:
-  # - Base Isaac Lab action space: 6 (position + rotation)
-  # - HybridForcePositionWrapper: 12 (force-only) or 18 (force+torque)
-  component_dims:
-    fingertip_pos: 3
-    fingertip_pos_rel_fixed: 3
-    fingertip_quat: 4
-    ee_linvel: 3
-    ee_angvel: 3
-    prev_actions: 6                    # Base action size (updated dynamically by control wrappers)
-    force_torque: 6                    # Custom addition for force sensor
-    held_pos: 3                       # Custom addition for held object
-    held_pos_rel_fixed: 3             # Custom addition for held object relative
-    held_quat: 4                      # Custom addition for held object orientation
+  # Observation attribute mapping for Isaac Lab integration
+  # NOTE: Isaac Lab's native OBS_DIM_CFG and STATE_DIM_CFG are now the single source of truth for dimensions
 
   component_attr_map:
     fingertip_pos: "fingertip_midpoint_pos"
@@ -48,11 +35,14 @@ environment:
     fingertip_quat: "fingertip_midpoint_quat"
     ee_linvel: "ee_linvel_fd"
     ee_angvel: "ee_angvel_fd"
+    joint_pos: "joint_pos"            # Robot joint positions
     prev_actions: "prev_actions"       # Added missing Isaac Lab component mapping
     force_torque: "robot_force_torque"
     held_pos: "held_pos"
     held_pos_rel_fixed: "held_pos_rel_fixed"  # Added missing mapping
     held_quat: "held_quat"
+    fixed_pos: "fixed_pos"           # Fixed object position
+    fixed_quat: "fixed_quat"         # Fixed object orientation
 
   # Factory task configuration (will be merged into Isaac Lab's task config)
   task:

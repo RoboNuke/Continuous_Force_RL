@@ -568,18 +568,28 @@ def apply_hybrid_control_wrapper(env, wrapper_config):
 
     # Create configuration objects with environment defaults and wrapper overrides
     env_cfg_ctrl = getattr(env.unwrapped.cfg, 'ctrl', {})
+
+    # Helper function to get attribute from object or dictionary
+    def get_ctrl_attr(obj, attr_name, default=None):
+        if hasattr(obj, attr_name):
+            return getattr(obj, attr_name)
+        elif isinstance(obj, dict):
+            return obj.get(attr_name, default)
+        else:
+            return default
+
     ctrl_cfg = HybridCtrlCfg(
         ema_factor=wrapper_config.get('ema_factor', 0.2),
         no_sel_ema=wrapper_config.get('no_sel_ema', True),
         target_init_mode=wrapper_config.get('target_init_mode', 'zero'),
         default_task_force_gains=wrapper_config.get('default_task_force_gains',
-                                                   env_cfg_ctrl.get('default_task_force_gains', None)),
-        force_action_bounds=env_cfg_ctrl.get('force_action_bounds', None),
-        torque_action_bounds=env_cfg_ctrl.get('torque_action_bounds', None),
-        force_action_threshold=env_cfg_ctrl.get('force_action_threshold', None),
-        torque_action_threshold=env_cfg_ctrl.get('torque_action_threshold', None),
-        pos_action_bounds=env_cfg_ctrl.get('pos_action_bounds', None),
-        rot_action_bounds=env_cfg_ctrl.get('rot_action_bounds', None)
+                                                   get_ctrl_attr(env_cfg_ctrl, 'default_task_force_gains', None)),
+        force_action_bounds=get_ctrl_attr(env_cfg_ctrl, 'force_action_bounds', None),
+        torque_action_bounds=get_ctrl_attr(env_cfg_ctrl, 'torque_action_bounds', None),
+        force_action_threshold=get_ctrl_attr(env_cfg_ctrl, 'force_action_threshold', None),
+        torque_action_threshold=get_ctrl_attr(env_cfg_ctrl, 'torque_action_threshold', None),
+        pos_action_bounds=get_ctrl_attr(env_cfg_ctrl, 'pos_action_bounds', None),
+        rot_action_bounds=get_ctrl_attr(env_cfg_ctrl, 'rot_action_bounds', None)
     )
 
     task_cfg = HybridTaskCfg(

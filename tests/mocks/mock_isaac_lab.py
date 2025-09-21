@@ -319,6 +319,33 @@ from dataclasses import dataclass
 
 configclass = dataclass
 
+# Mock Isaac Lab's native dimension configurations (single source of truth)
+OBS_DIM_CFG = {
+    "fingertip_pos": 3,
+    "fingertip_pos_rel_fixed": 3,
+    "fingertip_quat": 4,
+    "ee_linvel": 3,
+    "ee_angvel": 3,
+}
+
+STATE_DIM_CFG = {
+    "fingertip_pos": 3,
+    "fingertip_pos_rel_fixed": 3,
+    "fingertip_quat": 4,
+    "ee_linvel": 3,
+    "ee_angvel": 3,
+    "joint_pos": 7,
+    "held_pos": 3,
+    "held_pos_rel_fixed": 3,
+    "held_quat": 4,
+    "fixed_pos": 3,
+    "fixed_quat": 4,
+    "task_prop_gains": 6,
+    "ema_factor": 1,
+    "pos_threshold": 3,
+    "rot_threshold": 3,
+}
+
 
 # Environment creation function
 def make_env(task_name, **kwargs):
@@ -343,15 +370,7 @@ class MockEnvConfig:
         self.observation_space = 32
         self.state_space = 48
 
-        # Component dimensions for history and noise wrappers
-        self.component_dims = {
-            "fingertip_pos": 3,
-            "ee_linvel": 3,
-            "ee_angvel": 3,
-            "joint_pos": 7,
-            "fingertip_quat": 4,
-            "force_torque": 6
-        }
+        # Component dimensions now come from Isaac Lab's native OBS_DIM_CFG/STATE_DIM_CFG
 
         # Component attribute mapping for history wrapper
         self.component_attr_map = {

@@ -126,9 +126,8 @@ class TestForceTorqueWrapperSensorSetup:
         wrapper = ForceTorqueWrapper(env)
         # Initialization happens automatically for MockBaseEnv
 
-        # Should add force_torque to component dimensions and attribute map
-        assert 'force_torque' in env.cfg.component_dims
-        assert env.cfg.component_dims['force_torque'] == 6
+        # Should only add force_torque to component attribute map (not component_dims)
+        # Note: component_dims is deprecated - Isaac Lab's OBS_DIM_CFG/STATE_DIM_CFG are the single source of truth
         assert 'force_torque' in env.cfg.component_attr_map
         assert env.cfg.component_attr_map['force_torque'] == 'robot_force_torque'
 

@@ -97,33 +97,22 @@ class ForceTorqueWrapper(gym.Wrapper):
         """
         Update dimension configurations for force-torque sensor integration.
 
-        Requires explicit environment configuration with component_dims and
-        component_attr_map dictionaries to properly integrate force-torque
-        sensor data into the observation pipeline.
+        Uses Isaac Lab's native OBS_DIM_CFG and STATE_DIM_CFG as the single source
+        of truth for observation dimensions. Only updates component_attr_map for
+        attribute mapping when it exists.
 
         Args:
-            env_cfg: Environment configuration object containing component definitions
+            env_cfg: Environment configuration object
 
-        Raises:
-            ValueError: If required configuration dictionaries are missing
+        Note:
+            Force-torque dimensions should already be added to Isaac Lab's dimension
+            dictionaries by factory_runnerv2.py when the sensor is enabled.
         """
-
-        # Check if environment has required configuration
-        if not (hasattr(env_cfg, 'component_dims') and hasattr(env_cfg, 'component_attr_map')):
-            raise ValueError(
-                "Environment configuration must have 'component_dims' and 'component_attr_map' "
-                "for force-torque sensor integration. Please ensure the environment configuration "
-                "includes: component_dims={'force_torque': 6, ...} and "
-                "component_attr_map={'force_torque': 'robot_force_torque', ...}"
-            )
-
-        # Add force_torque to component dimensions if not already present
-        if 'force_torque' not in env_cfg.component_dims:
-            env_cfg.component_dims['force_torque'] = 6
-
-        # Add force_torque attribute mapping if not already present
-        if 'force_torque' not in env_cfg.component_attr_map:
-            env_cfg.component_attr_map['force_torque'] = 'robot_force_torque'
+        # Only update component_attr_map if it exists (for attribute mapping)
+        if hasattr(env_cfg, 'component_attr_map'):
+            # Add force_torque attribute mapping if not already present
+            if 'force_torque' not in env_cfg.component_attr_map:
+                env_cfg.component_attr_map['force_torque'] = 'robot_force_torque'
 
     def _update_gym_spaces(self):
         """

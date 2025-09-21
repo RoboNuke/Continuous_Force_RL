@@ -109,30 +109,27 @@ class HistoryObservationWrapper(gym.Wrapper):
             )
 
     def _get_component_dimensions_from_config(self):
-        """Get component dimensions from environment configuration."""
-        # Require explicit component dimension configuration
-        if not hasattr(self.unwrapped.cfg, 'component_dims'):
+        """Get component dimensions from Isaac Lab's native dimension dictionaries."""
+        try:
+            # Import Isaac Lab's native dimension configurations (single source of truth)
+            try:
+                from isaaclab_tasks.direct.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG
+            except ImportError:
+                from omni.isaac.lab_tasks.direct.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG
+
+            # Combine both observation and state dimensions for comprehensive component tracking
+            # History wrapper needs access to all available components
+            component_dims = {**OBS_DIM_CFG, **STATE_DIM_CFG}
+
+            return component_dims
+
+        except ImportError:
             raise ValueError(
-                "Environment configuration must have 'component_dims' dictionary defining "
-                "dimensions for each observation component. Example: "
-                "cfg.component_dims = {'force_torque': 6, 'ee_linvel': 3, 'fingertip_pos': 3}"
+                "Could not import Isaac Lab's native dimension configurations (OBS_DIM_CFG, STATE_DIM_CFG). "
+                "Please ensure Isaac Lab is properly installed and factory tasks are available. "
+                "The history wrapper requires these configurations as the single source of truth "
+                "for observation component dimensions."
             )
-
-        component_dims = self.unwrapped.cfg.component_dims
-
-        if not isinstance(component_dims, dict):
-            raise ValueError(
-                "Environment configuration 'component_dims' must be a dictionary mapping "
-                "component names to their dimensions."
-            )
-
-        if not component_dims:
-            raise ValueError(
-                "Environment configuration 'component_dims' cannot be empty. "
-                "Must define dimensions for observation components."
-            )
-
-        return component_dims
 
     def _update_observation_dimensions(self):
         """Update observation space dimensions for history components."""

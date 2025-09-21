@@ -137,22 +137,23 @@ class ObservationNoiseWrapper(gym.Wrapper):
         print(f"  - Configured noise groups: {list(self.config.noise_groups.keys())}")
 
     def _load_observation_configs(self) -> tuple:
-        """Load observation dimension configurations - require explicit configuration."""
-        # Check if environment has the required configuration
-        if not (hasattr(self.unwrapped.cfg, 'component_dims') and
-                hasattr(self.unwrapped.cfg, 'component_attr_map')):
+        """Load observation dimension configurations from Isaac Lab's native dictionaries."""
+        try:
+            # Import Isaac Lab's native dimension configurations
+            try:
+                from isaaclab_tasks.direct.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG
+            except ImportError:
+                from omni.isaac.lab_tasks.direct.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG
+
+            return OBS_DIM_CFG, STATE_DIM_CFG
+
+        except ImportError:
             raise ValueError(
-                "Environment configuration must have 'component_dims' and 'component_attr_map' "
-                "for observation noise wrapper. Please ensure the environment configuration includes "
-                "these dictionaries defining observation component dimensions and attribute mappings. "
-                "Example: component_dims={'fingertip_pos': 3, 'ee_linvel': 3, ...}"
+                "Could not import Isaac Lab's native dimension configurations (OBS_DIM_CFG, STATE_DIM_CFG). "
+                "Please ensure Isaac Lab is properly installed and factory tasks are available. "
+                "The observation noise wrapper requires these configurations as the single source of truth "
+                "for observation dimensions."
             )
-
-        # Use environment's explicit configuration
-        component_dims = self.unwrapped.cfg.component_dims
-
-        # For this wrapper, obs and state configs are the same since we use component_dims
-        return component_dims, component_dims
 
     def _build_group_mapping(self, order_attr: str, dim_cfg: Dict[str, int]) -> Dict[str, tuple]:
         """Build mapping from observation groups to tensor indices."""

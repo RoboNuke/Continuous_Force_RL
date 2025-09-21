@@ -185,8 +185,8 @@ class ConfigManager:
                                 setattr(existing_config, prop_key, prop_value)
                     else:
                         # Special handling for configurations that need to remain as dictionaries
-                        # for dynamic access (component_dims, component_attr_map)
-                        if key in ['component_dims', 'component_attr_map']:
+                        # for dynamic access (component_attr_map for Isaac Lab attribute mapping)
+                        if key in ['component_attr_map']:
                             print(f"[CONFIG]: Creating new {key} dictionary configuration")
                             setattr(env_cfg, key, value.copy())
                         else:

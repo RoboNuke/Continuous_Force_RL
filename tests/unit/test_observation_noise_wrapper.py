@@ -15,9 +15,18 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 # Mock modules before imports
-sys.modules['omni.isaac.lab'] = __import__('tests.mocks.mock_isaac_lab', fromlist=[''])
-sys.modules['omni.isaac.lab.envs'] = __import__('tests.mocks.mock_isaac_lab', fromlist=['envs'])
-sys.modules['omni.isaac.lab.utils'] = __import__('tests.mocks.mock_isaac_lab', fromlist=['utils'])
+mock_isaac_lab = __import__('tests.mocks.mock_isaac_lab', fromlist=[''])
+sys.modules['omni.isaac.lab'] = mock_isaac_lab
+sys.modules['omni.isaac.lab.envs'] = mock_isaac_lab
+sys.modules['omni.isaac.lab.utils'] = mock_isaac_lab
+sys.modules['omni.isaac.lab_tasks'] = mock_isaac_lab
+sys.modules['omni.isaac.lab_tasks.direct'] = mock_isaac_lab
+sys.modules['omni.isaac.lab_tasks.direct.factory'] = mock_isaac_lab
+sys.modules['omni.isaac.lab_tasks.direct.factory.factory_env_cfg'] = mock_isaac_lab
+sys.modules['isaaclab_tasks'] = mock_isaac_lab
+sys.modules['isaaclab_tasks.direct'] = mock_isaac_lab
+sys.modules['isaaclab_tasks.direct.factory'] = mock_isaac_lab
+sys.modules['isaaclab_tasks.direct.factory.factory_env_cfg'] = mock_isaac_lab
 
 from wrappers.observations.observation_noise_wrapper import (
     ObservationNoiseWrapper, ObservationNoiseConfig, NoiseGroupConfig,
@@ -144,30 +153,27 @@ class TestObservationNoiseWrapper:
         assert wrapper.config.seed == 42
 
     def test_initialization_missing_config(self):
-        """Test wrapper initialization without required environment config."""
-        # Remove required config
-        delattr(self.base_env.cfg, 'component_dims')
-
-        with pytest.raises(ValueError, match="Environment configuration must have 'component_dims'"):
-            ObservationNoiseWrapper(self.base_env, self.noise_config)
+        """Test wrapper initialization with new architecture."""
+        # This test is no longer applicable as we use Isaac Lab's native configurations
+        # The wrapper will automatically import OBS_DIM_CFG and STATE_DIM_CFG
+        wrapper = ObservationNoiseWrapper(self.base_env, self.noise_config)
+        assert wrapper is not None
 
     def test_load_observation_configs_missing_attr_map(self):
-        """Test loading configs without component_attr_map."""
-        # Remove component_attr_map
-        delattr(self.base_env.cfg, 'component_attr_map')
-
-        with pytest.raises(ValueError, match="Environment configuration must have .* 'component_attr_map'"):
-            ObservationNoiseWrapper(self.base_env, self.noise_config)
+        """Test loading configs with new Isaac Lab architecture."""
+        # This test is no longer applicable as observation noise wrapper
+        # now uses Isaac Lab's native OBS_DIM_CFG and STATE_DIM_CFG
+        wrapper = ObservationNoiseWrapper(self.base_env, self.noise_config)
+        assert wrapper is not None
 
     def test_build_group_mapping_success(self):
         """Test building group mapping successfully."""
         wrapper = ObservationNoiseWrapper(self.base_env, self.noise_config)
 
-        # Check policy mapping
+        # Check policy mapping (joint_pos is only in STATE_DIM_CFG, not OBS_DIM_CFG)
         expected_policy = {
             "fingertip_pos": (0, 3),
             "ee_linvel": (3, 6),
-            "joint_pos": (6, 13)
         }
         assert wrapper.policy_group_mapping == expected_policy
 

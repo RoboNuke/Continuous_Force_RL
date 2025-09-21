@@ -225,25 +225,46 @@ class TestObsDimCfgModificationMocked:
 
     def test_mock_import_failure_handling(self):
         """Test graceful handling when neither import path works."""
-        def mock_add_force_torque_import_failure():
-            wrappers_config = {'force_torque_sensor': {'enabled': True}}
+        # Temporarily remove any Isaac Lab modules that might have been mocked by other tests
+        isaac_modules_to_remove = [
+            'isaaclab_tasks', 'isaaclab_tasks.direct', 'isaaclab_tasks.direct.factory',
+            'isaaclab_tasks.direct.factory.factory_env_cfg',
+            'omni.isaac.lab_tasks', 'omni.isaac.lab_tasks.direct', 'omni.isaac.lab_tasks.direct.factory',
+            'omni.isaac.lab_tasks.direct.factory.factory_env_cfg'
+        ]
 
-            if not wrappers_config.get('force_torque_sensor', {}).get('enabled', False):
-                return False
+        # Store original modules and remove them temporarily
+        original_modules = {}
+        for module_name in isaac_modules_to_remove:
+            if module_name in sys.modules:
+                original_modules[module_name] = sys.modules[module_name]
+                del sys.modules[module_name]
 
-            try:
-                from isaaclab_tasks.direct.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG
-            except ImportError:
+        try:
+            def mock_add_force_torque_import_failure():
+                wrappers_config = {'force_torque_sensor': {'enabled': True}}
+
+                if not wrappers_config.get('force_torque_sensor', {}).get('enabled', False):
+                    return False
+
                 try:
-                    from omni.isaac.lab_tasks.direct.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG
+                    from isaaclab_tasks.direct.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG
                 except ImportError:
-                    return False  # Both imports failed
+                    try:
+                        from omni.isaac.lab_tasks.direct.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG
+                    except ImportError:
+                        return False  # Both imports failed
 
-            return True
+                return True
 
-        # Since we're not mocking the modules, imports should fail
-        result = mock_add_force_torque_import_failure()
-        assert result is False, "Function should return False when imports fail"
+            # Now the imports should fail since we removed the mocked modules
+            result = mock_add_force_torque_import_failure()
+            assert result is False, "Function should return False when imports fail"
+
+        finally:
+            # Restore original modules
+            for module_name, module in original_modules.items():
+                sys.modules[module_name] = module
 
     def test_mock_already_present_dimensions(self):
         """Test behavior when force_torque dimensions are already present."""
