@@ -184,10 +184,16 @@ class ConfigManager:
                                 print(f"[CONFIG]:   Setting {key}.{prop_key} = {prop_value}")
                                 setattr(existing_config, prop_key, prop_value)
                     else:
-                        # No existing config, create a new object from our dictionary
-                        print(f"[CONFIG]: Creating new {key} configuration object")
-                        config_obj = type(f'{key.title()}Config', (), value)()
-                        setattr(env_cfg, key, config_obj)
+                        # Special handling for configurations that need to remain as dictionaries
+                        # for dynamic access (component_dims, component_attr_map)
+                        if key in ['component_dims', 'component_attr_map']:
+                            print(f"[CONFIG]: Creating new {key} dictionary configuration")
+                            setattr(env_cfg, key, value.copy())
+                        else:
+                            # No existing config, create a new object from our dictionary
+                            print(f"[CONFIG]: Creating new {key} configuration object")
+                            config_obj = type(f'{key.title()}Config', (), value)()
+                            setattr(env_cfg, key, config_obj)
                 else:
                     # Set attribute directly (whether it exists or not)
                     setattr(env_cfg, key, value)
