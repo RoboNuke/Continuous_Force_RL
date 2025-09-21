@@ -439,5 +439,100 @@ class TestForceTorqueWrapperUtilityMethods:
         assert torch.all(obs == 0.0)
 
 
+class TestForceTorqueWrapperFactoryObservation:
+    """Test force torque wrapper factory observation injection."""
+
+    def test_wrapped_get_factory_obs_state_dict_with_original(self):
+        """Test wrapped factory obs state dict method with original method."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        # Create mock original method
+        def mock_original():
+            return {
+                'fingertip_pos': torch.randn(env.num_envs, 3),
+                'ee_linvel': torch.randn(env.num_envs, 3),
+            }, {
+                'fingertip_pos': torch.randn(env.num_envs, 3),
+                'joint_pos': torch.randn(env.num_envs, 7),
+            }
+
+        wrapper._original_get_factory_obs_state_dict = mock_original
+
+        obs_dict, state_dict = wrapper._wrapped_get_factory_obs_state_dict()
+
+        # Check that original observations are preserved
+        assert 'fingertip_pos' in obs_dict
+        assert 'ee_linvel' in obs_dict
+        assert 'fingertip_pos' in state_dict
+        assert 'joint_pos' in state_dict
+
+        # Check that force_torque is injected
+        assert 'force_torque' in obs_dict
+        assert 'force_torque' in state_dict
+        assert obs_dict['force_torque'].shape == (env.num_envs, 6)
+        assert state_dict['force_torque'].shape == (env.num_envs, 6)
+
+    def test_wrapped_get_factory_obs_state_dict_without_original(self):
+        """Test wrapped factory obs state dict method without original method."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        # No original method
+        wrapper._original_get_factory_obs_state_dict = None
+
+        obs_dict, state_dict = wrapper._wrapped_get_factory_obs_state_dict()
+
+        # Should only contain force_torque
+        assert 'force_torque' in obs_dict
+        assert 'force_torque' in state_dict
+        assert obs_dict['force_torque'].shape == (env.num_envs, 6)
+        assert state_dict['force_torque'].shape == (env.num_envs, 6)
+
+    def test_wrapped_get_factory_obs_state_dict_without_sensor_data(self):
+        """Test wrapped method when force-torque sensor data is unavailable."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
+
+        # Remove robot_force_torque attribute to simulate unavailable sensor data
+        if hasattr(env, 'robot_force_torque'):
+            delattr(env, 'robot_force_torque')
+
+        def mock_original():
+            return {'original_obs': torch.randn(env.num_envs, 3)}, {'original_state': torch.randn(env.num_envs, 3)}
+
+        wrapper._original_get_factory_obs_state_dict = mock_original
+
+        obs_dict, state_dict = wrapper._wrapped_get_factory_obs_state_dict()
+
+        # Should have original data but no force_torque
+        assert 'original_obs' in obs_dict
+        assert 'original_state' in state_dict
+        assert 'force_torque' not in obs_dict
+        assert 'force_torque' not in state_dict
+
+    def test_method_override_registration(self):
+        """Test that the _get_factory_obs_state_dict method override is properly registered."""
+        env = MockBaseEnv()
+
+        # Add _get_factory_obs_state_dict method to mock env
+        def mock_factory_obs_state_dict():
+            return {}, {}
+
+        env._get_factory_obs_state_dict = mock_factory_obs_state_dict
+
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        # Check that original method is stored
+        assert wrapper._original_get_factory_obs_state_dict is not None
+
+        # Check that method is overridden
+        assert hasattr(env, '_get_factory_obs_state_dict')
+        assert env._get_factory_obs_state_dict == wrapper._wrapped_get_factory_obs_state_dict
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

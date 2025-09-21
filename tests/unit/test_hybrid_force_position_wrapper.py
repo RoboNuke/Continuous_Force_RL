@@ -112,6 +112,7 @@ class MockFactoryEnv(gym.Env):
 
         # Force-torque sensor data
         self.robot_force_torque = torch.zeros((num_envs, 6), device=self.device)
+        self.has_force_torque_sensor = True
 
         # Control targets
         self.ctrl_target_fingertip_midpoint_pos = torch.zeros((num_envs, 3), device=self.device)
@@ -617,6 +618,7 @@ class TestHybridForcePositionWrapper:
         # Restore robot but remove force-torque data
         mock_env._robot = robot
         del mock_env.robot_force_torque
+        del mock_env.has_force_torque_sensor
 
         with pytest.raises(ValueError, match="force-torque sensor data"):
             wrapper._initialize_wrapper()

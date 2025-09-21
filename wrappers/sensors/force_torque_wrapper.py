@@ -57,6 +57,7 @@ class ForceTorqueWrapper(gym.Wrapper):
         self._original_compute_intermediate_values = None
         self._original_reset_buffers = None
         self._original_pre_physics_step = None
+        self._original_get_factory_obs_state_dict = None
         self.unwrapped.has_force_torque_sensor = True
         # Initialize after the base environment is ready
         if hasattr(self.unwrapped, '_robot'):
@@ -161,6 +162,10 @@ class ForceTorqueWrapper(gym.Wrapper):
         if hasattr(self.unwrapped, '_pre_physics_step'):
             self._original_pre_physics_step = self.unwrapped._pre_physics_step
             self.unwrapped._pre_physics_step = self._wrapped_pre_physics_step
+
+        if hasattr(self.unwrapped, '_get_factory_obs_state_dict'):
+            self._original_get_factory_obs_state_dict = self.unwrapped._get_factory_obs_state_dict
+            self.unwrapped._get_factory_obs_state_dict = self._wrapped_get_factory_obs_state_dict
 
         # Initialize force-torque sensor
         self._init_force_torque_sensor()
@@ -277,6 +282,33 @@ class ForceTorqueWrapper(gym.Wrapper):
         # Call original pre-physics step
         if self._original_pre_physics_step:
             self._original_pre_physics_step(action)
+
+    def _wrapped_get_factory_obs_state_dict(self):
+        """
+        Get factory observation and state dictionaries with force-torque data injected.
+
+        This method wraps the environment's original _get_factory_obs_state_dict method
+        and injects the force-torque sensor readings into both observation and state
+        dictionaries. This ensures that when the factory environment constructs
+        obs_tensors using obs_order, the force_torque observation is available.
+
+        Returns:
+            tuple: (obs_dict, state_dict) with force_torque data added to both dictionaries
+        """
+        # Call original method to get base observation and state dictionaries
+        if self._original_get_factory_obs_state_dict:
+            obs_dict, state_dict = self._original_get_factory_obs_state_dict()
+        else:
+            # Fallback to empty dictionaries if no original method
+            obs_dict, state_dict = {}, {}
+
+        # Inject force-torque observation if available
+        if hasattr(self.unwrapped, 'robot_force_torque'):
+            force_torque_obs = self.get_force_torque_observation()
+            obs_dict['force_torque'] = force_torque_obs
+            state_dict['force_torque'] = force_torque_obs
+
+        return obs_dict, state_dict
 
     def step(self, action):
         """Step the environment and ensure wrapper is initialized."""
