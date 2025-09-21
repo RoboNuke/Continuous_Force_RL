@@ -36,7 +36,8 @@ class BlockPPO(PPO):
             raise ValueError("env parameter is required for BlockPPO. Must pass environment with wrapper system.")
 
         ## VALIDATE WRAPPER INTEGRATION ##
-        if not hasattr(env, 'unwrapped') or not hasattr(env.unwrapped, 'add_metrics'):
+        wandb_wrapper = self._find_wandb_wrapper(env)
+        if wandb_wrapper is None:
             raise ValueError("Environment must have GenericWandbLoggingWrapper with add_metrics method.")
 
         self.env = env  ## STORE ENVIRONMENT FOR WRAPPER ACCESS ##
@@ -94,6 +95,20 @@ class BlockPPO(PPO):
         else:
             self.memory = memory
             self.secondary_memories = []
+
+    def _find_wandb_wrapper(self, env):
+        """Find GenericWandbLoggingWrapper in the environment wrapper chain."""
+        current_env = env
+        while hasattr(current_env, 'env'):
+            if hasattr(current_env, 'add_metrics'):
+                return current_env
+            current_env = current_env.env
+
+        # Check the final environment too
+        if hasattr(current_env, 'add_metrics'):
+            return current_env
+
+        return None
 
     def init(self, trainer_cfg: Optional[Mapping[str, Any]] = None) -> None:
 
