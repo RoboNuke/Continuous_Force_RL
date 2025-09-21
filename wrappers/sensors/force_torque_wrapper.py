@@ -57,7 +57,7 @@ class ForceTorqueWrapper(gym.Wrapper):
         self._original_compute_intermediate_values = None
         self._original_reset_buffers = None
         self._original_pre_physics_step = None
-
+        self.unwrapped.has_force_torque_sensor = True
         # Initialize after the base environment is ready
         if hasattr(self.unwrapped, '_robot'):
             self._initialize_wrapper()

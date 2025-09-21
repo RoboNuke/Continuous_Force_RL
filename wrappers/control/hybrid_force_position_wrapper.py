@@ -162,8 +162,8 @@ class HybridForcePositionWrapper(gym.Wrapper):
         current_env = self.env
 
         while current_env is not None:
-            if hasattr(current_env, 'robot_force_torque'):
-                force_torque_found = True
+            if hasattr(current_env, 'has_force_torque_sensor'):
+                force_torque_found = current_env.has_force_torque_sensor
                 break
             # Move up the wrapper chain
             if hasattr(current_env, 'env'):
