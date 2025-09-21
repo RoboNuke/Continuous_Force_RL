@@ -76,6 +76,7 @@ except ImportError:
 
 # Load configuration system
 from configs.config_manager import ConfigManager
+from configs.isaac_lab_extensions.ctrl_cfg import ExtendedCtrlCfg
 
 # seed for reproducibility - set once globally
 if args_cli.seed == -1:
@@ -164,6 +165,24 @@ def main():
         if hasattr(env_spec, 'kwargs') and 'env_cfg_entry_point' in env_spec.kwargs:
             # Use the default configuration from the task
             env_cfg = env_spec.kwargs['env_cfg_entry_point']()
+
+            # Replace the ctrl config with our extended version
+            print(f"[DEBUG]: Replacing ctrl config with ExtendedCtrlCfg")
+            original_ctrl = env_cfg.ctrl
+            extended_ctrl = ExtendedCtrlCfg()
+
+            # Copy all existing ctrl values to our extended config
+            for attr_name in dir(original_ctrl):
+                if not attr_name.startswith('_') and hasattr(extended_ctrl, attr_name):
+                    original_value = getattr(original_ctrl, attr_name)
+                    if not callable(original_value):
+                        setattr(extended_ctrl, attr_name, original_value)
+                        print(f"[DEBUG]:   Copied {attr_name}: {original_value}")
+
+            # Replace the ctrl config
+            env_cfg.ctrl = extended_ctrl
+            print(f"[DEBUG]: Successfully replaced ctrl with ExtendedCtrlCfg")
+
             print(f"[DEBUG]: Successfully loaded Isaac Lab config")
             print(f"[DEBUG]: Has obs_order: {hasattr(env_cfg, 'obs_order')}")
             print(f"[DEBUG]: Has state_order: {hasattr(env_cfg, 'state_order')}")

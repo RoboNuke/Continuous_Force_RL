@@ -157,10 +157,12 @@ class ConfigManager:
                     print(f"[CONFIG]: Merging {key} parameters into existing Isaac Lab {isaac_lab_attr} object")
                     for prop_key, prop_value in value.items():
                         if hasattr(existing_config, prop_key):
-                            print(f"[CONFIG]:   Updating {isaac_lab_attr}.{prop_key}: {getattr(existing_config, prop_key)} -> {prop_value}")
+                            old_value = getattr(existing_config, prop_key)
+                            print(f"[CONFIG]:   Updating {isaac_lab_attr}.{prop_key}: {old_value} -> {prop_value}")
+                            setattr(existing_config, prop_key, prop_value)
                         else:
-                            print(f"[CONFIG]:   Adding new {isaac_lab_attr}.{prop_key} = {prop_value}")
-                        setattr(existing_config, prop_key, prop_value)
+                            print(f"[CONFIG]:   WARNING: {isaac_lab_attr}.{prop_key} not found in ExtendedCtrlCfg - skipping")
+                            # With ExtendedCtrlCfg, all attributes should exist, so this is unexpected
                 else:
                     print(f"[CONFIG]: WARNING - Isaac Lab {isaac_lab_attr} object not found, cannot merge {key} parameters")
                 continue
