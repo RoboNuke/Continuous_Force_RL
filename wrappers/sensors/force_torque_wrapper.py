@@ -214,6 +214,7 @@ class ForceTorqueWrapper(gym.Wrapper):
         self.unwrapped.robot_force_torque = torch.zeros(
             (num_envs, 6), dtype=torch.float32, device=device
         )
+        print("\n\n\nForce torque data defined\n\n\n")
 
 
     def _wrapped_compute_intermediate_values(self, dt):
