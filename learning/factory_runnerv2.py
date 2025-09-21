@@ -203,6 +203,15 @@ def main():
     print("[INFO]: Step 1 - Applying basic configuration")
     ConfigManager.apply_to_isaac_lab(env_cfg, agent_cfg, resolved_config)
 
+    # Debug: Print environment configuration with color coding
+    ConfigManager.print_env_config(env_cfg)
+
+    # Debug: Print task and control configs if they exist
+    if hasattr(env_cfg, 'cfg_task'):
+        ConfigManager.print_task_config(env_cfg.cfg_task)
+    if hasattr(env_cfg, 'cfg_ctrl'):
+        ConfigManager.print_control_config(env_cfg.cfg_ctrl)
+
     # Step 1.5: Validate factory configuration
     print("[INFO]: Step 1.5 - Validating factory configuration")
     lUtils.validate_factory_configuration(env_cfg)
@@ -244,6 +253,9 @@ def main():
 
     # Step 8: Agent configuration (learning parameters now in agent section)
     print("[INFO]: Step 8 - Agent configuration ready (SKRL parameters included)")
+
+    # Debug: Print agent configuration with color coding
+    ConfigManager.print_agent_config(agent_cfg)
 
     # Step 9: Apply model configuration
     print("[INFO]: Step 9 - Applying model configuration")

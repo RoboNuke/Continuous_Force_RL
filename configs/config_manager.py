@@ -306,19 +306,19 @@ class ConfigManager:
         """Print environment configuration with color-coded source tracking."""
         from learning.config_printer import print_config
         ConfigManager._print_color_legend()
-        print_config("Environment Configuration", env_cfg, color_map=ConfigManager._config_sources)
+        print_config("Environment Configuration", env_cfg, color_map=ConfigManager._config_sources, path_prefix="environment")
 
     @staticmethod
     def print_agent_config(agent_cfg: Any) -> None:
         """Print agent configuration with color-coded source tracking."""
         from learning.config_printer import print_config
-        print_config("Agent Configuration", agent_cfg, color_map=ConfigManager._config_sources)
+        print_config("Agent Configuration", agent_cfg, color_map=ConfigManager._config_sources, path_prefix="agent")
 
     @staticmethod
     def print_model_config(model_cfg: Any) -> None:
         """Print model configuration with color-coded source tracking."""
         from learning.config_printer import print_config
-        print_config("Model Configuration", model_cfg, color_map=ConfigManager._config_sources)
+        print_config("Model Configuration", model_cfg, color_map=ConfigManager._config_sources, path_prefix="primary")
 
     @staticmethod
     def print_task_config(task_cfg: Any) -> None:
