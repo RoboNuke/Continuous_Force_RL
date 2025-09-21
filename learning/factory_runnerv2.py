@@ -110,8 +110,45 @@ print(f"  - Rollout steps: {derived['rollout_steps']}")
 
 print("\n\nImports complete\n\n")
 
+def add_force_torque_to_isaaclab_configs():
+    """Add force-torque dimensions to IsaacLab configuration dictionaries if force-torque sensor is enabled."""
+    if not wrappers_config.get('force_torque_sensor', {}).get('enabled', False):
+        print("[INFO]: Force-torque sensor not enabled, skipping dimension config modification")
+        return False
+
+    try:
+        from isaaclab_tasks.direct.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG
+        print("[INFO]: Imported IsaacLab factory configs from isaaclab_tasks (v2.0.0+)")
+    except ImportError:
+        try:
+            from omni.isaac.lab_tasks.direct.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG
+            print("[INFO]: Imported IsaacLab factory configs from omni.isaac.lab_tasks (v1.4.1)")
+        except ImportError:
+            print("[WARNING]: Could not import IsaacLab factory configs - force-torque sensor may cause dimension mismatch")
+            return False
+
+    # Add force-torque dimensions if not already present
+    modified = False
+    if 'force_torque' not in OBS_DIM_CFG:
+        OBS_DIM_CFG['force_torque'] = 6
+        modified = True
+        print("[INFO]: Added 'force_torque: 6' to OBS_DIM_CFG")
+
+    if 'force_torque' not in STATE_DIM_CFG:
+        STATE_DIM_CFG['force_torque'] = 6
+        modified = True
+        print("[INFO]: Added 'force_torque: 6' to STATE_DIM_CFG")
+
+    if not modified:
+        print("[INFO]: Force-torque dimensions already present in IsaacLab configs")
+
+    return True
+
 def main():
     """Main training function using our configuration system instead of Hydra."""
+
+    # Add force-torque dimensions to IsaacLab configs if needed
+    add_force_torque_to_isaaclab_configs()
 
     # Create Isaac Lab environment configuration
     # We'll create a basic ManagerBasedRLEnvCfg and then apply our configuration to it
