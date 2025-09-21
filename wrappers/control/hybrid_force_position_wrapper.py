@@ -158,8 +158,17 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         # Check for required force-torque data
         if not hasattr(self.unwrapped, 'robot_force_torque'):
-            raise ValueError("Hybrid force-position control requires force-torque sensor data. "
-                           "Please apply ForceTorqueWrapper first.")
+            raise ValueError(
+                "ERROR: Hybrid force-position control requires force-torque sensor data.\n"
+                "\n"
+                "SOLUTION: Enable the force-torque sensor in your configuration file:\n"
+                "  wrappers:\n"
+                "    force_torque_sensor:\n"
+                "      enabled: true\n"
+                "\n"
+                "The ForceTorqueWrapper must be enabled and applied before HybridForcePositionWrapper.\n"
+                "This is a required dependency that must be explicitly configured."
+            )
 
         # Store and override methods
         if hasattr(self.unwrapped, '_pre_physics_step'):
