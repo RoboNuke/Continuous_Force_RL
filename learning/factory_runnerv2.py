@@ -207,83 +207,36 @@ def main():
 
     print("Ckpt Path:", derived.get('ckpt_tracker_path', "/nfs/stak/users/brownhun/ckpt_tracker2.txt"))
 
-    # Step 1: Apply basic configuration to Isaac Lab configs
-    print("[INFO]: Step 1 - Applying basic configuration")
-    ConfigManager.apply_to_isaac_lab(env_cfg, agent_cfg, resolved_config)
+    # ===== STEP 1: COMPLETE CONFIGURATION =====
+    # All configuration happens here - no other steps should modify config objects
+    print("[INFO]: Step 1 - Applying complete configuration")
+    ConfigManager.apply_complete_configuration(env_cfg, agent_cfg, resolved_config)
 
-    # Debug: Print environment configuration with color coding
+    # Debug: Print configurations
     ConfigManager.print_env_config(env_cfg)
+    ConfigManager.print_agent_config(agent_cfg)
 
-    # Debug: Print task and control configs if they exist
-    if hasattr(env_cfg, 'cfg_task'):
-        ConfigManager.print_task_config(env_cfg.cfg_task)
-    if hasattr(env_cfg, 'cfg_ctrl'):
-        ConfigManager.print_control_config(env_cfg.cfg_ctrl)
-
-    # Step 1.5: Validate factory configuration
+    # Validate factory configuration
     print("[INFO]: Step 1.5 - Validating factory configuration")
     lUtils.validate_factory_configuration(env_cfg)
 
-    # Set device from configuration or default to cuda if available
-    if hasattr(env_cfg, 'sim') and hasattr(env_cfg.sim, 'device'):
-        if env_cfg.sim.device is None:
-            env_cfg.sim.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    else:
-        # If sim config doesn't exist, create it
-        env_cfg.sim = type('SimConfig', (), {'device': 'cuda' if torch.cuda.is_available() else 'cpu'})()
-
-    # Step 2: Set break forces and agent distribution
-    print("[INFO]: Step 2 - Setting break forces and agent distribution")
-    env_cfg.break_force = primary['break_forces']
-    agent_cfg['agent']['break_force'] = primary['break_forces']
-
-    # Step 3: Apply easy mode if debug enabled
-    if primary.get('debug_mode', False):
-        print("[INFO]: Step 3 - Applying easy mode for debug")
-        lUtils.apply_easy_mode(env_cfg, agent_cfg)
-
-    # Step 4: Set environment scene configuration
-    print("[INFO]: Step 4 - Setting environment scene configuration")
-    lUtils.configure_environment_scene(env_cfg, primary, derived)
-
-    # Step 5: Configure force sensor if needed
-    if wrappers_config.get('force_torque_sensor', {}).get('enabled', False):
-        print("[INFO]: Step 5 - Enabling force-torque sensor")
-        lUtils.enable_force_sensor(env_cfg)
-
-    # Step 6: Apply environment parameter overrides
-    print("[INFO]: Step 6 - Applying environment parameter overrides")
-    lUtils.apply_environment_overrides(env_cfg, environment)
-
-    # Step 7: Calculate rollout parameters
+    # Extract derived values calculated in Step 1
     max_rollout_steps = derived['rollout_steps']
-    print(f"[INFO]: Step 7 - Calculated rollout steps: {max_rollout_steps}")
+    print(f"[INFO]: Configuration complete - rollout steps: {max_rollout_steps}")
 
-    # Step 8: Agent configuration (learning parameters now in agent section)
-    print("[INFO]: Step 8 - Agent configuration ready (SKRL parameters included)")
-
-    # Debug: Print agent configuration with color coding
-    ConfigManager.print_agent_config(agent_cfg)
-
-    # Step 9: Apply model configuration
-    print("[INFO]: Step 9 - Applying model configuration")
-    lUtils.apply_model_config(agent_cfg, model)
-
-    # Step 10: Set up experiment and logging paths
-    print("[INFO]: Step 10 - Setting up experiment and logging")
-    lUtils.setup_experiment_logging(env_cfg, agent_cfg, resolved_config)
-
-    print("[INFO]: Creating Env...")
+    # ===== STEP 2: CREATE ENVIRONMENT =====
+    # Environment creation using fully configured objects from Step 1
+    print("[INFO]: Step 2 - Creating environment")
     env = gym.make(
         args_cli.task,
         cfg=env_cfg,
         render_mode=None
     )
+    print("[INFO]: Environment created successfully")
 
-    print("[INFO]: Env Built!")
-
-    # Step 11: Apply wrapper stack
-    print("[INFO]: Step 11 - Applying wrapper stack")
+    # ===== STEP 3: APPLY WRAPPER STACK =====
+    # Apply wrappers using pre-configured wrapper settings from Step 1
+    print("[INFO]: Step 3 - Applying wrapper stack")
     if wrappers_config.get('fragile_objects', {}).get('enabled', False):
         print("  - Applying FragileObjectWrapper")
         env = lUtils.apply_fragile_object_wrapper(env, wrappers_config['fragile_objects'], primary, derived)
@@ -316,26 +269,23 @@ def main():
         print("  - Applying EnhancedActionLoggingWrapper")
         env = lUtils.apply_enhanced_action_logging_wrapper(env, wrappers_config['action_logging'])
 
-    # Step 12: Wrap for SKRL
-    print("[INFO]: Step 12 - Wrapping environment for SKRL")
+    # ===== STEP 4: WRAP FOR SKRL =====
+    print("[INFO]: Step 4 - Wrapping environment for SKRL")
     env = SkrlVecEnvWrapper(env, ml_framework="torch")
 
-    # Step 13: Set preprocessors
-    print("[INFO]: Step 13 - Setting up preprocessors")
-    ## ORIGINAL CODE - SHARED PREPROCESSORS (BROKEN FOR MULTI-AGENT) ##
-    # lUtils.setup_preprocessors(env_cfg, agent_cfg, env, learning) # TODO MAKE THIS MULTI AGENT
+    print("[INFO]: Environment wrapped successfully")
+    print(f"[INFO]: Observation Space Size: {env.cfg.observation_space}")
+    print(f"[INFO]: State Space Size: {env.cfg.state_space}")
+    print(f"[INFO]: Action Space Size: {env.action_space}")
 
-    ## NEW CODE - PER-AGENT PREPROCESSORS HANDLED IN create_block_ppo_agents ##
-    print("  - Preprocessor setup moved to create_block_ppo_agents for per-agent independence")
-
-    print("[INFO]: Observation Space Size:", env.cfg.observation_space)
-    print("[INFO]: State Space Size:", env.cfg.state_space)
-    print("[INFO]: Action Space Size:", env.action_space)
+    # ===== STEP 5: CREATE AGENTS AND TRAINING COMPONENTS =====
+    # All components use pre-configured objects from Step 1
+    print("[INFO]: Step 5 - Creating training components")
 
     device = env_cfg.sim.device
 
-    # Step 14: Create memory
-    print("[INFO]: Step 14 - Creating memory")
+    # Create memory using pre-configured parameters
+    print("[INFO]:   Creating memory")
     memory = MultiRandomMemory(
         memory_size=derived['rollout_steps'],
         num_envs=env.num_envs,
@@ -344,21 +294,18 @@ def main():
         num_agents=derived['total_agents']
     )
 
-    # Step 15: Create models
-    print("[INFO]: Step 15 - Creating models")
+    # Create models using pre-configured parameters
+    print("[INFO]:   Creating models")
     models = lUtils.create_policy_and_value_models(env_cfg, agent_cfg, env, model, wrappers_config, derived)
 
-    # Step 16: Create agents
-    print("[INFO]: Step 16 - Creating agents and optimizer")
-    ## ORIGINAL CODE - USING BLOCKWANDBLOGGERPPO ##
-    # agents = lUtils.create_block_wandb_agents(env_cfg, agent_cfg, env, models, memory, derived, learning)
-
-    ## NEW CODE - USING BLOCKPPO WITH PER-AGENT PREPROCESSORS ##
+    # Create agents using pre-configured parameters
+    print("[INFO]:   Creating agents")
     agents = lUtils.create_block_ppo_agents(env_cfg, agent_cfg, env, models, memory, derived)
 
-    print(agents)
+    # ===== STEP 6: CREATE AND START TRAINER =====
+    # Trainer uses pre-configured parameters from Step 1
+    print("[INFO]: Step 6 - Creating and starting trainer")
 
-    # configure and instantiate the RL trainer
     cfg_trainer = {
         "timesteps": derived['max_steps'] // (derived['total_num_envs']),
         "headless": True,
@@ -371,9 +318,10 @@ def main():
         env=env,
         agents=agents
     )
-    print("Trainer Created")
+    print("[INFO]: Trainer created successfully")
 
-    # Training loop
+    # Start training
+    print("[INFO]: Starting training...")
     torch.autograd.set_detect_anomaly(True)
     trainer.train()
 

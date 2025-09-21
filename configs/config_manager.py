@@ -66,12 +66,71 @@ class ConfigManager:
         return resolved_config
 
     @staticmethod
-    def apply_to_isaac_lab(env_cfg, agent_cfg, resolved_config):
-        """Apply configuration to Isaac Lab environment and agent configs."""
+    def apply_complete_configuration(env_cfg, agent_cfg, resolved_config):
+        """
+        Apply complete configuration to Isaac Lab environment and agent configs.
+
+        This is the single point of configuration that handles ALL configuration
+        aspects in Step 1. No other steps should modify configuration objects.
+
+        Args:
+            env_cfg: Isaac Lab environment configuration object
+            agent_cfg: Agent configuration dictionary
+            resolved_config: Fully resolved configuration from ConfigManager
+        """
+        print("[CONFIG]: Starting complete configuration application")
+
+        # Extract configuration sections
         environment = resolved_config.get('environment', {})
         primary = resolved_config.get('primary', {})
+        derived = resolved_config.get('derived', {})
+        model = resolved_config.get('model', {})
+        wrappers_config = resolved_config.get('wrappers', {})
+        experiment = resolved_config.get('experiment', {})
 
-        # Isaac Lab attribute name mapping (our config name -> Isaac Lab attribute name)
+        # 1. Apply basic Isaac Lab configuration (task, ctrl, and other basic settings)
+        ConfigManager._apply_isaac_lab_basic_config(env_cfg, environment)
+
+        # 2. Apply device configuration
+        ConfigManager._apply_device_config(env_cfg)
+
+        # 3. Apply break forces and agent distribution
+        ConfigManager._apply_break_force_config(env_cfg, agent_cfg, primary)
+
+        # 4. Apply easy mode if enabled
+        if primary.get('debug_mode', False):
+            ConfigManager._apply_easy_mode_config(env_cfg, agent_cfg)
+
+        # 5. Apply environment scene configuration
+        ConfigManager._apply_scene_config(env_cfg, primary, derived)
+
+        # 6. Apply force sensor configuration if enabled
+        if wrappers_config.get('force_torque_sensor', {}).get('enabled', False):
+            ConfigManager._apply_force_sensor_config(env_cfg)
+
+        # 7. Apply model configuration
+        ConfigManager._apply_model_config(agent_cfg, model)
+
+        # 8. Apply experiment and logging configuration
+        ConfigManager._apply_experiment_config(env_cfg, agent_cfg, resolved_config)
+
+        print("[CONFIG]: Complete configuration application finished")
+
+    @staticmethod
+    def apply_to_isaac_lab(env_cfg, agent_cfg, resolved_config):
+        """
+        DEPRECATED: Use apply_complete_configuration instead.
+
+        This method is kept for backward compatibility but should not be used
+        in new code. Use apply_complete_configuration for the clean architecture.
+        """
+        print("[CONFIG]: WARNING - Using deprecated apply_to_isaac_lab. Use apply_complete_configuration instead.")
+        ConfigManager._apply_isaac_lab_basic_config(env_cfg, resolved_config.get('environment', {}))
+
+    @staticmethod
+    def _apply_isaac_lab_basic_config(env_cfg, environment):
+        """Apply basic Isaac Lab configuration (task, ctrl, and other settings)."""
+        # Isaac Lab attribute name mapping
         isaac_lab_attr_mapping = {
             'task': 'task',  # Our 'task' config maps to Isaac Lab's 'task' attribute
             'ctrl': 'ctrl'   # Our 'ctrl' config maps to Isaac Lab's 'ctrl' attribute
@@ -90,20 +149,17 @@ class ConfigManager:
 
                 if existing_config is not None:
                     print(f"[CONFIG]: Merging {key} parameters into existing Isaac Lab {isaac_lab_attr} object")
-                    print(f"[CONFIG]: BEFORE - {isaac_lab_attr} type: {type(existing_config)}")
                     for prop_key, prop_value in value.items():
                         if hasattr(existing_config, prop_key):
                             print(f"[CONFIG]:   Updating {isaac_lab_attr}.{prop_key}: {getattr(existing_config, prop_key)} -> {prop_value}")
                         else:
                             print(f"[CONFIG]:   Adding new {isaac_lab_attr}.{prop_key} = {prop_value}")
                         setattr(existing_config, prop_key, prop_value)
-                    print(f"[CONFIG]: AFTER - {isaac_lab_attr} type: {type(existing_config)}")
                 else:
                     print(f"[CONFIG]: WARNING - Isaac Lab {isaac_lab_attr} object not found, cannot merge {key} parameters")
-                    # Don't create a fallback object for critical Isaac Lab configs
                 continue
 
-            # Log what we're applying for other keys
+            # Handle other environment configuration
             existing_value = getattr(env_cfg, key, "NOT_SET") if hasattr(env_cfg, key) else "NOT_SET"
             print(f"[CONFIG]: Applying {key}: {existing_value} -> {value}")
 
@@ -198,6 +254,138 @@ class ConfigManager:
                 )
 
         print(f"[CONFIG]: Validation passed - Isaac Lab configuration objects are properly initialized")
+
+    @staticmethod
+    def _apply_device_config(env_cfg):
+        """Apply device configuration."""
+        print("[CONFIG]: Applying device configuration")
+        import torch
+
+        if hasattr(env_cfg, 'sim') and hasattr(env_cfg.sim, 'device'):
+            if env_cfg.sim.device is None:
+                env_cfg.sim.device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+                print(f"[CONFIG]:   Set sim.device = {env_cfg.sim.device}")
+        else:
+            # If sim config doesn't exist, create it
+            env_cfg.sim = type('SimConfig', (), {'device': 'cuda:0' if torch.cuda.is_available() else 'cpu'})()
+            print(f"[CONFIG]:   Created sim config with device = {env_cfg.sim.device}")
+
+    @staticmethod
+    def _apply_break_force_config(env_cfg, agent_cfg, primary):
+        """Apply break force and agent distribution configuration."""
+        print("[CONFIG]: Applying break force configuration")
+
+        break_forces = primary['break_forces']
+        env_cfg.break_force = break_forces
+        agent_cfg['agent']['break_force'] = break_forces
+
+        print(f"[CONFIG]:   Set break_force = {break_forces}")
+
+    @staticmethod
+    def _apply_easy_mode_config(env_cfg, agent_cfg):
+        """Apply easy mode configuration."""
+        print("[CONFIG]: Applying easy mode configuration")
+
+        agent_cfg['agent']['easy_mode'] = True
+
+        # Set easy environment parameters
+        env_cfg.task.duration_s = env_cfg.episode_length_s
+        env_cfg.task.hand_init_pos = [0.0, 0.0, 0.035]  # Relative to fixed asset tip
+        env_cfg.task.hand_init_pos_noise = [0.0025, 0.0025, 0.00]
+        env_cfg.task.hand_init_orn_noise = [0.0, 0.0, 0.0]
+
+        # Fixed Asset (applies to all tasks)
+        env_cfg.task.fixed_asset_init_pos_noise = [0.0, 0.0, 0.0]
+        env_cfg.task.fixed_asset_init_orn_deg = 0.0
+        env_cfg.task.fixed_asset_init_orn_range_deg = 0.0
+
+        # Held Asset (applies to all tasks)
+        env_cfg.task.held_asset_pos_noise = [0.0, 0.0, 0.0]
+        env_cfg.task.held_asset_rot_init = 0.0
+
+        print("[CONFIG]:   Easy mode environment settings applied")
+
+    @staticmethod
+    def _apply_scene_config(env_cfg, primary, derived):
+        """Apply environment scene configuration."""
+        print("[CONFIG]: Applying environment scene configuration")
+
+        env_cfg.scene.num_envs = derived['total_num_envs']
+        env_cfg.scene.replicate_physics = True
+        env_cfg.num_agents = derived['total_agents']
+
+        print(f"[CONFIG]:   Scene configured: {derived['total_num_envs']} envs, {derived['total_agents']} agents")
+
+    @staticmethod
+    def _apply_force_sensor_config(env_cfg):
+        """Apply force sensor configuration."""
+        print("[CONFIG]: Applying force sensor configuration")
+
+        # Add force-torque to observation and state orders if not already present
+        if hasattr(env_cfg, 'obs_order') and 'force_torque' not in env_cfg.obs_order:
+            env_cfg.obs_order.append('force_torque')
+            print("[CONFIG]:   Added 'force_torque' to obs_order")
+
+        if hasattr(env_cfg, 'state_order') and 'force_torque' not in env_cfg.state_order:
+            env_cfg.state_order.append('force_torque')
+            print("[CONFIG]:   Added 'force_torque' to state_order")
+
+        print("[CONFIG]:   Force-torque sensor enabled in observation and state")
+
+    @staticmethod
+    def _apply_model_config(agent_cfg, model_config):
+        """Apply model configuration."""
+        print("[CONFIG]: Applying model configuration")
+
+        # Ensure models section exists
+        if 'models' not in agent_cfg:
+            agent_cfg['models'] = {'policy': {}, 'value': {}}
+
+        # Apply model configuration
+        for key, value in model_config.items():
+            if key in ['actor', 'policy']:
+                # Policy model configuration
+                for param_key, param_value in value.items():
+                    agent_cfg['models']['policy'][param_key] = param_value
+                    print(f"[CONFIG]:   Set policy param: {param_key} = {param_value}")
+            elif key in ['critic', 'value']:
+                # Value model configuration
+                for param_key, param_value in value.items():
+                    agent_cfg['models']['value'][param_key] = param_value
+                    print(f"[CONFIG]:   Set value param: {param_key} = {param_value}")
+            else:
+                # General model configuration
+                agent_cfg['models'][key] = value
+                print(f"[CONFIG]:   Set general model param: {key} = {value}")
+
+    @staticmethod
+    def _apply_experiment_config(env_cfg, agent_cfg, resolved_config):
+        """Apply experiment and logging configuration."""
+        print("[CONFIG]: Applying experiment and logging configuration")
+
+        experiment = resolved_config.get('experiment', {})
+        derived = resolved_config.get('derived', {})
+
+        # Ensure experiment section exists
+        if 'experiment' not in agent_cfg['agent']:
+            agent_cfg['agent']['experiment'] = {}
+
+        # Apply experiment configuration
+        agent_cfg['agent']['experiment']['project'] = experiment.get('wandb_project', 'Continuous_Force_RL')
+        agent_cfg['agent']['experiment']['tags'] = experiment.get('tags', [])
+        agent_cfg['agent']['experiment']['group'] = experiment.get('group', '')
+        agent_cfg['agent']['experiment']['name'] = experiment.get('name', 'unnamed')
+
+        # Set agent-specific data
+        agent_cfg['agent']['break_force'] = resolved_config.get('primary', {}).get('break_forces', -1)
+        agent_cfg['agent']['num_envs'] = derived.get('total_num_envs', 128)
+
+        # Add task tags
+        task_name = env_cfg.task_name if hasattr(env_cfg, 'task_name') else 'factory'
+        agent_cfg['agent']['experiment']['tags'].append(task_name)
+
+        print(f"[CONFIG]:   Set up logging for {derived.get('total_agents', 1)} agents with unique paths and wandb runs")
+        print(f"[CONFIG]:   Experiment '{experiment.get('name', 'unnamed')}' configured for {derived.get('total_agents', 1)} agents")
 
     @staticmethod
     def _load_yaml_file(file_path: str) -> Dict[str, Any]:
