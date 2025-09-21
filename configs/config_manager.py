@@ -51,10 +51,14 @@ class ConfigManager:
     def apply_to_isaac_lab(env_cfg, agent_cfg, resolved_config):
         """Apply configuration to Isaac Lab environment and agent configs."""
         environment = resolved_config.get('environment', {})
-        primary = resolved_config['primary']
+        primary = resolved_config.get('primary', {})
 
         # Apply environment overrides
         for key, value in environment.items():
+            # Log what we're applying
+            existing_value = getattr(env_cfg, key, "NOT_SET") if hasattr(env_cfg, key) else "NOT_SET"
+            print(f"[CONFIG]: Applying {key}: {existing_value} -> {value}")
+
             if '.' in key:
                 ConfigManager._set_nested_attr(env_cfg, key, value)
             else:

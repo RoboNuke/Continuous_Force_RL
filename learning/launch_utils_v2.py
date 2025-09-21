@@ -5,6 +5,8 @@ This module provides step-by-step configuration application with clear logic flo
 Each function has a single, clear responsibility.
 """
 
+import sys
+
 from skrl.resources.schedulers.torch import KLAdaptiveLR
 from models.SimBa_hybrid_control import HybridControlBlockSimBaActor
 
@@ -102,6 +104,41 @@ def configure_environment_scene(env_cfg, primary, derived):
     env_cfg.num_agents = derived['total_agents']
 
     print(f"  - Scene configured: {derived['total_num_envs']} envs, {derived['total_agents']} agents")
+
+
+def validate_factory_configuration(env_cfg):
+    """Validate that environment configuration has required factory settings."""
+
+    required_attributes = ['obs_order', 'state_order']
+    missing_attributes = []
+
+    for attr in required_attributes:
+        if not hasattr(env_cfg, attr):
+            missing_attributes.append(attr)
+
+    if missing_attributes:
+        print(f"[ERROR]: Missing critical factory configuration attributes: {missing_attributes}")
+        print(f"[ERROR]: This indicates Isaac Lab factory configuration was not loaded properly.")
+        print(f"[ERROR]: Required attributes from Isaac Lab factory config:")
+        print(f"  - obs_order: Defines observation component ordering for policy")
+        print(f"  - state_order: Defines state component ordering for critic")
+        print(f"[ERROR]: Check that:")
+        print(f"  1. Task name is correct: {getattr(env_cfg, 'task_name', 'UNKNOWN')}")
+        print(f"  2. Isaac Lab factory tasks are properly registered")
+        print(f"  3. Isaac Lab version supports the specified task")
+        sys.exit(1)
+
+    # Validate the attributes are not empty
+    for attr in required_attributes:
+        value = getattr(env_cfg, attr)
+        if not value or len(value) == 0:
+            print(f"[ERROR]: Factory configuration attribute '{attr}' is empty: {value}")
+            print(f"[ERROR]: This indicates a problem with Isaac Lab factory configuration.")
+            sys.exit(1)
+
+    print(f"[INFO]: Factory configuration validation passed")
+    print(f"  - obs_order: {env_cfg.obs_order}")
+    print(f"  - state_order: {env_cfg.state_order}")
 
 
 def enable_force_sensor(env_cfg):

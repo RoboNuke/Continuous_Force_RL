@@ -120,18 +120,33 @@ def main():
         import gymnasium as gym
         # Tasks module already imported in try/except block above
 
-        # Get the environment configuration class for the task
+        print(f"[DEBUG]: Attempting to load task: {args_cli.task}")
         env_spec = gym.spec(args_cli.task)
+        print(f"[DEBUG]: Found env_spec: {env_spec}")
+
         if hasattr(env_spec, 'kwargs') and 'cfg' in env_spec.kwargs:
             # Use the default configuration from the task
             env_cfg = env_spec.kwargs['cfg']()
+            print(f"[DEBUG]: Successfully loaded Isaac Lab config")
+            print(f"[DEBUG]: Has obs_order: {hasattr(env_cfg, 'obs_order')}")
+            print(f"[DEBUG]: Has state_order: {hasattr(env_cfg, 'state_order')}")
+            if hasattr(env_cfg, 'obs_order'):
+                print(f"[DEBUG]: obs_order: {env_cfg.obs_order}")
+            if hasattr(env_cfg, 'state_order'):
+                print(f"[DEBUG]: state_order: {env_cfg.state_order}")
         else:
-            # Fallback to a basic configuration
-            env_cfg = ManagerBasedRLEnvCfg()
+            print(f"[ERROR]: env_spec has no cfg attribute")
+            print(f"[ERROR]: env_spec.kwargs: {getattr(env_spec, 'kwargs', 'None')}")
+            raise ValueError(f"Invalid task configuration for {args_cli.task}")
 
     except Exception as e:
-        print(f"[INFO]: Could not get default environment config, using basic config: {e}")
-        env_cfg = ManagerBasedRLEnvCfg()
+        print(f"[ERROR]: Failed to load Isaac Lab task configuration: {e}")
+        print(f"[ERROR]: Task name: {args_cli.task}")
+        print(f"[ERROR]: This likely means:")
+        print(f"  1. The task name is incorrect")
+        print(f"  2. Isaac Lab tasks are not properly registered")
+        print(f"  3. Isaac Lab is not properly installed")
+        sys.exit(1)
 
     # Create basic agent configuration structure
     agent_cfg = {
@@ -150,6 +165,10 @@ def main():
     # Step 1: Apply basic configuration to Isaac Lab configs
     print("[INFO]: Step 1 - Applying basic configuration")
     ConfigManager.apply_to_isaac_lab(env_cfg, agent_cfg, resolved_config)
+
+    # Step 1.5: Validate factory configuration
+    print("[INFO]: Step 1.5 - Validating factory configuration")
+    lUtils.validate_factory_configuration(env_cfg)
 
     # Set device from configuration or default to cuda if available
     if hasattr(env_cfg, 'sim') and hasattr(env_cfg.sim, 'device'):
