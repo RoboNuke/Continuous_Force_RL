@@ -12,6 +12,12 @@ import copy
 from dataclasses import dataclass, field
 import torch
 
+# Import for individual agent logging setup
+def _import_setup_individual_agent_logging():
+    """Lazy import to avoid circular imports."""
+    from learning.launch_utils_v2 import _setup_individual_agent_logging
+    return _setup_individual_agent_logging
+
 
 class ConfigManager:
     """Manages configuration loading and resolution."""
@@ -389,6 +395,10 @@ class ConfigManager:
         # Add task tags
         task_name = env_cfg.task_name if hasattr(env_cfg, 'task_name') else 'factory'
         agent_cfg['agent']['experiment']['tags'].append(task_name)
+
+        # Set up individual agent logging configurations
+        setup_individual_agent_logging = _import_setup_individual_agent_logging()
+        setup_individual_agent_logging(agent_cfg, resolved_config)
 
         print(f"[CONFIG]:   Set up logging for {derived.get('total_agents', 1)} agents with unique paths and wandb runs")
         print(f"[CONFIG]:   Experiment '{experiment.get('name', 'unnamed')}' configured for {derived.get('total_agents', 1)} agents")

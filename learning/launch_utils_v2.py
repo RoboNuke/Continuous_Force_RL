@@ -689,7 +689,7 @@ def apply_wandb_logging_wrapper(env, wrapper_config, derived, agent_cfg, env_cfg
         - Agent-specific configurations for multi-agent scenarios
     """
     """Apply simplified wandb logging wrapper to environment."""
-    print("  - Using simplified wandb wrapper (no config files needed)")
+    print("  - Using wandb wrapper with per-agent configuration")
 
     # Get pre-built agent configs from resolved_config (created in _setup_individual_agent_logging)
     agent_specific_configs = resolved_config.get('agent_specific_configs', {})
