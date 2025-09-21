@@ -267,7 +267,7 @@ def main():
     print("[INFO]: Step 11 - Applying wrapper stack")
     if wrappers_config.get('fragile_objects', {}).get('enabled', False):
         print("  - Applying FragileObjectWrapper")
-        env = lUtils.apply_fragile_object_wrapper(env, wrappers_config['fragile_objects'], primary)
+        env = lUtils.apply_fragile_object_wrapper(env, wrappers_config['fragile_objects'], primary, derived)
 
     if wrappers_config.get('force_torque_sensor', {}).get('enabled', False):
         print("  - Applying ForceTorqueWrapper")
@@ -287,7 +287,7 @@ def main():
 
     if wrappers_config.get('factory_metrics', {}).get('enabled', False):
         print("  - Applying FactoryMetricsWrapper")
-        env = lUtils.apply_factory_metrics_wrapper(env, primary)
+        env = lUtils.apply_factory_metrics_wrapper(env, derived)
 
     if wrappers_config.get('wandb_logging', {}).get('enabled', False):
         print("  - Applying GenericWandbLoggingWrapper")
