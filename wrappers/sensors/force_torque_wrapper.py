@@ -58,6 +58,7 @@ class ForceTorqueWrapper(gym.Wrapper):
         self._original_reset_buffers = None
         self._original_pre_physics_step = None
         self._original_get_factory_obs_state_dict = None
+        self._original_get_observations = None
         self.unwrapped.has_force_torque_sensor = True
         # Initialize after the base environment is ready
         if hasattr(self.unwrapped, '_robot'):
@@ -166,6 +167,11 @@ class ForceTorqueWrapper(gym.Wrapper):
         if hasattr(self.unwrapped, '_get_factory_obs_state_dict'):
             self._original_get_factory_obs_state_dict = self.unwrapped._get_factory_obs_state_dict
             self.unwrapped._get_factory_obs_state_dict = self._wrapped_get_factory_obs_state_dict
+        else:
+            # Fallback: override _get_observations directly when _get_factory_obs_state_dict is not available
+            if hasattr(self.unwrapped, '_get_observations'):
+                self._original_get_observations = self.unwrapped._get_observations
+                self.unwrapped._get_observations = self._wrapped_get_observations
 
         # Initialize force-torque sensor
         self._init_force_torque_sensor()
@@ -219,7 +225,6 @@ class ForceTorqueWrapper(gym.Wrapper):
         self.unwrapped.robot_force_torque = torch.zeros(
             (num_envs, 6), dtype=torch.float32, device=device
         )
-        print("\n\n\nForce torque data defined\n\n\n")
 
 
     def _wrapped_compute_intermediate_values(self, dt):
@@ -309,6 +314,84 @@ class ForceTorqueWrapper(gym.Wrapper):
             state_dict['force_torque'] = force_torque_obs
 
         return obs_dict, state_dict
+
+    def _wrapped_get_observations(self):
+        """
+        Fallback wrapper for _get_observations when _get_factory_obs_state_dict is not available.
+
+        This method intercepts the factory environment's _get_observations call and injects
+        force-torque data into the observation dictionaries before they're processed.
+
+        Returns:
+            dict: Observation dictionary with "policy" and "critic" keys containing tensor data
+        """
+        # Call original _get_observations to get the base obs_dict and state_dict
+        if self._original_get_observations:
+            try:
+                # The original method calls _get_factory_obs_state_dict internally
+                result = self._original_get_observations()
+                return result
+            except KeyError as e:
+                if "force_torque" in str(e):
+                    # The error occurred because force_torque is missing from obs_dict
+                    # We need to manually create the obs_dict with force_torque
+                    return self._create_observations_with_force_torque()
+                else:
+                    raise e
+        else:
+            return self._create_observations_with_force_torque()
+
+    def _create_observations_with_force_torque(self):
+        """
+        Create observations manually with force-torque data injected.
+
+        This is a fallback when we can't override _get_factory_obs_state_dict.
+        """
+        # Create observations manually when factory utils are not available or when catching KeyError
+
+        # Create basic observation dictionary
+        obs_dict = {
+            "prev_actions": getattr(self.unwrapped, 'actions', torch.zeros((self.unwrapped.num_envs, 6), device=self.unwrapped.device)),
+        }
+
+        # Add basic factory observations if available
+        if hasattr(self.unwrapped, 'fingertip_midpoint_pos'):
+            obs_dict["fingertip_pos"] = self.unwrapped.fingertip_midpoint_pos
+        if hasattr(self.unwrapped, 'fingertip_midpoint_quat'):
+            obs_dict["fingertip_quat"] = self.unwrapped.fingertip_midpoint_quat
+        if hasattr(self.unwrapped, 'ee_linvel_fd'):
+            obs_dict["ee_linvel"] = self.unwrapped.ee_linvel_fd
+        if hasattr(self.unwrapped, 'ee_angvel_fd'):
+            obs_dict["ee_angvel"] = self.unwrapped.ee_angvel_fd
+
+        # Add force-torque observation
+        if hasattr(self.unwrapped, 'robot_force_torque'):
+            force_torque_obs = self.get_force_torque_observation()
+            obs_dict['force_torque'] = force_torque_obs
+
+        # Create state dict (copy of obs_dict for simplicity)
+        state_dict = obs_dict.copy()
+
+        # Use factory_utils to collapse the dictionaries if available
+        try:
+            import isaaclab_tasks.direct.factory.factory_utils as factory_utils
+            obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.unwrapped.cfg.obs_order + ["prev_actions"])
+            state_tensors = factory_utils.collapse_obs_dict(state_dict, self.unwrapped.cfg.state_order + ["prev_actions"])
+            return {"policy": obs_tensors, "critic": state_tensors}
+        except Exception:
+            # Fallback: simple concatenation when factory_utils is not available
+            obs_list = []
+            for obs_name in self.unwrapped.cfg.obs_order + ["prev_actions"]:
+                if obs_name in obs_dict:
+                    obs_list.append(obs_dict[obs_name])
+
+            if obs_list:
+                obs_tensor = torch.cat(obs_list, dim=-1)
+                return {"policy": obs_tensor, "critic": obs_tensor}
+            else:
+                # Ultimate fallback
+                return {"policy": torch.zeros((self.unwrapped.num_envs, 1), device=self.unwrapped.device),
+                        "critic": torch.zeros((self.unwrapped.num_envs, 1), device=self.unwrapped.device)}
 
     def step(self, action):
         """Step the environment and ensure wrapper is initialized."""

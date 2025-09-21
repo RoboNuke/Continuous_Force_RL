@@ -533,6 +533,54 @@ class TestForceTorqueWrapperFactoryObservation:
         assert hasattr(env, '_get_factory_obs_state_dict')
         assert env._get_factory_obs_state_dict == wrapper._wrapped_get_factory_obs_state_dict
 
+    def test_fallback_get_observations_override(self):
+        """Test fallback _get_observations override when _get_factory_obs_state_dict is not available."""
+        env = MockBaseEnv()
+
+        # Remove _get_factory_obs_state_dict method to trigger fallback
+        if hasattr(env, '_get_factory_obs_state_dict'):
+            delattr(env, '_get_factory_obs_state_dict')
+
+        # Add _get_observations method
+        def mock_get_observations():
+            return {"policy": torch.randn(env.num_envs, 32), "critic": torch.randn(env.num_envs, 48)}
+
+        env._get_observations = mock_get_observations
+
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        # Check that fallback override was used
+        assert wrapper._original_get_observations is not None
+        assert hasattr(env, '_get_observations')
+        assert env._get_observations == wrapper._wrapped_get_observations
+
+    def test_wrapped_get_observations_fallback_keyerror_handling(self):
+        """Test that fallback method handles KeyError for force_torque."""
+        env = MockBaseEnv()
+
+        # Remove _get_factory_obs_state_dict to trigger fallback
+        if hasattr(env, '_get_factory_obs_state_dict'):
+            delattr(env, '_get_factory_obs_state_dict')
+
+        # Create a mock _get_observations that raises KeyError for force_torque
+        def mock_get_observations_with_keyerror():
+            raise KeyError("'force_torque'")
+
+        env._get_observations = mock_get_observations_with_keyerror
+
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        # The wrapper should catch the KeyError and create observations manually
+        result = wrapper._wrapped_get_observations()
+
+        assert isinstance(result, dict)
+        assert "policy" in result
+        assert "critic" in result
+        assert isinstance(result["policy"], torch.Tensor)
+        assert isinstance(result["critic"], torch.Tensor)
+
 
 if __name__ == "__main__":
     pytest.main([__file__])
