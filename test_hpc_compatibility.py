@@ -106,14 +106,14 @@ def create_mock_isaac_lab_config():
             }
 
             # Task configuration
-            self.cfg_task = type('TaskConfig', (), {
+            self.task = type('TaskConfig', (), {
                 'success_threshold': 0.02,
                 'engage_threshold': 0.05,
                 'name': 'factory_task'
             })()
 
             # Control configuration
-            self.cfg_ctrl = type('CtrlConfig', (), {
+            self.ctrl = type('CtrlConfig', (), {
                 'pos_action_bounds': [0.05, 0.05, 0.05],
                 'force_action_bounds': [50.0, 50.0, 50.0],
                 'torque_action_bounds': [0.5, 0.5, 0.5],

@@ -62,8 +62,14 @@ class ConfigManager:
             if '.' in key:
                 ConfigManager._set_nested_attr(env_cfg, key, value)
             else:
-                # Set attribute directly (whether it exists or not)
-                setattr(env_cfg, key, value)
+                # Convert dictionaries to objects for dot notation access
+                if isinstance(value, dict):
+                    # Create a simple object from the dictionary
+                    config_obj = type(f'{key.title()}Config', (), value)()
+                    setattr(env_cfg, key, config_obj)
+                else:
+                    # Set attribute directly (whether it exists or not)
+                    setattr(env_cfg, key, value)
 
     @staticmethod
     def _load_yaml_file(file_path: str) -> Dict[str, Any]:

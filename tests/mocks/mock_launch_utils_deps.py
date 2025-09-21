@@ -79,14 +79,25 @@ class MockEnvConfig:
         self.sim = Mock()
         self.sim.device = 'cpu'
 
-        # Control configuration
-        self.ctrl = Mock()
-        self.ctrl.default_task_prop_gains = [1000.0, 1000.0, 1000.0, 100.0, 100.0, 100.0]
-        self.ctrl.pos_action_threshold = [0.1, 0.1, 0.1]
-        self.ctrl.rot_action_threshold = [0.1, 0.1, 0.1]
-        self.ctrl.default_task_force_gains = [100.0, 100.0, 100.0, 10.0, 10.0, 10.0]
-        self.ctrl.force_action_threshold = [10.0, 10.0, 10.0]
-        self.ctrl.torque_action_bounds = [1.0, 1.0, 1.0]
+        # Control configuration - use dict-like object for new naming
+        class CtrlConfig:
+            def __init__(self):
+                self.default_task_prop_gains = [1000.0, 1000.0, 1000.0, 100.0, 100.0, 100.0]
+                self.pos_action_threshold = [0.1, 0.1, 0.1]
+                self.rot_action_threshold = [0.1, 0.1, 0.1]
+                self.default_task_force_gains = [100.0, 100.0, 100.0, 10.0, 10.0, 10.0]
+                self.force_action_threshold = [10.0, 10.0, 10.0]
+                self.torque_action_bounds = [1.0, 1.0, 1.0]
+                self.force_action_bounds = [50.0, 50.0, 50.0]
+                self.torque_action_threshold = [1.0, 1.0, 1.0]
+                self.pos_action_bounds = [0.2, 0.2, 0.2]
+                self.rot_action_bounds = [0.2, 0.2, 0.2]
+
+            def get(self, key, default=None):
+                """Support dict-like access."""
+                return getattr(self, key, default)
+
+        self.ctrl = CtrlConfig()
 
         # Configuration attributes
         self.cfg_ctrl = {

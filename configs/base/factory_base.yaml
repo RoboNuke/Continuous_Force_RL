@@ -55,13 +55,13 @@ environment:
     held_quat: "held_quat"
 
   # Factory task configuration (required for factory metrics wrapper)
-  cfg_task:
+  task:
     success_threshold: 0.02
     engage_threshold: 0.05
     name: "factory_task"  # Used for task-specific logic
 
   # Control configuration (required for hybrid control wrapper)
-  cfg_ctrl:
+  ctrl:
     pos_action_bounds: [0.05, 0.05, 0.05]
     force_action_bounds: [50.0, 50.0, 50.0]
     torque_action_bounds: [0.5, 0.5, 0.5]

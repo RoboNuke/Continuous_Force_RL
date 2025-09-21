@@ -890,12 +890,12 @@ def main(
                 
                 # Get current successes and engagements
                 curr_successes = env.unwrapped._get_curr_successes(
-                    success_threshold=env.cfg_task.success_threshold, 
-                    check_rot=env.cfg_task.name == "nut_thread"
+                    success_threshold=env.task.success_threshold,
+                    check_rot=env.task.name == "nut_thread"
                 )
                 engaged_mask[:,i] = env.unwrapped._get_curr_successes(
-                    success_threshold=env.cfg_task.engage_threshold,
-                    check_rot=env.cfg_task.name == "nut_thread"
+                    success_threshold=env.task.engage_threshold,
+                    check_rot=env.task.name == "nut_thread"
                 )
 
                 if (curr_successes).any():

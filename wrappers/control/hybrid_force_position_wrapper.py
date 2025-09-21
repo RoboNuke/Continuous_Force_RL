@@ -248,12 +248,12 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Enforce position bounds for goal - require explicit configuration
         delta_pos = pos_goal - self.unwrapped.fixed_pos_action_frame
         if self.ctrl_cfg.pos_action_bounds is None:
-            if not hasattr(self.unwrapped.cfg.ctrl, 'pos_action_bounds'):
+            if not hasattr(self.unwrapped.ctrl, 'pos_action_bounds'):
                 raise ValueError(
                     "Position action bounds not configured. Please set ctrl_cfg.pos_action_bounds "
-                    "or ensure environment has cfg.ctrl.pos_action_bounds. Example: pos_action_bounds=[0.05, 0.05, 0.05]"
+                    "or ensure environment has ctrl.pos_action_bounds. Example: pos_action_bounds=[0.05, 0.05, 0.05]"
                 )
-            pos_bounds = self.unwrapped.cfg.ctrl.pos_action_bounds
+            pos_bounds = self.unwrapped.ctrl.pos_action_bounds
         else:
             pos_bounds = self.ctrl_cfg.pos_action_bounds
         pos_error_clipped = torch.clip(delta_pos, -pos_bounds[0], pos_bounds[1])
@@ -263,7 +263,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
         rot_actions = self.unwrapped.actions[:, self.force_size+3:self.force_size+6]
 
         # Handle unidirectional rotation if configured
-        if getattr(self.unwrapped.cfg_task, 'unidirectional_rot', False):
+        if getattr(self.unwrapped.task, 'unidirectional_rot', False):
             rot_actions[:, 2] = -(rot_actions[:, 2] + 1.0) * 0.5
 
         rot_actions = rot_actions * self.unwrapped.rot_threshold
@@ -296,24 +296,24 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         # Extract force actions and scale by threshold - require explicit configuration
         if self.ctrl_cfg.force_action_threshold is None:
-            if not hasattr(self.unwrapped.cfg.ctrl, 'force_action_threshold'):
+            if not hasattr(self.unwrapped.ctrl, 'force_action_threshold'):
                 raise ValueError(
                     "Force action threshold not configured. Please set ctrl_cfg.force_action_threshold "
-                    "or ensure environment has cfg.ctrl.force_action_threshold. Example: force_action_threshold=[10, 10, 10]"
+                    "or ensure environment has ctrl.force_action_threshold. Example: force_action_threshold=[10, 10, 10]"
                 )
-            force_threshold = self.unwrapped.cfg.ctrl.force_action_threshold
+            force_threshold = self.unwrapped.ctrl.force_action_threshold
         else:
             force_threshold = self.ctrl_cfg.force_action_threshold
         force_delta = self.unwrapped.actions[:, min_idx:max_idx] * force_threshold[0]
 
         # Add current force to get absolute goal - require explicit bounds
         if self.ctrl_cfg.force_action_bounds is None:
-            if not hasattr(self.unwrapped.cfg.ctrl, 'force_action_bounds'):
+            if not hasattr(self.unwrapped.ctrl, 'force_action_bounds'):
                 raise ValueError(
                     "Force action bounds not configured. Please set ctrl_cfg.force_action_bounds "
-                    "or ensure environment has cfg.ctrl.force_action_bounds. Example: force_action_bounds=[50, 50, 50]"
+                    "or ensure environment has ctrl.force_action_bounds. Example: force_action_bounds=[50, 50, 50]"
                 )
-            force_bounds = self.unwrapped.cfg.ctrl.force_action_bounds
+            force_bounds = self.unwrapped.ctrl.force_action_bounds
         else:
             force_bounds = self.ctrl_cfg.force_action_bounds
         self.force_goal[:, :3] = torch.clip(
@@ -324,22 +324,22 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Handle torque if enabled - require explicit configuration
         if self.force_size > 3:
             if self.ctrl_cfg.torque_action_threshold is None:
-                if not hasattr(self.unwrapped.cfg.ctrl, 'torque_action_threshold'):
+                if not hasattr(self.unwrapped.ctrl, 'torque_action_threshold'):
                     raise ValueError(
                         "Torque action threshold not configured for 6DOF control. Please set ctrl_cfg.torque_action_threshold "
-                        "or ensure environment has cfg.ctrl.torque_action_threshold. Example: torque_action_threshold=[0.1, 0.1, 0.1]"
+                        "or ensure environment has ctrl.torque_action_threshold. Example: torque_action_threshold=[0.1, 0.1, 0.1]"
                     )
-                torque_threshold = self.unwrapped.cfg.ctrl.torque_action_threshold
+                torque_threshold = self.unwrapped.ctrl.torque_action_threshold
             else:
                 torque_threshold = self.ctrl_cfg.torque_action_threshold
 
             if self.ctrl_cfg.torque_action_bounds is None:
-                if not hasattr(self.unwrapped.cfg.ctrl, 'torque_action_bounds'):
+                if not hasattr(self.unwrapped.ctrl, 'torque_action_bounds'):
                     raise ValueError(
                         "Torque action bounds not configured for 6DOF control. Please set ctrl_cfg.torque_action_bounds "
-                        "or ensure environment has cfg.ctrl.torque_action_bounds. Example: torque_action_bounds=[0.5, 0.5, 0.5]"
+                        "or ensure environment has ctrl.torque_action_bounds. Example: torque_action_bounds=[0.5, 0.5, 0.5]"
                     )
-                torque_bounds = self.unwrapped.cfg.ctrl.torque_action_bounds
+                torque_bounds = self.unwrapped.ctrl.torque_action_bounds
             else:
                 torque_bounds = self.ctrl_cfg.torque_action_bounds
 
@@ -398,7 +398,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
     def _get_target_out_of_bounds(self):
         """Check if fingertip target is out of position bounds."""
         delta = self.unwrapped.fingertip_midpoint_pos - self.unwrapped.fixed_pos_action_frame
-        pos_bounds = self.unwrapped.cfg.ctrl.pos_action_bounds
+        pos_bounds = self.unwrapped.ctrl.pos_action_bounds
 
         out_of_bounds = torch.logical_or(
             delta <= -pos_bounds[0],

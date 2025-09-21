@@ -439,12 +439,12 @@ def main(
                 mask_update = ~torch.logical_or(terminated, truncated)
                 alive_mask *= mask_update
                 curr_successes = env.unwrapped._get_curr_successes(
-                    success_threshold=env.cfg_task.success_threshold, 
-                    check_rot = env.cfg_task.name == "nut_thread"
+                    success_threshold=env.task.success_threshold,
+                    check_rot = env.task.name == "nut_thread"
                 )
                 engaged_mask[:,i] = env.unwrapped._get_curr_successes(
-                    success_threshold=env.cfg_task.engage_threshold,
-                    check_rot= env.cfg_task.name == "nut_thread"
+                    success_threshold=env.task.engage_threshold,
+                    check_rot= env.task.name == "nut_thread"
                 )
 
 

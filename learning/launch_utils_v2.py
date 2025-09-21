@@ -562,7 +562,7 @@ def apply_hybrid_control_wrapper(env, wrapper_config):
     ctrl_torque = wrapper_config.get('ctrl_torque', False)
 
     # Create configuration objects with environment defaults and wrapper overrides
-    env_cfg_ctrl = getattr(env.unwrapped.cfg, 'cfg_ctrl', {})
+    env_cfg_ctrl = getattr(env.unwrapped.cfg, 'ctrl', {})
     ctrl_cfg = HybridCtrlCfg(
         ema_factor=wrapper_config.get('ema_factor', 0.2),
         no_sel_ema=wrapper_config.get('no_sel_ema', True),

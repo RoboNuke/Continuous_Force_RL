@@ -85,7 +85,8 @@ class MockFactoryEnv(gym.Env):
 
         # Configuration
         self.cfg = self._create_mock_cfg()
-        self.cfg_task = self._create_mock_task_cfg()
+        self.task = self._create_mock_task_cfg()
+        self.ctrl = self.cfg.ctrl  # Add direct access to ctrl config
 
         # Robot mock
         self._robot = self._create_mock_robot()
@@ -655,7 +656,7 @@ class TestHybridForcePositionWrapper:
         """Test pose goal calculation without configured bounds."""
         # Remove bounds from config
         hybrid_ctrl_cfg.pos_action_bounds = None
-        del mock_env.cfg.ctrl.pos_action_bounds
+        del mock_env.ctrl.pos_action_bounds
 
         wrapper = HybridForcePositionWrapper(
             mock_env,
@@ -673,7 +674,7 @@ class TestHybridForcePositionWrapper:
         """Test force goal calculation without configured threshold."""
         # Remove threshold from config
         hybrid_ctrl_cfg.force_action_threshold = None
-        del mock_env.cfg.ctrl.force_action_threshold
+        del mock_env.ctrl.force_action_threshold
 
         wrapper = HybridForcePositionWrapper(
             mock_env,
@@ -691,7 +692,7 @@ class TestHybridForcePositionWrapper:
         """Test force goal calculation without configured bounds."""
         # Remove bounds from config
         hybrid_ctrl_cfg.force_action_bounds = None
-        del mock_env.cfg.ctrl.force_action_bounds
+        del mock_env.ctrl.force_action_bounds
 
         wrapper = HybridForcePositionWrapper(
             mock_env,
@@ -726,7 +727,7 @@ class TestHybridForcePositionWrapper:
         """Test torque goal calculation without proper configuration."""
         # Remove torque config
         hybrid_ctrl_cfg.torque_action_threshold = None
-        del mock_env.cfg.ctrl.torque_action_threshold
+        del mock_env.ctrl.torque_action_threshold
 
         wrapper = HybridForcePositionWrapper(
             mock_env,

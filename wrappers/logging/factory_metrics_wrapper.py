@@ -183,20 +183,20 @@ class FactoryMetricsWrapper(gym.Wrapper):
         if hasattr(self.unwrapped, '_get_curr_successes'):
             try:
                 # Require explicit task configuration
-                if not hasattr(self.unwrapped, 'cfg_task'):
+                if not hasattr(self.unwrapped, 'task'):
                     raise ValueError(
-                        "Environment must have cfg_task attribute for factory metrics. "
+                        "Environment must have task attribute for factory metrics. "
                         "Please ensure environment configuration includes task parameters."
                     )
 
-                if not hasattr(self.unwrapped.cfg_task, 'success_threshold'):
+                if not hasattr(self.unwrapped.task, 'success_threshold'):
                     raise ValueError(
-                        "Environment cfg_task must have 'success_threshold' parameter. "
-                        "Example: cfg_task.success_threshold = 0.02"
+                        "Environment task must have 'success_threshold' parameter. "
+                        "Example: task.success_threshold = 0.02"
                     )
 
-                success_threshold = self.unwrapped.cfg_task.success_threshold
-                check_rot = getattr(self.unwrapped.cfg_task, 'name', '') == "nut_thread"
+                success_threshold = self.unwrapped.task.success_threshold
+                check_rot = getattr(self.unwrapped.task, 'name', '') == "nut_thread"
                 curr_successes = self.unwrapped._get_curr_successes(success_threshold, check_rot)
             except Exception as e:
                 print(f"Warning: Could not get success status: {e}")
@@ -204,13 +204,13 @@ class FactoryMetricsWrapper(gym.Wrapper):
         if hasattr(self.unwrapped, '_get_curr_successes'):
             try:
                 # Require explicit engagement threshold
-                if not hasattr(self.unwrapped.cfg_task, 'engage_threshold'):
+                if not hasattr(self.unwrapped.task, 'engage_threshold'):
                     raise ValueError(
-                        "Environment cfg_task must have 'engage_threshold' parameter for engagement tracking. "
-                        "Example: cfg_task.engage_threshold = 0.05"
+                        "Environment task must have 'engage_threshold' parameter for engagement tracking. "
+                        "Example: task.engage_threshold = 0.05"
                     )
 
-                engage_threshold = self.unwrapped.cfg_task.engage_threshold
+                engage_threshold = self.unwrapped.task.engage_threshold
                 curr_engaged = self.unwrapped._get_curr_successes(engage_threshold, False)
             except Exception as e:
                 print(f"Warning: Could not get engagement status: {e}")
