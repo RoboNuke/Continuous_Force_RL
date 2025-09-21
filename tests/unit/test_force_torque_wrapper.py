@@ -581,6 +581,51 @@ class TestForceTorqueWrapperFactoryObservation:
         assert isinstance(result["policy"], torch.Tensor)
         assert isinstance(result["critic"], torch.Tensor)
 
+    def test_create_minimal_observations(self):
+        """Test minimal observation creation fallback."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        result = wrapper._create_minimal_observations()
+
+        assert isinstance(result, dict)
+        assert "policy" in result
+        assert "critic" in result
+        assert isinstance(result["policy"], torch.Tensor)
+        assert isinstance(result["critic"], torch.Tensor)
+
+        # Check tensor dimensions
+        assert result["policy"].shape[0] == env.num_envs
+        assert result["critic"].shape[0] == env.num_envs
+
+        # Should have at least force_torque (6) + prev_actions (6) + fingertip_pos (3) = 15 dimensions
+        assert result["policy"].shape[1] >= 15
+
+    def test_create_minimal_observations_without_attributes(self):
+        """Test minimal observation creation when environment attributes are missing."""
+        env = MockBaseEnv()
+
+        # Remove attributes to test fallback behavior
+        delattr(env, 'fingertip_midpoint_pos')
+        if hasattr(env, 'actions'):
+            delattr(env, 'actions')
+
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        result = wrapper._create_minimal_observations()
+
+        assert isinstance(result, dict)
+        assert "policy" in result
+        assert "critic" in result
+        assert isinstance(result["policy"], torch.Tensor)
+        assert isinstance(result["critic"], torch.Tensor)
+
+        # Check tensor dimensions - should still have force_torque (6) + prev_actions (6) + fingertip_pos (3) = 15
+        assert result["policy"].shape[0] == env.num_envs
+        assert result["policy"].shape[1] == 15  # Force torque + actions + fingertip pos
+
 
 if __name__ == "__main__":
     pytest.main([__file__])

@@ -347,51 +347,72 @@ class ForceTorqueWrapper(gym.Wrapper):
 
         This is a fallback when we can't override _get_factory_obs_state_dict.
         """
-        # Create observations manually when factory utils are not available or when catching KeyError
+        # Try to call the original factory environment's _get_factory_obs_state_dict if it exists
+        if hasattr(self.unwrapped, '_get_factory_obs_state_dict'):
+            try:
+                obs_dict, state_dict = self.unwrapped._get_factory_obs_state_dict()
 
-        # Create basic observation dictionary
-        obs_dict = {
-            "prev_actions": getattr(self.unwrapped, 'actions', torch.zeros((self.unwrapped.num_envs, 6), device=self.unwrapped.device)),
-        }
+                # Add force-torque observation to both dictionaries
+                if hasattr(self.unwrapped, 'robot_force_torque'):
+                    force_torque_obs = self.get_force_torque_observation()
+                    obs_dict['force_torque'] = force_torque_obs
+                    state_dict['force_torque'] = force_torque_obs
 
-        # Add basic factory observations if available
-        if hasattr(self.unwrapped, 'fingertip_midpoint_pos'):
-            obs_dict["fingertip_pos"] = self.unwrapped.fingertip_midpoint_pos
-        if hasattr(self.unwrapped, 'fingertip_midpoint_quat'):
-            obs_dict["fingertip_quat"] = self.unwrapped.fingertip_midpoint_quat
-        if hasattr(self.unwrapped, 'ee_linvel_fd'):
-            obs_dict["ee_linvel"] = self.unwrapped.ee_linvel_fd
-        if hasattr(self.unwrapped, 'ee_angvel_fd'):
-            obs_dict["ee_angvel"] = self.unwrapped.ee_angvel_fd
+                # Use factory_utils to collapse the dictionaries
+                try:
+                    import isaaclab_tasks.direct.factory.factory_utils as factory_utils
+                    obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.unwrapped.cfg.obs_order + ["prev_actions"])
+                    state_tensors = factory_utils.collapse_obs_dict(state_dict, self.unwrapped.cfg.state_order + ["prev_actions"])
+                    return {"policy": obs_tensors, "critic": state_tensors}
+                except Exception:
+                    # If factory_utils fails, just create minimal observations
+                    return self._create_minimal_observations()
 
-        # Add force-torque observation
+            except Exception:
+                # If _get_factory_obs_state_dict fails, create minimal observations
+                return self._create_minimal_observations()
+        else:
+            # No factory obs state dict method available, create minimal observations
+            return self._create_minimal_observations()
+
+    def _create_minimal_observations(self):
+        """
+        Create minimal valid observations when all else fails.
+
+        This ensures we always return something SKRL can process.
+        """
+        num_envs = self.unwrapped.num_envs
+        device = self.unwrapped.device
+
+        # Create minimal observation with just force-torque and prev_actions
+        obs_components = []
+
+        # Add force-torque observation if available
         if hasattr(self.unwrapped, 'robot_force_torque'):
             force_torque_obs = self.get_force_torque_observation()
-            obs_dict['force_torque'] = force_torque_obs
+            obs_components.append(force_torque_obs)  # Shape: (num_envs, 6)
 
-        # Create state dict (copy of obs_dict for simplicity)
-        state_dict = obs_dict.copy()
+        # Add previous actions if available
+        if hasattr(self.unwrapped, 'actions') and self.unwrapped.actions is not None:
+            obs_components.append(self.unwrapped.actions)
+        else:
+            # Default previous actions - match typical factory environment action space
+            prev_actions = torch.zeros((num_envs, 6), device=device)
+            obs_components.append(prev_actions)
 
-        # Use factory_utils to collapse the dictionaries if available
-        try:
-            import isaaclab_tasks.direct.factory.factory_utils as factory_utils
-            obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.unwrapped.cfg.obs_order + ["prev_actions"])
-            state_tensors = factory_utils.collapse_obs_dict(state_dict, self.unwrapped.cfg.state_order + ["prev_actions"])
-            return {"policy": obs_tensors, "critic": state_tensors}
-        except Exception:
-            # Fallback: simple concatenation when factory_utils is not available
-            obs_list = []
-            for obs_name in self.unwrapped.cfg.obs_order + ["prev_actions"]:
-                if obs_name in obs_dict:
-                    obs_list.append(obs_dict[obs_name])
+        # Add basic environment state if available (fingertip position as minimal state)
+        if hasattr(self.unwrapped, 'fingertip_midpoint_pos'):
+            obs_components.append(self.unwrapped.fingertip_midpoint_pos)  # Shape: (num_envs, 3)
+        else:
+            # Fallback fingertip position
+            fingertip_pos = torch.zeros((num_envs, 3), device=device)
+            obs_components.append(fingertip_pos)
 
-            if obs_list:
-                obs_tensor = torch.cat(obs_list, dim=-1)
-                return {"policy": obs_tensor, "critic": obs_tensor}
-            else:
-                # Ultimate fallback
-                return {"policy": torch.zeros((self.unwrapped.num_envs, 1), device=self.unwrapped.device),
-                        "critic": torch.zeros((self.unwrapped.num_envs, 1), device=self.unwrapped.device)}
+        # Concatenate all observation components
+        obs_tensor = torch.cat(obs_components, dim=-1)
+
+        # For factory environments, policy and critic usually get the same observations
+        return {"policy": obs_tensor, "critic": obs_tensor}
 
     def step(self, action):
         """Step the environment and ensure wrapper is initialized."""
