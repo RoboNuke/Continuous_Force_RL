@@ -371,6 +371,12 @@ class MockEnvConfig:
 class MockTask:
     """Mock task configuration."""
     def __init__(self):
+        # Isaac Lab required attributes
+        self.duration_s = 10.0
+        self.fixed_asset = "mock_fixed_asset"
+        self.held_asset = "mock_held_asset"
+
+        # Custom attributes (for testing overrides)
         self.success_threshold = 0.02
         self.engage_threshold = 0.05
         self.name = "factory_task"
