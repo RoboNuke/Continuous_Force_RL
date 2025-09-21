@@ -257,13 +257,13 @@ def main():
         print("  - Applying HybridForcePositionWrapper")
         env = lUtils.apply_hybrid_control_wrapper(env, wrappers_config['hybrid_control'])
 
-    if wrappers_config.get('factory_metrics', {}).get('enabled', False):
-        print("  - Applying FactoryMetricsWrapper")
-        env = lUtils.apply_factory_metrics_wrapper(env, derived)
-
     if wrappers_config.get('wandb_logging', {}).get('enabled', False):
         print("  - Applying GenericWandbLoggingWrapper")
         env = lUtils.apply_wandb_logging_wrapper(env, wrappers_config['wandb_logging'], derived, agent_cfg, env_cfg, resolved_config)
+
+    if wrappers_config.get('factory_metrics', {}).get('enabled', False):
+        print("  - Applying FactoryMetricsWrapper")
+        env = lUtils.apply_factory_metrics_wrapper(env, derived)
 
     if wrappers_config.get('action_logging', {}).get('enabled', False):
         print("  - Applying EnhancedActionLoggingWrapper")
