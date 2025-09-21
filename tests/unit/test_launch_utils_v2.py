@@ -691,7 +691,7 @@ class TestAgentCreation:
         mock_optimizer.return_value = Mock()
 
         agent = launch_utils.create_block_ppo_agents(
-            env_cfg, agent_cfg, env, models, memory, derived, learning_config
+            env_cfg, agent_cfg, env, models, memory, derived
         )
 
         # Check that BlockPPO was called

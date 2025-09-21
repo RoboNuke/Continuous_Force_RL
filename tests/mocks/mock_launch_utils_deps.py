@@ -247,8 +247,15 @@ def create_mock_agent_config():
             'num_envs': 16,
             'rewards_shaper_scale': 1.0,
             'learning_rate': 0.0003,
+            'policy_learning_rate': 0.001,
+            'critic_learning_rate': 0.001,
             'batch_size': 32,
             'entropy_coeff': 0.0,
+            'optimizer': {
+                'betas': [0.9, 0.999],
+                'eps': 1e-8,
+                'weight_decay': 0.0
+            },
             'hybrid_agent': {
                 'unit_std_init': False,
                 'pos_init_std': 0.1,

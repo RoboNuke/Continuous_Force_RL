@@ -389,6 +389,11 @@ class MockCtrl:
         self.rot_action_threshold = [0.1, 0.1, 0.1]
         self.default_task_force_gains = [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
         self.force_action_threshold = [10.0, 10.0, 10.0]
+        self.torque_action_threshold = [1.0, 1.0, 1.0]
+
+    def get(self, key, default=None):
+        """Support dict-like access."""
+        return getattr(self, key, default)
 
 
 # Mock Isaac Lab modules structure

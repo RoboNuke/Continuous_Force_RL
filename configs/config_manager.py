@@ -16,6 +16,9 @@ import torch
 class ConfigManager:
     """Manages configuration loading and resolution."""
 
+    # Class-level source tracking
+    _config_sources = {}
+
     @staticmethod
     def load_and_resolve_config(config_path: str, overrides: Optional[List[str]] = None) -> Dict[str, Any]:
         """
@@ -28,6 +31,9 @@ class ConfigManager:
         Returns:
             Fully resolved configuration dictionary
         """
+        # Clear previous source tracking
+        ConfigManager._config_sources = {}
+
         # Load main config
         config = ConfigManager._load_yaml_file(config_path)
 
@@ -35,11 +41,23 @@ class ConfigManager:
         if 'base' in config:
             base_path = ConfigManager._resolve_config_path(config['base'], config_path)
             base_config = ConfigManager._load_yaml_file(base_path)
+
+            # Track base config sources
+            ConfigManager._track_config_sources(base_config, 'base')
+
+            # Track local override sources
+            ConfigManager._track_config_sources(config, 'local_override')
+
             config = ConfigManager._merge_configs(base_config, config)
+        else:
+            # No base config, all current values are from local file
+            ConfigManager._track_config_sources(config, 'local_override')
 
         # Apply CLI overrides
         if overrides:
             for override in overrides:
+                key, _ = override.split('=', 1)
+                ConfigManager._config_sources[key] = 'cli_override'
                 ConfigManager._apply_override(config, override)
 
         # Resolve configuration
@@ -62,11 +80,28 @@ class ConfigManager:
             if '.' in key:
                 ConfigManager._set_nested_attr(env_cfg, key, value)
             else:
-                # Convert dictionaries to objects for dot notation access
+                # Handle dictionary configurations that need to be merged with existing Isaac Lab configs
                 if isinstance(value, dict):
-                    # Create a simple object from the dictionary
-                    config_obj = type(f'{key.title()}Config', (), value)()
-                    setattr(env_cfg, key, config_obj)
+                    existing_config = getattr(env_cfg, key, None)
+                    if existing_config is not None:
+                        # Check if existing config is an object (with attributes) or a dictionary
+                        if isinstance(existing_config, dict):
+                            # Existing config is a dictionary, merge directly
+                            print(f"[CONFIG]: Merging {key} properties into existing dictionary configuration")
+                            for prop_key, prop_value in value.items():
+                                print(f"[CONFIG]:   Setting {key}[{prop_key}] = {prop_value}")
+                                existing_config[prop_key] = prop_value
+                        else:
+                            # Existing config is an object, merge using setattr
+                            print(f"[CONFIG]: Merging {key} properties into existing Isaac Lab configuration object")
+                            for prop_key, prop_value in value.items():
+                                print(f"[CONFIG]:   Setting {key}.{prop_key} = {prop_value}")
+                                setattr(existing_config, prop_key, prop_value)
+                    else:
+                        # No existing config, create a new object from our dictionary
+                        print(f"[CONFIG]: Creating new {key} configuration object")
+                        config_obj = type(f'{key.title()}Config', (), value)()
+                        setattr(env_cfg, key, config_obj)
                 else:
                     # Set attribute directly (whether it exists or not)
                     setattr(env_cfg, key, value)
@@ -226,6 +261,26 @@ class ConfigManager:
             return config
 
     @staticmethod
+    def _track_config_sources(config: Dict, source_type: str, path_prefix: str = ""):
+        """
+        Recursively track configuration sources for all keys.
+
+        Args:
+            config: Configuration dictionary to track
+            source_type: Type of source ('base', 'local_override', 'cli_override')
+            path_prefix: Current path prefix for nested keys
+        """
+        for key, value in config.items():
+            current_path = f"{path_prefix}.{key}" if path_prefix else key
+
+            # Track this key's source
+            ConfigManager._config_sources[current_path] = source_type
+
+            # Recursively track nested dictionaries
+            if isinstance(value, dict):
+                ConfigManager._track_config_sources(value, source_type, current_path)
+
+    @staticmethod
     def _get_nested_value(config: Dict, key_path: str) -> Any:
         """Get nested value from configuration using dot notation."""
         keys = key_path.split('.')
@@ -245,6 +300,62 @@ class ConfigManager:
                 raise ValueError(f"Reference not found: {key_path}")
 
         return current
+
+    @staticmethod
+    def print_env_config(env_cfg: Any) -> None:
+        """Print environment configuration with color-coded source tracking."""
+        from learning.config_printer import print_config
+        ConfigManager._print_color_legend()
+        print_config("Environment Configuration", env_cfg, color_map=ConfigManager._config_sources)
+
+    @staticmethod
+    def print_agent_config(agent_cfg: Any) -> None:
+        """Print agent configuration with color-coded source tracking."""
+        from learning.config_printer import print_config
+        print_config("Agent Configuration", agent_cfg, color_map=ConfigManager._config_sources)
+
+    @staticmethod
+    def print_model_config(model_cfg: Any) -> None:
+        """Print model configuration with color-coded source tracking."""
+        from learning.config_printer import print_config
+        print_config("Model Configuration", model_cfg, color_map=ConfigManager._config_sources)
+
+    @staticmethod
+    def print_task_config(task_cfg: Any) -> None:
+        """Print task configuration with color-coded source tracking."""
+        from learning.config_printer import print_config
+        print_config("Task Configuration", task_cfg, color_map=ConfigManager._config_sources)
+
+    @staticmethod
+    def print_control_config(ctrl_cfg: Any) -> None:
+        """Print control configuration with color-coded source tracking."""
+        from learning.config_printer import print_config
+        print_config("Control Configuration", ctrl_cfg, color_map=ConfigManager._config_sources)
+
+    @staticmethod
+    def print_config_sources() -> None:
+        """Print all tracked configuration sources for debugging."""
+        print("\n🔍 Configuration Source Tracking:")
+        print("=" * 50)
+        if not ConfigManager._config_sources:
+            print("No source tracking data available.")
+            return
+
+        from learning.config_printer import Colors
+        for path, source in sorted(ConfigManager._config_sources.items()):
+            if source == 'local_override':
+                print(f"{Colors.BLUE}{path}{Colors.RESET}: {source}")
+            elif source == 'cli_override':
+                print(f"{Colors.GREEN}{path}{Colors.RESET}: {source}")
+            else:
+                print(f"{path}: {source}")
+        print("=" * 50)
+
+    @staticmethod
+    def _print_color_legend():
+        """Print color legend for configuration source tracking."""
+        from learning.config_printer import Colors
+        print(f"\n🎨 Configuration Colors: {Colors.BLUE}Local overrides{Colors.RESET} | {Colors.GREEN}CLI overrides{Colors.RESET} | Default (base values)")
 
 
 # ===== INTEGRATED LOGGING CONFIGURATION SYSTEM =====

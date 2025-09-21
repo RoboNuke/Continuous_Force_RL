@@ -9,6 +9,7 @@ import sys
 
 from skrl.resources.schedulers.torch import KLAdaptiveLR
 from models.SimBa_hybrid_control import HybridControlBlockSimBaActor
+from configs.config_manager import ConfigManager
 
 # Isaac Lab utilities are imported but not used in this file
 # They may be needed for future functionality
@@ -280,6 +281,10 @@ def apply_model_config(agent_cfg, model_config):
         apply_model_config(agent_cfg, model_config)
     """
     """Apply model configuration to agent."""
+
+    # Debug: Print model configuration being applied
+    ConfigManager.print_model_config(model_config)
+
     # Ensure models section exists
     if 'models' not in agent_cfg:
         agent_cfg['models'] = {}
@@ -784,7 +789,7 @@ def setup_preprocessors(env_cfg, agent_cfg, env, learning_config):
     # Per-agent preprocessors are handled directly in create_block_ppo_agents function.
     # Keeping this function for backward compatibility with other agent types.
 
-    if agent_config.get('state_preprocessor', True):
+    if learning_config.get('state_preprocessor', True):
         agent_cfg['agent']["state_preprocessor"] = RunningStandardScaler
         agent_cfg['agent']["state_preprocessor_kwargs"] = {
             "size": env.cfg.observation_space + env.cfg.state_space,
@@ -792,7 +797,7 @@ def setup_preprocessors(env_cfg, agent_cfg, env, learning_config):
         }
         print("  - State preprocessor enabled (shared - legacy mode)")
 
-    if agent_config.get('value_preprocessor', True):
+    if learning_config.get('value_preprocessor', True):
         agent_cfg['agent']["value_preprocessor"] = RunningStandardScaler
         agent_cfg['agent']["value_preprocessor_kwargs"] = {"size": 1, "device": env_cfg.sim.device}
         print("  - Value preprocessor enabled (shared - legacy mode)")
