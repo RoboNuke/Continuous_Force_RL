@@ -76,7 +76,22 @@ class ConfigManager:
 
         # Apply environment overrides
         for key, value in environment.items():
-            # Log what we're applying
+            # Handle critical Isaac Lab configuration objects specially
+            if key in ['task', 'ctrl'] and isinstance(value, dict):
+                existing_config = getattr(env_cfg, key, None)
+                if existing_config is not None:
+                    print(f"[CONFIG]: Merging {key} parameters into existing Isaac Lab {key} object")
+                    for prop_key, prop_value in value.items():
+                        if hasattr(existing_config, prop_key):
+                            print(f"[CONFIG]:   Updating {key}.{prop_key}: {getattr(existing_config, prop_key)} -> {prop_value}")
+                        else:
+                            print(f"[CONFIG]:   Adding new {key}.{prop_key} = {prop_value}")
+                        setattr(existing_config, prop_key, prop_value)
+                else:
+                    print(f"[CONFIG]: WARNING - Isaac Lab {key} object not found, cannot merge {key} parameters")
+                continue
+
+            # Log what we're applying for other keys
             existing_value = getattr(env_cfg, key, "NOT_SET") if hasattr(env_cfg, key) else "NOT_SET"
             print(f"[CONFIG]: Applying {key}: {existing_value} -> {value}")
 

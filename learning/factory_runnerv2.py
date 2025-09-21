@@ -197,6 +197,14 @@ def main():
         }
     }
 
+    # Merge agent configuration from resolved config
+    agent_config_from_file = resolved_config.get('agent', {})
+    if agent_config_from_file:
+        print("[INFO]: Merging agent configuration from config file")
+        for key, value in agent_config_from_file.items():
+            agent_cfg['agent'][key] = value
+            print(f"[CONFIG]: Setting agent.{key} = {value}")
+
     print("Ckpt Path:", derived.get('ckpt_tracker_path', "/nfs/stak/users/brownhun/ckpt_tracker2.txt"))
 
     # Step 1: Apply basic configuration to Isaac Lab configs
