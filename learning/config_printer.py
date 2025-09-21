@@ -138,6 +138,14 @@ def _print_object(obj: Any, indent_level: int = 0, max_depth: int = 3, current_d
                     print(f" {value_color}{formatted_list}{Colors.RESET}")
                 else:
                     print(f" {formatted_list}")
+            elif hasattr(value, '__dict__') and (value.__class__.__name__.endswith('Cfg') or value.__class__.__name__.endswith('Config')):
+                # Config classes - print inline with just class name
+                value_color = _get_color_for_path(key_path, color_map)
+                class_name = value.__class__.__name__
+                if value_color:
+                    print(f" {value_color}{class_name}{Colors.RESET}")
+                else:
+                    print(f" {class_name}")
             else:
                 print()  # New line for complex objects
                 _print_object(value, indent_level + 1, max_depth, current_depth + 1, color_map, key_path)
@@ -174,8 +182,16 @@ def _print_object(obj: Any, indent_level: int = 0, max_depth: int = 3, current_d
     if hasattr(obj, '__dict__'):
         class_name = obj.__class__.__name__
 
-        # For classes/objects, just show the class name instead of dumping all attributes
-        print(f"{indent}<{class_name} object>")
+        # For config classes (like ArticulationCfg), show just the class name
+        if class_name.endswith('Cfg') or class_name.endswith('Config'):
+            color = _get_color_for_path(path_prefix, color_map)
+            if color:
+                print(f"{indent}{color}{class_name}{Colors.RESET}")
+            else:
+                print(f"{indent}{class_name}")
+        else:
+            # For other classes/objects, show as object
+            print(f"{indent}<{class_name} object>")
         return
 
     # Fallback for other object types
