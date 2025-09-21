@@ -157,7 +157,24 @@ class HybridForcePositionWrapper(gym.Wrapper):
             return
 
         # Check for required force-torque data
-        if not hasattr(self.unwrapped, 'robot_force_torque'):
+        # Search through the wrapper chain to find robot_force_torque
+        force_torque_found = False
+        current_env = self.env
+
+        while current_env is not None:
+            if hasattr(current_env, 'robot_force_torque'):
+                force_torque_found = True
+                break
+            # Move up the wrapper chain
+            if hasattr(current_env, 'env'):
+                current_env = current_env.env
+            elif hasattr(current_env, 'unwrapped'):
+                current_env = current_env.unwrapped
+                break
+            else:
+                break
+
+        if not force_torque_found:
             raise ValueError(
                 "ERROR: Hybrid force-position control requires force-torque sensor data.\n"
                 "\n"
@@ -169,6 +186,9 @@ class HybridForcePositionWrapper(gym.Wrapper):
                 "The ForceTorqueWrapper must be enabled and applied before HybridForcePositionWrapper.\n"
                 "This is a required dependency that must be explicitly configured."
             )
+
+        # Store reference to the environment that has force-torque data
+        self._force_torque_env = current_env
 
         # Store and override methods
         if hasattr(self.unwrapped, '_pre_physics_step'):
@@ -184,6 +204,11 @@ class HybridForcePositionWrapper(gym.Wrapper):
             self.unwrapped._update_rew_buf = self._wrapped_update_rew_buf
 
         self._wrapper_initialized = True
+
+    @property
+    def robot_force_torque(self):
+        """Access force-torque data from the correct environment in the wrapper chain."""
+        return self._force_torque_env.robot_force_torque
 
 
     def _wrapped_pre_physics_step(self, action):
@@ -326,7 +351,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
         else:
             force_bounds = self.ctrl_cfg.force_action_bounds
         self.force_goal[:, :3] = torch.clip(
-            force_delta[:, :3] + self.unwrapped.robot_force_torque[:, :3],
+            force_delta[:, :3] + self.robot_force_torque[:, :3],
             -force_bounds[0], force_bounds[0]
         )
 
@@ -354,7 +379,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
             torque_delta = force_delta[:, 3:] * torque_threshold[0] / force_threshold[0]
             self.force_goal[:, 3:] = torch.clip(
-                torque_delta + self.unwrapped.robot_force_torque[:, 3:],
+                torque_delta + self.robot_force_torque[:, 3:],
                 -torque_bounds[0], torque_bounds[0]
             )
 
@@ -449,7 +474,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
         force_wrench = compute_force_task_wrench(
             cfg=self.unwrapped.cfg,
             dof_pos=self.unwrapped.joint_pos,
-            eef_force=self.unwrapped.robot_force_torque,
+            eef_force=self.robot_force_torque,
             ctrl_target_force=self.target_force_for_control,
             task_gains=self.kp,
             device=self.unwrapped.device
@@ -505,9 +530,9 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
     def _simple_force_reward(self):
         """Simple force activity reward."""
-        active_force = torch.abs(self.unwrapped.robot_force_torque[:, :self.force_size]) > self.task_cfg.force_active_threshold
+        active_force = torch.abs(self.robot_force_torque[:, :self.force_size]) > self.task_cfg.force_active_threshold
         if self.force_size > 3:
-            active_force[:, 3:] = torch.abs(self.unwrapped.robot_force_torque[:, 3:]) > self.task_cfg.torque_active_threshold
+            active_force[:, 3:] = torch.abs(self.robot_force_torque[:, 3:]) > self.task_cfg.torque_active_threshold
 
         force_ctrl = self.sel_matrix[:, :self.force_size].bool()
 
@@ -523,9 +548,9 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
     def _directional_force_reward(self):
         """Direction-specific force reward."""
-        active_force = torch.abs(self.unwrapped.robot_force_torque[:, :self.force_size]) > self.task_cfg.force_active_threshold
+        active_force = torch.abs(self.robot_force_torque[:, :self.force_size]) > self.task_cfg.force_active_threshold
         if self.force_size > 3:
-            active_force[:, 3:] = torch.abs(self.unwrapped.robot_force_torque[:, 3:]) > self.task_cfg.torque_active_threshold
+            active_force[:, 3:] = torch.abs(self.robot_force_torque[:, 3:]) > self.task_cfg.torque_active_threshold
 
         force_ctrl = self.sel_matrix[:, :self.force_size].bool()
 
@@ -552,9 +577,9 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
     def _position_simple_reward(self):
         """Position-focused simple force reward."""
-        active_force = torch.abs(self.unwrapped.robot_force_torque[:, :self.force_size]) > self.task_cfg.force_active_threshold
+        active_force = torch.abs(self.robot_force_torque[:, :self.force_size]) > self.task_cfg.force_active_threshold
         if self.force_size > 3:
-            active_force[:, 3:] = torch.abs(self.unwrapped.robot_force_torque[:, 3:]) > self.task_cfg.torque_active_threshold
+            active_force[:, 3:] = torch.abs(self.robot_force_torque[:, 3:]) > self.task_cfg.torque_active_threshold
 
         force_ctrl = self.sel_matrix[:, :self.force_size].bool()
 
