@@ -89,11 +89,17 @@ def _print_object(obj: Any, indent_level: int = 0, max_depth: int = 3, current_d
             print(f"{indent}[]")
             return
 
-        # If all items are simple types, print on one line
-        if len(obj) <= 5 and all(isinstance(item, (str, int, float, bool, type(None))) for item in obj):
+        # If all items are simple types (not dicts/lists), print on one line regardless of length
+        if all(isinstance(item, (str, int, float, bool, type(None))) for item in obj):
             formatted_items = [_format_value(item) for item in obj]
-            print(f"{indent}[{', '.join(formatted_items)}]")
+            color = _get_color_for_path(path_prefix, color_map)
+            formatted_list = f"[{', '.join(formatted_items)}]"
+            if color:
+                print(f"{indent}{color}{formatted_list}{Colors.RESET}")
+            else:
+                print(f"{indent}{formatted_list}")
         else:
+            # Only break out complex items (dicts, lists) with dashes
             for i, item in enumerate(obj):
                 print(f"{indent}- ")
                 item_path = f"{path_prefix}[{i}]" if path_prefix else f"[{i}]"
@@ -123,7 +129,8 @@ def _print_object(obj: Any, indent_level: int = 0, max_depth: int = 3, current_d
                     print(f" {value_color}{formatted_value}{Colors.RESET}")
                 else:
                     print(f" {formatted_value}")
-            elif isinstance(value, (list, tuple)) and len(value) <= 3 and all(isinstance(item, (str, int, float, bool)) for item in value):
+            elif isinstance(value, (list, tuple)) and all(isinstance(item, (str, int, float, bool, type(None))) for item in value):
+                # All simple types in list - print inline regardless of length
                 formatted_items = [_format_value(item) for item in value]
                 value_color = _get_color_for_path(key_path, color_map)
                 formatted_list = f"[{', '.join(formatted_items)}]"
@@ -166,31 +173,9 @@ def _print_object(obj: Any, indent_level: int = 0, max_depth: int = 3, current_d
     # Handle objects with attributes (general case)
     if hasattr(obj, '__dict__'):
         class_name = obj.__class__.__name__
-        print(f"{indent}# {class_name}")
 
-        # Get public attributes (not starting with _)
-        public_attrs = {k: v for k, v in obj.__dict__.items() if not k.startswith('_')}
-
-        if not public_attrs:
-            print(f"{indent}<no public attributes>")
-            return
-
-        for attr_name, attr_value in public_attrs.items():
-            print(f"{indent}{attr_name}:", end="")
-
-            # If value is simple, print on same line
-            if isinstance(attr_value, (str, int, float, bool, type(None))):
-                attr_path = f"{path_prefix}.{attr_name}" if path_prefix else attr_name
-                value_color = _get_color_for_path(attr_path, color_map)
-                formatted_value = _format_value(attr_value)
-                if value_color:
-                    print(f" {value_color}{formatted_value}{Colors.RESET}")
-                else:
-                    print(f" {formatted_value}")
-            else:
-                print()  # New line for complex objects
-                attr_path = f"{path_prefix}.{attr_name}" if path_prefix else attr_name
-                _print_object(attr_value, indent_level + 1, max_depth, current_depth + 1, color_map, attr_path)
+        # For classes/objects, just show the class name instead of dumping all attributes
+        print(f"{indent}<{class_name} object>")
         return
 
     # Fallback for other object types

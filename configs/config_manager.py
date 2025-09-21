@@ -45,13 +45,13 @@ class ConfigManager:
             # Track base config sources
             ConfigManager._track_config_sources(base_config, 'base')
 
-            # Track local override sources
-            ConfigManager._track_config_sources(config, 'local_override')
+            # Track local override sources (only for keys that override base)
+            ConfigManager._track_config_sources(config, 'local_override', base_config)
 
             config = ConfigManager._merge_configs(base_config, config)
         else:
-            # No base config, all current values are from local file
-            ConfigManager._track_config_sources(config, 'local_override')
+            # No base config, all current values are base values
+            ConfigManager._track_config_sources(config, 'base')
 
         # Apply CLI overrides
         if overrides:
@@ -70,6 +70,9 @@ class ConfigManager:
         """Apply configuration to Isaac Lab environment and agent configs."""
         environment = resolved_config.get('environment', {})
         primary = resolved_config.get('primary', {})
+
+        # Validate critical Isaac Lab configuration objects before applying overrides
+        ConfigManager._validate_isaac_lab_config_objects(env_cfg, environment)
 
         # Apply environment overrides
         for key, value in environment.items():
@@ -105,6 +108,65 @@ class ConfigManager:
                 else:
                     # Set attribute directly (whether it exists or not)
                     setattr(env_cfg, key, value)
+
+    @staticmethod
+    def _validate_isaac_lab_config_objects(env_cfg, environment_overrides):
+        """
+        Validate that Isaac Lab environment has required configuration objects.
+
+        Ensures that critical configuration objects (task, ctrl) exist and are proper
+        Isaac Lab objects (not dictionaries) before we attempt to merge custom
+        configurations. This prevents accidentally creating new objects that are
+        missing Isaac Lab's required attributes.
+
+        Args:
+            env_cfg: Isaac Lab environment configuration object
+            environment_overrides: Dictionary of environment configuration overrides
+
+        Raises:
+            ValueError: If required configuration objects are missing or invalid
+        """
+        # List of critical configuration keys that should be objects, not dicts
+        critical_config_keys = ['task', 'ctrl']
+
+        # Only validate keys that we're trying to override
+        keys_to_validate = [key for key in critical_config_keys
+                           if key in environment_overrides and isinstance(environment_overrides[key], dict)]
+
+        for key in keys_to_validate:
+            if not hasattr(env_cfg, key):
+                raise ValueError(
+                    f"Isaac Lab environment configuration is missing required '{key}' attribute. "
+                    f"This suggests the environment was not properly initialized with Isaac Lab defaults. "
+                    f"Cannot safely merge custom configuration."
+                )
+
+            existing_obj = getattr(env_cfg, key)
+
+            # Check that it's not a plain dictionary (should be a proper config object)
+            if isinstance(existing_obj, dict):
+                raise ValueError(
+                    f"Isaac Lab environment '{key}' configuration is a dictionary instead of a proper "
+                    f"configuration object. This suggests Isaac Lab was not properly loaded. "
+                    f"Expected a configclass or similar object with attributes, got: {type(existing_obj)}"
+                )
+
+            # Additional check: ensure it has some expected Isaac Lab attributes
+            if key == 'task' and not (hasattr(existing_obj, 'duration_s') or hasattr(existing_obj, 'fixed_asset') or hasattr(existing_obj, 'held_asset')):
+                raise ValueError(
+                    f"Isaac Lab task configuration object does not have expected Isaac Lab attributes "
+                    f"(duration_s, fixed_asset, held_asset). This suggests the task object is not a "
+                    f"proper Isaac Lab configuration. Got object: {existing_obj}"
+                )
+
+            if key == 'ctrl' and not (hasattr(existing_obj, 'default_task_prop_gains') or hasattr(existing_obj, 'default_task_force_gains')):
+                raise ValueError(
+                    f"Isaac Lab ctrl configuration object does not have expected Isaac Lab attributes "
+                    f"(default_task_prop_gains, default_task_force_gains). This suggests the ctrl object is not a "
+                    f"proper Isaac Lab configuration. Got object: {existing_obj}"
+                )
+
+        print(f"[CONFIG]: Validation passed - Isaac Lab configuration objects are properly initialized")
 
     @staticmethod
     def _load_yaml_file(file_path: str) -> Dict[str, Any]:
@@ -261,24 +323,38 @@ class ConfigManager:
             return config
 
     @staticmethod
-    def _track_config_sources(config: Dict, source_type: str, path_prefix: str = ""):
+    def _track_config_sources(config: Dict, source_type: str, base_config: Optional[Dict] = None, path_prefix: str = ""):
         """
         Recursively track configuration sources for all keys.
 
         Args:
             config: Configuration dictionary to track
             source_type: Type of source ('base', 'local_override', 'cli_override')
+            base_config: Base configuration to compare against (for determining actual overrides)
             path_prefix: Current path prefix for nested keys
         """
         for key, value in config.items():
             current_path = f"{path_prefix}.{key}" if path_prefix else key
 
-            # Track this key's source
-            ConfigManager._config_sources[current_path] = source_type
+            # For local overrides, only mark as override if it actually overrides base
+            if source_type == 'local_override' and base_config is not None:
+                # Check if this key exists in base and has different value
+                base_value = ConfigManager._get_nested_value_safe(base_config, current_path)
+                if base_value is None or key == 'base':  # Skip 'base' key itself
+                    # This is a true override - new key not in base
+                    ConfigManager._config_sources[current_path] = source_type
+                elif base_value != value:
+                    # This is a true override - different value from base
+                    ConfigManager._config_sources[current_path] = source_type
+                # If same as base, don't track (keep base marking)
+            else:
+                # Track this key's source (base or cli_override)
+                ConfigManager._config_sources[current_path] = source_type
 
             # Recursively track nested dictionaries
             if isinstance(value, dict):
-                ConfigManager._track_config_sources(value, source_type, current_path)
+                base_nested = ConfigManager._get_nested_value_safe(base_config, current_path) if base_config else None
+                ConfigManager._track_config_sources(value, source_type, base_nested, current_path)
 
     @staticmethod
     def _get_nested_value(config: Dict, key_path: str) -> Any:
@@ -300,6 +376,17 @@ class ConfigManager:
                 raise ValueError(f"Reference not found: {key_path}")
 
         return current
+
+    @staticmethod
+    def _get_nested_value_safe(config: Dict, key_path: str) -> Any:
+        """Get nested value from configuration using dot notation, return None if not found."""
+        if not config or not key_path:
+            return None
+
+        try:
+            return ConfigManager._get_nested_value(config, key_path)
+        except (ValueError, KeyError, TypeError):
+            return None
 
     @staticmethod
     def print_env_config(env_cfg: Any) -> None:
