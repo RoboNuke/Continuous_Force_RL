@@ -55,18 +55,24 @@ try:
     )
     import isaaclab_tasks  # noqa: F401
     from isaaclab_rl.skrl import SkrlVecEnvWrapper
-    print("isaaclab successfully loaded")
-except:
-    print("Isaaclab not successfully loaded")
-    from omni.isaac.lab.envs import (
-        DirectMARLEnv,
-        DirectMARLEnvCfg,
-        DirectRLEnvCfg,
-        ManagerBasedRLEnvCfg,
-    )
-    import omni.isaac.lab_tasks  # noqa: F401
-    from omni.isaac.lab_tasks.utils.wrappers.skrl import SkrlVecEnvWrapper
-    print("Fallback worked!")
+    print("Isaac Lab v2.0.0+ successfully loaded")
+except ImportError:
+    try:
+        from omni.isaac.lab.envs import (
+            DirectMARLEnv,
+            DirectMARLEnvCfg,
+            DirectRLEnvCfg,
+            ManagerBasedRLEnvCfg,
+        )
+        import omni.isaac.lab_tasks  # noqa: F401
+        from omni.isaac.lab_tasks.utils.wrappers.skrl import SkrlVecEnvWrapper
+        print("Isaac Lab v1.4.1 successfully loaded")
+    except ImportError:
+        print("ERROR: Could not import Isaac Lab tasks module.")
+        print("Please ensure you have either:")
+        print("  - Isaac Lab v2.0.0+ (isaaclab_tasks)")
+        print("  - Isaac Lab v1.4.1 or earlier (omni.isaac.lab_tasks)")
+        sys.exit(1)
 
 # Load configuration system
 from configs.config_manager import ConfigManager
@@ -112,7 +118,7 @@ def main():
     try:
         # Try to get the task environment configuration from Isaac Lab
         import gymnasium as gym
-        import omni.isaac.lab_tasks  # This registers the tasks
+        # Tasks module already imported in try/except block above
 
         # Get the environment configuration class for the task
         env_spec = gym.spec(args_cli.task)
