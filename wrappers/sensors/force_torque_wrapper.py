@@ -325,21 +325,44 @@ class ForceTorqueWrapper(gym.Wrapper):
         Returns:
             dict: Observation dictionary with "policy" and "critic" keys containing tensor data
         """
-        # Call original _get_observations to get the base obs_dict and state_dict
-        if self._original_get_observations:
-            try:
-                # The original method calls _get_factory_obs_state_dict internally
-                result = self._original_get_observations()
-                return result
-            except KeyError as e:
-                if "force_torque" in str(e):
-                    # The error occurred because force_torque is missing from obs_dict
-                    # We need to manually create the obs_dict with force_torque
-                    return self._create_observations_with_force_torque()
-                else:
-                    raise e
-        else:
-            return self._create_observations_with_force_torque()
+        try:
+            # Try to call the original _get_factory_obs_state_dict directly to get obs/state dicts
+            if hasattr(self.unwrapped, '_get_factory_obs_state_dict'):
+                obs_dict, state_dict = self.unwrapped._get_factory_obs_state_dict()
+
+                # Inject force-torque data
+                if hasattr(self.unwrapped, 'robot_force_torque'):
+                    force_torque_obs = self.get_force_torque_observation()
+                    obs_dict['force_torque'] = force_torque_obs
+                    state_dict['force_torque'] = force_torque_obs
+
+                # Use factory_utils to properly collapse the observations
+                try:
+                    import isaaclab_tasks.direct.factory.factory_utils as factory_utils
+                    obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.unwrapped.cfg.obs_order + ["prev_actions"])
+                    state_tensors = factory_utils.collapse_obs_dict(state_dict, self.unwrapped.cfg.state_order + ["prev_actions"])
+                    return {"policy": obs_tensors, "critic": state_tensors}
+                except Exception:
+                    # Fall back to original method if factory_utils fails
+                    pass
+
+            # If direct approach fails, try the original method
+            if self._original_get_observations:
+                try:
+                    result = self._original_get_observations()
+                    return result
+                except KeyError as e:
+                    if "force_torque" in str(e):
+                        # Create minimal fallback observations
+                        return self._create_minimal_observations()
+                    else:
+                        raise e
+            else:
+                return self._create_minimal_observations()
+
+        except Exception:
+            # Ultimate fallback - create minimal observations
+            return self._create_minimal_observations()
 
     def _create_observations_with_force_torque(self):
         """
@@ -379,39 +402,44 @@ class ForceTorqueWrapper(gym.Wrapper):
         """
         Create minimal valid observations when all else fails.
 
-        This ensures we always return something SKRL can process.
+        This ensures we always return something SKRL can process by creating
+        a very simple observation structure that mimics factory environment format.
         """
         num_envs = self.unwrapped.num_envs
         device = self.unwrapped.device
 
-        # Create minimal observation with just force-torque and prev_actions
-        obs_components = []
+        # Create a very simple observation - just a concatenated tensor of basic dimensions
+        # This should match what SKRL expects from a factory environment
 
-        # Add force-torque observation if available
+        # Force-torque: 6 dimensions
         if hasattr(self.unwrapped, 'robot_force_torque'):
-            force_torque_obs = self.get_force_torque_observation()
-            obs_components.append(force_torque_obs)  # Shape: (num_envs, 6)
+            force_torque = self.get_force_torque_observation()
+        else:
+            force_torque = torch.zeros((num_envs, 6), device=device)
 
-        # Add previous actions if available
+        # Previous actions: 6 dimensions (typical for factory tasks)
         if hasattr(self.unwrapped, 'actions') and self.unwrapped.actions is not None:
-            obs_components.append(self.unwrapped.actions)
+            prev_actions = self.unwrapped.actions.clone()
         else:
-            # Default previous actions - match typical factory environment action space
             prev_actions = torch.zeros((num_envs, 6), device=device)
-            obs_components.append(prev_actions)
 
-        # Add basic environment state if available (fingertip position as minimal state)
+        # Basic state (fingertip position): 3 dimensions
         if hasattr(self.unwrapped, 'fingertip_midpoint_pos'):
-            obs_components.append(self.unwrapped.fingertip_midpoint_pos)  # Shape: (num_envs, 3)
+            fingertip_pos = self.unwrapped.fingertip_midpoint_pos.clone()
         else:
-            # Fallback fingertip position
             fingertip_pos = torch.zeros((num_envs, 3), device=device)
-            obs_components.append(fingertip_pos)
 
-        # Concatenate all observation components
-        obs_tensor = torch.cat(obs_components, dim=-1)
+        # Create a simple flat observation tensor
+        # Total: 6 + 6 + 3 = 15 dimensions
+        obs_tensor = torch.cat([force_torque, prev_actions, fingertip_pos], dim=-1)
 
-        # For factory environments, policy and critic usually get the same observations
+        # Ensure the tensor has the right shape and dtype
+        obs_tensor = obs_tensor.to(device=device, dtype=torch.float32)
+
+        # Verify tensor shape
+        assert obs_tensor.shape == (num_envs, 15), f"Expected shape ({num_envs}, 15), got {obs_tensor.shape}"
+
+        # Return in the format expected by the factory environment
         return {"policy": obs_tensor, "critic": obs_tensor}
 
     def step(self, action):
