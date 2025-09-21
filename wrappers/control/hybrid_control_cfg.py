@@ -9,15 +9,19 @@ from dataclasses import dataclass
 from typing import List, Literal
 
 try:
-    # Try Isaac Lab v2+ import
-    from omni.isaac.lab.utils.configclass import configclass
+    # Try Isaac Lab v2+ import (isaaclab.utils.configclass)
+    from isaaclab.utils.configclass import configclass
 except ImportError:
     try:
-        # Try Isaac Sim import
-        from isaacsim.core.utils.configclass import configclass
+        # Try Isaac Lab v1.4.1 import (omni.isaac.lab.utils.configclass)
+        from omni.isaac.lab.utils.configclass import configclass
     except ImportError:
-        # Fallback to basic dataclass if Isaac Lab not available
-        configclass = dataclass
+        try:
+            # Try Isaac Sim import (isaacsim.core.utils.configclass)
+            from isaacsim.core.utils.configclass import configclass
+        except ImportError:
+            # Fallback to basic dataclass if Isaac Lab not available
+            configclass = dataclass
 
 
 @configclass

@@ -1,6 +1,10 @@
 import argparse
 import sys
-from isaaclab.app import AppLauncher
+
+try:
+    from isaaclab.app import AppLauncher
+except ImportError:
+    from omni.isaac.lab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with skrl.")
@@ -47,20 +51,31 @@ from models.default_mixin import Shared
 #from models.bro_model import BroAgent
 #from wrappers.DMP_observation_wrapper import DMPObservationWrapper
 
-from isaaclab.envs import (
-    DirectMARLEnv,
-    DirectMARLEnvCfg,
-    DirectRLEnvCfg,
-    ManagerBasedRLEnvCfg,
-    multi_agent_to_single_agent,
-)
+try:
+    from isaaclab.envs import (
+        DirectMARLEnv,
+        DirectMARLEnvCfg,
+        DirectRLEnvCfg,
+        ManagerBasedRLEnvCfg,
+        multi_agent_to_single_agent,
+    )
+    import isaaclab_tasks  # noqa: F401
+    from isaaclab_tasks.utils.hydra import hydra_task_config
+    from isaaclab_rl.skrl import SkrlVecEnvWrapper
+except ImportError:
+    from omni.isaac.lab.envs import (
+        DirectMARLEnv,
+        DirectMARLEnvCfg,
+        DirectRLEnvCfg,
+        ManagerBasedRLEnvCfg,
+        multi_agent_to_single_agent,
+    )
+    import omni.isaac.lab_tasks  # noqa: F401
+    from omni.isaac.lab_tasks.utils.hydra import hydra_task_config
+    from omni.isaac.lab_tasks.utils.wrappers.skrl import SkrlVecEnvWrapper
 
-import isaaclab_tasks  # noqa: F401
 #import envs.FPiH.config.franka
 import envs.factory
-
-from isaaclab_tasks.utils.hydra import hydra_task_config
-from isaaclab_rl.skrl import SkrlVecEnvWrapper
 from agents.wandb_logger_ppo_agent import WandbLoggerPPO
 from models.SimBa import SimBaActor, SimBaCritic
 from skrl.resources.schedulers.torch import KLAdaptiveLR
@@ -304,8 +319,12 @@ seed = args_cli.seed
 print("Seed:", seed)
 set_seed(seed)
 
-from isaaclab.sensors import TiledCameraCfg, ImuCfg
-import isaaclab.sim as sim_utils
+try:
+    from isaaclab.sensors import TiledCameraCfg, ImuCfg
+    import isaaclab.sim as sim_utils
+except ImportError:
+    from omni.isaac.lab.sensors import TiledCameraCfg, ImuCfg
+    import omni.isaac.lab.sim as sim_utils
 import time
 @hydra_task_config("Isaac-Factory-PegInsert-Local-v0", agent_cfg_entry_point)
 def main(

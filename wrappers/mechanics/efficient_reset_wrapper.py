@@ -74,7 +74,10 @@ class EfficientResetWrapper(gym.Wrapper):
                     return cls._reset_idx.__get__(self.unwrapped, type(self.unwrapped))
 
             # If DirectRLEnv not found by name, look for it by import
-            from isaaclab.envs.direct_rl_env import DirectRLEnv
+            try:
+                from isaaclab.envs.direct_rl_env import DirectRLEnv
+            except ImportError:
+                from omni.isaac.lab.envs.direct_rl_env import DirectRLEnv
             if isinstance(self.unwrapped, DirectRLEnv):
                 # Our environment inherits from DirectRLEnv, so we can use super() approach
                 # Find the factory env class and skip it
