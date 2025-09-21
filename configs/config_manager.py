@@ -338,15 +338,24 @@ class ConfigManager:
 
             # For local overrides, only mark as override if it actually overrides base
             if source_type == 'local_override' and base_config is not None:
-                # Check if this key exists in base and has different value
-                base_value = ConfigManager._get_nested_value_safe(base_config, current_path)
-                if base_value is None or key == 'base':  # Skip 'base' key itself
-                    # This is a true override - new key not in base
-                    ConfigManager._config_sources[current_path] = source_type
-                elif base_value != value:
-                    # This is a true override - different value from base
-                    ConfigManager._config_sources[current_path] = source_type
-                # If same as base, don't track (keep base marking)
+                # Skip 'base' key itself and section-level keys if they're dictionaries
+                if key == 'base':
+                    continue  # Don't track the base reference itself
+
+                # For dictionary values, we'll track their children, not the section itself
+                if isinstance(value, dict):
+                    # Don't mark the section as override, let children determine their own status
+                    pass
+                else:
+                    # For non-dict values, check if they actually override base
+                    base_value = ConfigManager._get_nested_value_safe(base_config, current_path)
+                    if base_value is None:
+                        # This is a true override - new key not in base
+                        ConfigManager._config_sources[current_path] = source_type
+                    elif base_value != value:
+                        # This is a true override - different value from base
+                        ConfigManager._config_sources[current_path] = source_type
+                    # If same as base, don't track (keep base marking)
             else:
                 # Track this key's source (base or cli_override)
                 ConfigManager._config_sources[current_path] = source_type
