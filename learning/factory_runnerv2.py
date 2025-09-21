@@ -124,9 +124,9 @@ def main():
         env_spec = gym.spec(args_cli.task)
         print(f"[DEBUG]: Found env_spec: {env_spec}")
 
-        if hasattr(env_spec, 'kwargs') and 'cfg' in env_spec.kwargs:
+        if hasattr(env_spec, 'kwargs') and 'env_cfg_entry_point' in env_spec.kwargs:
             # Use the default configuration from the task
-            env_cfg = env_spec.kwargs['cfg']()
+            env_cfg = env_spec.kwargs['env_cfg_entry_point']()
             print(f"[DEBUG]: Successfully loaded Isaac Lab config")
             print(f"[DEBUG]: Has obs_order: {hasattr(env_cfg, 'obs_order')}")
             print(f"[DEBUG]: Has state_order: {hasattr(env_cfg, 'state_order')}")

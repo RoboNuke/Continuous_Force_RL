@@ -383,6 +383,13 @@ class MockCtrl:
         self.force_action_bounds = [50.0, 50.0, 50.0]
         self.torque_action_bounds = [0.5, 0.5, 0.5]
 
+        # Additional attributes needed for hybrid control
+        self.default_task_prop_gains = [1000.0, 1000.0, 1000.0, 100.0, 100.0, 100.0]
+        self.pos_action_threshold = [0.05, 0.05, 0.05]
+        self.rot_action_threshold = [0.1, 0.1, 0.1]
+        self.default_task_force_gains = [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
+        self.force_action_threshold = [10.0, 10.0, 10.0]
+
 
 # Mock Isaac Lab modules structure
 class isaac_lab:

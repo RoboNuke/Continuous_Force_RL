@@ -226,14 +226,29 @@ def apply_learning_config(agent_cfg, learning_config, max_rollout_steps):
     """Apply learning configuration to agent."""
     # Set rollout parameters
     agent_cfg['agent']['rollouts'] = max_rollout_steps
+
+    # Ensure experiment section exists
+    if 'experiment' not in agent_cfg['agent']:
+        agent_cfg['agent']['experiment'] = {}
+
     agent_cfg['agent']['experiment']['write_interval'] = max_rollout_steps
     agent_cfg['agent']['experiment']['checkpoint_interval'] = max_rollout_steps * 10
 
-    # Apply all learning parameters
+    # Apply learning parameters - both existing and known new parameters
+    known_learning_params = {
+        'learning_rate', 'batch_size', 'entropy_coeff', 'learning_epochs',
+        'mini_batches', 'policy_learning_rate', 'critic_learning_rate',
+        'value_update_ratio', 'use_huber_value_loss', 'state_preprocessor',
+        'value_preprocessor', 'rollouts'
+    }
+
     for key, value in learning_config.items():
-        if key in agent_cfg['agent']:
+        # Apply if it's already in config or if it's a known learning parameter
+        if key in agent_cfg['agent'] or key in known_learning_params:
             agent_cfg['agent'][key] = value
             print(f"  - Set agent learning param: {key} = {value}")
+        else:
+            print(f"  - Skipping unknown learning param: {key}")
 
     print(f"  - Rollout steps set to: {max_rollout_steps}")
 
@@ -265,13 +280,38 @@ def apply_model_config(agent_cfg, model_config):
         apply_model_config(agent_cfg, model_config)
     """
     """Apply model configuration to agent."""
+    # Ensure models section exists
+    if 'models' not in agent_cfg:
+        agent_cfg['models'] = {}
+
+    # Ensure policy and value sections exist
+    if 'policy' not in agent_cfg['models']:
+        agent_cfg['models']['policy'] = {}
+    if 'value' not in agent_cfg['models']:
+        agent_cfg['models']['value'] = {}
+
     for key, value in model_config.items():
-        if key in agent_cfg['models']:
+        if key == 'actor' and isinstance(value, dict):
+            # Map actor config to policy
+            for subkey, subvalue in value.items():
+                agent_cfg['models']['policy'][subkey] = subvalue
+                print(f"  - Set policy param: {subkey} = {subvalue}")
+        elif key == 'critic' and isinstance(value, dict):
+            # Map critic config to value
+            for subkey, subvalue in value.items():
+                agent_cfg['models']['value'][subkey] = subvalue
+                print(f"  - Set value param: {subkey} = {subvalue}")
+        elif key in agent_cfg['models']:
             agent_cfg['models'][key] = value
             print(f"  - Set model param: {key} = {value}")
         elif '.' in key:
             _set_nested_attr(agent_cfg['models'], key, value)
             print(f"  - Set nested model param: {key} = {value}")
+        else:
+            # Apply to both policy and value if no specific target
+            agent_cfg['models']['policy'][key] = value
+            agent_cfg['models']['value'][key] = value
+            print(f"  - Set general model param: {key} = {value}")
 
 
 def setup_experiment_logging(env_cfg, agent_cfg, resolved_config):
@@ -304,6 +344,10 @@ def setup_experiment_logging(env_cfg, agent_cfg, resolved_config):
     """Set up experiment and logging configuration."""
     primary = resolved_config['primary']
     experiment = resolved_config.get('experiment', {})
+
+    # Ensure experiment section exists
+    if 'experiment' not in agent_cfg['agent']:
+        agent_cfg['agent']['experiment'] = {}
 
     # Set basic experiment parameters
     agent_cfg['agent']['experiment']['project'] = experiment.get('wandb_project', 'Continuous_Force_RL')
@@ -517,13 +561,14 @@ def apply_hybrid_control_wrapper(env, wrapper_config):
 
     ctrl_torque = wrapper_config.get('ctrl_torque', False)
 
-    # Create configuration objects with environment defaults
+    # Create configuration objects with environment defaults and wrapper overrides
     env_cfg_ctrl = getattr(env.unwrapped.cfg, 'cfg_ctrl', {})
     ctrl_cfg = HybridCtrlCfg(
         ema_factor=wrapper_config.get('ema_factor', 0.2),
         no_sel_ema=wrapper_config.get('no_sel_ema', True),
         target_init_mode=wrapper_config.get('target_init_mode', 'zero'),
-        default_task_force_gains=env_cfg_ctrl.get('default_task_force_gains', None),
+        default_task_force_gains=wrapper_config.get('default_task_force_gains',
+                                                   env_cfg_ctrl.get('default_task_force_gains', None)),
         force_action_bounds=env_cfg_ctrl.get('force_action_bounds', None),
         torque_action_bounds=env_cfg_ctrl.get('torque_action_bounds', None),
         force_action_threshold=env_cfg_ctrl.get('force_action_threshold', None),
@@ -1323,7 +1368,15 @@ def _configure_hybrid_agent_parameters(env_cfg, agent_cfg, model_config, wrapper
         - Unit standard deviation mode for normalized initialization
     """
     """Configure hybrid agent initialization parameters."""
-    if agent_cfg['agent']['hybrid_agent']['unit_std_init']:
+
+    # Copy hybrid agent configuration from model config to agent config
+    if 'hybrid_agent' in model_config:
+        for key, value in model_config['hybrid_agent'].items():
+            agent_cfg['agent']['hybrid_agent'][key] = value
+
+    # Check if unit_std_init is enabled
+    unit_std_init = agent_cfg['agent']['hybrid_agent'].get('unit_std_init', False)
+    if unit_std_init:
         agent_cfg['agent']['hybrid_agent']['pos_init_std'] = (1 / (env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0])) ** 2
         agent_cfg['agent']['hybrid_agent']['rot_init_std'] = (1 / (env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]))**2
         agent_cfg['agent']['hybrid_agent']['force_init_std'] = (1 / (env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]))**2
