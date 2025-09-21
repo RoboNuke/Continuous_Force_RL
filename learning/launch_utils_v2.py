@@ -784,7 +784,7 @@ def setup_preprocessors(env_cfg, agent_cfg, env, learning_config):
     # Per-agent preprocessors are handled directly in create_block_ppo_agents function.
     # Keeping this function for backward compatibility with other agent types.
 
-    if learning_config.get('state_preprocessor', True):
+    if agent_config.get('state_preprocessor', True):
         agent_cfg['agent']["state_preprocessor"] = RunningStandardScaler
         agent_cfg['agent']["state_preprocessor_kwargs"] = {
             "size": env.cfg.observation_space + env.cfg.state_space,
@@ -792,13 +792,13 @@ def setup_preprocessors(env_cfg, agent_cfg, env, learning_config):
         }
         print("  - State preprocessor enabled (shared - legacy mode)")
 
-    if learning_config.get('value_preprocessor', True):
+    if agent_config.get('value_preprocessor', True):
         agent_cfg['agent']["value_preprocessor"] = RunningStandardScaler
         agent_cfg['agent']["value_preprocessor_kwargs"] = {"size": 1, "device": env_cfg.sim.device}
         print("  - Value preprocessor enabled (shared - legacy mode)")
 
 
-def setup_per_agent_preprocessors(env_cfg, env, learning_config, num_agents):
+def setup_per_agent_preprocessors(env_cfg, env, agent_config, num_agents):
     """
     Set up per-agent preprocessors for multi-agent training scenarios.
 
@@ -809,7 +809,7 @@ def setup_per_agent_preprocessors(env_cfg, env, learning_config, num_agents):
     Args:
         env_cfg: Environment configuration with observation specifications
         env: Environment instance for observation space information
-        learning_config: Learning configuration with preprocessor parameters
+        agent_config: Agent configuration with preprocessor parameters
         num_agents: Number of agents requiring individual preprocessors
 
     Returns:
@@ -833,7 +833,7 @@ def setup_per_agent_preprocessors(env_cfg, env, learning_config, num_agents):
     """
     preprocessor_configs = {}
 
-    if learning_config.get('state_preprocessor', True):
+    if agent_config.get('state_preprocessor', True):
         preprocessor_configs["state_preprocessor"] = RunningStandardScaler
         preprocessor_configs["state_preprocessor_kwargs"] = {
             "size": env.cfg.observation_space + env.cfg.state_space,
@@ -841,7 +841,7 @@ def setup_per_agent_preprocessors(env_cfg, env, learning_config, num_agents):
         }
         print(f"  - State preprocessor config set (will create {num_agents} independent instances)")
 
-    if learning_config.get('value_preprocessor', True):
+    if agent_config.get('value_preprocessor', True):
         preprocessor_configs["value_preprocessor"] = RunningStandardScaler
         preprocessor_configs["value_preprocessor_kwargs"] = {
             "size": 1,
@@ -1104,7 +1104,7 @@ def create_block_wandb_agents(env_cfg, agent_cfg, env, models, memory, derived, 
 
 ## NEW FUNCTION: CREATE BLOCKPPO AGENTS WITH PER-AGENT PREPROCESSORS ##
 
-def create_block_ppo_agents(env_cfg, agent_cfg, env, models, memory, derived, learning_config):
+def create_block_ppo_agents(env_cfg, agent_cfg, env, models, memory, derived):
     """
     Create standard BlockPPO agents for training without wandb integration.
 
@@ -1114,12 +1114,11 @@ def create_block_ppo_agents(env_cfg, agent_cfg, env, models, memory, derived, le
 
     Args:
         env_cfg: Environment configuration with training specifications
-        agent_cfg: Agent configuration with algorithm parameters
+        agent_cfg: Agent configuration with algorithm parameters (includes SKRL PPO params)
         env: Environment instance for agent initialization
         models: Dictionary containing 'policy' and 'value' model instances
         memory: Memory/replay buffer instance for experience storage
         derived: Derived configuration with agent and environment counts
-        learning_config: Learning configuration with algorithm parameters
 
     Returns:
         list: List of BlockPPO agent instances
@@ -1147,7 +1146,7 @@ def create_block_ppo_agents(env_cfg, agent_cfg, env, models, memory, derived, le
 
     # Set up preprocessor configurations (BlockPPO will create independent instances)
     preprocessor_configs = setup_per_agent_preprocessors(
-        env_cfg, env, learning_config, derived['total_agents']
+        env_cfg, env, agent_cfg['agent'], derived['total_agents']
     )
 
     # Update agent_cfg with preprocessor configs
@@ -1185,11 +1184,11 @@ def create_block_ppo_agents(env_cfg, agent_cfg, env, models, memory, derived, le
     agent.optimizer = make_agent_optimizer(
         models['policy'],
         models['value'],
-        policy_lr=learning_config['policy_learning_rate'],
-        critic_lr=learning_config['critic_learning_rate'],
-        betas=tuple(learning_config['optimizer']['betas']),  # From config instead of hardcoded
-        eps=learning_config['optimizer']['eps'],             # From config instead of hardcoded
-        weight_decay=learning_config['optimizer']['weight_decay'],  # From config instead of hardcoded
+        policy_lr=agent_cfg['agent']['policy_learning_rate'],
+        critic_lr=agent_cfg['agent']['critic_learning_rate'],
+        betas=tuple(agent_cfg['agent']['optimizer']['betas']),  # From config instead of hardcoded
+        eps=agent_cfg['agent']['optimizer']['eps'],             # From config instead of hardcoded
+        weight_decay=agent_cfg['agent']['optimizer']['weight_decay'],  # From config instead of hardcoded
         debug=agent_cfg['agent'].get('debug_mode', False)
     )
 

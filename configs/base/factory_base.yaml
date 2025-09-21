@@ -69,60 +69,6 @@ environment:
     torque_action_threshold: [0.1, 0.1, 0.1]
     default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
 
-# LEARNING CONFIGURATION (PPO + custom parameters)
-learning:
-  # Standard PPO parameters
-  rollouts: null  # Auto-calculated from episode timing
-  learning_epochs: 4
-  mini_batches: null  # Auto-calculated to match rollouts
-  discount_factor: 0.99
-  lambda: 0.95
-  random_timesteps: 0
-  learning_starts: 0
-  mixed_precision: false
-
-  # Custom learning rates (replaces standard learning_rate)
-  policy_learning_rate: 1.0e-6
-  critic_learning_rate: 1.0e-5
-  value_update_ratio: 2
-
-  # Optimizer parameters (moved from hardcoded constants)
-  optimizer:
-    betas: [0.999, 0.999]  # Adam beta parameters
-    eps: 1.0e-8           # Adam epsilon
-    weight_decay: 0       # Adam weight decay
-
-  # Loss and clipping
-  use_huber_value_loss: true
-  grad_norm_clip: 0.5
-  ratio_clip: 0.2
-  clip_predicted_values: false
-  value_clip: 0.2
-  entropy_loss_scale: 0.0
-  value_loss_scale: 1.0
-  kl_threshold: 0.05
-  time_limit_bootstrap: true
-
-  # Reward shaping
-  reward_shaper_type: 'const_scale'
-  rewards_shaper_scale: 0.1
-
-  # Preprocessors
-  state_preprocessor: true
-  value_preprocessor: true
-
-  # Learning rate scheduler
-  learning_rate_scheduler: "KLAdaptiveLR"
-  klAdaptive_lr_scheduler_kwargs:
-    kl_threshold: 0.01
-    min_lr: 1.0e-9
-  linear_warmup_learning_rate_scheduler_kwargs:
-    start_factor: 1.0e-7
-    end_factor: 1.0
-    total_iters: 80
-
-  # Value training
-  random_value_timesteps: 150
 
 # MODEL CONFIGURATION (SimBa architecture parameters)
 model:
@@ -250,7 +196,7 @@ experiment:
   wandb_project: "Continuous_Force_RL"
   wandb_entity: "hur"
 
-# AGENT CONFIGURATION (additional parameters for MultiWandbLoggerPPO compatibility)
+# AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
 agent:
   class: "PPO"
   agent_is_list: false
@@ -269,5 +215,58 @@ agent:
     project: "OVERRIDE_WITH_ARG"
     tags: []
     group: ""
+
+  # SKRL PPO PARAMETERS (standard parameters)
+  rollouts: null  # Auto-calculated from episode timing
+  learning_epochs: 4
+  mini_batches: null  # Auto-calculated to match rollouts
+  discount_factor: 0.99
+  lambda: 0.95
+  random_timesteps: 0
+  learning_starts: 0
+  mixed_precision: false
+
+  # CUSTOM LEARNING PARAMETERS (extensions to SKRL)
+  policy_learning_rate: 1.0e-6
+  critic_learning_rate: 1.0e-5
+  value_update_ratio: 2
+
+  # Optimizer parameters (moved from hardcoded constants)
+  optimizer:
+    betas: [0.999, 0.999]  # Adam beta parameters
+    eps: 1.0e-8           # Adam epsilon
+    weight_decay: 0       # Adam weight decay
+
+  # Loss and clipping
+  use_huber_value_loss: true
+  grad_norm_clip: 0.5
+  ratio_clip: 0.2
+  clip_predicted_values: false
+  value_clip: 0.2
+  entropy_loss_scale: 0.0
+  value_loss_scale: 1.0
+  kl_threshold: 0.05
+  time_limit_bootstrap: true
+
+  # Reward shaping
+  reward_shaper_type: 'const_scale'
+  rewards_shaper_scale: 0.1
+
+  # Preprocessors
+  state_preprocessor: true
+  value_preprocessor: true
+
+  # Learning rate scheduler
+  learning_rate_scheduler: "KLAdaptiveLR"
+  klAdaptive_lr_scheduler_kwargs:
+    kl_threshold: 0.01
+    min_lr: 1.0e-9
+  linear_warmup_learning_rate_scheduler_kwargs:
+    start_factor: 1.0e-7
+    end_factor: 1.0
+    total_iters: 80
+
+  # Value training
+  random_value_timesteps: 150
 
 

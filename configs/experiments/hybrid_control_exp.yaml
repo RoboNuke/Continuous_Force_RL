@@ -66,8 +66,8 @@ wrappers:
     track_observation_histograms: false
     logging_frequency: 50  # More frequent logging for hybrid actions
 
-# Learning configuration adjustments for hybrid control
-learning:
+# Agent configuration adjustments for hybrid control
+agent:
   policy_learning_rate: 5.0e-7  # Lower learning rate for stable hybrid learning
   critic_learning_rate: 8.0e-6
   learning_epochs: 5  # More epochs for complex policy

@@ -96,7 +96,7 @@ if args_cli.task is None:
 primary = resolved_config['primary']
 derived = resolved_config['derived']
 environment = resolved_config.get('environment', {})
-learning = resolved_config['learning']
+agent_config = resolved_config['agent']
 model = resolved_config['model']
 wrappers_config = resolved_config.get('wrappers', {})
 experiment = resolved_config.get('experiment', {})
@@ -242,9 +242,8 @@ def main():
     max_rollout_steps = derived['rollout_steps']
     print(f"[INFO]: Step 7 - Calculated rollout steps: {max_rollout_steps}")
 
-    # Step 8: Update agent configuration with learning parameters
-    print("[INFO]: Step 8 - Updating agent configuration")
-    lUtils.apply_learning_config(agent_cfg, learning, max_rollout_steps)
+    # Step 8: Agent configuration (learning parameters now in agent section)
+    print("[INFO]: Step 8 - Agent configuration ready (SKRL parameters included)")
 
     # Step 9: Apply model configuration
     print("[INFO]: Step 9 - Applying model configuration")
@@ -335,7 +334,7 @@ def main():
     # agents = lUtils.create_block_wandb_agents(env_cfg, agent_cfg, env, models, memory, derived, learning)
 
     ## NEW CODE - USING BLOCKPPO WITH PER-AGENT PREPROCESSORS ##
-    agents = lUtils.create_block_ppo_agents(env_cfg, agent_cfg, env, models, memory, derived, learning)
+    agents = lUtils.create_block_ppo_agents(env_cfg, agent_cfg, env, models, memory, derived)
 
     print(agents)
 
