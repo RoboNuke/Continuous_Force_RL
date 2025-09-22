@@ -13,6 +13,7 @@ from skrl.envs.wrappers.torch.base import Wrapper
 from skrl.utils.spaces.torch import flatten_tensorized_space, tensorize_space, unflatten_tensorized_space
 import numpy as np
 
+from gymnasium.spaces import Box
 class AsyncCriticIsaacLabWrapper(Wrapper):
     """
     SKRL wrapper for Isaac Lab that processes both policy and critic observations.
@@ -38,7 +39,6 @@ class AsyncCriticIsaacLabWrapper(Wrapper):
         if not hasattr(env, 'state_space') or getattr(env, 'state_space', None) is None:
             state_dim = getattr(env.unwrapped.cfg, 'state_space', 0)
             if state_dim > 0:
-                from gymnasium.spaces import Box
                 env.state_space = Box(low=-float('inf'), high=float('inf'), shape=(state_dim,), dtype=np.float32)
                 print(f"[INFO]: Created env.state_space with {state_dim} dimensions")
             else:
