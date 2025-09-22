@@ -29,7 +29,7 @@ class FactorySKRLObservationWrapper(gym.Wrapper):
         """
         super().__init__(env)
 
-        # Get dimensions from environment config
+        # Get dimensions from environment config (DO NOT MODIFY env.cfg - models need original values)
         obs_dim = getattr(self.unwrapped.cfg, 'observation_space', 0)
         state_dim = getattr(self.unwrapped.cfg, 'state_space', 0)
         combined_dim = obs_dim + state_dim
@@ -38,17 +38,22 @@ class FactorySKRLObservationWrapper(gym.Wrapper):
             raise ValueError(f"Invalid combined dimension: obs={obs_dim} + state={state_dim} = {combined_dim}")
 
         self._combined_dim = combined_dim
+
+        # Create the correct Box space for SKRL without touching original cfg
+        self._policy_space = Box(low=-float('inf'), high=float('inf'), shape=(combined_dim,), dtype=np.float32)
+
         print(f"[INFO]: FactorySKRLObservationWrapper - obs_dim: {obs_dim}, state_dim: {state_dim}, combined: {combined_dim}")
+        print(f"[INFO]: Preserving original env.cfg values for model initialization")
 
     @property
     def single_observation_space(self):
         """Expose combined observation space size to SKRL."""
-        return {"policy": Box(low=-float('inf'), high=float('inf'), shape=(self._combined_dim,), dtype=np.float32)}
+        return {"policy": self._policy_space}
 
     @property
     def observation_space(self):
-        """Provide observation_space fallback for SKRL compatibility."""
-        return self.single_observation_space
+        """Override for SKRL - return combined space while preserving original env.cfg."""
+        return {"policy": self._policy_space}
 
     @property
     def state_space(self):
