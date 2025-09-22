@@ -350,14 +350,24 @@ class ForceTorqueWrapper(gym.Wrapper):
         if self._original_get_factory_obs_state_dict:
             obs_dict, state_dict = self._original_get_factory_obs_state_dict()
         else:
-            # Fallback to empty dictionaries if no original method
-            obs_dict, state_dict = {}, {}
+            # No original method - this should not happen in factory environments
+            raise ValueError("Force-torque wrapper requires factory environment with _get_factory_obs_state_dict method")
 
-        # Inject force-torque observation if available
-        if hasattr(self.unwrapped, 'robot_force_torque'):
-            force_torque_obs = self.get_force_torque_observation()
-            obs_dict['force_torque'] = force_torque_obs
-            state_dict['force_torque'] = force_torque_obs
+        # Verify force-torque data is available
+        if not hasattr(self.unwrapped, 'robot_force_torque'):
+            raise ValueError("Force-torque sensor not initialized - robot_force_torque attribute missing")
+
+        # Inject force-torque observation
+        force_torque_obs = self.get_force_torque_observation()
+        if force_torque_obs is None:
+            raise ValueError("Force-torque observation returned None")
+
+        obs_dict['force_torque'] = force_torque_obs
+        state_dict['force_torque'] = force_torque_obs
+
+        # Verify injection succeeded
+        if 'force_torque' not in obs_dict:
+            raise ValueError("Failed to inject force_torque into obs_dict")
 
         return obs_dict, state_dict
 

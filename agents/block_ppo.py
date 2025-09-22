@@ -947,9 +947,12 @@ class BlockPPO(PPO):
             print(f"  - Wrapper integration validated: Found logging wrapper at self.env.unwrapped")
             return True
         else:
-            print("  - Warning: No compatible logging wrapper found. Metrics logging will be disabled.")
-            print("    Expected: GenericWandbLoggingWrapper with add_metrics method")
-            return False
+            # Throw error instead of warning - data collection is required
+            raise ValueError(
+                "No compatible logging wrapper found. Data collection is required for experiments.\n"
+                "Expected: GenericWandbLoggingWrapper with add_metrics method.\n"
+                "Ensure the GenericWandbLoggingWrapper is properly applied to the environment."
+            )
 
     def _get_logging_wrapper(self):
         """Get the logging wrapper for metrics reporting.
