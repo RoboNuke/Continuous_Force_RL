@@ -421,7 +421,15 @@ class ForceTorqueWrapper(gym.Wrapper):
             dict: Observation dictionary with "policy" and "critic" keys
         """
         # Import and patch factory_utils temporarily
-        from isaaclab_tasks.direct.factory import factory_utils
+        try:
+            import isaaclab_tasks.direct.factory.factory_utils as factory_utils
+        except ImportError:
+            # Fallback for older Isaac Lab versions
+            try:
+                import omni.isaac.lab_tasks.direct.factory.factory_utils as factory_utils
+            except ImportError:
+                raise ImportError("Cannot import factory_utils from Isaac Lab. Please ensure Isaac Lab is properly installed.")
+
         original_collapse = factory_utils.collapse_obs_dict
 
         def patched_collapse_obs_dict(obs_dict, obs_order):
