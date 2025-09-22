@@ -411,7 +411,6 @@ OBS_DIM_CFG = {
     "ee_angvel": 3,
     "joint_pos": 7,  # Joint positions can be in observations
     "held_pos": 3,   # Object positions can be in observations
-    "force_torque": 6,  # Force-torque sensor data
 }
 
 STATE_DIM_CFG = {
@@ -430,8 +429,11 @@ STATE_DIM_CFG = {
     "ema_factor": 1,
     "pos_threshold": 3,
     "rot_threshold": 3,
-    "force_torque": 6,  # Force-torque sensor data
 }
+
+# Separate configs for tests that need force_torque
+OBS_DIM_CFG_WITH_FORCE = {**OBS_DIM_CFG, "force_torque": 6}
+STATE_DIM_CFG_WITH_FORCE = {**STATE_DIM_CFG, "force_torque": 6}
 
 
 # Environment creation function

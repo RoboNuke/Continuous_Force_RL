@@ -114,7 +114,7 @@ class ForceTorqueWrapper(gym.Wrapper):
             if hasattr(env_cfg, '_is_mock_test_config'):
                 # In tests, import the mock configs from the test environment
                 try:
-                    from tests.mocks.mock_isaac_lab import OBS_DIM_CFG, STATE_DIM_CFG
+                    from tests.mocks.mock_isaac_lab import OBS_DIM_CFG_WITH_FORCE as OBS_DIM_CFG, STATE_DIM_CFG_WITH_FORCE as STATE_DIM_CFG
                 except ImportError:
                     # Fallback if mock not available
                     OBS_DIM_CFG = {

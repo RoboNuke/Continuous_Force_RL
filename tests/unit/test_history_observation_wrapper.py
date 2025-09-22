@@ -130,6 +130,9 @@ class TestHistoryObservationWrapper:
 
     def test_update_observation_dimensions(self):
         """Test observation space dimension updates."""
+        # Get base observation space before applying wrapper
+        base_obs_space = MockEnvConfig().observation_space
+
         components = ["fingertip_pos", "ee_linvel"]  # 3 + 3 = 6 dims per sample
         wrapper = HistoryObservationWrapper(
             self.base_env,
@@ -139,10 +142,13 @@ class TestHistoryObservationWrapper:
 
         # Should add (3-1) * 6 = 12 additional dimensions
         expected_additional = (3 - 1) * 6
-        assert self.base_env.cfg.observation_space == 32 + expected_additional
+        assert self.base_env.cfg.observation_space == base_obs_space + expected_additional
 
     def test_update_observation_dimensions_state_space(self):
         """Test state space dimension updates."""
+        # Get base state space before applying wrapper
+        base_state_space = MockEnvConfig().state_space
+
         components = ["fingertip_pos"]  # In state_order
         wrapper = HistoryObservationWrapper(
             self.base_env,
@@ -152,7 +158,7 @@ class TestHistoryObservationWrapper:
 
         # Should add (4-1) * 3 = 9 additional dimensions to state space
         expected_additional = (4 - 1) * 3
-        assert self.base_env.cfg.state_space == 48 + expected_additional
+        assert self.base_env.cfg.state_space == base_state_space + expected_additional
 
     def test_initialization_without_robot(self):
         """Test wrapper initialization without robot attribute."""

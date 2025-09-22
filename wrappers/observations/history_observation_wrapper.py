@@ -128,7 +128,7 @@ class HistoryObservationWrapper(gym.Wrapper):
             if hasattr(self.unwrapped.cfg, '_is_mock_test_config'):
                 # In tests, import the mock configs from the test environment
                 try:
-                    from tests.mocks.mock_isaac_lab import OBS_DIM_CFG, STATE_DIM_CFG
+                    from tests.mocks.mock_isaac_lab import OBS_DIM_CFG_WITH_FORCE as OBS_DIM_CFG, STATE_DIM_CFG_WITH_FORCE as STATE_DIM_CFG
                     component_dims = {**OBS_DIM_CFG, **STATE_DIM_CFG}
                     return component_dims
                 except ImportError:

@@ -22,7 +22,7 @@ with patch.dict('sys.modules', {
     'omni.isaac.sensor': MagicMock(),
     'omni.isaac.sensor.utils': MagicMock(),
 }):
-    from tests.mocks.mock_isaac_lab import MockRobotView, MockBaseEnv, MockEnvConfig, OBS_DIM_CFG, STATE_DIM_CFG
+    from tests.mocks.mock_isaac_lab import MockRobotView, MockBaseEnv, MockEnvConfig, OBS_DIM_CFG_WITH_FORCE as OBS_DIM_CFG, STATE_DIM_CFG_WITH_FORCE as STATE_DIM_CFG
 
     # Mock the RobotView import in the wrapper modules
     import wrappers.sensors.force_torque_wrapper as ft_module

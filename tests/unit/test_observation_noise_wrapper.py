@@ -170,10 +170,11 @@ class TestObservationNoiseWrapper:
         """Test building group mapping successfully."""
         wrapper = ObservationNoiseWrapper(self.base_env, self.noise_config)
 
-        # Check policy mapping (joint_pos is only in STATE_DIM_CFG, not OBS_DIM_CFG)
+        # Check policy mapping
         expected_policy = {
             "fingertip_pos": (0, 3),
             "ee_linvel": (3, 6),
+            "joint_pos": (6, 13),
         }
         assert wrapper.policy_group_mapping == expected_policy
 
