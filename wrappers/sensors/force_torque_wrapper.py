@@ -58,7 +58,6 @@ class ForceTorqueWrapper(gym.Wrapper):
         self._original_reset_buffers = None
         self._original_pre_physics_step = None
         self._original_get_factory_obs_state_dict = None
-        self._original_get_observations = None
         self.unwrapped.has_force_torque_sensor = True
         # Initialize after the base environment is ready
         if hasattr(self.unwrapped, '_robot'):
@@ -253,12 +252,7 @@ class ForceTorqueWrapper(gym.Wrapper):
             self._original_get_factory_obs_state_dict = self.unwrapped._get_factory_obs_state_dict
             self.unwrapped._get_factory_obs_state_dict = self._wrapped_get_factory_obs_state_dict
         else:
-            # Fallback: override _get_observations if _get_factory_obs_state_dict doesn't exist
-            if hasattr(self.unwrapped, '_get_observations'):
-                self._original_get_observations = self.unwrapped._get_observations
-                self.unwrapped._get_observations = self._wrapped_get_observations
-            else:
-                raise ValueError("Factory environment missing required observation methods")
+            raise ValueError("Factory environment missing _get_factory_obs_state_dict method. This wrapper requires Isaac Lab factory environments.")
 
         # Initialize force-torque sensor
         self._init_force_torque_sensor()
@@ -410,42 +404,6 @@ class ForceTorqueWrapper(gym.Wrapper):
 
         return obs_dict, state_dict
 
-    def _wrapped_get_observations(self):
-        """
-        Fallback override for _get_observations when _get_factory_obs_state_dict doesn't exist.
-
-        This method patches the factory_utils.collapse_obs_dict function to inject
-        force_torque data before observations are collapsed.
-
-        Returns:
-            dict: Observation dictionary with "policy" and "critic" keys
-        """
-        # Import and patch factory_utils temporarily
-        try:
-            import isaaclab_tasks.direct.factory.factory_utils as factory_utils
-        except ImportError:
-            # Fallback for older Isaac Lab versions
-            try:
-                import omni.isaac.lab_tasks.direct.factory.factory_utils as factory_utils
-            except ImportError:
-                raise ImportError("Cannot import factory_utils from Isaac Lab. Please ensure Isaac Lab is properly installed.")
-
-        original_collapse = factory_utils.collapse_obs_dict
-
-        def patched_collapse_obs_dict(obs_dict, obs_order):
-            # Inject force_torque if it's in obs_order but missing from obs_dict
-            if 'force_torque' in obs_order and 'force_torque' not in obs_dict:
-                obs_dict['force_torque'] = self.get_force_torque_observation()
-            return original_collapse(obs_dict, obs_order)
-
-        try:
-            # Temporarily replace the collapse function
-            factory_utils.collapse_obs_dict = patched_collapse_obs_dict
-            # Call original _get_observations with patched collapse function
-            return self._original_get_observations()
-        finally:
-            # Restore original function
-            factory_utils.collapse_obs_dict = original_collapse
 
 
     def has_force_torque_data(self):

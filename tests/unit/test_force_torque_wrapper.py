@@ -198,7 +198,7 @@ class TestObservationMethods:
         assert isinstance(state_dict, dict)
 
     def test_wrapped_get_observations_fallback(self):
-        """Test fallback when _get_factory_obs_state_dict doesn't exist."""
+        """Test that environments without _get_factory_obs_state_dict are rejected."""
         # Create a custom mock that doesn't have _get_factory_obs_state_dict
         class MinimalMockEnv(gym.Env):
             def __init__(self):
@@ -236,12 +236,9 @@ class TestObservationMethods:
 
         env = MinimalMockEnv()
 
-        wrapper = ForceTorqueWrapper(env)
-        wrapper._initialize_wrapper()
-
-        # Should have fallback to _get_observations
-        assert wrapper._original_get_observations is not None
-        assert wrapper._original_get_factory_obs_state_dict is None
+        # Should raise ValueError for environments without _get_factory_obs_state_dict
+        with pytest.raises(ValueError, match="Factory environment missing _get_factory_obs_state_dict method"):
+            wrapper = ForceTorqueWrapper(env)
 
 
 class TestConfigurationUpdate:
