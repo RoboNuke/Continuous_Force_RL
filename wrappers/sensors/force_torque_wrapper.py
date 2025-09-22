@@ -456,9 +456,9 @@ class ForceTorqueWrapper(gym.Wrapper):
         if hasattr(self.unwrapped.cfg, 'state_order') and 'force_torque' in self.unwrapped.cfg.state_order:
             state_dict['force_torque'] = force_torque_data
 
-        obs_tensors = [obs_dict[obs_name] for obs_name in self.cfg.obs_order + ["prev_actions"]]
+        obs_tensors = [obs_dict[obs_name] for obs_name in self.unwrapped.cfg.obs_order + ["prev_actions"]]
         obs_tensors = torch.cat(obs_tensors, dim=-1)
-        state_tensors = [state_dict[state_name] for state_name in self.cfg.state_order + ["prev_actions"]]
+        state_tensors = [state_dict[state_name] for state_name in self.unwrapped.cfg.state_order + ["prev_actions"]]
         state_tensors = torch.cat(state_tensors, dim=-1)
         return {"policy": obs_tensors, "critic": state_tensors}
 
