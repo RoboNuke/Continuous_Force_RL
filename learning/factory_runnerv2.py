@@ -288,6 +288,10 @@ def main():
         print("  - Applying EnhancedActionLoggingWrapper")
         env = lUtils.apply_enhanced_action_logging_wrapper(env, wrappers_config['action_logging'])
 
+    # Apply final observation flattening wrapper for SKRL compatibility
+    print("  - Applying FactorySKRLObservationWrapper")
+    env = lUtils.apply_factory_skrl_observation_wrapper(env, use_critic_for_obs=False)
+
     # ===== STEP 4: WRAP FOR SKRL =====
     print("[INFO]: Step 4 - Wrapping environment for SKRL")
     env = SkrlVecEnvWrapper(env, ml_framework="torch")
