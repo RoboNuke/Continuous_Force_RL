@@ -862,7 +862,7 @@ def setup_per_agent_preprocessors(env_cfg, env, agent_config, num_agents):
             "size": env.cfg.observation_space + env.cfg.state_space,
             "device": env_cfg.sim.device
         }
-        print(f"  - State preprocessor config set (will create {num_agents} independent instances)")
+        print(f"  - State preprocessor config set (will create {num_agents} independent instances with input size {env.cfg.observation_space + env.cfg.state_space})")
 
     if agent_config.get('value_preprocessor', True):
         preprocessor_configs["value_preprocessor"] = RunningStandardScaler
@@ -870,7 +870,7 @@ def setup_per_agent_preprocessors(env_cfg, env, agent_config, num_agents):
             "size": 1,
             "device": env_cfg.sim.device
         }
-        print(f"  - Value preprocessor config set (will create {num_agents} independent instances)")
+        print(f"  - Value preprocessor config set (will create {num_agents} independent instances wihnt input size 1")
 
     return preprocessor_configs
 
