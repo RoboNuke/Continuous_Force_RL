@@ -211,7 +211,7 @@ def apply_learning_config(agent_cfg, learning_config, max_rollout_steps):
 
     Updates agent configuration with learning-specific parameters such as
     rollout steps, learning rate, batch size, and entropy coefficient.
-    Handles both direct parameter setting and calculated values.
+    Uses SKRL's PPO default configuration to validate parameter names.
 
     Args:
         agent_cfg: Agent configuration dictionary to modify
@@ -221,8 +221,9 @@ def apply_learning_config(agent_cfg, learning_config, max_rollout_steps):
     Side Effects:
         - Sets agent_cfg['agent']['rollouts'] from max_rollout_steps
         - Applies learning parameters from learning_config to agent_cfg['agent']
-        - Only updates parameters that exist in learning_config
+        - Only applies parameters that are valid in SKRL's PPO config
         - Prints applied learning configuration summary
+        - Falls back to minimal parameter set if SKRL import fails
     """
     """Apply learning configuration to agent."""
     # Set rollout parameters
@@ -235,21 +236,27 @@ def apply_learning_config(agent_cfg, learning_config, max_rollout_steps):
     agent_cfg['agent']['experiment']['write_interval'] = max_rollout_steps
     agent_cfg['agent']['experiment']['checkpoint_interval'] = max_rollout_steps * 10
 
-    # Apply learning parameters - both existing and known new parameters
-    known_learning_params = {
-        'learning_rate', 'batch_size', 'entropy_coeff', 'learning_epochs',
-        'mini_batches', 'policy_learning_rate', 'critic_learning_rate',
-        'value_update_ratio', 'use_huber_value_loss', 'state_preprocessor',
-        'value_preprocessor', 'rollouts'
-    }
+    # Apply learning parameters - use SKRL's default config to determine valid parameters
+    try:
+        from skrl.agents.torch.ppo import PPO_DEFAULT_CONFIG
+        valid_learning_params = set(PPO_DEFAULT_CONFIG.keys())
+        print(f"  - Using SKRL PPO default config with {len(valid_learning_params)} valid parameters")
+    except ImportError:
+        # Fallback to minimal set if import fails
+        valid_learning_params = {
+            'rollouts', 'learning_epochs', 'mini_batches', 'learning_rate',
+            'discount_factor', 'lambda', 'ratio_clip', 'value_clip',
+            'entropy_loss_scale', 'value_loss_scale', 'grad_norm_clip'
+        }
+        print(f"  - Fallback: Using minimal parameter set with {len(valid_learning_params)} parameters")
 
     for key, value in learning_config.items():
-        # Apply if it's already in config or if it's a known learning parameter
-        if key in agent_cfg['agent'] or key in known_learning_params:
+        # Apply if it's already in config or if it's a valid SKRL parameter
+        if key in agent_cfg['agent'] or key in valid_learning_params:
             agent_cfg['agent'][key] = value
             print(f"  - Set agent learning param: {key} = {value}")
         else:
-            print(f"  - Skipping unknown learning param: {key}")
+            print(f"  - Skipping unknown learning param: {key} (not in SKRL PPO config)")
 
     print(f"  - Rollout steps set to: {max_rollout_steps}")
 
