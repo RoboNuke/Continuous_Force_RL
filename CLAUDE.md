@@ -5,3 +5,5 @@
 - Always present a plan and get permission before beginning to execute it for anything that requires changing any files.
 - All this project needs to work within the isaaclab factory environment as they are defined here: https://github.com/isaac-sim/IsaacLab/blob/main/source/isaaclab_tasks/isaaclab_tasks/direct/factory/factory_tasks_cfg.py, https://github.com/isaac-sim/IsaacLab/blob/main/source/isaaclab_tasks/isaaclab_tasks/direct/factory/factory_env_cfg.py, and https://github.com/isaac-sim/IsaacLab/blob/main/source/isaaclab_tasks/isaaclab_tasks/direct/factory/factory_env.py 
 - Our training pipeline inherts from this class in SKRL: https://github.com/Toni-SM/skrl/blob/main/skrl/agents/torch/ppo/ppo.py
+- When reporting test results always provide number of passed, failed and total, there is no such thing as critical tests, they all must be passed.
+- Do not place fallbacks in code. If the inputs are not what we expect throw an error and stop the program. Experiments take days so I need to know that what I think is happening is what is happening.

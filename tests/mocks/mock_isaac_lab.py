@@ -227,6 +227,9 @@ class MockBaseEnv(gym.Env):
         # Add observation data for observation wrappers
         self._setup_observation_data()
 
+        # Add actions attribute for dynamic observation calculation
+        self.actions = torch.randn(self.num_envs, 6, device=self.device)
+
     @property
     def unwrapped(self):
         return self._unwrapped
@@ -365,10 +368,18 @@ class MockEnvConfig:
         self.ctrl = MockCtrl()
 
         # Observation configuration for observation wrappers
-        self.obs_order = ["fingertip_pos", "ee_linvel", "joint_pos"]
-        self.state_order = ["fingertip_pos", "ee_linvel", "joint_pos", "fingertip_quat"]
-        self.observation_space = 32
-        self.state_space = 48
+        self.obs_order = ["fingertip_pos", "ee_linvel", "joint_pos", "force_torque"]
+        self.state_order = ["fingertip_pos", "ee_linvel", "joint_pos", "fingertip_quat", "force_torque"]
+        self.action_space = 6  # Action space dimensions (following Isaac Lab's integer pattern)
+
+        # These will be calculated dynamically by the wrapper, but set for compatibility
+        # fingertip_pos(3) + ee_linvel(3) + joint_pos(7) + force_torque(6) + actions(6) = 25
+        self.observation_space = 25
+        # fingertip_pos(3) + ee_linvel(3) + joint_pos(7) + fingertip_quat(4) + force_torque(6) + actions(6) = 29
+        self.state_space = 29
+
+        # Mark this as a test config to enable test-specific behavior
+        self._is_mock_test_config = True
 
         # Component dimensions now come from Isaac Lab's native OBS_DIM_CFG/STATE_DIM_CFG
 

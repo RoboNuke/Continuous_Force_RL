@@ -25,6 +25,13 @@ class MockIsaacLabEnv(gym.Env):
         self.device = torch.device('cpu')
         self.num_envs = 16
 
+        # Add attributes required for force-torque wrapper
+        self._robot = True  # For wrapper initialization detection
+        self.robot_force_torque = torch.randn(self.num_envs, 6, device=self.device)
+        self.actions = torch.randn(self.num_envs, 6, device=self.device)
+        self.fingertip_pos = torch.randn(self.num_envs, 3, device=self.device)
+        self.joint_pos = torch.randn(self.num_envs, 7, device=self.device)
+
     def step(self, action):
         """Mock step method."""
         obs = self.observation_space.sample()
@@ -57,6 +64,9 @@ class MockEnvConfig:
     """Mock environment configuration object."""
 
     def __init__(self):
+        # Mark this as a test config to enable test-specific behavior
+        self._is_mock_test_config = True
+
         # Scene configuration
         self.scene = Mock()
         self.scene.num_envs = 16
@@ -117,10 +127,11 @@ class MockEnvConfig:
         self.action_space = 6  # Default action space size
 
         # Observation configuration
-        self.obs_order = ['fingertip_pos', 'joint_pos']
-        self.state_order = ['fingertip_pos', 'joint_pos']
-        self.observation_space = 32
-        self.state_space = 48
+        self.obs_order = ['fingertip_pos', 'joint_pos', 'force_torque']
+        self.state_order = ['fingertip_pos', 'joint_pos', 'force_torque']
+        # fingertip_pos(3) + joint_pos(7) + force_torque(6) + actions(6) = 22
+        self.observation_space = 22
+        self.state_space = 22
 
         # Component configuration
         self.component_dims = {

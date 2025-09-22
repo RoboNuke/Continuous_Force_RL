@@ -582,7 +582,7 @@ class TestForceTorqueWrapperFactoryObservation:
         assert isinstance(result["critic"], torch.Tensor)
 
     def test_create_minimal_observations(self):
-        """Test minimal observation creation fallback."""
+        """Test dynamic observation creation based on obs_order and state_order."""
         env = MockBaseEnv()
         wrapper = ForceTorqueWrapper(env)
         wrapper._initialize_wrapper()
@@ -599,36 +599,95 @@ class TestForceTorqueWrapperFactoryObservation:
         assert result["policy"].shape[0] == env.num_envs
         assert result["critic"].shape[0] == env.num_envs
 
-        # Should match the mock environment's expected observation space size
-        # MockBaseEnv has cfg.observation_space = 32, so we expect 32 dimensions total
-        expected_size = 32  # MockBaseEnv's configured observation space size
-        assert result["policy"].shape[1] == expected_size
+        # Should match dynamically calculated sizes from obs_order/state_order
+        # obs_order: fingertip_pos(3) + ee_linvel(3) + joint_pos(7) + force_torque(6) + actions(6) = 25
+        expected_obs_size = 25
+        # state_order: fingertip_pos(3) + ee_linvel(3) + joint_pos(7) + fingertip_quat(4) + force_torque(6) + actions(6) = 29
+        expected_state_size = 29
 
-    def test_create_minimal_observations_without_attributes(self):
-        """Test minimal observation creation when environment attributes are missing."""
+        assert result["policy"].shape[1] == expected_obs_size
+        assert result["critic"].shape[1] == expected_state_size
+
+    def test_create_minimal_observations_without_required_attributes(self):
+        """Test that missing required attributes cause proper errors (no fallbacks)."""
         env = MockBaseEnv()
 
-        # Remove attributes to test fallback behavior
-        delattr(env, 'fingertip_midpoint_pos')
-        if hasattr(env, 'actions'):
-            delattr(env, 'actions')
+        # Remove required actions attribute
+        delattr(env, 'actions')
 
         wrapper = ForceTorqueWrapper(env)
         wrapper._initialize_wrapper()
 
-        result = wrapper._create_minimal_observations()
+        # Should throw ValueError when actions are missing (no fallbacks!)
+        with pytest.raises(ValueError, match="Required 'actions' attribute not found"):
+            wrapper._create_minimal_observations()
 
-        assert isinstance(result, dict)
-        assert "policy" in result
-        assert "critic" in result
-        assert isinstance(result["policy"], torch.Tensor)
-        assert isinstance(result["critic"], torch.Tensor)
+    def test_create_minimal_observations_without_observation_component(self):
+        """Test that missing observation components cause proper errors (no fallbacks)."""
+        env = MockBaseEnv()
 
-        # Check tensor dimensions - should match expected observation space size
-        assert result["policy"].shape[0] == env.num_envs
-        # Should be exactly 32 dimensions (MockBaseEnv's configured observation space size)
-        expected_size = 32
-        assert result["policy"].shape[1] == expected_size
+        # Remove a required observation component
+        delattr(env, 'fingertip_pos')
+
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        # Should throw ValueError when required observation component is missing (no fallbacks!)
+        with pytest.raises(ValueError, match="Required observation component 'fingertip_pos'"):
+            wrapper._create_minimal_observations()
+
+    def test_isaac_lab_import_error_in_production(self):
+        """Test that missing Isaac Lab configs cause ImportError in production environment."""
+        env = MockBaseEnv()
+
+        # Remove the test marker to simulate production environment
+        delattr(env.cfg, '_is_mock_test_config')
+
+        # Should throw ImportError during wrapper initialization when Isaac Lab is not available in production (no fallbacks!)
+        with pytest.raises(ImportError, match="Failed to import Isaac Lab dimension configs"):
+            wrapper = ForceTorqueWrapper(env)
+
+    def test_dynamic_dimension_calculation(self):
+        """Test that dimensions are calculated dynamically using Isaac Lab's OBS_DIM_CFG/STATE_DIM_CFG."""
+        env = MockBaseEnv()
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        # Mock Isaac Lab's dimension configurations to verify they're being used
+        with patch.dict('sys.modules', {'isaaclab_tasks.direct.factory.factory_env_cfg': MagicMock()}):
+            mock_module = sys.modules['isaaclab_tasks.direct.factory.factory_env_cfg']
+            mock_module.OBS_DIM_CFG = {
+                "fingertip_pos": 3,
+                "ee_linvel": 3,
+                "joint_pos": 7,
+                "force_torque": 6
+            }
+            mock_module.STATE_DIM_CFG = {
+                "fingertip_pos": 3,
+                "ee_linvel": 3,
+                "joint_pos": 7,
+                "fingertip_quat": 4,
+                "force_torque": 6
+            }
+
+            result = wrapper._create_minimal_observations()
+
+            # Verify dimensions match Isaac Lab's calculation:
+            # obs: 3+3+7+6 + 6(actions) = 25
+            # state: 3+3+7+4+6 + 6(actions) = 29
+            assert result["policy"].shape[1] == 25
+            assert result["critic"].shape[1] == 29
+
+    def test_unknown_observation_component_error(self):
+        """Test that unknown components in obs_order/state_order cause KeyError (no fallbacks)."""
+        env = MockBaseEnv()
+
+        # Add unknown component to obs_order
+        env.cfg.obs_order.append("unknown_component")
+
+        # Should throw KeyError during wrapper initialization when obs_order contains unknown component (no fallbacks!)
+        with pytest.raises(KeyError, match="Unknown observation/state component"):
+            wrapper = ForceTorqueWrapper(env)
 
 
 if __name__ == "__main__":
