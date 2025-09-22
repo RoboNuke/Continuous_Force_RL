@@ -324,10 +324,12 @@ class BlockPPO(PPO):
             if self._time_limit_bootstrap:
                 #print("Time limit boostrapping")
                 # Ensure values have the same shape as rewards for broadcasting
+                print("values:", values.size(), rewards.size())
                 if values.dim() > 1:
                     values_flat = values.squeeze(-1)
                 else:
                     values_flat = values
+                print("val2:", values.size())
                 rewards += self._discount_factor * values_flat * truncated
             
             
