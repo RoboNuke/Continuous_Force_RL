@@ -190,38 +190,56 @@ class ForceTorqueWrapper(gym.Wrapper):
         - Setting up sensor data buffers
         """
         if self._sensor_initialized:
+            print(f"[DEBUG] Force-torque wrapper already initialized")
             return
+
+        print(f"[DEBUG] Force-torque wrapper initializing...")
+        print(f"[DEBUG] Environment type: {type(self.unwrapped)}")
+        print(f"[DEBUG] Available methods: {[m for m in dir(self.unwrapped) if m.startswith('_get')]}")
 
         # Store original methods
         if hasattr(self.unwrapped, '_init_tensors'):
+            print(f"[DEBUG] Overriding _init_tensors")
             self._original_init_tensors = self.unwrapped._init_tensors
             self.unwrapped._init_tensors = self._wrapped_init_tensors
 
         if hasattr(self.unwrapped, '_compute_intermediate_values'):
+            print(f"[DEBUG] Overriding _compute_intermediate_values")
             self._original_compute_intermediate_values = self.unwrapped._compute_intermediate_values
             self.unwrapped._compute_intermediate_values = self._wrapped_compute_intermediate_values
 
         if hasattr(self.unwrapped, '_reset_buffers'):
+            print(f"[DEBUG] Overriding _reset_buffers")
             self._original_reset_buffers = self.unwrapped._reset_buffers
             self.unwrapped._reset_buffers = self._wrapped_reset_buffers
 
         if hasattr(self.unwrapped, '_pre_physics_step'):
+            print(f"[DEBUG] Overriding _pre_physics_step")
             self._original_pre_physics_step = self.unwrapped._pre_physics_step
             self.unwrapped._pre_physics_step = self._wrapped_pre_physics_step
 
         # Try to override _get_factory_obs_state_dict first
         if hasattr(self.unwrapped, '_get_factory_obs_state_dict'):
+            print(f"[DEBUG] CRITICAL: Overriding _get_factory_obs_state_dict")
+            print(f"[DEBUG] Original method: {self.unwrapped._get_factory_obs_state_dict}")
             self._original_get_factory_obs_state_dict = self.unwrapped._get_factory_obs_state_dict
             self.unwrapped._get_factory_obs_state_dict = self._wrapped_get_factory_obs_state_dict
+            print(f"[DEBUG] New method: {self.unwrapped._get_factory_obs_state_dict}")
         else:
+            print(f"[DEBUG] WARNING: No _get_factory_obs_state_dict method found!")
             # Fallback: override _get_observations directly
             if hasattr(self.unwrapped, '_get_observations'):
+                print(f"[DEBUG] Fallback: Overriding _get_observations")
                 self._original_get_observations = self.unwrapped._get_observations
                 self.unwrapped._get_observations = self._wrapped_get_observations
+            else:
+                print(f"[DEBUG] ERROR: No _get_observations method found either!")
 
         # Initialize force-torque sensor
+        print(f"[DEBUG] Initializing force-torque sensor...")
         self._init_force_torque_sensor()
         self._sensor_initialized = True
+        print(f"[DEBUG] Force-torque wrapper initialization complete")
 
     def _init_force_torque_sensor(self):
         """
@@ -346,29 +364,46 @@ class ForceTorqueWrapper(gym.Wrapper):
         Returns:
             tuple: (obs_dict, state_dict) with force_torque data added to both dictionaries
         """
+        print(f"[DEBUG] _wrapped_get_factory_obs_state_dict called!")
+        print(f"[DEBUG] self._original_get_factory_obs_state_dict: {self._original_get_factory_obs_state_dict}")
+
         # Call original method to get base observation and state dictionaries
         if self._original_get_factory_obs_state_dict:
+            print(f"[DEBUG] Calling original _get_factory_obs_state_dict...")
             obs_dict, state_dict = self._original_get_factory_obs_state_dict()
+            print(f"[DEBUG] Original obs_dict keys: {list(obs_dict.keys())}")
+            print(f"[DEBUG] Original state_dict keys: {list(state_dict.keys())}")
         else:
             # No original method - this should not happen in factory environments
             raise ValueError("Force-torque wrapper requires factory environment with _get_factory_obs_state_dict method")
 
         # Verify force-torque data is available
         if not hasattr(self.unwrapped, 'robot_force_torque'):
+            print(f"[DEBUG] ERROR: robot_force_torque attribute missing")
+            print(f"[DEBUG] Available attributes: {[attr for attr in dir(self.unwrapped) if 'force' in attr.lower()]}")
             raise ValueError("Force-torque sensor not initialized - robot_force_torque attribute missing")
 
+        print(f"[DEBUG] robot_force_torque shape: {self.unwrapped.robot_force_torque.shape}")
+
         # Inject force-torque observation
+        print(f"[DEBUG] Getting force-torque observation...")
         force_torque_obs = self.get_force_torque_observation()
         if force_torque_obs is None:
             raise ValueError("Force-torque observation returned None")
 
+        print(f"[DEBUG] Force-torque obs shape: {force_torque_obs.shape}")
+
         obs_dict['force_torque'] = force_torque_obs
         state_dict['force_torque'] = force_torque_obs
+
+        print(f"[DEBUG] After injection - obs_dict keys: {list(obs_dict.keys())}")
+        print(f"[DEBUG] After injection - state_dict keys: {list(state_dict.keys())}")
 
         # Verify injection succeeded
         if 'force_torque' not in obs_dict:
             raise ValueError("Failed to inject force_torque into obs_dict")
 
+        print(f"[DEBUG] _wrapped_get_factory_obs_state_dict returning successfully")
         return obs_dict, state_dict
 
     def _wrapped_get_observations(self):
@@ -381,42 +416,57 @@ class ForceTorqueWrapper(gym.Wrapper):
         Returns:
             dict: Observation dictionary with "policy" and "critic" keys containing tensor data
         """
+        print(f"[DEBUG] _wrapped_get_observations called! This should NOT happen if _get_factory_obs_state_dict override worked!")
+        print(f"[DEBUG] self._original_get_observations: {self._original_get_observations}")
+
         try:
             # Try to call the original _get_factory_obs_state_dict directly to get obs/state dicts
             if hasattr(self.unwrapped, '_get_factory_obs_state_dict'):
+                print(f"[DEBUG] Manually calling _get_factory_obs_state_dict...")
+                print(f"[DEBUG] Current method bound to unwrapped: {self.unwrapped._get_factory_obs_state_dict}")
                 obs_dict, state_dict = self.unwrapped._get_factory_obs_state_dict()
 
                 # Inject force-torque data
                 if hasattr(self.unwrapped, 'robot_force_torque'):
+                    print(f"[DEBUG] Injecting force-torque data...")
                     force_torque_obs = self.get_force_torque_observation()
                     obs_dict['force_torque'] = force_torque_obs
                     state_dict['force_torque'] = force_torque_obs
 
                 # Use factory_utils to properly collapse the observations
                 try:
+                    print(f"[DEBUG] Using factory_utils to collapse observations...")
                     import isaaclab_tasks.direct.factory.factory_utils as factory_utils
                     obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.unwrapped.cfg.obs_order + ["prev_actions"])
                     state_tensors = factory_utils.collapse_obs_dict(state_dict, self.unwrapped.cfg.state_order + ["prev_actions"])
+                    print(f"[DEBUG] Successfully collapsed observations")
                     return {"policy": obs_tensors, "critic": state_tensors}
-                except Exception:
+                except Exception as e:
+                    print(f"[DEBUG] Factory_utils failed: {e}")
                     # Fall back to original method if factory_utils fails
                     pass
 
             # If direct approach fails, try the original method
             if self._original_get_observations:
                 try:
+                    print(f"[DEBUG] Calling original _get_observations...")
                     result = self._original_get_observations()
+                    print(f"[DEBUG] Original _get_observations returned: {type(result)}")
                     return result
                 except KeyError as e:
+                    print(f"[DEBUG] KeyError in original _get_observations: {e}")
                     if "force_torque" in str(e):
+                        print(f"[DEBUG] Force-torque KeyError detected, falling back to minimal observations")
                         # Create minimal fallback observations
                         return self._create_minimal_observations()
                     else:
                         raise e
             else:
+                print(f"[DEBUG] No original _get_observations, using minimal observations")
                 return self._create_minimal_observations()
 
-        except Exception:
+        except Exception as e:
+            print(f"[DEBUG] Exception in _wrapped_get_observations: {e}")
             # Ultimate fallback - create minimal observations
             return self._create_minimal_observations()
 
