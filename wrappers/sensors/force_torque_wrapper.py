@@ -190,56 +190,31 @@ class ForceTorqueWrapper(gym.Wrapper):
         - Setting up sensor data buffers
         """
         if self._sensor_initialized:
-            print(f"[DEBUG] Force-torque wrapper already initialized")
             return
 
-        print(f"[DEBUG] Force-torque wrapper initializing...")
-        print(f"[DEBUG] Environment type: {type(self.unwrapped)}")
-        print(f"[DEBUG] Available methods: {[m for m in dir(self.unwrapped) if m.startswith('_get')]}")
 
         # Store original methods
         if hasattr(self.unwrapped, '_init_tensors'):
-            print(f"[DEBUG] Overriding _init_tensors")
             self._original_init_tensors = self.unwrapped._init_tensors
             self.unwrapped._init_tensors = self._wrapped_init_tensors
 
         if hasattr(self.unwrapped, '_compute_intermediate_values'):
-            print(f"[DEBUG] Overriding _compute_intermediate_values")
             self._original_compute_intermediate_values = self.unwrapped._compute_intermediate_values
             self.unwrapped._compute_intermediate_values = self._wrapped_compute_intermediate_values
 
         if hasattr(self.unwrapped, '_reset_buffers'):
-            print(f"[DEBUG] Overriding _reset_buffers")
             self._original_reset_buffers = self.unwrapped._reset_buffers
             self.unwrapped._reset_buffers = self._wrapped_reset_buffers
 
         if hasattr(self.unwrapped, '_pre_physics_step'):
-            print(f"[DEBUG] Overriding _pre_physics_step")
             self._original_pre_physics_step = self.unwrapped._pre_physics_step
             self.unwrapped._pre_physics_step = self._wrapped_pre_physics_step
 
-        # Try to override _get_factory_obs_state_dict first
-        if hasattr(self.unwrapped, '_get_factory_obs_state_dict'):
-            print(f"[DEBUG] CRITICAL: Overriding _get_factory_obs_state_dict")
-            print(f"[DEBUG] Original method: {self.unwrapped._get_factory_obs_state_dict}")
-            self._original_get_factory_obs_state_dict = self.unwrapped._get_factory_obs_state_dict
-            self.unwrapped._get_factory_obs_state_dict = self._wrapped_get_factory_obs_state_dict
-            print(f"[DEBUG] New method: {self.unwrapped._get_factory_obs_state_dict}")
-        else:
-            print(f"[DEBUG] WARNING: No _get_factory_obs_state_dict method found!")
-            # Fallback: override _get_observations directly
-            if hasattr(self.unwrapped, '_get_observations'):
-                print(f"[DEBUG] Fallback: Overriding _get_observations")
-                self._original_get_observations = self.unwrapped._get_observations
-                self.unwrapped._get_observations = self._wrapped_get_observations
-            else:
-                print(f"[DEBUG] ERROR: No _get_observations method found either!")
+        # No method overriding needed - we'll inject force_torque as an environment attribute
 
         # Initialize force-torque sensor
-        print(f"[DEBUG] Initializing force-torque sensor...")
         self._init_force_torque_sensor()
         self._sensor_initialized = True
-        print(f"[DEBUG] Force-torque wrapper initialization complete")
 
     def _init_force_torque_sensor(self):
         """
@@ -290,6 +265,10 @@ class ForceTorqueWrapper(gym.Wrapper):
             (num_envs, 6), dtype=torch.float32, device=device
         )
 
+        # Also initialize force_torque attribute for factory obs_dict creation
+        # This is what the factory environment will access when creating obs_dict
+        self.unwrapped.force_torque = self.unwrapped.robot_force_torque
+
 
     def _wrapped_compute_intermediate_values(self, dt):
         """
@@ -313,19 +292,24 @@ class ForceTorqueWrapper(gym.Wrapper):
         if self._original_compute_intermediate_values:
             self._original_compute_intermediate_values(dt)
 
-        # Get force-torque sensor data
+        # Get force-torque sensor data and make it available for obs_dict creation
         if self._robot_av is not None:
             try:
                 # Force-torque sensor is at joint 8 (end-effector)
                 joint_forces = self._robot_av.get_measured_joint_forces()
                 if joint_forces.shape[1] > 8:  # Ensure joint 8 exists
-                    self.unwrapped.robot_force_torque = joint_forces[:, 8, :]
+                    force_torque_data = joint_forces[:, 8, :]
+                    self.unwrapped.robot_force_torque = force_torque_data
+                    # Also set as force_torque attribute for factory obs_dict creation
+                    self.unwrapped.force_torque = force_torque_data
                 else:
                     # Fallback to zeros if joint 8 doesn't exist
                     self.unwrapped.robot_force_torque.fill_(0.0)
+                    self.unwrapped.force_torque = self.unwrapped.robot_force_torque
             except Exception as e:
                 # Fallback to zeros if measurement fails
                 self.unwrapped.robot_force_torque.fill_(0.0)
+                self.unwrapped.force_torque = self.unwrapped.robot_force_torque
 
     def _wrapped_reset_buffers(self, env_ids):
         """
@@ -345,345 +329,15 @@ class ForceTorqueWrapper(gym.Wrapper):
         # Reset force-torque sensor readings
         if hasattr(self.unwrapped, 'robot_force_torque'):
             self.unwrapped.robot_force_torque[env_ids] = 0.0
+            # Also reset force_torque attribute for obs_dict creation
+            if hasattr(self.unwrapped, 'force_torque'):
+                self.unwrapped.force_torque[env_ids] = 0.0
 
     def _wrapped_pre_physics_step(self, action):
         """Update during physics step."""
         # Call original pre-physics step
         if self._original_pre_physics_step:
             self._original_pre_physics_step(action)
-
-    def _wrapped_get_factory_obs_state_dict(self):
-        """
-        Get factory observation and state dictionaries with force-torque data injected.
-
-        This method wraps the environment's original _get_factory_obs_state_dict method
-        and injects the force-torque sensor readings into both observation and state
-        dictionaries. This ensures that when the factory environment constructs
-        obs_tensors using obs_order, the force_torque observation is available.
-
-        Returns:
-            tuple: (obs_dict, state_dict) with force_torque data added to both dictionaries
-        """
-        print(f"[DEBUG] _wrapped_get_factory_obs_state_dict called!")
-        print(f"[DEBUG] self._original_get_factory_obs_state_dict: {self._original_get_factory_obs_state_dict}")
-
-        # Call original method to get base observation and state dictionaries
-        if self._original_get_factory_obs_state_dict:
-            print(f"[DEBUG] Calling original _get_factory_obs_state_dict...")
-            obs_dict, state_dict = self._original_get_factory_obs_state_dict()
-            print(f"[DEBUG] Original obs_dict keys: {list(obs_dict.keys())}")
-            print(f"[DEBUG] Original state_dict keys: {list(state_dict.keys())}")
-        else:
-            # No original method - this should not happen in factory environments
-            raise ValueError("Force-torque wrapper requires factory environment with _get_factory_obs_state_dict method")
-
-        # Verify force-torque data is available
-        if not hasattr(self.unwrapped, 'robot_force_torque'):
-            print(f"[DEBUG] ERROR: robot_force_torque attribute missing")
-            print(f"[DEBUG] Available attributes: {[attr for attr in dir(self.unwrapped) if 'force' in attr.lower()]}")
-            raise ValueError("Force-torque sensor not initialized - robot_force_torque attribute missing")
-
-        print(f"[DEBUG] robot_force_torque shape: {self.unwrapped.robot_force_torque.shape}")
-
-        # Inject force-torque observation
-        print(f"[DEBUG] Getting force-torque observation...")
-        force_torque_obs = self.get_force_torque_observation()
-        if force_torque_obs is None:
-            raise ValueError("Force-torque observation returned None")
-
-        print(f"[DEBUG] Force-torque obs shape: {force_torque_obs.shape}")
-
-        obs_dict['force_torque'] = force_torque_obs
-        state_dict['force_torque'] = force_torque_obs
-
-        print(f"[DEBUG] After injection - obs_dict keys: {list(obs_dict.keys())}")
-        print(f"[DEBUG] After injection - state_dict keys: {list(state_dict.keys())}")
-
-        # Verify injection succeeded
-        if 'force_torque' not in obs_dict:
-            raise ValueError("Failed to inject force_torque into obs_dict")
-
-        print(f"[DEBUG] _wrapped_get_factory_obs_state_dict returning successfully")
-        return obs_dict, state_dict
-
-    def _wrapped_get_observations(self):
-        """
-        Fallback wrapper for _get_observations when _get_factory_obs_state_dict is not available.
-
-        This method intercepts the factory environment's _get_observations call and injects
-        force-torque data into the observation dictionaries before they're processed.
-
-        Returns:
-            dict: Observation dictionary with "policy" and "critic" keys containing tensor data
-        """
-        print(f"[DEBUG] _wrapped_get_observations called! This should NOT happen if _get_factory_obs_state_dict override worked!")
-        print(f"[DEBUG] self._original_get_observations: {self._original_get_observations}")
-
-        try:
-            # Try to call the original _get_factory_obs_state_dict directly to get obs/state dicts
-            if hasattr(self.unwrapped, '_get_factory_obs_state_dict'):
-                print(f"[DEBUG] Manually calling _get_factory_obs_state_dict...")
-                print(f"[DEBUG] Current method bound to unwrapped: {self.unwrapped._get_factory_obs_state_dict}")
-                obs_dict, state_dict = self.unwrapped._get_factory_obs_state_dict()
-
-                # Inject force-torque data
-                if hasattr(self.unwrapped, 'robot_force_torque'):
-                    print(f"[DEBUG] Injecting force-torque data...")
-                    force_torque_obs = self.get_force_torque_observation()
-                    obs_dict['force_torque'] = force_torque_obs
-                    state_dict['force_torque'] = force_torque_obs
-
-                # Use factory_utils to properly collapse the observations
-                try:
-                    print(f"[DEBUG] Using factory_utils to collapse observations...")
-                    import isaaclab_tasks.direct.factory.factory_utils as factory_utils
-                    obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.unwrapped.cfg.obs_order + ["prev_actions"])
-                    state_tensors = factory_utils.collapse_obs_dict(state_dict, self.unwrapped.cfg.state_order + ["prev_actions"])
-                    print(f"[DEBUG] Successfully collapsed observations")
-                    return {"policy": obs_tensors, "critic": state_tensors}
-                except Exception as e:
-                    print(f"[DEBUG] Factory_utils failed: {e}")
-                    # Fall back to original method if factory_utils fails
-                    pass
-
-            # If direct approach fails, try the original method
-            if self._original_get_observations:
-                try:
-                    print(f"[DEBUG] Calling original _get_observations...")
-                    result = self._original_get_observations()
-                    print(f"[DEBUG] Original _get_observations returned: {type(result)}")
-                    return result
-                except KeyError as e:
-                    print(f"[DEBUG] KeyError in original _get_observations: {e}")
-                    if "force_torque" in str(e):
-                        print(f"[DEBUG] Force-torque KeyError detected, falling back to minimal observations")
-                        # Create minimal fallback observations
-                        return self._create_minimal_observations()
-                    else:
-                        raise e
-            else:
-                print(f"[DEBUG] No original _get_observations, using minimal observations")
-                return self._create_minimal_observations()
-
-        except Exception as e:
-            print(f"[DEBUG] Exception in _wrapped_get_observations: {e}")
-            # Ultimate fallback - create minimal observations
-            return self._create_minimal_observations()
-
-    def _create_observations_with_force_torque(self):
-        """
-        Create observations manually with force-torque data injected.
-
-        This is a fallback when we can't override _get_factory_obs_state_dict.
-        """
-        # Try to call the original factory environment's _get_factory_obs_state_dict if it exists
-        if hasattr(self.unwrapped, '_get_factory_obs_state_dict'):
-            try:
-                obs_dict, state_dict = self.unwrapped._get_factory_obs_state_dict()
-
-                # Add force-torque observation to both dictionaries
-                if hasattr(self.unwrapped, 'robot_force_torque'):
-                    force_torque_obs = self.get_force_torque_observation()
-                    obs_dict['force_torque'] = force_torque_obs
-                    state_dict['force_torque'] = force_torque_obs
-
-                # Use factory_utils to collapse the dictionaries
-                try:
-                    import isaaclab_tasks.direct.factory.factory_utils as factory_utils
-                    obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.unwrapped.cfg.obs_order + ["prev_actions"])
-                    state_tensors = factory_utils.collapse_obs_dict(state_dict, self.unwrapped.cfg.state_order + ["prev_actions"])
-                    return {"policy": obs_tensors, "critic": state_tensors}
-                except Exception:
-                    # If factory_utils fails, just create minimal observations
-                    return self._create_minimal_observations()
-
-            except Exception:
-                # If _get_factory_obs_state_dict fails, create minimal observations
-                return self._create_minimal_observations()
-        else:
-            # No factory obs state dict method available, create minimal observations
-            return self._create_minimal_observations()
-
-    def _create_minimal_observations(self):
-        """
-        Create observations dynamically based on obs_order and state_order configuration.
-
-        No fallbacks - throws errors if required configurations or dimension mappings are missing.
-
-        Raises:
-            ImportError: If Isaac Lab dimension configs cannot be imported
-            ValueError: If required config attributes are missing
-            KeyError: If obs_order/state_order contains unknown observation components
-        """
-        # Import Isaac Lab's dimension configurations
-        try:
-            from isaaclab_tasks.direct.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG
-        except ImportError as e:
-            # Check if we're in test environment by looking for test marker
-            if (hasattr(self.unwrapped, 'cfg') and
-                hasattr(self.unwrapped.cfg, '_is_mock_test_config')):
-                # In tests, use mock configs to verify dynamic calculation logic
-                OBS_DIM_CFG = {
-                    "fingertip_pos": 3,
-                    "ee_linvel": 3,
-                    "joint_pos": 7,
-                    "force_torque": 6
-                }
-                STATE_DIM_CFG = {
-                    "fingertip_pos": 3,
-                    "ee_linvel": 3,
-                    "joint_pos": 7,
-                    "fingertip_quat": 4,
-                    "force_torque": 6
-                }
-            else:
-                # In production, this is an error - no fallbacks!
-                raise ImportError(f"Failed to import Isaac Lab dimension configs: {e}")
-
-        # Ensure force_torque is in the dimension configs
-        if 'force_torque' not in OBS_DIM_CFG:
-            OBS_DIM_CFG['force_torque'] = 6
-        if 'force_torque' not in STATE_DIM_CFG:
-            STATE_DIM_CFG['force_torque'] = 6
-
-        # Verify required config exists
-        if not hasattr(self.unwrapped, 'cfg'):
-            raise ValueError("Environment missing required 'cfg' attribute")
-
-        env_cfg = self.unwrapped.cfg
-        if not hasattr(env_cfg, 'obs_order'):
-            raise ValueError("Environment config missing required 'obs_order' attribute")
-        if not hasattr(env_cfg, 'state_order'):
-            raise ValueError("Environment config missing required 'state_order' attribute")
-
-        num_envs = self.unwrapped.num_envs
-        device = self.unwrapped.device
-
-        # Calculate expected observation and state sizes dynamically
-        try:
-            expected_obs_size = sum([OBS_DIM_CFG[obs] for obs in env_cfg.obs_order])
-            expected_state_size = sum([STATE_DIM_CFG[state] for state in env_cfg.state_order])
-        except KeyError as e:
-            raise KeyError(f"Unknown observation/state component in obs_order/state_order: {e}")
-
-        # Add action space dimensions (following Isaac Lab's pattern)
-        if hasattr(env_cfg, 'action_space'):
-            expected_obs_size += env_cfg.action_space
-            expected_state_size += env_cfg.action_space
-        else:
-            raise ValueError("Environment config missing required 'action_space' attribute")
-
-        # Build observation components according to obs_order
-        obs_components = []
-        for obs_name in env_cfg.obs_order:
-            if obs_name == 'force_torque':
-                if hasattr(self.unwrapped, 'robot_force_torque'):
-                    force_torque = self.get_force_torque_observation()
-                    obs_components.append(force_torque)
-                else:
-                    raise ValueError("force_torque in obs_order but robot_force_torque data not available")
-            else:
-                # For other observation components, get from environment
-                attr_name = obs_name
-                if hasattr(env_cfg, 'component_attr_map') and obs_name in env_cfg.component_attr_map:
-                    attr_name = env_cfg.component_attr_map[obs_name]
-
-                if hasattr(self.unwrapped, attr_name):
-                    obs_data = getattr(self.unwrapped, attr_name)
-                    if isinstance(obs_data, torch.Tensor):
-                        obs_components.append(obs_data.clone())
-                    else:
-                        raise ValueError(f"Observation component '{obs_name}' (attr: '{attr_name}') is not a tensor")
-                else:
-                    raise ValueError(f"Required observation component '{obs_name}' (attr: '{attr_name}') not found in environment")
-
-        # Add previous actions (following Isaac Lab's pattern)
-        if hasattr(self.unwrapped, 'actions') and self.unwrapped.actions is not None:
-            obs_components.append(self.unwrapped.actions.clone())
-        else:
-            raise ValueError("Required 'actions' attribute not found in environment")
-
-        # Build state components according to state_order
-        state_components = []
-        for state_name in env_cfg.state_order:
-            if state_name == 'force_torque':
-                if hasattr(self.unwrapped, 'robot_force_torque'):
-                    force_torque = self.get_force_torque_observation()
-                    state_components.append(force_torque)
-                else:
-                    raise ValueError("force_torque in state_order but robot_force_torque data not available")
-            else:
-                # For other state components, get from environment
-                attr_name = state_name
-                if hasattr(env_cfg, 'component_attr_map') and state_name in env_cfg.component_attr_map:
-                    attr_name = env_cfg.component_attr_map[state_name]
-
-                if hasattr(self.unwrapped, attr_name):
-                    state_data = getattr(self.unwrapped, attr_name)
-                    if isinstance(state_data, torch.Tensor):
-                        state_components.append(state_data.clone())
-                    else:
-                        raise ValueError(f"State component '{state_name}' (attr: '{attr_name}') is not a tensor")
-                else:
-                    raise ValueError(f"Required state component '{state_name}' (attr: '{attr_name}') not found in environment")
-
-        # Add previous actions to state (following Isaac Lab's pattern)
-        if hasattr(self.unwrapped, 'actions') and self.unwrapped.actions is not None:
-            state_components.append(self.unwrapped.actions.clone())
-        else:
-            raise ValueError("Required 'actions' attribute not found in environment")
-
-        # Concatenate observation and state components
-        obs_tensor = torch.cat(obs_components, dim=-1)
-        state_tensor = torch.cat(state_components, dim=-1)
-
-        # Ensure tensors have correct shape, dtype, and device
-        obs_tensor = obs_tensor.to(device=device, dtype=torch.float32)
-        state_tensor = state_tensor.to(device=device, dtype=torch.float32)
-
-        # Verify sizes match calculated expectations (no fallbacks!)
-        if obs_tensor.shape[1] != expected_obs_size:
-            raise ValueError(f"Created observation size {obs_tensor.shape[1]} doesn't match calculated size {expected_obs_size}")
-        if state_tensor.shape[1] != expected_state_size:
-            raise ValueError(f"Created state size {state_tensor.shape[1]} doesn't match calculated size {expected_state_size}")
-
-        # Return in Isaac Lab factory format
-        return {"policy": obs_tensor, "critic": state_tensor}
-
-    def step(self, action):
-        """Step the environment and ensure wrapper is initialized."""
-        # Initialize wrapper if not done yet
-        if not self._sensor_initialized and hasattr(self.unwrapped, '_robot'):
-            self._initialize_wrapper()
-
-        return super().step(action)
-
-    def reset(self, **kwargs):
-        """Reset the environment and ensure wrapper is initialized."""
-        obs, info = super().reset(**kwargs)
-
-        # Initialize wrapper if not done yet
-        if not self._sensor_initialized and hasattr(self.unwrapped, '_robot'):
-            self._initialize_wrapper()
-
-        return obs, info
-
-    def get_current_force_torque(self):
-        """
-        Get current force-torque readings split into force and torque components.
-
-        Returns:
-            dict: Dictionary containing:
-                - 'current_force': Force components (Nx3 tensor)
-                - 'current_torque': Torque components (Nx3 tensor)
-                Empty dict if no force-torque data is available
-        """
-        if hasattr(self.unwrapped, 'robot_force_torque'):
-            return {
-                'current_force': self.unwrapped.robot_force_torque[:, :3],
-                'current_torque': self.unwrapped.robot_force_torque[:, 3:],
-            }
-        return {}
 
     def has_force_torque_data(self):
         """
@@ -693,6 +347,45 @@ class ForceTorqueWrapper(gym.Wrapper):
             bool: True if robot_force_torque attribute exists, False otherwise
         """
         return hasattr(self.unwrapped, 'robot_force_torque')
+
+    def get_current_force_torque(self):
+        """
+        Get current force-torque readings split into force and torque components.
+
+        Returns:
+            dict: Dictionary with 'current_force' and 'current_torque' keys containing
+                  tensors of shape (num_envs, 3) each, or empty dict if no data available
+        """
+        if self.has_force_torque_data():
+            return {
+                'current_force': self.unwrapped.robot_force_torque[:, :3],
+                'current_torque': self.unwrapped.robot_force_torque[:, 3:],
+            }
+        return {}
+
+    def get_stats(self):
+        """
+        Get statistics about the force-torque wrapper state.
+
+        Returns:
+            dict: Dictionary containing wrapper statistics and sensor status
+        """
+        stats = {
+            'sensor_initialized': self._sensor_initialized,
+            'has_force_torque_data': self.has_force_torque_data(),
+            'use_tanh_scaling': self.use_tanh_scaling,
+            'tanh_scale': self.tanh_scale
+        }
+
+        if self.has_force_torque_data():
+            force_torque_data = self.unwrapped.robot_force_torque
+            stats.update({
+                'force_torque_shape': list(force_torque_data.shape),
+                'force_torque_device': str(force_torque_data.device),
+                'force_torque_dtype': str(force_torque_data.dtype)
+            })
+
+        return stats
 
     def get_force_torque_observation(self):
         """
