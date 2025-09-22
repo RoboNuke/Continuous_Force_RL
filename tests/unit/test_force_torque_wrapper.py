@@ -12,6 +12,7 @@ import pytest
 import torch
 import sys
 import os
+import gymnasium as gym
 from unittest.mock import Mock, patch, MagicMock
 
 # Add project root to path
@@ -198,21 +199,47 @@ class TestObservationMethods:
 
     def test_wrapped_get_observations_fallback(self):
         """Test fallback when _get_factory_obs_state_dict doesn't exist."""
-        env = MockBaseEnv()
+        # Create a custom mock that doesn't have _get_factory_obs_state_dict
+        class MinimalMockEnv(gym.Env):
+            def __init__(self):
+                super().__init__()
+                self.cfg = MockEnvConfig()
+                self.num_envs = 4
+                self.device = torch.device("cpu")
+                self.observation_space = gym.spaces.Box(low=-1, high=1, shape=(25,))
+                self.action_space = gym.spaces.Box(low=-1, high=1, shape=(6,))
+                self._unwrapped = self
+                self._robot = True
 
-        # Mock _get_observations instead
-        def mock_get_observations():
-            return {
-                'policy': torch.randn(env.num_envs, 25),
-                'critic': torch.randn(env.num_envs, 29)
-            }
+            @property
+            def unwrapped(self):
+                return self._unwrapped
 
-        env._get_observations = mock_get_observations
+            def _get_observations(self):
+                return {
+                    'policy': torch.randn(self.num_envs, 25),
+                    'critic': torch.randn(self.num_envs, 29)
+                }
+
+            def step(self, action):
+                obs = torch.randn(25)
+                reward = 0.0
+                terminated = False
+                truncated = False
+                info = {}
+                return obs, reward, terminated, truncated, info
+
+            def reset(self, seed=None, options=None):
+                obs = torch.randn(25)
+                info = {}
+                return obs, info
+
+        env = MinimalMockEnv()
 
         wrapper = ForceTorqueWrapper(env)
         wrapper._initialize_wrapper()
 
-        # Should have fallback
+        # Should have fallback to _get_observations
         assert wrapper._original_get_observations is not None
         assert wrapper._original_get_factory_obs_state_dict is None
 

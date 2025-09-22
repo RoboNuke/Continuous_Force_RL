@@ -471,7 +471,11 @@ class TestPreprocessorSetup:
         # Check state preprocessor
         assert agent_cfg['agent']['state_preprocessor'] is not None
         assert 'state_preprocessor_kwargs' in agent_cfg['agent']
-        assert agent_cfg['agent']['state_preprocessor_kwargs']['size'] == 80  # 32 + 48
+
+        # Dynamic calculation: should equal observation_space + state_space
+        expected_size = env.cfg.observation_space + env.cfg.state_space
+        assert agent_cfg['agent']['state_preprocessor_kwargs']['size'] == expected_size, \
+            f"State preprocessor size should be {expected_size} (obs_space + state_space), got {agent_cfg['agent']['state_preprocessor_kwargs']['size']}"
         assert agent_cfg['agent']['state_preprocessor_kwargs']['device'] == 'cpu'
 
         # Check value preprocessor
@@ -512,7 +516,11 @@ class TestPreprocessorSetup:
         # Check returned config
         assert 'state_preprocessor' in preprocessor_configs
         assert 'state_preprocessor_kwargs' in preprocessor_configs
-        assert preprocessor_configs['state_preprocessor_kwargs']['size'] == 80
+
+        # Dynamic calculation: should equal observation_space + state_space
+        expected_size = env.cfg.observation_space + env.cfg.state_space
+        assert preprocessor_configs['state_preprocessor_kwargs']['size'] == expected_size, \
+            f"State preprocessor size should be {expected_size} (obs_space + state_space), got {preprocessor_configs['state_preprocessor_kwargs']['size']}"
 
         assert 'value_preprocessor' in preprocessor_configs
         assert 'value_preprocessor_kwargs' in preprocessor_configs

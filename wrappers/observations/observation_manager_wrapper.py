@@ -68,6 +68,9 @@ class ObservationManagerWrapper(gym.Wrapper):
         """
         super().__init__(env)
 
+        # Check that no history wrapper is already applied - history must be the last wrapper
+        self._check_no_history_wrapper()
+
         self.merge_strategy = merge_strategy
         self.num_envs = env.unwrapped.num_envs
         self.device = env.unwrapped.device
@@ -79,6 +82,37 @@ class ObservationManagerWrapper(gym.Wrapper):
         self._wrapper_initialized = False
         if hasattr(self.unwrapped, '_robot'):
             self._initialize_wrapper()
+
+    def _check_no_history_wrapper(self):
+        """
+        Check that no history wrapper is already applied in the wrapper chain.
+
+        History wrapper must be the last wrapper applied to ensure proper observation
+        space calculation and buffer management. If a history wrapper is detected,
+        raise an error with clear instructions.
+        """
+        current_env = self.env
+        while current_env is not None:
+            # Check if current wrapper is a history wrapper
+            if hasattr(current_env, '__class__') and 'HistoryObservationWrapper' in str(current_env.__class__):
+                raise ValueError(
+                    "ERROR: History wrapper detected in wrapper chain before ObservationManagerWrapper.\n"
+                    "\n"
+                    "SOLUTION: History wrapper must be applied LAST in the wrapper chain.\n"
+                    "Correct order:\n"
+                    "  1. Apply sensor wrappers (ForceTorqueWrapper, etc.)\n"
+                    "  2. Apply ObservationManagerWrapper\n"
+                    "  3. Apply HistoryObservationWrapper last\n"
+                    "\n"
+                    "Current wrapper chain violates this requirement.\n"
+                    "Please reorder your wrapper application to ensure HistoryObservationWrapper is applied last."
+                )
+
+            # Move to next wrapper in chain
+            if hasattr(current_env, 'env'):
+                current_env = current_env.env
+            else:
+                break
 
     def _initialize_wrapper(self):
         """Initialize wrapper by overriding observation methods."""

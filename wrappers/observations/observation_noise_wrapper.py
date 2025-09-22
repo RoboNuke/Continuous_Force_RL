@@ -101,6 +101,9 @@ class ObservationNoiseWrapper(gym.Wrapper):
         """
         super().__init__(env)
 
+        # Check that no history wrapper is already applied - history must be the last wrapper
+        self._check_no_history_wrapper()
+
         self.config = noise_config
         self.num_envs = env.unwrapped.num_envs
         self.device = env.unwrapped.device
@@ -135,6 +138,37 @@ class ObservationNoiseWrapper(gym.Wrapper):
         print(f"  - Policy groups: {list(self.policy_group_mapping.keys())}")
         print(f"  - Critic groups: {list(self.critic_group_mapping.keys())}")
         print(f"  - Configured noise groups: {list(self.config.noise_groups.keys())}")
+
+    def _check_no_history_wrapper(self):
+        """
+        Check that no history wrapper is already applied in the wrapper chain.
+
+        History wrapper must be the last wrapper applied to ensure proper observation
+        space calculation and buffer management. If a history wrapper is detected,
+        raise an error with clear instructions.
+        """
+        current_env = self.env
+        while current_env is not None:
+            # Check if current wrapper is a history wrapper
+            if hasattr(current_env, '__class__') and 'HistoryObservationWrapper' in str(current_env.__class__):
+                raise ValueError(
+                    "ERROR: History wrapper detected in wrapper chain before ObservationNoiseWrapper.\n"
+                    "\n"
+                    "SOLUTION: History wrapper must be applied LAST in the wrapper chain.\n"
+                    "Correct order:\n"
+                    "  1. Apply sensor wrappers (ForceTorqueWrapper, etc.)\n"
+                    "  2. Apply ObservationNoiseWrapper\n"
+                    "  3. Apply HistoryObservationWrapper last\n"
+                    "\n"
+                    "Current wrapper chain violates this requirement.\n"
+                    "Please reorder your wrapper application to ensure HistoryObservationWrapper is applied last."
+                )
+
+            # Move to next wrapper in chain
+            if hasattr(current_env, 'env'):
+                current_env = current_env.env
+            else:
+                break
 
     def _load_observation_configs(self) -> tuple:
         """Load observation dimension configurations from Isaac Lab's native dictionaries."""

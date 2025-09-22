@@ -32,6 +32,9 @@ class MockIsaacLabEnv(gym.Env):
         self.fingertip_pos = torch.randn(self.num_envs, 3, device=self.device)
         self.joint_pos = torch.randn(self.num_envs, 7, device=self.device)
 
+        # Mark that force-torque sensor is available for hybrid control wrapper
+        self.has_force_torque_sensor = True
+
     def step(self, action):
         """Mock step method."""
         obs = self.observation_space.sample()
@@ -58,6 +61,39 @@ class MockIsaacLabEnv(gym.Env):
             self.action_space = gym.spaces.Box(
                 low=-1, high=1, shape=(self.cfg.action_space,)
             )
+
+    def _get_factory_obs_state_dict(self):
+        """Mock factory observation state dict method for force torque wrapper."""
+        # Return Isaac Lab factory format: obs_dict, state_dict
+        obs_dict = {
+            'fingertip_pos': self.fingertip_pos,
+            'joint_pos': self.joint_pos,
+        }
+        state_dict = {
+            'fingertip_pos': self.fingertip_pos,
+            'joint_pos': self.joint_pos,
+        }
+        return obs_dict, state_dict
+
+    def _get_observations(self):
+        """Mock get observations method for observation manager wrapper."""
+        # Return Isaac Lab factory format: {"policy": tensor, "critic": tensor}
+        policy_obs = torch.randn(self.num_envs, 32, device=self.device)
+        critic_obs = torch.randn(self.num_envs, 48, device=self.device)
+        return {"policy": policy_obs, "critic": critic_obs}
+
+    def _init_tensors(self):
+        """Mock init tensors method for force torque wrapper."""
+        pass
+
+    def _compute_intermediate_values(self, dt=None):
+        """Mock compute intermediate values for force torque wrapper."""
+        # Update force-torque data
+        self.robot_force_torque = torch.randn(self.num_envs, 6, device=self.device)
+
+    def _pre_physics_step(self, actions):
+        """Mock pre-physics step for history wrapper."""
+        pass
 
 
 class MockEnvConfig:
@@ -126,12 +162,12 @@ class MockEnvConfig:
         self.use_force_sensor = False
         self.action_space = 6  # Default action space size
 
-        # Observation configuration
-        self.obs_order = ['fingertip_pos', 'joint_pos', 'force_torque']
-        self.state_order = ['fingertip_pos', 'joint_pos', 'force_torque']
-        # fingertip_pos(3) + joint_pos(7) + force_torque(6) + actions(6) = 22
-        self.observation_space = 22
-        self.state_space = 22
+        # Observation configuration (initially without force_torque)
+        self.obs_order = ['fingertip_pos', 'joint_pos']
+        self.state_order = ['fingertip_pos', 'joint_pos']
+        # fingertip_pos(3) + joint_pos(7) + actions(6) = 16
+        self.observation_space = 16
+        self.state_space = 16
 
         # Component configuration
         self.component_dims = {
@@ -151,6 +187,23 @@ class MockEnvConfig:
 
 
 # ===== MOCK ISAAC SIM =====
+
+class MockRobotView:
+    """Mock RobotView for Isaac Sim force-torque sensor integration."""
+
+    def __init__(self, prim_paths_expr="/World/envs/env_.*/Robot", name="robot_view"):
+        self.name = name
+        self.prim_paths_expr = prim_paths_expr
+
+    def initialize(self, physics_sim_view=None):
+        """Mock initialization."""
+        pass
+
+    def get_applied_joint_efforts(self):
+        """Mock joint efforts retrieval."""
+        # Return mock force-torque data (last 6 DOF as force-torque)
+        num_envs = 16  # Default for tests
+        return torch.randn(num_envs, 7)  # 7 joints, last 6 are force-torque
 
 class MockIsaacSim:
     """Mock Isaac Sim components."""
@@ -210,6 +263,13 @@ def setup_minimal_mocks():
         mock_torch_utils.quat_from_euler_xyz = MagicMock(side_effect=lambda x, y, z: torch.zeros(x.shape[0], 4) if hasattr(x, 'shape') else torch.zeros(1, 4))
         sys.modules['isaacsim.core.utils.torch'] = mock_torch_utils
 
+        # Mock isaacsim robot API
+        mock_isaacsim_api = MagicMock()
+        mock_isaacsim_api.robots = MagicMock()
+        mock_isaacsim_api.robots.RobotView = MockRobotView
+        sys.modules['isaacsim.core.api'] = mock_isaacsim_api
+        sys.modules['isaacsim.core.api.robots'] = mock_isaacsim_api.robots
+
     try:
         import omni
     except ImportError:
@@ -226,10 +286,60 @@ def setup_minimal_mocks():
         mock_omni.isaac.core = MagicMock()
         mock_omni.isaac.core.utils = MagicMock()
         mock_omni.isaac.core.utils.torch = mock_omni_torch_utils
+        # Mock omni.isaac.core.articulations with RobotView
+        mock_omni.isaac.core.articulations = MagicMock()
+        mock_omni.isaac.core.articulations.ArticulationView = MockRobotView
         sys.modules['omni.isaac'] = mock_omni.isaac
         sys.modules['omni.isaac.core'] = mock_omni.isaac.core
         sys.modules['omni.isaac.core.utils'] = mock_omni.isaac.core.utils
         sys.modules['omni.isaac.core.utils.torch'] = mock_omni_torch_utils
+        sys.modules['omni.isaac.core.articulations'] = mock_omni.isaac.core.articulations
+
+        # Mock Isaac Lab tasks for observation noise wrapper
+        mock_lab_tasks = MagicMock()
+        mock_lab_tasks.direct = MagicMock()
+        mock_lab_tasks.direct.factory = MagicMock()
+        mock_lab_tasks.direct.factory.factory_env_cfg = MagicMock()
+        # Add mock dimension configs
+        mock_lab_tasks.direct.factory.factory_env_cfg.OBS_DIM_CFG = {
+            'fingertip_pos': 3,
+            'joint_pos': 7,
+            'force_torque': 6,
+            'prev_actions': 6
+        }
+        mock_lab_tasks.direct.factory.factory_env_cfg.STATE_DIM_CFG = {
+            'fingertip_pos': 3,
+            'joint_pos': 7,
+            'fingertip_quat': 4,
+            'force_torque': 6
+        }
+        sys.modules['omni.isaac.lab_tasks'] = mock_lab_tasks
+        sys.modules['omni.isaac.lab_tasks.direct'] = mock_lab_tasks.direct
+        sys.modules['omni.isaac.lab_tasks.direct.factory'] = mock_lab_tasks.direct.factory
+        sys.modules['omni.isaac.lab_tasks.direct.factory.factory_env_cfg'] = mock_lab_tasks.direct.factory.factory_env_cfg
+
+        # Also mock the isaaclab_tasks alternative import path
+        mock_isaaclab_tasks = MagicMock()
+        mock_isaaclab_tasks.direct = MagicMock()
+        mock_isaaclab_tasks.direct.factory = MagicMock()
+        mock_isaaclab_tasks.direct.factory.factory_env_cfg = MagicMock()
+        # Add same mock dimension configs
+        mock_isaaclab_tasks.direct.factory.factory_env_cfg.OBS_DIM_CFG = {
+            'fingertip_pos': 3,
+            'joint_pos': 7,
+            'force_torque': 6,
+            'prev_actions': 6
+        }
+        mock_isaaclab_tasks.direct.factory.factory_env_cfg.STATE_DIM_CFG = {
+            'fingertip_pos': 3,
+            'joint_pos': 7,
+            'fingertip_quat': 4,
+            'force_torque': 6
+        }
+        sys.modules['isaaclab_tasks'] = mock_isaaclab_tasks
+        sys.modules['isaaclab_tasks.direct'] = mock_isaaclab_tasks.direct
+        sys.modules['isaaclab_tasks.direct.factory'] = mock_isaaclab_tasks.direct.factory
+        sys.modules['isaaclab_tasks.direct.factory.factory_env_cfg'] = mock_isaaclab_tasks.direct.factory.factory_env_cfg
 
     # Mock Wandb
     try:

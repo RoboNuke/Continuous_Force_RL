@@ -112,20 +112,24 @@ class ForceTorqueWrapper(gym.Wrapper):
         except ImportError as e:
             # Check if we're in test environment by looking for test marker
             if hasattr(env_cfg, '_is_mock_test_config'):
-                # In tests, use mock configs to verify dynamic calculation logic
-                OBS_DIM_CFG = {
-                    "fingertip_pos": 3,
-                    "ee_linvel": 3,
-                    "joint_pos": 7,
-                    "force_torque": 6
-                }
-                STATE_DIM_CFG = {
-                    "fingertip_pos": 3,
-                    "ee_linvel": 3,
-                    "joint_pos": 7,
-                    "fingertip_quat": 4,
-                    "force_torque": 6
-                }
+                # In tests, import the mock configs from the test environment
+                try:
+                    from tests.mocks.mock_isaac_lab import OBS_DIM_CFG, STATE_DIM_CFG
+                except ImportError:
+                    # Fallback if mock not available
+                    OBS_DIM_CFG = {
+                        "fingertip_pos": 3,
+                        "ee_linvel": 3,
+                        "joint_pos": 7,
+                        "force_torque": 6
+                    }
+                    STATE_DIM_CFG = {
+                        "fingertip_pos": 3,
+                        "ee_linvel": 3,
+                        "joint_pos": 7,
+                        "fingertip_quat": 4,
+                        "force_torque": 6
+                    }
             else:
                 # In production, this is an error - no fallbacks!
                 raise ImportError(f"Failed to import Isaac Lab dimension configs: {e}")
@@ -176,6 +180,37 @@ class ForceTorqueWrapper(gym.Wrapper):
                 # Silently continue if reconfiguration fails
                 pass
 
+    def _check_no_history_wrapper(self):
+        """
+        Check that no history wrapper is already applied in the wrapper chain.
+
+        History wrapper must be the last wrapper applied to ensure proper observation
+        space calculation and buffer management. If a history wrapper is detected,
+        raise an error with clear instructions.
+        """
+        current_env = self.env
+        while current_env is not None:
+            # Check if current wrapper is a history wrapper
+            if hasattr(current_env, '__class__') and 'HistoryObservationWrapper' in str(current_env.__class__):
+                raise ValueError(
+                    "ERROR: History wrapper detected in wrapper chain before ForceTorqueWrapper.\n"
+                    "\n"
+                    "SOLUTION: History wrapper must be applied LAST in the wrapper chain.\n"
+                    "Correct order:\n"
+                    "  1. Apply ForceTorqueWrapper first\n"
+                    "  2. Apply other observation/sensor wrappers\n"
+                    "  3. Apply HistoryObservationWrapper last\n"
+                    "\n"
+                    "Current wrapper chain violates this requirement.\n"
+                    "Please reorder your wrapper application to ensure HistoryObservationWrapper is applied last."
+                )
+
+            # Move to next wrapper in chain
+            if hasattr(current_env, 'env'):
+                current_env = current_env.env
+            else:
+                break
+
     def _initialize_wrapper(self):
         """
         Initialize the wrapper after the base environment is set up.
@@ -191,6 +226,9 @@ class ForceTorqueWrapper(gym.Wrapper):
         """
         if self._sensor_initialized:
             return
+
+        # Check that no history wrapper is already applied - history must be the last wrapper
+        self._check_no_history_wrapper()
 
 
         # Store original methods

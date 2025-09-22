@@ -33,10 +33,11 @@ def axis_angle_from_quat(quat):
     return axis * angle.unsqueeze(-1)
 
 
-class MockIsaacLabEnv:
+class MockIsaacLabEnv(gym.Env):
     """Mock Isaac Lab environment."""
 
     def __init__(self, cfg=None):
+        super().__init__()
         self.cfg = cfg or {}
         self.num_envs = getattr(cfg, 'num_envs', 256)
         self.observation_space = gym.spaces.Box(low=-1, high=1, shape=(64,))
@@ -44,6 +45,70 @@ class MockIsaacLabEnv:
         self.device = torch.device("cpu")
         self._episode_length = 500
         self._current_step = 0
+
+        # Add wrapper integration support
+        self._unwrapped = self
+
+        # Add robot for wrapper initialization detection
+        self._robot = True
+
+        # Add force-torque data for force torque wrapper
+        self.robot_force_torque = torch.randn(self.num_envs, 6, device=self.device)
+
+        # Add observation data for wrappers
+        self._setup_observation_data()
+
+    @property
+    def unwrapped(self):
+        return self._unwrapped
+
+    @unwrapped.setter
+    def unwrapped(self, value):
+        self._unwrapped = value
+
+    def _setup_observation_data(self):
+        """Setup observation data for wrapper testing."""
+        self.fingertip_pos = torch.randn(self.num_envs, 3, device=self.device)
+        self.ee_linvel = torch.randn(self.num_envs, 3, device=self.device)
+        self.ee_angvel = torch.randn(self.num_envs, 3, device=self.device)
+        self.joint_pos = torch.randn(self.num_envs, 7, device=self.device)
+        self.fingertip_quat = torch.randn(self.num_envs, 4, device=self.device)
+
+    def _get_factory_obs_state_dict(self):
+        """Mock factory observation state dict method for force torque wrapper."""
+        # Return Isaac Lab factory format: obs_dict, state_dict
+        obs_dict = {
+            'fingertip_pos': self.fingertip_pos,
+            'joint_pos': self.joint_pos,
+            'ee_linvel': self.ee_linvel,
+        }
+        state_dict = {
+            'fingertip_pos': self.fingertip_pos,
+            'joint_pos': self.joint_pos,
+            'fingertip_quat': self.fingertip_quat,
+        }
+        return obs_dict, state_dict
+
+    def _get_observations(self):
+        """Mock get observations method for observation manager wrapper."""
+        # Return Isaac Lab factory format: {"policy": tensor, "critic": tensor}
+        policy_obs = torch.randn(self.num_envs, 32, device=self.device)
+        critic_obs = torch.randn(self.num_envs, 48, device=self.device)
+        return {"policy": policy_obs, "critic": critic_obs}
+
+    def _init_tensors(self):
+        """Mock init tensors method for force torque wrapper."""
+        pass
+
+    def _compute_intermediate_values(self, dt=None):
+        """Mock compute intermediate values for force torque wrapper."""
+        # Update force-torque data
+        self.robot_force_torque = torch.randn(self.num_envs, 6, device=self.device)
+
+    def _pre_physics_step(self, actions):
+        """Mock pre-physics step for history wrapper."""
+        # Update observation data
+        self.fingertip_pos += torch.randn_like(self.fingertip_pos) * 0.01
 
     def reset(self, seed=None):
         self._current_step = 0
@@ -293,6 +358,21 @@ class MockBaseEnv(gym.Env):
         critic_obs = torch.randn(self.num_envs, 48, device=self.device)
         return {"policy": policy_obs, "critic": critic_obs}
 
+    def _get_factory_obs_state_dict(self):
+        """Mock factory observation state dict method for force torque wrapper."""
+        # Return Isaac Lab factory format: obs_dict, state_dict
+        obs_dict = {
+            'fingertip_pos': self.fingertip_pos,
+            'joint_pos': self.joint_pos,
+            'ee_linvel': self.ee_linvel,
+        }
+        state_dict = {
+            'fingertip_pos': self.fingertip_pos,
+            'joint_pos': self.joint_pos,
+            'fingertip_quat': self.fingertip_quat,
+        }
+        return obs_dict, state_dict
+
     def _pre_physics_step(self, actions):
         """Mock pre-physics step for history wrapper."""
         # Update observation data to simulate environment changes
@@ -329,6 +409,9 @@ OBS_DIM_CFG = {
     "fingertip_quat": 4,
     "ee_linvel": 3,
     "ee_angvel": 3,
+    "joint_pos": 7,  # Joint positions can be in observations
+    "held_pos": 3,   # Object positions can be in observations
+    "force_torque": 6,  # Force-torque sensor data
 }
 
 STATE_DIM_CFG = {
@@ -347,6 +430,7 @@ STATE_DIM_CFG = {
     "ema_factor": 1,
     "pos_threshold": 3,
     "rot_threshold": 3,
+    "force_torque": 6,  # Force-torque sensor data
 }
 
 
