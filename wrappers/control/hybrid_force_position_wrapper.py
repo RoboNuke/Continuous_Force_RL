@@ -345,7 +345,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
         rot_actions = self.unwrapped.actions[:, self.force_size+3:self.force_size+6]
 
         # Handle unidirectional rotation if configured
-        if self.task_cfg.unidirectional_rot: #getattr(self.unwrapped.cfg_task, 'unidirectional_rot', False):
+        if getattr(self.unwrapped.cfg_task, 'unidirectional_rot', False):
             rot_actions[:, 2] = -(rot_actions[:, 2] + 1.0) * 0.5
 
         rot_actions = rot_actions * self.unwrapped.rot_threshold
