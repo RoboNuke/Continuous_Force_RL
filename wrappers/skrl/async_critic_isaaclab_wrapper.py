@@ -65,8 +65,12 @@ class AsyncCriticIsaacLabWrapper(Wrapper):
         observations, reward, terminated, truncated, self._info = self._env.step(actions)
 
         # Process both policy and critic observations together
-        env_obs_space = self._env.observation_space
-        env_state_space = getattr(self._env, 'state_space', None)
+        # Create proper per-environment spaces (Isaac Lab incorrectly includes batch dimension)
+        obs_dim = getattr(self._env.unwrapped.cfg, 'observation_space', 0)
+        state_dim = getattr(self._env.unwrapped.cfg, 'state_space', 0)
+
+        env_obs_space = Box(low=-float('inf'), high=float('inf'), shape=(obs_dim,), dtype=np.float32)
+        env_state_space = Box(low=-float('inf'), high=float('inf'), shape=(state_dim,), dtype=np.float32) if state_dim > 0 else None
 
         if env_state_space is not None:
             # Create dict of spaces to match observation structure for SKRL
@@ -97,8 +101,12 @@ class AsyncCriticIsaacLabWrapper(Wrapper):
             observations, self._info = self._env.reset()
 
             # Process both policy and critic observations together
-            env_obs_space = self._env.observation_space
-            env_state_space = getattr(self._env, 'state_space', None)
+            # Create proper per-environment spaces (Isaac Lab incorrectly includes batch dimension)
+            obs_dim = getattr(self._env.unwrapped.cfg, 'observation_space', 0)
+            state_dim = getattr(self._env.unwrapped.cfg, 'state_space', 0)
+
+            env_obs_space = Box(low=-float('inf'), high=float('inf'), shape=(obs_dim,), dtype=np.float32)
+            env_state_space = Box(low=-float('inf'), high=float('inf'), shape=(state_dim,), dtype=np.float32) if state_dim > 0 else None
 
             if env_state_space is not None:
                 # Create dict of spaces to match observation structure for SKRL
