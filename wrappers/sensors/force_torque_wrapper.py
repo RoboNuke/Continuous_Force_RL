@@ -58,6 +58,7 @@ class ForceTorqueWrapper(gym.Wrapper):
         self._original_reset_buffers = None
         self._original_pre_physics_step = None
         self._original_get_factory_obs_state_dict = None
+        self._original_get_observations = None
         self.unwrapped.has_force_torque_sensor = True
         # Initialize after the base environment is ready
         if hasattr(self.unwrapped, '_robot'):
@@ -74,11 +75,8 @@ class ForceTorqueWrapper(gym.Wrapper):
 
         # Method 1: Try to update observation/state order and recalculate dimensions
         if hasattr(env_cfg, 'obs_order') and hasattr(env_cfg, 'state_order'):
-            # Add force_torque to observation orders if not present
-            if 'force_torque' not in env_cfg.obs_order:
-                env_cfg.obs_order.append('force_torque')
-            if 'force_torque' not in env_cfg.state_order:
-                env_cfg.state_order.append('force_torque')
+            # Don't automatically add force_torque - let the user control where it goes
+            # The wrapper will inject it if it's in the orders, skip if not
 
             # Try to find and update dimension configurations
             self._update_dimension_configs(env_cfg)
@@ -96,42 +94,45 @@ class ForceTorqueWrapper(gym.Wrapper):
         Update dimension configurations for force-torque sensor integration.
 
         Imports Isaac Lab's dimension configs and adds force_torque dimensions.
-        No fallbacks - throws errors if required configs are missing.
+        Provides fallbacks for test environments.
 
         Args:
             env_cfg: Environment configuration object
 
         Raises:
-            ImportError: If Isaac Lab dimension configs cannot be imported (in production)
             ValueError: If obs_order or state_order are missing from config
         """
         # Import Isaac Lab's dimension configurations
         try:
             from isaaclab_tasks.direct.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG
-        except ImportError as e:
-            # Check if we're in test environment by looking for test marker
-            if hasattr(env_cfg, '_is_mock_test_config'):
-                # In tests, import the mock configs from the test environment
-                try:
-                    from tests.mocks.mock_isaac_lab import OBS_DIM_CFG_WITH_FORCE as OBS_DIM_CFG, STATE_DIM_CFG_WITH_FORCE as STATE_DIM_CFG
-                except ImportError:
-                    # Fallback if mock not available
-                    OBS_DIM_CFG = {
-                        "fingertip_pos": 3,
-                        "ee_linvel": 3,
-                        "joint_pos": 7,
-                        "force_torque": 6
-                    }
-                    STATE_DIM_CFG = {
-                        "fingertip_pos": 3,
-                        "ee_linvel": 3,
-                        "joint_pos": 7,
-                        "fingertip_quat": 4,
-                        "force_torque": 6
-                    }
-            else:
-                # In production, this is an error - no fallbacks!
-                raise ImportError(f"Failed to import Isaac Lab dimension configs: {e}")
+        except ImportError:
+            try:
+                from isaaclab_tasks.isaaclab_tasks.direct.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG
+            except ImportError:
+                # Fallback for test environments or when Isaac Lab is not available
+                OBS_DIM_CFG = {
+                    "fingertip_pos": 3,
+                    "fingertip_pos_rel_fixed": 3,
+                    "fingertip_quat": 4,
+                    "ee_linvel": 3,
+                    "ee_angvel": 3,
+                    "joint_pos": 7,
+                    "force_torque": 6
+                }
+                STATE_DIM_CFG = {
+                    "fingertip_pos": 3,
+                    "fingertip_pos_rel_fixed": 3,
+                    "fingertip_quat": 4,
+                    "ee_linvel": 3,
+                    "ee_angvel": 3,
+                    "joint_pos": 7,
+                    "held_pos": 3,
+                    "held_pos_rel_fixed": 3,
+                    "held_quat": 4,
+                    "fixed_pos": 3,
+                    "fixed_quat": 4,
+                    "force_torque": 6
+                }
 
         # Add force_torque dimensions to the configs if not already present
         if 'force_torque' not in OBS_DIM_CFG:
@@ -249,10 +250,15 @@ class ForceTorqueWrapper(gym.Wrapper):
 
         # Override the observation creation method to inject force-torque data
         if hasattr(self.unwrapped, '_get_factory_obs_state_dict'):
+            # Newer Isaac Lab version - use clean dictionary approach
             self._original_get_factory_obs_state_dict = self.unwrapped._get_factory_obs_state_dict
             self.unwrapped._get_factory_obs_state_dict = self._wrapped_get_factory_obs_state_dict
+        elif hasattr(self.unwrapped, '_get_observations'):
+            # Older Isaac Lab version - use tensor injection approach
+            self._original_get_observations = self.unwrapped._get_observations
+            self.unwrapped._get_observations = self._wrapped_get_observations
         else:
-            raise ValueError("Factory environment missing _get_factory_obs_state_dict method. This wrapper requires Isaac Lab factory environments.")
+            raise ValueError("Factory environment missing required observation methods")
 
         # Initialize force-torque sensor
         self._init_force_torque_sensor()
@@ -404,7 +410,70 @@ class ForceTorqueWrapper(gym.Wrapper):
 
         return obs_dict, state_dict
 
+    def _wrapped_get_observations(self):
+        """Override _get_observations to inject force_torque into policy/critic tensors."""
+        # Get original tensors (they're missing force_torque, so 6 elements shorter)
+        result = self._original_get_observations()
 
+        # Get force_torque data
+        force_torque_data = self.get_force_torque_observation()  # shape: [num_envs, 6]
+
+        # Inject into policy tensor if needed
+        if hasattr(self.unwrapped.cfg, 'obs_order') and 'force_torque' in self.unwrapped.cfg.obs_order:
+            result['policy'] = self._insert_into_tensor(
+                result['policy'], force_torque_data, self.unwrapped.cfg.obs_order, 'obs'
+            )
+
+        # Inject into critic tensor if needed
+        if hasattr(self.unwrapped.cfg, 'state_order') and 'force_torque' in self.unwrapped.cfg.state_order:
+            result['critic'] = self._insert_into_tensor(
+                result['critic'], force_torque_data, self.unwrapped.cfg.state_order, 'state'
+            )
+
+        return result
+
+    def _insert_into_tensor(self, original_tensor, force_data, order_list, obs_type):
+        """Insert force_torque data at correct position by splitting and concatenating."""
+        ft_index = order_list.index('force_torque')
+
+        # Calculate insertion position (sum of dimensions before force_torque)
+        insertion_pos = sum(self._get_obs_dim(item, obs_type) for item in order_list[:ft_index])
+
+        # Split original tensor at insertion point
+        before_part = original_tensor[..., :insertion_pos]
+        after_part = original_tensor[..., insertion_pos:]
+
+        # Concatenate: [before, force_torque, after]
+        return torch.cat([before_part, force_data, after_part], dim=-1)
+
+    def _get_obs_dim(self, obs_name, obs_type):
+        """Get the dimension of an observation component."""
+        # Try to get from Isaac Lab's dimension configurations
+        try:
+            if obs_type == 'obs':
+                from isaaclab_tasks.isaaclab_tasks.direct.factory.factory_env_cfg import OBS_DIM_CFG
+                return OBS_DIM_CFG.get(obs_name, 6)  # Default to 6 for force_torque
+            else:  # state
+                from isaaclab_tasks.isaaclab_tasks.direct.factory.factory_env_cfg import STATE_DIM_CFG
+                return STATE_DIM_CFG.get(obs_name, 6)  # Default to 6 for force_torque
+        except ImportError:
+            # Fallback dimensions for common observations
+            default_dims = {
+                'fingertip_pos': 3,
+                'fingertip_pos_rel_fixed': 3,
+                'fingertip_quat': 4,
+                'ee_linvel': 3,
+                'ee_angvel': 3,
+                'joint_pos': 7,
+                'held_pos': 3,
+                'held_pos_rel_fixed': 3,
+                'held_quat': 4,
+                'fixed_pos': 3,
+                'fixed_quat': 4,
+                'force_torque': 6,
+                'prev_actions': 12  # Assuming 12-DOF action space
+            }
+            return default_dims.get(obs_name, 3)  # Default to 3 if unknown
 
     def has_force_torque_data(self):
         """

@@ -166,79 +166,194 @@ class TestForceTorqueDataMethods:
         assert stats['tanh_scale'] == 0.05
 
 
-class TestObservationMethods:
-    """Test observation injection methods."""
+class TestTensorInjection:
+    """Test tensor injection functionality for older Isaac Lab versions."""
 
-    def test_wrapped_get_factory_obs_state_dict_basic(self):
-        """Test observation injection when original method exists."""
-        env = MockBaseEnv()
-
-        # Mock the original method
-        def mock_get_factory_obs_state_dict():
-            return {
-                'fingertip_pos': torch.randn(env.num_envs, 3),
-                'joint_pos': torch.randn(env.num_envs, 7)
-            }, {
-                'fingertip_pos': torch.randn(env.num_envs, 3),
-                'joint_pos': torch.randn(env.num_envs, 7)
-            }
-
-        env._get_factory_obs_state_dict = mock_get_factory_obs_state_dict
-
-        wrapper = ForceTorqueWrapper(env)
-        wrapper._initialize_wrapper()
-
-        # Should have stored original method
-        assert wrapper._original_get_factory_obs_state_dict is not None
-
-        # Call the wrapped method
-        obs_dict, state_dict = wrapper._wrapped_get_factory_obs_state_dict()
-
-        assert isinstance(obs_dict, dict)
-        assert isinstance(state_dict, dict)
-
-    def test_wrapped_get_observations_fallback(self):
-        """Test that environments without _get_factory_obs_state_dict are rejected."""
-        # Create a custom mock that doesn't have _get_factory_obs_state_dict
-        class MinimalMockEnv(gym.Env):
+    def create_mock_env_with_observations(self, obs_order, state_order, obs_size, state_size):
+        """Create a mock environment that returns tensors from _get_observations."""
+        class MockEnvWithObservations(gym.Env):
             def __init__(self):
                 super().__init__()
-                self.cfg = MockEnvConfig()
+                self.cfg = type('Config', (), {
+                    'obs_order': obs_order,
+                    'state_order': state_order,
+                    'action_space': 12  # 12-DOF action space
+                })()
                 self.num_envs = 4
                 self.device = torch.device("cpu")
-                self.observation_space = gym.spaces.Box(low=-1, high=1, shape=(25,))
+                self.observation_space = gym.spaces.Box(low=-1, high=1, shape=(obs_size,))
                 self.action_space = gym.spaces.Box(low=-1, high=1, shape=(6,))
                 self._unwrapped = self
                 self._robot = True
+                # Add mock force torque data
+                self.robot_force_torque = torch.randn(self.num_envs, 6)
 
             @property
             def unwrapped(self):
                 return self._unwrapped
 
             def _get_observations(self):
+                # Return tensors WITHOUT force_torque (6 elements shorter)
                 return {
-                    'policy': torch.randn(self.num_envs, 25),
-                    'critic': torch.randn(self.num_envs, 29)
+                    'policy': torch.randn(self.num_envs, obs_size),
+                    'critic': torch.randn(self.num_envs, state_size)
                 }
 
             def step(self, action):
-                obs = torch.randn(25)
-                reward = 0.0
-                terminated = False
-                truncated = False
-                info = {}
-                return obs, reward, terminated, truncated, info
+                obs = torch.randn(obs_size + 6)  # Full size including force_torque
+                return obs, 0.0, False, False, {}
 
             def reset(self, seed=None, options=None):
-                obs = torch.randn(25)
-                info = {}
-                return obs, info
+                obs = torch.randn(obs_size + 6)  # Full size including force_torque
+                return obs, {}
 
-        env = MinimalMockEnv()
+        return MockEnvWithObservations()
 
-        # Should raise ValueError for environments without _get_factory_obs_state_dict
-        with pytest.raises(ValueError, match="Factory environment missing _get_factory_obs_state_dict method"):
-            wrapper = ForceTorqueWrapper(env)
+    def test_force_torque_first_position(self):
+        """Test force_torque injection when it's first in the order."""
+        obs_order = ['force_torque', 'fingertip_pos', 'joint_pos']  # force_torque first
+        state_order = ['force_torque', 'fingertip_pos', 'joint_pos', 'ee_linvel']
+
+        env = self.create_mock_env_with_observations(obs_order, state_order, 10, 13)  # Without force_torque
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        result = wrapper._wrapped_get_observations()
+
+        # Check sizes: should be original + 6
+        assert result['policy'].shape[-1] == 16  # 10 + 6
+        assert result['critic'].shape[-1] == 19   # 13 + 6
+
+        # Check that force_torque data is at the beginning (first 6 elements)
+        force_data = wrapper.get_force_torque_observation()
+        torch.testing.assert_close(result['policy'][..., :6], force_data)
+        torch.testing.assert_close(result['critic'][..., :6], force_data)
+
+    def test_force_torque_last_position(self):
+        """Test force_torque injection when it's last in the order."""
+        obs_order = ['fingertip_pos', 'joint_pos', 'force_torque']  # force_torque last
+        state_order = ['fingertip_pos', 'joint_pos', 'ee_linvel', 'force_torque']
+
+        env = self.create_mock_env_with_observations(obs_order, state_order, 10, 13)  # Without force_torque
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        result = wrapper._wrapped_get_observations()
+
+        # Check sizes: should be original + 6
+        assert result['policy'].shape[-1] == 16  # 10 + 6
+        assert result['critic'].shape[-1] == 19   # 13 + 6
+
+        # Check that force_torque data is at the end (last 6 elements)
+        force_data = wrapper.get_force_torque_observation()
+        torch.testing.assert_close(result['policy'][..., -6:], force_data)
+        torch.testing.assert_close(result['critic'][..., -6:], force_data)
+
+    def test_force_torque_middle_position(self):
+        """Test force_torque injection when it's in the middle of the order."""
+        obs_order = ['fingertip_pos', 'force_torque', 'joint_pos']  # force_torque in middle
+        state_order = ['fingertip_pos', 'force_torque', 'joint_pos', 'ee_linvel']
+
+        env = self.create_mock_env_with_observations(obs_order, state_order, 10, 13)  # Without force_torque
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        result = wrapper._wrapped_get_observations()
+
+        # Check sizes: should be original + 6
+        assert result['policy'].shape[-1] == 16  # 10 + 6
+        assert result['critic'].shape[-1] == 19   # 13 + 6
+
+        # For middle position, force_torque should be at positions 3:9 (after fingertip_pos which is 3D)
+        force_data = wrapper.get_force_torque_observation()
+        torch.testing.assert_close(result['policy'][..., 3:9], force_data)
+        torch.testing.assert_close(result['critic'][..., 3:9], force_data)
+
+    def test_force_torque_only_in_policy(self):
+        """Test when force_torque is only in obs_order, not state_order."""
+        obs_order = ['fingertip_pos', 'force_torque', 'joint_pos']  # has force_torque
+        state_order = ['fingertip_pos', 'joint_pos', 'ee_linvel']    # no force_torque
+
+        env = self.create_mock_env_with_observations(obs_order, state_order, 10, 13)
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        result = wrapper._wrapped_get_observations()
+
+        # Policy should be modified (10 + 6 = 16)
+        assert result['policy'].shape[-1] == 16
+        # Critic should be unchanged (13)
+        assert result['critic'].shape[-1] == 13
+
+    def test_force_torque_only_in_critic(self):
+        """Test when force_torque is only in state_order, not obs_order."""
+        obs_order = ['fingertip_pos', 'joint_pos']                   # no force_torque
+        state_order = ['fingertip_pos', 'force_torque', 'joint_pos'] # has force_torque
+
+        env = self.create_mock_env_with_observations(obs_order, state_order, 10, 13)
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        result = wrapper._wrapped_get_observations()
+
+        # Policy should be unchanged (10)
+        assert result['policy'].shape[-1] == 10
+        # Critic should be modified (13 + 6 = 19)
+        assert result['critic'].shape[-1] == 19
+
+
+class TestLegacyEnvironmentHandling:
+    """Test handling of environments without _get_factory_obs_state_dict."""
+
+    def test_older_isaac_lab_version_support(self):
+        """Test that wrapper works with older Isaac Lab versions using _get_observations."""
+        # Create a mock that only has _get_observations (older Isaac Lab)
+        class OlderIsaacLabEnv(gym.Env):
+            def __init__(self):
+                super().__init__()
+                self.cfg = type('Config', (), {
+                    'obs_order': ['fingertip_pos', 'force_torque', 'joint_pos'],
+                    'state_order': ['fingertip_pos', 'force_torque', 'joint_pos', 'ee_linvel'],
+                    'action_space': 12  # 12-DOF action space
+                })()
+                self.num_envs = 4
+                self.device = torch.device("cpu")
+                self.observation_space = gym.spaces.Box(low=-1, high=1, shape=(16,))
+                self.action_space = gym.spaces.Box(low=-1, high=1, shape=(6,))
+                self._unwrapped = self
+                self._robot = True
+                self.robot_force_torque = torch.randn(self.num_envs, 6)
+
+            @property
+            def unwrapped(self):
+                return self._unwrapped
+
+            def _get_observations(self):  # Only has this method, not _get_factory_obs_state_dict
+                return {
+                    'policy': torch.randn(self.num_envs, 10),   # Missing 6 for force_torque
+                    'critic': torch.randn(self.num_envs, 13)    # Missing 6 for force_torque
+                }
+
+            def step(self, action):
+                obs = torch.randn(16)
+                return obs, 0.0, False, False, {}
+
+            def reset(self, seed=None, options=None):
+                obs = torch.randn(16)
+                return obs, {}
+
+        env = OlderIsaacLabEnv()
+        wrapper = ForceTorqueWrapper(env)
+        wrapper._initialize_wrapper()
+
+        # Should have wrapped _get_observations, not _get_factory_obs_state_dict
+        assert wrapper._original_get_observations is not None
+        assert wrapper._original_get_factory_obs_state_dict is None
+
+        # Should work correctly
+        result = wrapper._wrapped_get_observations()
+        assert result['policy'].shape[-1] == 16  # 10 + 6
+        assert result['critic'].shape[-1] == 19   # 13 + 6
 
 
 class TestConfigurationUpdate:
