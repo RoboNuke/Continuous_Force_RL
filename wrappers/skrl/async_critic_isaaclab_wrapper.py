@@ -13,7 +13,7 @@ from skrl.envs.wrappers.torch.base import Wrapper
 from skrl.utils.spaces.torch import flatten_tensorized_space, tensorize_space, unflatten_tensorized_space
 import numpy as np
 
-from gymnasium.spaces import Box
+from gymnasium.spaces import Box, Dict
 class AsyncCriticIsaacLabWrapper(Wrapper):
     """
     SKRL wrapper for Isaac Lab that processes both policy and critic observations.
@@ -74,7 +74,7 @@ class AsyncCriticIsaacLabWrapper(Wrapper):
 
         if env_state_space is not None:
             # Create dict of spaces to match observation structure for SKRL
-            spaces = {'policy': env_obs_space, 'critic': env_state_space}
+            spaces = Dict({'policy': env_obs_space, 'critic': env_state_space})
             self._observations = flatten_tensorized_space(tensorize_space(spaces, observations))
         else:
             # Fallback to just observation space if no state space
@@ -110,7 +110,7 @@ class AsyncCriticIsaacLabWrapper(Wrapper):
 
             if env_state_space is not None:
                 # Create dict of spaces to match observation structure for SKRL
-                spaces = {'policy': env_obs_space, 'critic': env_state_space}
+                spaces = Dict({'policy': env_obs_space, 'critic': env_state_space})
                 self._observations = flatten_tensorized_space(tensorize_space(spaces, observations))
             else:
                 # Fallback to just observation space if no state space
