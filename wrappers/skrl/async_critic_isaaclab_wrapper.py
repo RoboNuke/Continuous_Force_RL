@@ -11,7 +11,7 @@ import torch
 import gymnasium
 from skrl.envs.wrappers.torch.base import Wrapper
 from skrl.utils.spaces.torch import flatten_tensorized_space, tensorize_space, unflatten_tensorized_space
-
+import numpy as np
 
 class AsyncCriticIsaacLabWrapper(Wrapper):
     """
