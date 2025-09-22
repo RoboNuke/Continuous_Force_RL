@@ -59,8 +59,8 @@ class AsyncCriticIsaacLabWrapper(Wrapper):
         env_state_space = getattr(self._env, 'state_space', None)
 
         if env_state_space is not None:
-            # Create list of spaces to process both observation and state spaces
-            spaces = [env_obs_space, env_state_space]
+            # Create dict of spaces to match observation structure for SKRL
+            spaces = {'policy': env_obs_space, 'critic': env_state_space}
             self._observations = flatten_tensorized_space(tensorize_space(spaces, observations))
         else:
             # Fallback to just observation space if no state space
@@ -91,8 +91,8 @@ class AsyncCriticIsaacLabWrapper(Wrapper):
             env_state_space = getattr(self._env, 'state_space', None)
 
             if env_state_space is not None:
-                # Create list of spaces to process both observation and state spaces
-                spaces = [env_obs_space, env_state_space]
+                # Create dict of spaces to match observation structure for SKRL
+                spaces = {'policy': env_obs_space, 'critic': env_state_space}
                 self._observations = flatten_tensorized_space(tensorize_space(spaces, observations))
             else:
                 # Fallback to just observation space if no state space
