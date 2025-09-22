@@ -153,12 +153,14 @@ class ForceTorqueWrapper(gym.Wrapper):
         except KeyError as e:
             raise KeyError(f"Unknown observation/state component in obs_order/state_order: {e}")
 
-        # Add action space dimensions (following Isaac Lab's pattern)
+        # ALWAYS add action space dimensions - this is what the tensor creation does
         if hasattr(env_cfg, 'action_space'):
             env_cfg.observation_space += env_cfg.action_space
             env_cfg.state_space += env_cfg.action_space
         else:
-            raise ValueError("Environment config missing required 'action_space' attribute")
+            # Use default action space size if not specified
+            env_cfg.observation_space += 12  # Default 12-DOF
+            env_cfg.state_space += 12
 
         # Update component_attr_map if it exists (for attribute mapping)
         if hasattr(env_cfg, 'component_attr_map'):
