@@ -58,27 +58,15 @@ class AsyncCriticIsaacLabWrapper(Wrapper):
         Returns:
             Tuple of (observations, rewards, terminated, truncated, info)
         """
-        # DEBUG: Track action shape transformations
-        print(f"[DEBUG] Input actions shape: {actions.shape}")
-        print(f"[DEBUG] Input actions dtype: {actions.dtype}")
-        print(f"[DEBUG] Using action_space: {self.action_space}")
+        # SKRL already provides correct action shape [num_envs, action_dim], no unflatten needed
+        # Skip unflatten operation since Isaac Lab action space incorrectly includes batch dimension
 
-        # Unflatten actions for environment
-        actions = unflatten_tensorized_space(self.action_space, actions)
-
-        print(f"[DEBUG] After unflatten actions shape: {actions.shape}")
-        print(f"[DEBUG] After unflatten actions dtype: {actions.dtype}")
-
-        # Validate action shape before passing to environment
+        # Validate we have correct shape for environment
         expected_action_dim = getattr(self._env.unwrapped.cfg, 'action_space', 6)
-        expected_shape = (512, expected_action_dim)
-        print(f"[DEBUG] Expected action shape: {expected_shape}")
+        expected_shape = (actions.shape[0], expected_action_dim)  # Use actual batch size
 
         if actions.shape != expected_shape:
-            print(f"[ERROR] Action shape mismatch: expected {expected_shape}, got {actions.shape}")
-            print(f"[ERROR] Environment action_space config: {expected_action_dim}")
-            print(f"[ERROR] Wrapper action_space: {self.action_space}")
-            raise ValueError(f"Action shape mismatch: expected {expected_shape}, got {actions.shape}")
+            raise ValueError(f"Unexpected action shape from SKRL: expected {expected_shape}, got {actions.shape}")
 
         # Step environment
         observations, reward, terminated, truncated, self._info = self._env.step(actions)
