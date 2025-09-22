@@ -413,24 +413,53 @@ class ForceTorqueWrapper(gym.Wrapper):
     def _wrapped_get_observations(self):
         """Override _get_observations to inject force_torque into policy/critic tensors."""
         # Get original tensors (they're missing force_torque, so 6 elements shorter)
-        result = self._original_get_observations()
+        noisy_fixed_pos = self.unwrapped.fixed_pos_obs_frame + self.unwrapped.init_fixed_pos_obs_noise
+
+        prev_actions = self.unwrapped.actions.clone()
+
+        obs_dict = {
+            "fingertip_pos": self.unwrapped.fingertip_midpoint_pos,
+            "fingertip_pos_rel_fixed": self.unwrapped.fingertip_midpoint_pos - noisy_fixed_pos,
+            "fingertip_quat": self.unwrapped.fingertip_midpoint_quat,
+            "ee_linvel": self.unwrapped.ee_linvel_fd,
+            "ee_angvel": self.unwrapped.ee_angvel_fd,
+            "prev_actions": prev_actions,
+        }
+
+        state_dict = {
+            "fingertip_pos": self.unwrapped.fingertip_midpoint_pos,
+            "fingertip_pos_rel_fixed": self.unwrapped.fingertip_midpoint_pos - self.fixed_pos_obs_frame,
+            "fingertip_quat": self.unwrapped.fingertip_midpoint_quat,
+            "ee_linvel": self.unwrapped.fingertip_midpoint_linvel,
+            "ee_angvel": self.unwrapped.fingertip_midpoint_angvel,
+            "joint_pos": self.unwrapped.joint_pos[:, 0:7],
+            "held_pos": self.unwrapped.held_pos,
+            "held_pos_rel_fixed": self.unwrapped.held_pos - self.unwrapped.fixed_pos_obs_frame,
+            "held_quat": self.unwrapped.held_quat,
+            "fixed_pos": self.unwrapped.fixed_pos,
+            "fixed_quat": self.unwrapped.fixed_quat,
+            "task_prop_gains": self.unwrapped.task_prop_gains,
+            "pos_threshold": self.unwrapped.pos_threshold,
+            "rot_threshold": self.unwrapped.rot_threshold,
+            "prev_actions": prev_actions,
+        }
 
         # Get force_torque data
         force_torque_data = self.get_force_torque_observation()  # shape: [num_envs, 6]
 
         # Inject into policy tensor if needed
         if hasattr(self.unwrapped.cfg, 'obs_order') and 'force_torque' in self.unwrapped.cfg.obs_order:
-            result['policy'] = self._insert_into_tensor(
-                result['policy'], force_torque_data, self.unwrapped.cfg.obs_order, 'obs'
-            )
+            obs_dict['force_torque'] = force_torque_data
 
         # Inject into critic tensor if needed
         if hasattr(self.unwrapped.cfg, 'state_order') and 'force_torque' in self.unwrapped.cfg.state_order:
-            result['critic'] = self._insert_into_tensor(
-                result['critic'], force_torque_data, self.unwrapped.cfg.state_order, 'state'
-            )
+            state_dict['force_torque'] = force_torque_data
 
-        return result
+        obs_tensors = [obs_dict[obs_name] for obs_name in self.cfg.obs_order + ["prev_actions"]]
+        obs_tensors = torch.cat(obs_tensors, dim=-1)
+        state_tensors = [state_dict[state_name] for state_name in self.cfg.state_order + ["prev_actions"]]
+        state_tensors = torch.cat(state_tensors, dim=-1)
+        return {"policy": obs_tensors, "critic": state_tensors}
 
     def _insert_into_tensor(self, original_tensor, force_data, order_list, obs_type):
         """Insert force_torque data at correct position by splitting and concatenating."""
