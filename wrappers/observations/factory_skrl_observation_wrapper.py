@@ -1,9 +1,9 @@
 """
 Factory SKRL Observation Wrapper
 
-This wrapper flattens factory environment observations for SKRL compatibility.
+This wrapper concatenates factory environment observations for SKRL compatibility.
 It converts the {"policy": tensor, "critic": tensor} format returned by factory
-observation wrappers into a single tensor that SKRL can process.
+observation wrappers into a single concatenated tensor under the "policy" key.
 """
 
 import torch
@@ -14,71 +14,46 @@ from gymnasium.spaces import Box
 
 class FactorySKRLObservationWrapper(gym.Wrapper):
     """
-    Flatten factory observations for SKRL compatibility.
+    Concatenate factory observations for SKRL compatibility.
 
-    Converts the {"policy": obs_tensor, "critic": state_tensor} format returned
-    by factory observation wrappers into a single observation tensor that SKRL
-    can process. The single tensor is used for both actor and critic networks.
+    Always concatenates policy + critic observations into a single tensor
+    under the "policy" key that SKRL can process.
     """
 
-    def __init__(self, env, use_critic_for_obs=False):
+    def __init__(self, env):
         """
         Initialize the factory SKRL observation wrapper.
 
         Args:
             env: Environment to wrap
-            use_critic_for_obs: If True, use critic observations as main observations.
-                              If False, use policy observations (default).
         """
         super().__init__(env)
-        self.use_critic_for_obs = use_critic_for_obs
-        print(f"[INFO]: FactorySKRLObservationWrapper initialized - using {'critic' if use_critic_for_obs else 'policy'} observations")
 
-        # Set up observation and state spaces for SKRL compatibility
-        self._setup_spaces()
-
-    def _setup_spaces(self):
-        """Set up observation and state spaces for SKRL compatibility."""
-        # Get dimensions from the underlying environment cfg
+        # Get dimensions from environment config
         obs_dim = getattr(self.unwrapped.cfg, 'observation_space', 0)
         state_dim = getattr(self.unwrapped.cfg, 'state_space', 0)
+        combined_dim = obs_dim + state_dim
 
-        print(f"[INFO]: FactorySKRLObservationWrapper spaces - obs_dim: {obs_dim}, state_dim: {state_dim}")
+        if combined_dim <= 0:
+            raise ValueError(f"Invalid combined dimension: obs={obs_dim} + state={state_dim} = {combined_dim}")
 
-        # Create gymnasium Box spaces
-        if obs_dim > 0:
-            self._policy_space = Box(low=-float('inf'), high=float('inf'), shape=(obs_dim,), dtype=np.float32)
-        else:
-            self._policy_space = None
-
-        if state_dim > 0:
-            self._critic_space = Box(low=-float('inf'), high=float('inf'), shape=(state_dim,), dtype=np.float32)
-        else:
-            self._critic_space = None
+        self._combined_dim = combined_dim
+        print(f"[INFO]: FactorySKRLObservationWrapper - obs_dim: {obs_dim}, state_dim: {state_dim}, combined: {combined_dim}")
 
     @property
     def single_observation_space(self):
-        """Provide single_observation_space for SKRL compatibility."""
-        spaces = {}
-        if self._policy_space is not None:
-            spaces["policy"] = self._policy_space
-        if self._critic_space is not None:
-            spaces["critic"] = self._critic_space
-        return spaces
+        """Expose combined observation space size to SKRL."""
+        return {"policy": Box(low=-float('inf'), high=float('inf'), shape=(self._combined_dim,), dtype=np.float32)}
 
     @property
     def observation_space(self):
-        """Provide observation_space for SKRL compatibility."""
-        if hasattr(self, '_policy_space') and self._policy_space is not None:
-            return {"policy": self._policy_space}
-        return super().observation_space
+        """Provide observation_space fallback for SKRL compatibility."""
+        return self.single_observation_space
 
     @property
     def state_space(self):
-        """Provide state_space for SKRL compatibility."""
-        if hasattr(self, '_critic_space') and self._critic_space is not None:
-            return self._critic_space
-        return getattr(super(), 'state_space', None)
+        """No separate state space since everything is concatenated into policy."""
+        return None
 
     def _get_observations(self):
         """
@@ -110,18 +85,17 @@ class FactorySKRLObservationWrapper(gym.Wrapper):
 
     def _convert_observations(self, obs):
         """
-        Convert observations to SKRL-compatible format.
+        Concatenate policy and critic observations into single tensor.
 
-        SKRL Isaac Lab wrapper expects observations in {"policy": tensor} format,
-        so we need to maintain that structure but with our chosen tensor.
+        Args:
+            obs: Observation dict with 'policy' and 'critic' keys
+
+        Returns:
+            dict: {"policy": concatenated_tensor}
         """
         if isinstance(obs, dict) and 'policy' in obs and 'critic' in obs:
-            # Choose which observation to use
-            chosen_obs = obs['critic'] if self.use_critic_for_obs else obs['policy']
-
-            # Return in the format SKRL expects
-            return {"policy": chosen_obs}
-
-        # If not factory dict format, assume it's already a single tensor
-        # Wrap it in the expected format for SKRL
-        return {"policy": obs}
+            # Always concatenate policy + critic
+            concatenated = torch.cat([obs['policy'], obs['critic']], dim=-1)
+            return {"policy": concatenated}
+        else:
+            raise ValueError(f"Expected dict with 'policy' and 'critic' keys, got {type(obs)} with keys {list(obs.keys()) if isinstance(obs, dict) else 'N/A'}")

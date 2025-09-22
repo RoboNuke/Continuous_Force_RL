@@ -752,31 +752,30 @@ def apply_enhanced_action_logging_wrapper(env, wrapper_config):
     return env
 
 
-def apply_factory_skrl_observation_wrapper(env, use_critic_for_obs=False):
+def apply_factory_skrl_observation_wrapper(env):
     """
-    Apply factory SKRL observation wrapper to flatten observations for SKRL compatibility.
+    Apply factory SKRL observation wrapper to concatenate observations for SKRL compatibility.
 
     Converts the {"policy": obs_tensor, "critic": state_tensor} format returned
-    by factory observation wrappers into a single observation tensor that SKRL
-    can process. This wrapper should be applied as the final observation wrapper
-    before the SKRL environment wrapper.
+    by factory observation wrappers into a single concatenated observation tensor
+    under the "policy" key that SKRL can process. This wrapper should be applied
+    as the final observation wrapper before the SKRL environment wrapper.
 
     Args:
         env: Environment to wrap (typically has factory observation dict format)
-        use_critic_for_obs: If True, use critic observations as main observations.
-                          If False, use policy observations (default).
 
     Returns:
-        FactorySKRLObservationWrapper: Wrapped environment with flattened observations
+        FactorySKRLObservationWrapper: Wrapped environment with concatenated observations
 
     Side Effects:
         - Prints wrapper initialization message
-        - Converts dict observations to single tensor format
+        - Concatenates policy + critic observations into single tensor
+        - Exposes combined observation space size to SKRL
         - Ensures SKRL compatibility for both step() and reset() methods
     """
     from wrappers.observations.factory_skrl_observation_wrapper import FactorySKRLObservationWrapper
 
-    env = FactorySKRLObservationWrapper(env, use_critic_for_obs=use_critic_for_obs)
+    env = FactorySKRLObservationWrapper(env)
     return env
 
 

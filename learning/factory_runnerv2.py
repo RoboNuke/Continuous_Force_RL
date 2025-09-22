@@ -290,7 +290,7 @@ def main():
 
     # Apply final observation flattening wrapper for SKRL compatibility
     print("  - Applying FactorySKRLObservationWrapper")
-    env = lUtils.apply_factory_skrl_observation_wrapper(env, use_critic_for_obs=False)
+    env = lUtils.apply_factory_skrl_observation_wrapper(env)
 
     # ===== STEP 4: WRAP FOR SKRL =====
     print("[INFO]: Step 4 - Wrapping environment for SKRL")
