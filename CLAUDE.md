@@ -7,3 +7,4 @@
 - Our training pipeline inherts from this class in SKRL: https://github.com/Toni-SM/skrl/blob/main/skrl/agents/torch/ppo/ppo.py
 - When reporting test results always provide number of passed, failed and total, there is no such thing as critical tests, they all must be passed.
 - Do not place fallbacks in code. If the inputs are not what we expect throw an error and stop the program. Experiments take days so I need to know that what I think is happening is what is happening.
+- When making unit tests, do not add code to the actual code to help unit testing. If a helper function is required define it in the unit test. It is important to keep the actual code clean and easy to read. 

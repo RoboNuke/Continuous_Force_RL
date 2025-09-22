@@ -401,6 +401,7 @@ class ForceTorqueWrapper(gym.Wrapper):
             # Restore original function
             factory_utils.collapse_obs_dict = original_collapse
 
+
     def has_force_torque_data(self):
         """
         Check if force-torque data is available in the environment.
