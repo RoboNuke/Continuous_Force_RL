@@ -93,14 +93,18 @@ class ObservationManagerWrapper(gym.Wrapper):
         self._wrapper_initialized = True
 
     def _wrapped_get_observations(self):
-        """Get observations and convert to single tensor format for SKRL compatibility."""
+        """Get observations and preserve Isaac Lab factory format for SKRL compatibility."""
         # Get base observations from factory environment
         obs = self._original_get_observations() if self._original_get_observations else {}
 
-        # Convert factory dict format to single tensor
-        single_tensor_obs = self._convert_to_single_tensor(obs)
-
-        return single_tensor_obs
+        # Check if this is Isaac Lab factory format that SKRL expects
+        if isinstance(obs, dict) and "policy" in obs and "critic" in obs:
+            # This is the format SKRL expects - preserve it!
+            return obs
+        else:
+            # Convert other formats to single tensor
+            single_tensor_obs = self._convert_to_single_tensor(obs)
+            return single_tensor_obs
 
     def _convert_to_single_tensor(self, obs):
         """Convert factory environment observations to single tensor format."""
@@ -246,10 +250,14 @@ class ObservationManagerWrapper(gym.Wrapper):
         # Check that we can get observations
         try:
             obs = self._wrapped_get_observations()
-            if not isinstance(obs, torch.Tensor):
-                issues.append(f"Expected tensor observations, got {type(obs)}")
-            else:
+            if isinstance(obs, torch.Tensor):
                 self._validate_observations(obs)
+            elif isinstance(obs, dict) and "policy" in obs and "critic" in obs:
+                # Isaac Lab factory format - validate both tensors
+                self._validate_observations(obs["policy"])
+                self._validate_observations(obs["critic"])
+            else:
+                issues.append(f"Expected tensor or Isaac Lab factory format observations, got {type(obs)}")
         except Exception as e:
             issues.append(f"Failed to get or validate observations: {e}")
 

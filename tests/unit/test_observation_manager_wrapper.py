@@ -295,10 +295,16 @@ class TestObservationManagerWrapper:
         wrapper._original_get_observations = mock_get_observations
 
         result = wrapper._wrapped_get_observations()
-        assert isinstance(result, torch.Tensor)
-        assert result.shape == (4, 80)
-        assert torch.allclose(result[:, :32], torch.ones(4, 32))
-        assert torch.allclose(result[:, 32:], torch.ones(4, 48) * 2)
+        # Should preserve Isaac Lab factory format for SKRL compatibility
+        assert isinstance(result, dict)
+        assert "policy" in result
+        assert "critic" in result
+        assert isinstance(result["policy"], torch.Tensor)
+        assert isinstance(result["critic"], torch.Tensor)
+        assert result["policy"].shape == (4, 32)
+        assert result["critic"].shape == (4, 48)
+        assert torch.allclose(result["policy"], torch.ones(4, 32))
+        assert torch.allclose(result["critic"], torch.ones(4, 48) * 2)
 
     def test_wrapped_get_observations_no_original(self):
         """Test wrapped get observations without original method."""
