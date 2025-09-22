@@ -8,6 +8,8 @@ observation wrappers into a single tensor that SKRL can process.
 
 import torch
 import gymnasium as gym
+import numpy as np
+from gymnasium.spaces import Box
 
 
 class FactorySKRLObservationWrapper(gym.Wrapper):
@@ -31,6 +33,52 @@ class FactorySKRLObservationWrapper(gym.Wrapper):
         super().__init__(env)
         self.use_critic_for_obs = use_critic_for_obs
         print(f"[INFO]: FactorySKRLObservationWrapper initialized - using {'critic' if use_critic_for_obs else 'policy'} observations")
+
+        # Set up observation and state spaces for SKRL compatibility
+        self._setup_spaces()
+
+    def _setup_spaces(self):
+        """Set up observation and state spaces for SKRL compatibility."""
+        # Get dimensions from the underlying environment cfg
+        obs_dim = getattr(self.unwrapped.cfg, 'observation_space', 0)
+        state_dim = getattr(self.unwrapped.cfg, 'state_space', 0)
+
+        print(f"[INFO]: FactorySKRLObservationWrapper spaces - obs_dim: {obs_dim}, state_dim: {state_dim}")
+
+        # Create gymnasium Box spaces
+        if obs_dim > 0:
+            self._policy_space = Box(low=-float('inf'), high=float('inf'), shape=(obs_dim,), dtype=np.float32)
+        else:
+            self._policy_space = None
+
+        if state_dim > 0:
+            self._critic_space = Box(low=-float('inf'), high=float('inf'), shape=(state_dim,), dtype=np.float32)
+        else:
+            self._critic_space = None
+
+    @property
+    def single_observation_space(self):
+        """Provide single_observation_space for SKRL compatibility."""
+        spaces = {}
+        if self._policy_space is not None:
+            spaces["policy"] = self._policy_space
+        if self._critic_space is not None:
+            spaces["critic"] = self._critic_space
+        return spaces
+
+    @property
+    def observation_space(self):
+        """Provide observation_space for SKRL compatibility."""
+        if hasattr(self, '_policy_space') and self._policy_space is not None:
+            return {"policy": self._policy_space}
+        return super().observation_space
+
+    @property
+    def state_space(self):
+        """Provide state_space for SKRL compatibility."""
+        if hasattr(self, '_critic_space') and self._critic_space is not None:
+            return self._critic_space
+        return getattr(super(), 'state_space', None)
 
     def _get_observations(self):
         """
