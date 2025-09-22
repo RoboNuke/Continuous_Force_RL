@@ -210,7 +210,17 @@ class ForceTorqueWrapper(gym.Wrapper):
             self._original_pre_physics_step = self.unwrapped._pre_physics_step
             self.unwrapped._pre_physics_step = self._wrapped_pre_physics_step
 
-        # No method overriding needed - we'll inject force_torque as an environment attribute
+        # Override the observation creation method to inject force-torque data
+        if hasattr(self.unwrapped, '_get_factory_obs_state_dict'):
+            self._original_get_factory_obs_state_dict = self.unwrapped._get_factory_obs_state_dict
+            self.unwrapped._get_factory_obs_state_dict = self._wrapped_get_factory_obs_state_dict
+        else:
+            # Fallback: override _get_observations if _get_factory_obs_state_dict doesn't exist
+            if hasattr(self.unwrapped, '_get_observations'):
+                self._original_get_observations = self.unwrapped._get_observations
+                self.unwrapped._get_observations = self._wrapped_get_observations
+            else:
+                raise ValueError("Factory environment missing required observation methods")
 
         # Initialize force-torque sensor
         self._init_force_torque_sensor()
@@ -338,6 +348,58 @@ class ForceTorqueWrapper(gym.Wrapper):
         # Call original pre-physics step
         if self._original_pre_physics_step:
             self._original_pre_physics_step(action)
+
+    def _wrapped_get_factory_obs_state_dict(self):
+        """
+        Override factory observation and state dictionary creation to inject force-torque data.
+
+        This method wraps the environment's _get_factory_obs_state_dict and adds
+        force_torque to both observation and state dictionaries.
+
+        Returns:
+            tuple: (obs_dict, state_dict) with force_torque injected
+        """
+        # Call original method to get base dictionaries
+        obs_dict, state_dict = self._original_get_factory_obs_state_dict()
+
+        # Inject force-torque data if it's in the observation/state order
+        env_cfg = self.unwrapped.cfg
+        if hasattr(env_cfg, 'obs_order') and 'force_torque' in env_cfg.obs_order:
+            obs_dict['force_torque'] = self.get_force_torque_observation()
+
+        if hasattr(env_cfg, 'state_order') and 'force_torque' in env_cfg.state_order:
+            state_dict['force_torque'] = self.get_force_torque_observation()
+
+        return obs_dict, state_dict
+
+    def _wrapped_get_observations(self):
+        """
+        Fallback override for _get_observations when _get_factory_obs_state_dict doesn't exist.
+
+        This method patches the factory_utils.collapse_obs_dict function to inject
+        force_torque data before observations are collapsed.
+
+        Returns:
+            dict: Observation dictionary with "policy" and "critic" keys
+        """
+        # Import and patch factory_utils temporarily
+        from isaaclab_tasks.direct.factory import factory_utils
+        original_collapse = factory_utils.collapse_obs_dict
+
+        def patched_collapse_obs_dict(obs_dict, obs_order):
+            # Inject force_torque if it's in obs_order but missing from obs_dict
+            if 'force_torque' in obs_order and 'force_torque' not in obs_dict:
+                obs_dict['force_torque'] = self.get_force_torque_observation()
+            return original_collapse(obs_dict, obs_order)
+
+        try:
+            # Temporarily replace the collapse function
+            factory_utils.collapse_obs_dict = patched_collapse_obs_dict
+            # Call original _get_observations with patched collapse function
+            return self._original_get_observations()
+        finally:
+            # Restore original function
+            factory_utils.collapse_obs_dict = original_collapse
 
     def has_force_torque_data(self):
         """
