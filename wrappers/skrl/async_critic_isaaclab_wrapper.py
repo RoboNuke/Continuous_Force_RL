@@ -34,6 +34,16 @@ class AsyncCriticIsaacLabWrapper(Wrapper):
         self._observations = None
         self._info = {}
 
+        # Create state_space if missing (Isaac Lab doesn't set gymnasium state_space by default)
+        if not hasattr(env, 'state_space') or getattr(env, 'state_space', None) is None:
+            state_dim = getattr(env.unwrapped.cfg, 'state_space', 0)
+            if state_dim > 0:
+                from gymnasium.spaces import Box
+                env.state_space = Box(low=-float('inf'), high=float('inf'), shape=(state_dim,), dtype=np.float32)
+                print(f"[INFO]: Created env.state_space with {state_dim} dimensions")
+            else:
+                print(f"[INFO]: No state space needed (state_dim = {state_dim})")
+
         print(f"[INFO]: AsyncCriticIsaacLabWrapper initialized")
         print(f"[INFO]: Environment observation space: {getattr(env, 'observation_space', 'Not available')}")
         print(f"[INFO]: Environment state space: {getattr(env, 'state_space', 'Not available')}")
