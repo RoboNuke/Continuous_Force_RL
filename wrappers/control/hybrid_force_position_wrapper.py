@@ -57,7 +57,13 @@ class HybridForcePositionWrapper(gym.Wrapper):
             ctrl_cfg: HybridCtrlCfg instance. Must be provided - no defaults.
             task_cfg: HybridTaskCfg instance. Must be provided - no defaults.
         """
+        # Store original action space size before modification
+        self._original_action_size = getattr(env.unwrapped.cfg, 'action_space', 6)
+
         super().__init__(env)
+
+        # Store control configuration for action space calculation
+        self.ctrl_torque = ctrl_torque
 
         # Require explicit configuration - no fallback defaults
         if ctrl_cfg is None:
@@ -146,10 +152,36 @@ class HybridForcePositionWrapper(gym.Wrapper):
         if reward_type == "delta":
             self._old_sel_matrix = torch.zeros_like(self.sel_matrix)
 
+        # Calculate new action space size based on control configuration
+        # Action space: 6 (pose) + 6 (force) + 0/6 (torque selection if ctrl_torque)
+        self._new_action_size = 12 if not ctrl_torque else 18
+
+        # Update observation/state dimensions for action space change
+        self._update_observation_dimensions()
+
         # Initialize wrapper
         self._wrapper_initialized = False
         if hasattr(self.unwrapped, '_robot'):
             self._initialize_wrapper()
+
+    def _update_observation_dimensions(self):
+        """Update observation and state space dimensions for action space change."""
+        action_diff = self._new_action_size - self._original_action_size
+
+        if hasattr(self.unwrapped.cfg, 'observation_space'):
+            old_obs_space = self.unwrapped.cfg.observation_space
+            self.unwrapped.cfg.observation_space += action_diff
+            print(f"[HYBRID]: Updated observation_space by {action_diff}: {old_obs_space} -> {self.unwrapped.cfg.observation_space}")
+
+        if hasattr(self.unwrapped.cfg, 'state_space'):
+            old_state_space = self.unwrapped.cfg.state_space
+            self.unwrapped.cfg.state_space += action_diff
+            print(f"[HYBRID]: Updated state_space by {action_diff}: {old_state_space} -> {self.unwrapped.cfg.state_space}")
+
+        if hasattr(self.unwrapped.cfg, 'action_space'):
+            old_action_space = self.unwrapped.cfg.action_space
+            self.unwrapped.cfg.action_space = self._new_action_size
+            print(f"[HYBRID]: Updated action_space: {old_action_space} -> {self._new_action_size} (ctrl_torque={self.ctrl_torque})")
 
     def _initialize_wrapper(self):
         """Initialize wrapper by overriding environment methods."""

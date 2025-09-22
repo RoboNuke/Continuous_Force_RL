@@ -254,17 +254,8 @@ def main():
     print("[INFO]: Environment created successfully")
 
     # ===== STEP 3: APPLY WRAPPER STACK =====
-    # Apply wrappers in correct order: action space modifiers first, then observation space modifiers, then logging
+    # Apply wrappers using pre-configured wrapper settings from Step 1
     print("[INFO]: Step 3 - Applying wrapper stack")
-
-    # ===== STEP 3A: APPLY ACTION SPACE WRAPPERS FIRST =====
-    print("[INFO]: Step 3A - Applying action space modification wrappers")
-    if wrappers_config.get('hybrid_control', {}).get('enabled', False):
-        print("  - Applying HybridForcePositionWrapper")
-        env = lUtils.apply_hybrid_control_wrapper(env, wrappers_config['hybrid_control'])
-
-    # ===== STEP 3B: APPLY OBSERVATION SPACE WRAPPERS =====
-    print("[INFO]: Step 3B - Applying observation space wrappers")
     if wrappers_config.get('fragile_objects', {}).get('enabled', False):
         print("  - Applying FragileObjectWrapper")
         env = lUtils.apply_fragile_object_wrapper(env, wrappers_config['fragile_objects'], primary, derived)
@@ -281,8 +272,10 @@ def main():
         print("  - Applying ObservationNoiseWrapper")
         env = lUtils.apply_observation_noise_wrapper(env, wrappers_config['observation_noise'])
 
-    # ===== STEP 3C: APPLY LOGGING AND METRICS WRAPPERS =====
-    print("[INFO]: Step 3C - Applying logging and metrics wrappers")
+    if wrappers_config.get('hybrid_control', {}).get('enabled', False):
+        print("  - Applying HybridForcePositionWrapper")
+        env = lUtils.apply_hybrid_control_wrapper(env, wrappers_config['hybrid_control'])
+
     if wrappers_config.get('wandb_logging', {}).get('enabled', False):
         print("  - Applying GenericWandbLoggingWrapper")
         env = lUtils.apply_wandb_logging_wrapper(env, wrappers_config['wandb_logging'], derived, agent_cfg, env_cfg, resolved_config)
