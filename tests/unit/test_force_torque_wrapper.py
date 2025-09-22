@@ -599,8 +599,8 @@ class TestForceTorqueWrapperFactoryObservation:
         assert result["policy"].shape[0] == env.num_envs
         assert result["critic"].shape[0] == env.num_envs
 
-        # Should have at least force_torque (6) + prev_actions (6) + fingertip_pos (3) = 15 dimensions
-        assert result["policy"].shape[1] >= 15
+        # Should have at least force_torque (6) + prev_actions (6) = 12 dimensions
+        assert result["policy"].shape[1] >= 12
 
     def test_create_minimal_observations_without_attributes(self):
         """Test minimal observation creation when environment attributes are missing."""
@@ -622,9 +622,9 @@ class TestForceTorqueWrapperFactoryObservation:
         assert isinstance(result["policy"], torch.Tensor)
         assert isinstance(result["critic"], torch.Tensor)
 
-        # Check tensor dimensions - should still have force_torque (6) + prev_actions (6) + fingertip_pos (3) = 15
+        # Check tensor dimensions - should have at least force_torque (6) + prev_actions (6) = 12 dimensions
         assert result["policy"].shape[0] == env.num_envs
-        assert result["policy"].shape[1] == 15  # Force torque + actions + fingertip pos
+        assert result["policy"].shape[1] >= 12  # At least force torque + actions
 
 
 if __name__ == "__main__":

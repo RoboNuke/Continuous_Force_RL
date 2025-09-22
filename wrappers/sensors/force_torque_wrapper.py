@@ -164,11 +164,12 @@ class ForceTorqueWrapper(gym.Wrapper):
             self._original_pre_physics_step = self.unwrapped._pre_physics_step
             self.unwrapped._pre_physics_step = self._wrapped_pre_physics_step
 
+        # Try to override _get_factory_obs_state_dict first
         if hasattr(self.unwrapped, '_get_factory_obs_state_dict'):
             self._original_get_factory_obs_state_dict = self.unwrapped._get_factory_obs_state_dict
             self.unwrapped._get_factory_obs_state_dict = self._wrapped_get_factory_obs_state_dict
         else:
-            # Fallback: override _get_observations directly when _get_factory_obs_state_dict is not available
+            # Fallback: override _get_observations directly
             if hasattr(self.unwrapped, '_get_observations'):
                 self._original_get_observations = self.unwrapped._get_observations
                 self.unwrapped._get_observations = self._wrapped_get_observations
@@ -403,41 +404,62 @@ class ForceTorqueWrapper(gym.Wrapper):
         Create minimal valid observations when all else fails.
 
         This ensures we always return something SKRL can process by creating
-        a very simple observation structure that mimics factory environment format.
+        a flexible observation structure that adapts to available environment data.
         """
         num_envs = self.unwrapped.num_envs
         device = self.unwrapped.device
 
-        # Create a very simple observation - just a concatenated tensor of basic dimensions
-        # This should match what SKRL expects from a factory environment
+        # Build observation components dynamically based on available environment data
+        obs_components = []
 
-        # Force-torque: 6 dimensions
+        # Force-torque: 6 dimensions (always include this since it's our primary purpose)
         if hasattr(self.unwrapped, 'robot_force_torque'):
             force_torque = self.get_force_torque_observation()
+            obs_components.append(force_torque)
         else:
             force_torque = torch.zeros((num_envs, 6), device=device)
+            obs_components.append(force_torque)
 
-        # Previous actions: 6 dimensions (typical for factory tasks)
+        # Previous actions - determine size dynamically
         if hasattr(self.unwrapped, 'actions') and self.unwrapped.actions is not None:
             prev_actions = self.unwrapped.actions.clone()
+            obs_components.append(prev_actions)
         else:
-            prev_actions = torch.zeros((num_envs, 6), device=device)
+            # Try to determine action space size from environment config
+            action_size = 6  # Default fallback
+            if hasattr(self.unwrapped, 'cfg') and hasattr(self.unwrapped.cfg, 'action_space'):
+                action_size = self.unwrapped.cfg.action_space
+            elif hasattr(self.unwrapped, 'action_space') and hasattr(self.unwrapped.action_space, 'shape'):
+                action_size = self.unwrapped.action_space.shape[0] if self.unwrapped.action_space.shape else 6
 
-        # Basic state (fingertip position): 3 dimensions
-        if hasattr(self.unwrapped, 'fingertip_midpoint_pos'):
-            fingertip_pos = self.unwrapped.fingertip_midpoint_pos.clone()
-        else:
-            fingertip_pos = torch.zeros((num_envs, 3), device=device)
+            prev_actions = torch.zeros((num_envs, action_size), device=device)
+            obs_components.append(prev_actions)
 
-        # Create a simple flat observation tensor
-        # Total: 6 + 6 + 3 = 15 dimensions
-        obs_tensor = torch.cat([force_torque, prev_actions, fingertip_pos], dim=-1)
+        # Add all available factory environment observations
+        factory_obs_attrs = [
+            ('fingertip_midpoint_pos', 3),
+            ('fingertip_midpoint_quat', 4),
+            ('ee_linvel_fd', 3),
+            ('ee_angvel_fd', 3),
+            ('joint_pos', None),  # Variable size, get from actual tensor
+            ('joint_vel_fd', None),  # Variable size, get from actual tensor
+        ]
 
-        # Ensure the tensor has the right shape and dtype
+        for attr_name, expected_size in factory_obs_attrs:
+            if hasattr(self.unwrapped, attr_name):
+                attr_value = getattr(self.unwrapped, attr_name)
+                if attr_value is not None and isinstance(attr_value, torch.Tensor):
+                    obs_components.append(attr_value.clone())
+                elif expected_size is not None:
+                    # Create zero tensor with expected size
+                    fallback_tensor = torch.zeros((num_envs, expected_size), device=device)
+                    obs_components.append(fallback_tensor)
+
+        # Concatenate all observation components
+        obs_tensor = torch.cat(obs_components, dim=-1)
+
+        # Ensure the tensor has the right dtype
         obs_tensor = obs_tensor.to(device=device, dtype=torch.float32)
-
-        # Verify tensor shape
-        assert obs_tensor.shape == (num_envs, 15), f"Expected shape ({num_envs}, 15), got {obs_tensor.shape}"
 
         # Return in the format expected by the factory environment
         return {"policy": obs_tensor, "critic": obs_tensor}
