@@ -941,25 +941,78 @@ class BlockPPO(PPO):
         """Validate that the wrapper system is properly integrated for logging.
 
         This checks if GenericWandbLoggingWrapper or compatible wrapper is available
-        for the logging methods to use.
+        for the logging methods to use. Searches through the wrapper chain thoroughly.
         """
+        # Method 1: Check direct unwrapped access
         if hasattr(self.env, 'unwrapped') and hasattr(self.env.unwrapped, 'add_metrics'):
             print(f"  - Wrapper integration validated: Found logging wrapper at self.env.unwrapped")
             return True
-        else:
-            # Throw error instead of warning - data collection is required
-            raise ValueError(
-                "No compatible logging wrapper found. Data collection is required for experiments.\n"
-                "Expected: GenericWandbLoggingWrapper with add_metrics method.\n"
-                "Ensure the GenericWandbLoggingWrapper is properly applied to the environment."
-            )
+
+        # Method 2: Check if SKRL wrapper has the base environment with add_metrics
+        if hasattr(self.env, '_env') and hasattr(self.env._env, 'add_metrics'):
+            print(f"  - Wrapper integration validated: Found logging wrapper at self.env._env")
+            return True
+
+        # Method 3: Search through wrapper chain manually
+        current_env = self.env
+        search_depth = 0
+        max_depth = 10  # Prevent infinite loops
+
+        while current_env is not None and search_depth < max_depth:
+            if hasattr(current_env, 'add_metrics'):
+                print(f"  - Wrapper integration validated: Found logging wrapper at depth {search_depth}")
+                return True
+
+            # Try different wrapper access patterns
+            next_env = None
+            for attr in ['env', '_env', 'unwrapped']:
+                if hasattr(current_env, attr):
+                    next_env = getattr(current_env, attr)
+                    break
+
+            current_env = next_env
+            search_depth += 1
+
+        # If we get here, no logging wrapper was found
+        raise ValueError(
+            "No compatible logging wrapper found. Data collection is required for experiments.\n"
+            "Expected: GenericWandbLoggingWrapper with add_metrics method.\n"
+            "Ensure the GenericWandbLoggingWrapper is properly applied to the environment.\n"
+            f"Searched through {search_depth} wrapper layers without finding add_metrics method."
+        )
 
     def _get_logging_wrapper(self):
         """Get the logging wrapper for metrics reporting.
 
         Returns the wrapper object if found, None otherwise.
+        Uses the same thorough search as _validate_wrapper_integration.
         """
+        # Method 1: Check direct unwrapped access
         if hasattr(self.env, 'unwrapped') and hasattr(self.env.unwrapped, 'add_metrics'):
             return self.env.unwrapped
+
+        # Method 2: Check if SKRL wrapper has the base environment with add_metrics
+        if hasattr(self.env, '_env') and hasattr(self.env._env, 'add_metrics'):
+            return self.env._env
+
+        # Method 3: Search through wrapper chain manually
+        current_env = self.env
+        search_depth = 0
+        max_depth = 10  # Prevent infinite loops
+
+        while current_env is not None and search_depth < max_depth:
+            if hasattr(current_env, 'add_metrics'):
+                return current_env
+
+            # Try different wrapper access patterns
+            next_env = None
+            for attr in ['env', '_env', 'unwrapped']:
+                if hasattr(current_env, attr):
+                    next_env = getattr(current_env, attr)
+                    break
+
+            current_env = next_env
+            search_depth += 1
+
         return None
 
