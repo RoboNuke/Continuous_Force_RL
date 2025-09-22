@@ -183,6 +183,22 @@ class HybridForcePositionWrapper(gym.Wrapper):
             self.unwrapped.cfg.action_space = self._new_action_size
             print(f"[HYBRID]: Updated action_space: {old_action_space} -> {self._new_action_size} (ctrl_torque={self.ctrl_torque})")
 
+        self._update_gym_spaces()
+
+    def _update_gym_spaces(self):
+        """
+        Update gymnasium environment spaces if needed.
+
+        Attempts to reconfigure the environment's observation and action spaces
+        to account for the additional force-torque sensor dimensions. Silently
+        continues if reconfiguration fails to maintain compatibility.
+        """
+        if hasattr(self.unwrapped, '_configure_gym_env_spaces'):
+            try:
+                self.unwrapped._configure_gym_env_spaces()
+            except Exception:
+                # Silently continue if reconfiguration fails
+                RuntimeError("Unable to configure gym env spaces in hybrid controller")
     def _initialize_wrapper(self):
         """Initialize wrapper by overriding environment methods."""
         if self._wrapper_initialized:
