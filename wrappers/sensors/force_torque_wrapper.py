@@ -316,6 +316,7 @@ class ForceTorqueWrapper(gym.Wrapper):
         # Also initialize force_torque attribute for factory obs_dict creation
         # This is what the factory environment will access when creating obs_dict
         self.unwrapped.force_torque = self.unwrapped.robot_force_torque
+        print("inited tensors")
 
 
     def _wrapped_compute_intermediate_values(self, dt):
@@ -428,7 +429,7 @@ class ForceTorqueWrapper(gym.Wrapper):
 
         state_dict = {
             "fingertip_pos": self.unwrapped.fingertip_midpoint_pos,
-            "fingertip_pos_rel_fixed": self.unwrapped.fingertip_midpoint_pos - self.fixed_pos_obs_frame,
+            "fingertip_pos_rel_fixed": self.unwrapped.fingertip_midpoint_pos - self.unwrapped.fixed_pos_obs_frame,
             "fingertip_quat": self.unwrapped.fingertip_midpoint_quat,
             "ee_linvel": self.unwrapped.fingertip_midpoint_linvel,
             "ee_angvel": self.unwrapped.fingertip_midpoint_angvel,
