@@ -599,8 +599,10 @@ class TestForceTorqueWrapperFactoryObservation:
         assert result["policy"].shape[0] == env.num_envs
         assert result["critic"].shape[0] == env.num_envs
 
-        # Should have at least force_torque (6) + prev_actions (6) = 12 dimensions
-        assert result["policy"].shape[1] >= 12
+        # Should match the mock environment's expected observation space size
+        # MockBaseEnv has cfg.observation_space = 32, so we expect 32 dimensions total
+        expected_size = 32  # MockBaseEnv's configured observation space size
+        assert result["policy"].shape[1] == expected_size
 
     def test_create_minimal_observations_without_attributes(self):
         """Test minimal observation creation when environment attributes are missing."""
@@ -622,9 +624,11 @@ class TestForceTorqueWrapperFactoryObservation:
         assert isinstance(result["policy"], torch.Tensor)
         assert isinstance(result["critic"], torch.Tensor)
 
-        # Check tensor dimensions - should have at least force_torque (6) + prev_actions (6) = 12 dimensions
+        # Check tensor dimensions - should match expected observation space size
         assert result["policy"].shape[0] == env.num_envs
-        assert result["policy"].shape[1] >= 12  # At least force torque + actions
+        # Should be exactly 32 dimensions (MockBaseEnv's configured observation space size)
+        expected_size = 32
+        assert result["policy"].shape[1] == expected_size
 
 
 if __name__ == "__main__":

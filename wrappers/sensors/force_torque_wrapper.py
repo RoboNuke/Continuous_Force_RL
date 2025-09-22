@@ -403,16 +403,25 @@ class ForceTorqueWrapper(gym.Wrapper):
         """
         Create minimal valid observations when all else fails.
 
-        This ensures we always return something SKRL can process by creating
-        a flexible observation structure that adapts to available environment data.
+        This creates observations that match the expected observation space size
+        (original dimensions + 6 for force-torque) rather than dynamically adding all available data.
         """
         num_envs = self.unwrapped.num_envs
         device = self.unwrapped.device
 
-        # Build observation components dynamically based on available environment data
+        # Determine the expected observation space size
+        expected_obs_size = 25  # Default baseline
+        if hasattr(self.unwrapped, 'cfg') and hasattr(self.unwrapped.cfg, 'observation_space'):
+            if isinstance(self.unwrapped.cfg.observation_space, int):
+                expected_obs_size = self.unwrapped.cfg.observation_space
+        elif hasattr(self.unwrapped, 'observation_space') and hasattr(self.unwrapped.observation_space, 'shape'):
+            if len(self.unwrapped.observation_space.shape) > 0:
+                expected_obs_size = self.unwrapped.observation_space.shape[0]
+
+        # Create observations to match expected size exactly
         obs_components = []
 
-        # Force-torque: 6 dimensions (always include this since it's our primary purpose)
+        # Force-torque: 6 dimensions (our primary purpose)
         if hasattr(self.unwrapped, 'robot_force_torque'):
             force_torque = self.get_force_torque_observation()
             obs_components.append(force_torque)
@@ -420,46 +429,41 @@ class ForceTorqueWrapper(gym.Wrapper):
             force_torque = torch.zeros((num_envs, 6), device=device)
             obs_components.append(force_torque)
 
-        # Previous actions - determine size dynamically
-        if hasattr(self.unwrapped, 'actions') and self.unwrapped.actions is not None:
-            prev_actions = self.unwrapped.actions.clone()
-            obs_components.append(prev_actions)
-        else:
-            # Try to determine action space size from environment config
-            action_size = 6  # Default fallback
-            if hasattr(self.unwrapped, 'cfg') and hasattr(self.unwrapped.cfg, 'action_space'):
-                action_size = self.unwrapped.cfg.action_space
-            elif hasattr(self.unwrapped, 'action_space') and hasattr(self.unwrapped.action_space, 'shape'):
-                action_size = self.unwrapped.action_space.shape[0] if self.unwrapped.action_space.shape else 6
+        # Calculate remaining dimensions needed
+        remaining_dims = expected_obs_size - 6
 
-            prev_actions = torch.zeros((num_envs, action_size), device=device)
-            obs_components.append(prev_actions)
+        if remaining_dims > 0:
+            # Fill remaining dimensions with available data or zeros
+            # Previous actions first (if available and fits)
+            if hasattr(self.unwrapped, 'actions') and self.unwrapped.actions is not None:
+                action_dims = self.unwrapped.actions.shape[-1]
+                if action_dims <= remaining_dims:
+                    obs_components.append(self.unwrapped.actions.clone())
+                    remaining_dims -= action_dims
+                else:
+                    # Truncate actions to fit
+                    obs_components.append(self.unwrapped.actions[:, :remaining_dims].clone())
+                    remaining_dims = 0
 
-        # Add all available factory environment observations
-        factory_obs_attrs = [
-            ('fingertip_midpoint_pos', 3),
-            ('fingertip_midpoint_quat', 4),
-            ('ee_linvel_fd', 3),
-            ('ee_angvel_fd', 3),
-            ('joint_pos', None),  # Variable size, get from actual tensor
-            ('joint_vel_fd', None),  # Variable size, get from actual tensor
-        ]
+            # Fill any remaining dimensions with basic environment state
+            if remaining_dims > 0:
+                if hasattr(self.unwrapped, 'fingertip_midpoint_pos') and remaining_dims >= 3:
+                    obs_components.append(self.unwrapped.fingertip_midpoint_pos.clone())
+                    remaining_dims -= 3
 
-        for attr_name, expected_size in factory_obs_attrs:
-            if hasattr(self.unwrapped, attr_name):
-                attr_value = getattr(self.unwrapped, attr_name)
-                if attr_value is not None and isinstance(attr_value, torch.Tensor):
-                    obs_components.append(attr_value.clone())
-                elif expected_size is not None:
-                    # Create zero tensor with expected size
-                    fallback_tensor = torch.zeros((num_envs, expected_size), device=device)
-                    obs_components.append(fallback_tensor)
+                # Fill any leftover dimensions with zeros
+                if remaining_dims > 0:
+                    padding = torch.zeros((num_envs, remaining_dims), device=device)
+                    obs_components.append(padding)
 
         # Concatenate all observation components
         obs_tensor = torch.cat(obs_components, dim=-1)
 
-        # Ensure the tensor has the right dtype
+        # Ensure the tensor has the right shape and dtype
         obs_tensor = obs_tensor.to(device=device, dtype=torch.float32)
+
+        # Verify the size matches expectations
+        assert obs_tensor.shape[1] == expected_obs_size, f"Created observation size {obs_tensor.shape[1]} doesn't match expected {expected_obs_size}"
 
         # Return in the format expected by the factory environment
         return {"policy": obs_tensor, "critic": obs_tensor}
