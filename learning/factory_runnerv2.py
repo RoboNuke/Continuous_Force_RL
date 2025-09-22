@@ -288,13 +288,10 @@ def main():
         print("  - Applying EnhancedActionLoggingWrapper")
         env = lUtils.apply_enhanced_action_logging_wrapper(env, wrappers_config['action_logging'])
 
-    # Apply final observation flattening wrapper for SKRL compatibility
-    print("  - Applying FactorySKRLObservationWrapper")
-    env = lUtils.apply_factory_skrl_observation_wrapper(env)
-
-    # ===== STEP 4: WRAP FOR SKRL =====
-    print("[INFO]: Step 4 - Wrapping environment for SKRL")
-    env = SkrlVecEnvWrapper(env, ml_framework="torch")
+    # ===== STEP 4: WRAP FOR SKRL WITH ASYNC CRITIC SUPPORT =====
+    print("[INFO]: Step 4 - Wrapping environment for SKRL with AsyncCriticIsaacLabWrapper")
+    from wrappers.skrl.async_critic_isaaclab_wrapper import AsyncCriticIsaacLabWrapper
+    env = AsyncCriticIsaacLabWrapper(env)
 
     print("[INFO]: Environment wrapped successfully")
     print(f"[INFO]: Observation Space Size: {env.cfg.observation_space}")
