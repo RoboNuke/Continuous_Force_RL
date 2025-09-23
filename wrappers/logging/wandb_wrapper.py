@@ -50,6 +50,11 @@ class SimpleEpisodeTracker:
     def add_metrics(self, metrics: Dict[str, torch.Tensor]):
         """Add metrics for this agent's environments."""
         for name, values in metrics.items():
+            if not isinstance(values, torch.Tensor):
+                raise TypeError(
+                    f"Metric '{name}' must be a torch.Tensor, got {type(values)}. "
+                    f"Convert lists to tensors using: torch.tensor(your_list)"
+                )
             if name not in self.accumulated_metrics:
                 self.accumulated_metrics[name] = []
             self.accumulated_metrics[name].append(values)
@@ -57,6 +62,15 @@ class SimpleEpisodeTracker:
     def publish(self, onetime_metrics: Dict[str, torch.Tensor] = {}):
         """Add onetime metrics and publish everything to wandb."""
         print(f"[DEBUG] Publishing metrics. Accumulated: {len(self.accumulated_metrics)}, Onetime: {len(onetime_metrics)}")
+
+        # Validate onetime_metrics are tensors
+        for name, value in onetime_metrics.items():
+            if not isinstance(value, torch.Tensor):
+                raise TypeError(
+                    f"Onetime metric '{name}' must be a torch.Tensor, got {type(value)}. "
+                    f"Convert to tensor using: torch.tensor(your_value)"
+                )
+
         # Aggregate accumulated metrics
         final_metrics = {}
 
@@ -68,9 +82,10 @@ class SimpleEpisodeTracker:
                 print(f"[DEBUG] Metric '{name}': {len(value_list)} values, final={result}, type={type(result)}")
                 final_metrics[name] = result
 
-        # Add onetime metrics
+        # Add onetime metrics (now guaranteed to be tensors)
         for name, value in onetime_metrics.items():
-            final_metrics[f"learning/{name}"] = value.mean().item() if isinstance(value, torch.Tensor) else value
+            result = value.mean().item()
+            final_metrics[f"learning/{name}"] = result
 
         # Add required step metrics for x-axis
         final_metrics["total_steps"] = self.total_steps
@@ -249,6 +264,16 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             metrics: Dictionary of metric_name -> tensor with length num_envs, num_agents, or scalar
         """
         print(f"[DEBUG] GenericWandbLoggingWrapper.add_metrics called with {len(metrics)} metrics: {list(metrics.keys())}")
+
+        # Validate all metrics are tensors
+        for name, values in metrics.items():
+            if not isinstance(values, torch.Tensor):
+                raise TypeError(
+                    f"Metric '{name}' must be a torch.Tensor, got {type(values)}. "
+                    f"Convert lists to tensors using: torch.tensor(your_list). "
+                    f"This error occurred in GenericWandbLoggingWrapper.add_metrics()"
+                )
+
         self._split_by_agent(metrics, 'add_metrics')
 
     def publish(self, onetime_metrics: Dict[str, torch.Tensor] = {}):
@@ -258,6 +283,15 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         Args:
             onetime_metrics: Final onetime metrics to add before publishing
         """
+        # Validate onetime_metrics are tensors
+        for name, value in onetime_metrics.items():
+            if not isinstance(value, torch.Tensor):
+                raise TypeError(
+                    f"Onetime metric '{name}' must be a torch.Tensor, got {type(value)}. "
+                    f"Convert to tensor using: torch.tensor(your_value). "
+                    f"This error occurred in GenericWandbLoggingWrapper.publish()"
+                )
+
         self._split_by_agent(onetime_metrics, 'publish')
 
     def step(self, action):

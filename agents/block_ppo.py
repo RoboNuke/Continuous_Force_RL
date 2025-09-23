@@ -737,25 +737,25 @@ class BlockPPO(PPO):
                     clip_mask = (ratio < 1 - self._ratio_clip) | (ratio > 1 + self._ratio_clip)
                     kl = old_log_probs - new_log_probs
 
-                    # Calculate per-agent metrics
-                    stats["Policy/KL_Divergence_Avg"] = [kl[:, i, :].mean().item() for i in range(self.num_agents)]
-                    stats["Policy/KL_Divergence_95_Quantile"] = [kl[:, i, :].quantile(0.95).item() for i in range(self.num_agents)]
-                    stats["Policy/Clip_Fraction"] = [clip_mask[:, i, :].float().mean().item() for i in range(self.num_agents)]
+                    # Calculate per-agent metrics (as tensors)
+                    stats["Policy/KL_Divergence_Avg"] = torch.tensor([kl[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
+                    stats["Policy/KL_Divergence_95_Quantile"] = torch.tensor([kl[:, i, :].quantile(0.95).item() for i in range(self.num_agents)], device=self.device)
+                    stats["Policy/Clip_Fraction"] = torch.tensor([clip_mask[:, i, :].float().mean().item() for i in range(self.num_agents)], device=self.device)
 
                 if entropies is not None:
-                    stats["Policy/Entropy_Avg"] = [entropies[:, i, :].mean().item() for i in range(self.num_agents)]
+                    stats["Policy/Entropy_Avg"] = torch.tensor([entropies[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
 
                 if policy_losses is not None:
-                    stats["Policy/Loss_Avg"] = [policy_losses[:, i, :].mean().item() for i in range(self.num_agents)]
+                    stats["Policy/Loss_Avg"] = torch.tensor([policy_losses[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
 
                 # --- Value stats (per-agent) ---
                 if value_losses is not None and values is not None and returns is not None:
-                    stats["Critic/Loss_Avg"] = [value_losses[:, i, :].mean().item() for i in range(self.num_agents)]
-                    stats["Critic/Loss_Median"] = [value_losses[:, i, :].median().item() for i in range(self.num_agents)]
-                    stats["Critic/Loss_95_Quantile"] = [value_losses[:, i, :].quantile(0.95).item() for i in range(self.num_agents)]
-                    stats["Critic/Loss_90_Quantile"] = [value_losses[:, i, :].quantile(0.90).item() for i in range(self.num_agents)]
-                    stats["Critic/Predicted_Values_Avg"] = [values[:, i, :].mean().item() for i in range(self.num_agents)]
-                    stats["Critic/Predicted_Values_Std"] = [values[:, i, :].std().item() for i in range(self.num_agents)]
+                    stats["Critic/Loss_Avg"] = torch.tensor([value_losses[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
+                    stats["Critic/Loss_Median"] = torch.tensor([value_losses[:, i, :].median().item() for i in range(self.num_agents)], device=self.device)
+                    stats["Critic/Loss_95_Quantile"] = torch.tensor([value_losses[:, i, :].quantile(0.95).item() for i in range(self.num_agents)], device=self.device)
+                    stats["Critic/Loss_90_Quantile"] = torch.tensor([value_losses[:, i, :].quantile(0.90).item() for i in range(self.num_agents)], device=self.device)
+                    stats["Critic/Predicted_Values_Avg"] = torch.tensor([values[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
+                    stats["Critic/Predicted_Values_Std"] = torch.tensor([values[:, i, :].std().item() for i in range(self.num_agents)], device=self.device)
 
                     # Explained variance per agent
                     explained_var_list = []
@@ -765,12 +765,12 @@ class BlockPPO(PPO):
                         explained_var = (1 - ((agent_returns - agent_values).var(unbiased=False) /
                                             agent_returns.var(unbiased=False).clamp(min=1e-8))).item()
                         explained_var_list.append(explained_var)
-                    stats["Critic/Explained_Variance"] = explained_var_list
+                    stats["Critic/Explained_Variance"] = torch.tensor(explained_var_list, device=self.device)
 
                 # --- Advantage diagnostics (per-agent) ---
                 if advantages is not None:
-                    stats["Advantage/Mean"] = [advantages[:, i, :].mean().item() for i in range(self.num_agents)]
-                    stats["Advantage/Std_Dev"] = [advantages[:, i, :].std().item() for i in range(self.num_agents)]
+                    stats["Advantage/Mean"] = torch.tensor([advantages[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
+                    stats["Advantage/Std_Dev"] = torch.tensor([advantages[:, i, :].std().item() for i in range(self.num_agents)], device=self.device)
 
                     # Skewness per agent
                     skew_list = []
@@ -778,7 +778,7 @@ class BlockPPO(PPO):
                         agent_adv = advantages[:, i, :]
                         skew = (((agent_adv - agent_adv.mean()) ** 3).mean() / (agent_adv.std() ** 3 + 1e-8)).item()
                         skew_list.append(skew)
-                    stats["Advantage/Skew"] = skew_list
+                    stats["Advantage/Skew"] = torch.tensor(skew_list, device=self.device)
 
                 # --- Network state diagnostics (per-agent) ---
                 def grad_norm_per_agent(agent_gradients):
@@ -814,17 +814,17 @@ class BlockPPO(PPO):
 
                 # Policy network diagnostics
                 if store_policy_state and network_states is not None:
-                    stats['Policy/Gradient_Norm'] = [grad_norm_per_agent(state['policy']['gradients'])
-                                                   for state in network_states]
-                    stats['Policy/Step_Size'] = [adam_step_size_per_agent(state['policy']['optimizer_state'])
-                                                for state in network_states]
+                    stats['Policy/Gradient_Norm'] = torch.tensor([grad_norm_per_agent(state['policy']['gradients'])
+                                                   for state in network_states], device=self.device)
+                    stats['Policy/Step_Size'] = torch.tensor([adam_step_size_per_agent(state['policy']['optimizer_state'])
+                                                for state in network_states], device=self.device)
 
                 # Critic network diagnostics
                 if store_critic_state and network_states is not None:
-                    stats['Critic/Gradient_Norm'] = [grad_norm_per_agent(state['critic']['gradients'])
-                                                    for state in network_states]
-                    stats['Critic/Step_Size'] = [adam_step_size_per_agent(state['critic']['optimizer_state'])
-                                                for state in network_states]
+                    stats['Critic/Gradient_Norm'] = torch.tensor([grad_norm_per_agent(state['critic']['gradients'])
+                                                    for state in network_states], device=self.device)
+                    stats['Critic/Step_Size'] = torch.tensor([adam_step_size_per_agent(state['critic']['optimizer_state'])
+                                                for state in network_states], device=self.device)
 
             # Pass metrics to wrapper system
             print(f"[DEBUG] Sending {len(stats)} metrics to wrapper: {list(stats.keys())}")
