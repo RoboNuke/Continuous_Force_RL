@@ -65,6 +65,42 @@ class ConfigBundle:
     config_source_path: str = ""
     """Path to source configuration file"""
 
+    # Backward compatibility properties for tests
+    @property
+    def primary(self):
+        """Backward compatibility alias for primary_cfg."""
+        return self.primary_cfg
+
+    @property
+    def env(self):
+        """Backward compatibility alias for env_cfg."""
+        return self.env_cfg
+
+    @property
+    def agent(self):
+        """Backward compatibility alias for agent_cfg."""
+        return self.agent_cfg
+
+    @property
+    def model(self):
+        """Backward compatibility alias for model_cfg."""
+        return self.model_cfg
+
+    @property
+    def wrapper(self):
+        """Backward compatibility alias for wrapper_cfg."""
+        return self.wrapper_cfg
+
+    @property
+    def hybrid(self):
+        """Backward compatibility alias for hybrid_cfg."""
+        return self.hybrid_cfg
+
+    @property
+    def environment(self):
+        """Backward compatibility alias for env_cfg."""
+        return self.env_cfg
+
 
 class ConfigManagerV2:
     """
@@ -156,6 +192,12 @@ class ConfigManagerV2:
         # Apply CLI overrides
         if cli_overrides:
             ConfigManagerV2._apply_cli_overrides(config_bundle, cli_overrides)
+
+            # Re-apply primary config to propagate any CLI overrides to primary config
+            # This ensures environment and agent configs stay synchronized with primary
+            config_bundle.env_cfg.apply_primary_cfg(config_bundle.primary_cfg)
+            config_bundle.agent_cfg.apply_primary_cfg(config_bundle.primary_cfg)
+            config_bundle.wrapper_cfg.apply_primary_cfg(config_bundle.primary_cfg)
 
         # 9. Validate final configuration
 
@@ -779,7 +821,8 @@ class ConfigManagerV2:
             },
             'environment': {
                 'decimation': config_bundle.env_cfg.decimation,
-                'episode_length_s': config_bundle.env_cfg.episode_length_s
+                'episode_length_s': config_bundle.env_cfg.episode_length_s,
+                'ctrl': config_bundle.env_cfg.ctrl
             },
             'model': config_bundle.model_cfg.to_dict(),
             'wrappers': config_bundle.wrapper_cfg.to_dict(),

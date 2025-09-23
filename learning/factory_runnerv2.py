@@ -214,26 +214,6 @@ def main():
         print(f"  3. Isaac Lab is not properly installed")
         sys.exit(1)
 
-    # Create basic agent configuration structure
-    agent_cfg = {
-        'agent': {
-            'class': 'PPO',
-            'disable_progressbar': True,
-        },
-        'models': {
-            'policy': {},
-            'value': {}
-        }
-    }
-
-    # Merge agent configuration from resolved config
-    agent_config_from_file = resolved_config.get('agent', {})
-    if agent_config_from_file:
-        print("[INFO]: Merging agent configuration from config file")
-        for key, value in agent_config_from_file.items():
-            agent_cfg['agent'][key] = value
-            print(f"[CONFIG]: Setting agent.{key} = {value}")
-
     print("Ckpt Path:", derived.get('ckpt_tracker_path', "/nfs/stak/users/brownhun/ckpt_tracker2.txt"))
 
     # ===== STEP 1: COMPLETE CONFIGURATION =====
@@ -246,13 +226,19 @@ def main():
 
     # Apply learning configuration
     max_rollout_steps = derived['rollout_steps']
-    lUtils.apply_learning_config(agent_cfg, agent_config, max_rollout_steps)
+    # Create wrapper structure for launch_utils compatibility
+    agent_cfg_wrapper = {'agent': agent_config}
+    lUtils.apply_learning_config(agent_cfg_wrapper, agent_config, max_rollout_steps)
+    # Extract the modified config back
+    agent_config = agent_cfg_wrapper['agent']
 
     # Apply model configuration
-    lUtils.apply_model_config(agent_cfg, model)
+    lUtils.apply_model_config(agent_cfg_wrapper, model)
 
     # Setup experiment logging
-    lUtils.setup_experiment_logging(env_cfg, agent_cfg, resolved_config)
+    lUtils.setup_experiment_logging(env_cfg, agent_cfg_wrapper, resolved_config)
+    # Extract the modified config back
+    agent_config = agent_cfg_wrapper['agent']
 
     # Debug: Print configurations
     if primary.get('debug_mode', False):
@@ -298,7 +284,7 @@ def main():
 
     if wrappers_config.get('wandb_logging', {}).get('enabled', False):
         print("  - Applying GenericWandbLoggingWrapper")
-        env = lUtils.apply_wandb_logging_wrapper(env, wrappers_config['wandb_logging'], derived, agent_cfg, env_cfg, resolved_config)
+        env = lUtils.apply_wandb_logging_wrapper(env, wrappers_config['wandb_logging'], derived, agent_cfg_wrapper, env_cfg, resolved_config)
 
     if wrappers_config.get('factory_metrics', {}).get('enabled', False):
         print("  - Applying FactoryMetricsWrapper")
@@ -336,22 +322,22 @@ def main():
 
     # Create models using pre-configured parameters
     print("[INFO]:   Creating models")
-    models = lUtils.create_policy_and_value_models(env_cfg, agent_cfg, env, model, wrappers_config, derived)
+    models = lUtils.create_policy_and_value_models(env_cfg, agent_cfg_wrapper, env, model, wrappers_config, derived)
 
     # Create agents using pre-configured parameters
     print("[INFO]:   Creating agents")
-    agents = lUtils.create_block_ppo_agents(env_cfg, agent_cfg, env, models, memory, derived)
+    agents = lUtils.create_block_ppo_agents(env_cfg, agent_cfg_wrapper, env, models, memory, derived)
 
     # ===== STEP 6: CREATE AND START TRAINER =====
     # Trainer uses pre-configured parameters from Step 1
     print("[INFO]: Step 6 - Creating and starting trainer")
 
-    print("Disable Progress:", agent_cfg['agent']['disable_progressbar'])
+    print("Disable Progress:", agent_config.get('disable_progressbar', True))
     cfg_trainer = {
         "timesteps": derived['max_steps'] // (derived['total_num_envs']),
         "headless": True,
         "close_environment_at_exit": True,
-        "disable_progressbar": agent_cfg['agent']['disable_progressbar']
+        "disable_progressbar": agent_config.get('disable_progressbar', True)
     }
 
     trainer = SequentialTrainer(

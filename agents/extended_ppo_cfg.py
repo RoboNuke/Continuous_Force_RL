@@ -295,6 +295,7 @@ class ExtendedPPOConfig:
             },
 
             # Agent-specific parameters
+            'disable_progressbar': self.disable_progressbar,
             'break_force': self.break_force,
             'easy_mode': self.easy_mode,
             'track_ckpts': self.track_ckpts,
