@@ -12,6 +12,7 @@ import copy
 from dataclasses import dataclass, field
 import torch
 
+
 # Import for individual agent logging setup
 def _import_setup_individual_agent_logging():
     """Lazy import to avoid circular imports."""
@@ -68,6 +69,9 @@ class ConfigManager:
 
         # Resolve configuration
         resolved_config = ConfigManager._resolve_config(config)
+
+        # Apply SKRL PPO defaults for null values in agent configuration
+        ConfigManager._apply_skrl_ppo_defaults(resolved_config)
 
         return resolved_config
 
@@ -689,6 +693,50 @@ class ConfigManager:
         """Print color legend for configuration source tracking."""
         from learning.config_printer import Colors
         print(f"\n🎨 Configuration Colors: {Colors.BLUE}Local overrides{Colors.RESET} | {Colors.GREEN}CLI overrides{Colors.RESET} | Default (base values)")
+
+    @staticmethod
+    def _apply_skrl_ppo_defaults(resolved_config):
+        """
+        Apply SKRL PPO defaults for null values in agent configuration.
+
+        Dynamically loads defaults from SKRL PPO agent class and applies them
+        only for keys that are null in our configuration.
+        """
+        if 'agent' not in resolved_config:
+            return
+
+        try:
+            # Import SKRL PPO module to access its default configuration
+            import skrl.agents.torch.ppo.ppo as ppo_module
+
+            # Access the default configuration from the SKRL PPO module
+            # This is defined as PPO_DEFAULT_CONFIG in the module
+            if hasattr(ppo_module, 'PPO_DEFAULT_CONFIG'):
+                skrl_defaults = ppo_module.PPO_DEFAULT_CONFIG
+            else:
+                print(f"[CONFIG]: Warning - Could not find PPO_DEFAULT_CONFIG in SKRL module")
+                skrl_defaults = {}
+
+            print(f"[CONFIG]: Loading SKRL PPO defaults dynamically")
+
+            # Apply defaults only for null values in agent config
+            agent_config = resolved_config['agent']
+            defaults_applied = []
+
+            for key, default_value in skrl_defaults.items():
+                if key in agent_config and agent_config[key] is None:
+                    agent_config[key] = default_value
+                    defaults_applied.append(f"{key}={default_value}")
+                    print(f"[CONFIG]:   Applied SKRL default: {key} = {default_value}")
+
+            if defaults_applied:
+                print(f"[CONFIG]: Applied {len(defaults_applied)} SKRL PPO defaults for null values")
+            else:
+                print(f"[CONFIG]: No null values found in agent config, no defaults applied")
+
+        except Exception as e:
+            print(f"[CONFIG]: Warning - Failed to load SKRL PPO defaults: {e}")
+            print(f"[CONFIG]: Continuing with current configuration...")
 
 
 # ===== INTEGRATED LOGGING CONFIGURATION SYSTEM =====
