@@ -157,62 +157,18 @@ def add_force_torque_to_isaaclab_configs():
 
 def main():
     """Main training function using our configuration system instead of Hydra."""
+    # Use global variables defined outside main()
+    global agent_config, config_bundle, primary, derived, environment, model, wrappers_config, experiment
 
     # Add force-torque dimensions to IsaacLab configs if needed
     add_force_torque_to_isaaclab_configs()
 
-    # Create Isaac Lab environment configuration
-    # We'll create a basic ManagerBasedRLEnvCfg and then apply our configuration to it
-    try:
-        # Try to get the task environment configuration from Isaac Lab
-        import gymnasium as gym
-        # Tasks module already imported in try/except block above
-
-        print(f"[DEBUG]: Attempting to load task: {args_cli.task}")
-        env_spec = gym.spec(args_cli.task)
-        print(f"[DEBUG]: Found env_spec: {env_spec}")
-
-        if hasattr(env_spec, 'kwargs') and 'env_cfg_entry_point' in env_spec.kwargs:
-            # Use the default configuration from the task
-            env_cfg = env_spec.kwargs['env_cfg_entry_point']()
-
-            # Replace the ctrl config with our extended version
-            print(f"[DEBUG]: Replacing ctrl config with ExtendedCtrlCfg")
-            original_ctrl = env_cfg.ctrl
-            extended_ctrl = ExtendedCtrlCfg()
-
-            # Copy all existing ctrl values to our extended config
-            for attr_name in dir(original_ctrl):
-                if not attr_name.startswith('_') and hasattr(extended_ctrl, attr_name):
-                    original_value = getattr(original_ctrl, attr_name)
-                    if not callable(original_value):
-                        setattr(extended_ctrl, attr_name, original_value)
-                        print(f"[DEBUG]:   Copied {attr_name}: {original_value}")
-
-            # Replace the ctrl config
-            env_cfg.ctrl = extended_ctrl
-            print(f"[DEBUG]: Successfully replaced ctrl with ExtendedCtrlCfg")
-
-            print(f"[DEBUG]: Successfully loaded Isaac Lab config")
-            print(f"[DEBUG]: Has obs_order: {hasattr(env_cfg, 'obs_order')}")
-            print(f"[DEBUG]: Has state_order: {hasattr(env_cfg, 'state_order')}")
-            if hasattr(env_cfg, 'obs_order'):
-                print(f"[DEBUG]: obs_order: {env_cfg.obs_order}")
-            if hasattr(env_cfg, 'state_order'):
-                print(f"[DEBUG]: state_order: {env_cfg.state_order}")
-        else:
-            print(f"[ERROR]: env_spec has no cfg attribute")
-            print(f"[ERROR]: env_spec.kwargs: {getattr(env_spec, 'kwargs', 'None')}")
-            raise ValueError(f"Invalid task configuration for {args_cli.task}")
-
-    except Exception as e:
-        print(f"[ERROR]: Failed to load Isaac Lab task configuration: {e}")
-        print(f"[ERROR]: Task name: {args_cli.task}")
-        print(f"[ERROR]: This likely means:")
-        print(f"  1. The task name is incorrect")
-        print(f"  2. Isaac Lab tasks are not properly registered")
-        print(f"  3. Isaac Lab is not properly installed")
-        sys.exit(1)
+    # Use environment configuration from ConfigManagerV2
+    env_cfg = config_bundle.env_cfg
+    print(f"[INFO]: Using environment configuration from ConfigManagerV2")
+    print(f"[INFO]: Task: {config_bundle.task_name}")
+    print(f"[INFO]: Episode length: {env_cfg.episode_length_s}s")
+    print(f"[INFO]: Decimation: {env_cfg.decimation}")
 
     print("Ckpt Path:", derived.get('ckpt_tracker_path', "/nfs/stak/users/brownhun/ckpt_tracker2.txt"))
 
