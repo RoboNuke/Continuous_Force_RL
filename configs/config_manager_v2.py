@@ -151,6 +151,15 @@ class ConfigManagerV2:
         # 1. Load and validate YAML file
         yaml_config = ConfigManagerV2._load_yaml_file(config_path)
 
+        # 1.5. Load and merge base configuration if specified
+        if 'base_config' in yaml_config:
+            base_config_path = yaml_config['base_config']
+            print(f"[CONFIG V2]: Loading base configuration from {base_config_path}")
+            base_config = ConfigManagerV2._load_yaml_file(base_config_path)
+            # Merge: base config gets overridden by experiment config
+            yaml_config = ConfigManagerV2._merge_configs(base_config, yaml_config)
+            print(f"[CONFIG V2]: Merged base configuration with experiment configuration")
+
         # 2. Resolve task name with proper error handling
         task_name = ConfigManagerV2._resolve_task_name(yaml_config, cli_task)
         print(f"[CONFIG V2]: Resolved task name: {task_name}")
@@ -834,3 +843,36 @@ class ConfigManagerV2:
                 'wandb_project': config_bundle.agent_cfg.wandb_project
             }
         }
+
+    @staticmethod
+    def _merge_configs(base_config: Dict[str, Any], override_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Merge base configuration with override configuration.
+
+        The override config takes precedence over base config values.
+        Performs deep merge for nested dictionaries.
+
+        Args:
+            base_config: Base configuration dictionary
+            override_config: Override configuration dictionary
+
+        Returns:
+            Merged configuration dictionary
+        """
+        import copy
+
+        # Start with a deep copy of base config
+        merged = copy.deepcopy(base_config)
+
+        # Recursively merge override config
+        def _deep_merge(base_dict, override_dict):
+            for key, value in override_dict.items():
+                if key in base_dict and isinstance(base_dict[key], dict) and isinstance(value, dict):
+                    # Recursively merge nested dictionaries
+                    _deep_merge(base_dict[key], value)
+                else:
+                    # Override value (including replacing entire nested dicts)
+                    base_dict[key] = copy.deepcopy(value)
+
+        _deep_merge(merged, override_config)
+        return merged

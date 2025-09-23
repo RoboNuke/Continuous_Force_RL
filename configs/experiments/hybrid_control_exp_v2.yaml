@@ -1,6 +1,9 @@
 # Hybrid Control Experiment Configuration V2
 # Updated for ConfigManagerV2 - No reference syntax, direct values only
 
+# Base configuration to inherit from
+base_config: "configs/base/factory_base_v2.yaml"
+
 # Task name
 task_name: "Isaac-Factory-PegInsert-Direct-v0"
 
@@ -117,7 +120,7 @@ agent:
   critic_learning_rate: 1.0e-5
   disable_progressbar: false
   # PPO parameters suitable for complex control
-  learning_epochs: 6  # More epochs for complex hybrid learning
+  learning_epochs: 4  # More epochs for complex hybrid learning
   discount_factor: 0.99
   lambda_: 0.95
 

@@ -1,8 +1,8 @@
 # Debug Experiment Configuration
 # Extends base factory configuration with easy mode settings for debugging and development
 
-# Inherit from base configuration
-base: "base/factory_base"
+# Base configuration to inherit from
+base_config: "configs/base/factory_base.yaml"
 
 # Override primary parameters for debug mode
 primary:

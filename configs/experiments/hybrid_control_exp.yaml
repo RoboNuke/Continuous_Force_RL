@@ -1,8 +1,8 @@
 # Hybrid Control Experiment Configuration
 # Extends base factory configuration to enable hybrid force-position control
 
-# Inherit from base configuration
-base: "base/factory_base"
+# Base configuration to inherit from
+base_config: "configs/base/factory_base.yaml"
 
 # Override primary parameters for hybrid control experiment
 primary:
