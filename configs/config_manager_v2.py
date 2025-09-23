@@ -20,6 +20,12 @@ from .cfg_exts.extended_gear_mesh_cfg import ExtendedFactoryTaskGearMeshCfg
 from .cfg_exts.extended_nut_thread_cfg import ExtendedFactoryTaskNutThreadCfg
 from .cfg_exts.extended_model_cfg import ExtendedModelConfig, ExtendedHybridAgentConfig
 from .cfg_exts.extended_wrapper_cfg import ExtendedWrapperConfig
+from .cfg_exts.actor_cfg import ActorConfig
+from .cfg_exts.critic_cfg import CriticConfig
+from .cfg_exts.wrapper_sub_configs import (
+    ForceTorqueSensorConfig, HybridControlConfig, ObservationNoiseConfig,
+    WandbLoggingConfig, ActionLoggingConfig
+)
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -131,20 +137,11 @@ class ConfigManagerV2:
         if model_cfg.use_hybrid_agent:
             hybrid_cfg = ConfigManagerV2._create_hybrid_config(yaml_config)
 
-        # 7. Apply YAML overrides
+        # 7. Apply environment and agent YAML overrides (model and wrapper overrides already applied)
         ConfigManagerV2._apply_yaml_overrides(env_cfg, yaml_config.get('environment', {}))
-        ConfigManagerV2._apply_yaml_overrides(model_cfg, yaml_config.get('model', {}))
-        ConfigManagerV2._apply_yaml_overrides(wrapper_cfg, yaml_config.get('wrappers', {}))
         ConfigManagerV2._apply_yaml_overrides(agent_cfg, yaml_config.get('agent', {}))
 
-        if hybrid_cfg and 'model' in yaml_config and 'hybrid_agent' in yaml_config['model']:
-            ConfigManagerV2._apply_yaml_overrides(hybrid_cfg, yaml_config['model']['hybrid_agent'])
-
-        # 8. Apply CLI overrides
-        if cli_overrides:
-            ConfigManagerV2._apply_cli_overrides(env_cfg, agent_cfg, model_cfg, wrapper_cfg, cli_overrides)
-
-        # 9. Validate final configuration
+        # 8. Create configuration bundle for CLI overrides
         config_bundle = ConfigBundle(
             env_cfg=env_cfg,
             agent_cfg=agent_cfg,
@@ -155,6 +152,12 @@ class ConfigManagerV2:
             task_name=task_name,
             config_source_path=config_path
         )
+
+        # Apply CLI overrides
+        if cli_overrides:
+            ConfigManagerV2._apply_cli_overrides(config_bundle, cli_overrides)
+
+        # 9. Validate final configuration
 
         ConfigManagerV2._validate_config_bundle(config_bundle)
 
@@ -278,69 +281,159 @@ class ConfigManagerV2:
     @staticmethod
     def _create_model_config(yaml_config: Dict[str, Any], primary_cfg: PrimaryConfig) -> ExtendedModelConfig:
         """
-        Create model configuration from YAML.
+        Create model configuration with nested structure support.
 
         Args:
             yaml_config: Loaded YAML configuration
             primary_cfg: Primary configuration for reference
-
         Returns:
             Model configuration with overrides applied
         """
+        # Start with Isaac Lab defaults
         model_cfg = ExtendedModelConfig()
 
         if 'model' in yaml_config:
-            # Handle nested actor/critic configuration
-            model_overrides = yaml_config['model'].copy()
+            model_data = yaml_config['model']
 
-            # Extract and handle actor configuration
-            if 'actor' in model_overrides:
-                actor_config = model_overrides.pop('actor')
-                if 'n' in actor_config:
-                    model_cfg.actor_n = actor_config['n']
-                    print(f"[CONFIG V2]:   Override actor_n: {model_cfg.actor_n} -> {actor_config['n']}")
-                if 'latent_size' in actor_config:
-                    old_value = model_cfg.actor_latent_size
-                    model_cfg.actor_latent_size = actor_config['latent_size']
-                    print(f"[CONFIG V2]:   Override actor_latent_size: {old_value} -> {actor_config['latent_size']}")
+            # Handle nested actor configuration
+            if 'actor' in model_data:
+                actor_data = model_data['actor']
+                model_cfg.actor = ActorConfig(
+                    n=actor_data.get('n', model_cfg.actor.n),
+                    latent_size=actor_data.get('latent_size', model_cfg.actor.latent_size)
+                )
+                print(f"[CONFIG V2]: Applied actor config: n={model_cfg.actor.n}, latent_size={model_cfg.actor.latent_size}")
 
-            # Extract and handle critic configuration
-            if 'critic' in model_overrides:
-                critic_config = model_overrides.pop('critic')
-                if 'n' in critic_config:
-                    model_cfg.critic_n = critic_config['n']
-                    print(f"[CONFIG V2]:   Override critic_n: {model_cfg.critic_n} -> {critic_config['n']}")
-                if 'latent_size' in critic_config:
-                    old_value = model_cfg.critic_latent_size
-                    model_cfg.critic_latent_size = critic_config['latent_size']
-                    print(f"[CONFIG V2]:   Override critic_latent_size: {old_value} -> {critic_config['latent_size']}")
+            # Handle nested critic configuration
+            if 'critic' in model_data:
+                critic_data = model_data['critic']
+                model_cfg.critic = CriticConfig(
+                    n=critic_data.get('n', model_cfg.critic.n),
+                    latent_size=critic_data.get('latent_size', model_cfg.critic.latent_size)
+                )
+                print(f"[CONFIG V2]: Applied critic config: n={model_cfg.critic.n}, latent_size={model_cfg.critic.latent_size}")
 
-            # Apply remaining overrides
-            ConfigManagerV2._apply_yaml_overrides(model_cfg, model_overrides)
-            print(f"[CONFIG V2]: Applied model config overrides")
+            # Handle nested hybrid_agent configuration
+            if 'hybrid_agent' in model_data:
+                hybrid_data = model_data['hybrid_agent']
+                if model_cfg.hybrid_agent is None:
+                    model_cfg.hybrid_agent = ExtendedHybridAgentConfig()
+
+                # Apply hybrid agent overrides using existing logic
+                for key, value in hybrid_data.items():
+                    if hasattr(model_cfg.hybrid_agent, key):
+                        setattr(model_cfg.hybrid_agent, key, value)
+                        print(f"[CONFIG V2]: Applied hybrid_agent.{key} = {value}")
+
+            # Handle flat model configuration
+            flat_configs = {k: v for k, v in model_data.items()
+                           if k not in ['actor', 'critic', 'hybrid_agent']}
+
+            for key, value in flat_configs.items():
+                if hasattr(model_cfg, key):
+                    old_value = getattr(model_cfg, key)
+                    setattr(model_cfg, key, value)
+                    print(f"[CONFIG V2]: Applied model.{key}: {old_value} -> {value}")
+                else:
+                    print(f"\033[93m[CONFIG V2]: Warning: ExtendedModelConfig has no attribute '{key}' (skipping)\033[0m")
+
+        # Validate configuration
+        model_cfg.validate()
 
         return model_cfg
 
     @staticmethod
     def _create_wrapper_config(yaml_config: Dict[str, Any], primary_cfg: PrimaryConfig) -> ExtendedWrapperConfig:
         """
-        Create wrapper configuration from YAML.
+        Create wrapper configuration with nested structure support.
 
         Args:
             yaml_config: Loaded YAML configuration
             primary_cfg: Primary configuration for reference
-
         Returns:
             Wrapper configuration with overrides applied
         """
+        # Start with Isaac Lab defaults
         wrapper_cfg = ExtendedWrapperConfig()
         wrapper_cfg.apply_primary_cfg(primary_cfg)
 
         if 'wrappers' in yaml_config:
-            # Handle nested wrapper configuration
-            wrapper_overrides = yaml_config['wrappers']
-            ConfigManagerV2._apply_nested_wrapper_overrides(wrapper_cfg, wrapper_overrides)
-            print(f"[CONFIG V2]: Applied wrapper config overrides")
+            wrapper_data = yaml_config['wrappers']
+
+            # Handle nested wrapper configurations
+            if 'force_torque_sensor' in wrapper_data:
+                fts_data = wrapper_data['force_torque_sensor']
+                wrapper_cfg.force_torque_sensor = ForceTorqueSensorConfig(
+                    enabled=fts_data.get('enabled', wrapper_cfg.force_torque_sensor.enabled),
+                    use_tanh_scaling=fts_data.get('use_tanh_scaling', wrapper_cfg.force_torque_sensor.use_tanh_scaling),
+                    tanh_scale=fts_data.get('tanh_scale', wrapper_cfg.force_torque_sensor.tanh_scale)
+                )
+                print(f"[CONFIG V2]: Applied force_torque_sensor config: enabled={wrapper_cfg.force_torque_sensor.enabled}")
+
+            if 'hybrid_control' in wrapper_data:
+                hc_data = wrapper_data['hybrid_control']
+                wrapper_cfg.hybrid_control = HybridControlConfig(
+                    enabled=hc_data.get('enabled', wrapper_cfg.hybrid_control.enabled),
+                    reward_type=hc_data.get('reward_type', wrapper_cfg.hybrid_control.reward_type)
+                )
+                print(f"[CONFIG V2]: Applied hybrid_control config: enabled={wrapper_cfg.hybrid_control.enabled}")
+
+            if 'observation_noise' in wrapper_data:
+                on_data = wrapper_data['observation_noise']
+                wrapper_cfg.observation_noise = ObservationNoiseConfig(
+                    enabled=on_data.get('enabled', wrapper_cfg.observation_noise.enabled),
+                    global_scale=on_data.get('global_scale', wrapper_cfg.observation_noise.global_scale),
+                    apply_to_critic=on_data.get('apply_to_critic', wrapper_cfg.observation_noise.apply_to_critic),
+                    seed=on_data.get('seed', wrapper_cfg.observation_noise.seed)
+                )
+                print(f"[CONFIG V2]: Applied observation_noise config: enabled={wrapper_cfg.observation_noise.enabled}")
+
+            if 'wandb_logging' in wrapper_data:
+                wl_data = wrapper_data['wandb_logging']
+                wrapper_cfg.wandb_logging = WandbLoggingConfig(
+                    enabled=wl_data.get('enabled', wrapper_cfg.wandb_logging.enabled),
+                    wandb_project=wl_data.get('wandb_project', wrapper_cfg.wandb_logging.wandb_project),
+                    wandb_entity=wl_data.get('wandb_entity', wrapper_cfg.wandb_logging.wandb_entity),
+                    wandb_name=wl_data.get('wandb_name', wrapper_cfg.wandb_logging.wandb_name),
+                    wandb_group=wl_data.get('wandb_group', wrapper_cfg.wandb_logging.wandb_group),
+                    wandb_tags=wl_data.get('wandb_tags', wrapper_cfg.wandb_logging.wandb_tags)
+                )
+                print(f"[CONFIG V2]: Applied wandb_logging config: enabled={wrapper_cfg.wandb_logging.enabled}")
+
+            if 'action_logging' in wrapper_data:
+                al_data = wrapper_data['action_logging']
+                wrapper_cfg.action_logging = ActionLoggingConfig(
+                    enabled=al_data.get('enabled', wrapper_cfg.action_logging.enabled),
+                    track_selection=al_data.get('track_selection', wrapper_cfg.action_logging.track_selection),
+                    track_pos=al_data.get('track_pos', wrapper_cfg.action_logging.track_pos),
+                    track_rot=al_data.get('track_rot', wrapper_cfg.action_logging.track_rot),
+                    track_force=al_data.get('track_force', wrapper_cfg.action_logging.track_force),
+                    track_torque=al_data.get('track_torque', wrapper_cfg.action_logging.track_torque),
+                    force_size=al_data.get('force_size', wrapper_cfg.action_logging.force_size),
+                    logging_frequency=al_data.get('logging_frequency', wrapper_cfg.action_logging.logging_frequency)
+                )
+                print(f"[CONFIG V2]: Applied action_logging config: enabled={wrapper_cfg.action_logging.enabled}")
+
+            # Handle flat wrapper configurations
+            flat_configs = {k: v for k, v in wrapper_data.items()
+                           if k not in ['force_torque_sensor', 'hybrid_control', 'observation_noise',
+                                       'wandb_logging', 'action_logging']}
+
+            for key, value in flat_configs.items():
+                flat_attr_map = {
+                    'fragile_objects': 'fragile_objects_enabled',
+                    'efficient_reset': 'efficient_reset_enabled',
+                    'observation_manager': 'observation_manager_enabled',
+                    'factory_metrics': 'factory_metrics_enabled'
+                }
+
+                if key in flat_attr_map:
+                    attr_name = flat_attr_map[key]
+                    if isinstance(value, dict) and 'enabled' in value:
+                        setattr(wrapper_cfg, attr_name, value['enabled'])
+                        print(f"[CONFIG V2]: Applied {key}.enabled = {value['enabled']}")
+                else:
+                    print(f"\033[93m[CONFIG V2]: Warning: Unknown wrapper config '{key}' (skipping)\033[0m")
 
         return wrapper_cfg
 
@@ -415,14 +508,14 @@ class ConfigManagerV2:
                                 setattr(ctrl_obj, ctrl_param, ctrl_value)
                                 print(f"[CONFIG V2]:   Override ctrl.{ctrl_param}: {old_ctrl_value} -> {ctrl_value}")
                             else:
-                                print(f"[CONFIG V2]:   Warning: ctrl has no attribute '{ctrl_param}' (skipping)")
+                                print(f"\033[93m[CONFIG V2]:   Warning: ctrl has no attribute '{ctrl_param}' (skipping)\033[0m")
                         print(f"[CONFIG V2]:   Applied ctrl configuration overrides")
                         continue  # Skip the normal assignment
 
                 setattr(target_obj, key, value)
                 print(f"[CONFIG V2]:   Override {key}: {old_value} -> {value}")
             else:
-                print(f"[CONFIG V2]:   Warning: {type(target_obj).__name__} has no attribute '{key}' (skipping)")
+                print(f"\033[93m[CONFIG V2]:   Warning: {type(target_obj).__name__} has no attribute '{key}' (skipping)\033[0m")
 
     @staticmethod
     def _apply_nested_wrapper_overrides(wrapper_cfg: ExtendedWrapperConfig, wrapper_overrides: Dict[str, Any]) -> None:
@@ -487,65 +580,135 @@ class ConfigManagerV2:
                         print(f"[CONFIG V2]:   Override {attr_name}: {old_value} -> {section_config[yaml_param]}")
 
     @staticmethod
-    def _apply_cli_overrides(
-        env_cfg: ExtendedFactoryEnvCfg,
-        agent_cfg: ExtendedPPOConfig,
-        model_cfg: ExtendedModelConfig,
-        wrapper_cfg: ExtendedWrapperConfig,
-        cli_overrides: List[str]
-    ) -> None:
+    def _apply_cli_overrides(config_bundle: ConfigBundle, cli_overrides: List[str]) -> None:
         """
-        Apply CLI overrides to configuration objects.
+        Apply CLI overrides with support for nested configurations.
 
         Args:
-            env_cfg: Environment configuration
-            agent_cfg: Agent configuration
-            model_cfg: Model configuration
-            wrapper_cfg: Wrapper configuration
+            config_bundle: Complete configuration bundle
             cli_overrides: List of "key=value" override strings
         """
-        config_objects = {
-            'environment': env_cfg,
-            'agent': agent_cfg,
-            'model': model_cfg,
-            'wrappers': wrapper_cfg
-        }
+        for override in cli_overrides:
+            if '=' not in override:
+                print(f"\033[93m[CONFIG V2]: Warning: Invalid override format '{override}' (expected key=value)\033[0m")
+                continue
 
-        for override_str in cli_overrides:
-            if '=' not in override_str:
-                raise ValueError(f"Invalid CLI override format: '{override_str}'. Expected 'key=value'")
+            key, value = override.split('=', 1)
+            parsed_value = ConfigManagerV2._parse_override_value(value)
 
-            key, value_str = override_str.split('=', 1)
-
-            # Parse value
-            try:
-                import ast
-                value = ast.literal_eval(value_str)
-            except:
-                # Handle common string representations
-                if value_str.lower() == 'true':
-                    value = True
-                elif value_str.lower() == 'false':
-                    value = False
-                elif value_str.lower() == 'none':
-                    value = None
+            # Handle nested model overrides
+            if key.startswith('model.actor.'):
+                param = key.replace('model.actor.', '')
+                if hasattr(config_bundle.model_cfg.actor, param):
+                    setattr(config_bundle.model_cfg.actor, param, parsed_value)
+                    print(f"[CONFIG V2]: CLI override model.actor.{param} = {parsed_value}")
                 else:
-                    value = value_str
+                    print(f"\033[93m[CONFIG V2]: Warning: CLI override {key} - no such attribute\033[0m")
 
-            # Apply override to appropriate config object
-            if '.' in key:
-                section, param = key.split('.', 1)
-                if section in config_objects:
-                    target_obj = config_objects[section]
-                    if hasattr(target_obj, param):
-                        setattr(target_obj, param, value)
-                        print(f"[CONFIG V2]: CLI override {key} = {value}")
-                    else:
-                        print(f"[CONFIG V2]: Warning: CLI override {key} - no such attribute (skipping)")
+            elif key.startswith('model.critic.'):
+                param = key.replace('model.critic.', '')
+                if hasattr(config_bundle.model_cfg.critic, param):
+                    setattr(config_bundle.model_cfg.critic, param, parsed_value)
+                    print(f"[CONFIG V2]: CLI override model.critic.{param} = {parsed_value}")
                 else:
-                    print(f"[CONFIG V2]: Warning: CLI override {key} - unknown section '{section}' (skipping)")
+                    print(f"\033[93m[CONFIG V2]: Warning: CLI override {key} - no such attribute\033[0m")
+
+            elif key.startswith('model.hybrid_agent.'):
+                param = key.replace('model.hybrid_agent.', '')
+                if config_bundle.model_cfg.hybrid_agent is None:
+                    config_bundle.model_cfg.hybrid_agent = ExtendedHybridAgentConfig()
+                if hasattr(config_bundle.model_cfg.hybrid_agent, param):
+                    setattr(config_bundle.model_cfg.hybrid_agent, param, parsed_value)
+                    print(f"[CONFIG V2]: CLI override model.hybrid_agent.{param} = {parsed_value}")
+                else:
+                    print(f"\033[93m[CONFIG V2]: Warning: CLI override {key} - no such attribute\033[0m")
+
+            elif key.startswith('wrappers.force_torque_sensor.'):
+                param = key.replace('wrappers.force_torque_sensor.', '')
+                if hasattr(config_bundle.wrapper_cfg.force_torque_sensor, param):
+                    setattr(config_bundle.wrapper_cfg.force_torque_sensor, param, parsed_value)
+                    print(f"[CONFIG V2]: CLI override wrappers.force_torque_sensor.{param} = {parsed_value}")
+                else:
+                    print(f"\033[93m[CONFIG V2]: Warning: CLI override {key} - no such attribute\033[0m")
+
+            elif key.startswith('wrappers.hybrid_control.'):
+                param = key.replace('wrappers.hybrid_control.', '')
+                if hasattr(config_bundle.wrapper_cfg.hybrid_control, param):
+                    setattr(config_bundle.wrapper_cfg.hybrid_control, param, parsed_value)
+                    print(f"[CONFIG V2]: CLI override wrappers.hybrid_control.{param} = {parsed_value}")
+                else:
+                    print(f"\033[93m[CONFIG V2]: Warning: CLI override {key} - no such attribute\033[0m")
+
+            elif key.startswith('wrappers.observation_noise.'):
+                param = key.replace('wrappers.observation_noise.', '')
+                if hasattr(config_bundle.wrapper_cfg.observation_noise, param):
+                    setattr(config_bundle.wrapper_cfg.observation_noise, param, parsed_value)
+                    print(f"[CONFIG V2]: CLI override wrappers.observation_noise.{param} = {parsed_value}")
+                else:
+                    print(f"\033[93m[CONFIG V2]: Warning: CLI override {key} - no such attribute\033[0m")
+
+            elif key.startswith('wrappers.wandb_logging.'):
+                param = key.replace('wrappers.wandb_logging.', '')
+                if hasattr(config_bundle.wrapper_cfg.wandb_logging, param):
+                    setattr(config_bundle.wrapper_cfg.wandb_logging, param, parsed_value)
+                    print(f"[CONFIG V2]: CLI override wrappers.wandb_logging.{param} = {parsed_value}")
+                else:
+                    print(f"\033[93m[CONFIG V2]: Warning: CLI override {key} - no such attribute\033[0m")
+
+            elif key.startswith('wrappers.action_logging.'):
+                param = key.replace('wrappers.action_logging.', '')
+                if hasattr(config_bundle.wrapper_cfg.action_logging, param):
+                    setattr(config_bundle.wrapper_cfg.action_logging, param, parsed_value)
+                    print(f"[CONFIG V2]: CLI override wrappers.action_logging.{param} = {parsed_value}")
+                else:
+                    print(f"\033[93m[CONFIG V2]: Warning: CLI override {key} - no such attribute\033[0m")
+
+            # Handle existing flat overrides (primary, model flat attrs, etc.)
             else:
-                print(f"[CONFIG V2]: Warning: CLI override {key} - no section specified (skipping)")
+                # Use existing logic for flat overrides
+                ConfigManagerV2._apply_flat_cli_override(config_bundle, key, parsed_value)
+
+    @staticmethod
+    def _parse_override_value(value_str: str):
+        """Parse CLI override value string to appropriate Python type."""
+        try:
+            import ast
+            return ast.literal_eval(value_str)
+        except:
+            # Handle common string representations
+            if value_str.lower() == 'true':
+                return True
+            elif value_str.lower() == 'false':
+                return False
+            elif value_str.lower() == 'none':
+                return None
+            else:
+                return value_str
+
+    @staticmethod
+    def _apply_flat_cli_override(config_bundle: ConfigBundle, key: str, parsed_value) -> None:
+        """Apply flat CLI overrides to config objects."""
+        if '.' in key:
+            section, param = key.split('.', 1)
+            config_objects = {
+                'environment': config_bundle.env_cfg,
+                'agent': config_bundle.agent_cfg,
+                'model': config_bundle.model_cfg,
+                'wrappers': config_bundle.wrapper_cfg,
+                'primary': config_bundle.primary_cfg
+            }
+
+            if section in config_objects:
+                target_obj = config_objects[section]
+                if hasattr(target_obj, param):
+                    setattr(target_obj, param, parsed_value)
+                    print(f"[CONFIG V2]: CLI override {key} = {parsed_value}")
+                else:
+                    print(f"\033[93m[CONFIG V2]: Warning: CLI override {key} - no such attribute (skipping)\033[0m")
+            else:
+                print(f"\033[93m[CONFIG V2]: Warning: CLI override {key} - unknown section '{section}' (skipping)\033[0m")
+        else:
+            print(f"\033[93m[CONFIG V2]: Warning: CLI override {key} - no section specified (skipping)\033[0m")
 
     @staticmethod
     def _validate_config_bundle(config_bundle: ConfigBundle) -> None:

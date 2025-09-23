@@ -7,9 +7,11 @@ but our own organizational structure for model configuration.
 """
 
 from typing import Optional, Dict, Any, Union
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .version_compat import get_isaac_lab_ctrl_imports
+from .actor_cfg import ActorConfig
+from .critic_cfg import CriticConfig
 
 # Get configclass decorator with version compatibility
 configclass, _ = get_isaac_lab_ctrl_imports()
@@ -24,6 +26,16 @@ class ExtendedModelConfig:
     Contains parameters for both standard and hybrid agents, including
     SimBa architecture settings and initialization parameters.
     """
+
+    # Nested configurations (maintain natural YAML structure)
+    actor: ActorConfig = field(default_factory=ActorConfig)
+    """Actor network configuration"""
+
+    critic: CriticConfig = field(default_factory=CriticConfig)
+    """Critic network configuration"""
+
+    hybrid_agent: Optional['ExtendedHybridAgentConfig'] = None
+    """Hybrid agent configuration (when use_hybrid_agent=True)"""
 
     # General model parameters
     force_encoding: Optional[str] = None
@@ -42,38 +54,20 @@ class ExtendedModelConfig:
     use_hybrid_agent: bool = False
     """Whether to use hybrid force-position agent"""
 
-    # Actor (policy) network configuration
-    actor_n: int = 1
-    """Number of SimBa layers in actor network"""
-
-    actor_latent_size: int = 256
-    """Hidden dimension for actor network"""
-
-    # Critic (value) network configuration
-    critic_n: int = 3
-    """Number of SimBa layers in critic network"""
-
-    critic_latent_size: int = 1024
-    """Hidden dimension for critic network"""
-
     def __post_init__(self):
         """Post-initialization validation."""
-        self._validate_model_params()
+        self.validate()
 
-    def _validate_model_params(self):
-        """Validate model configuration parameters."""
-        # Validate network sizes
-        if self.actor_n <= 0:
-            raise ValueError(f"actor_n must be positive, got {self.actor_n}")
+    def validate(self) -> None:
+        """Validate model configuration."""
+        self.actor.validate()
+        self.critic.validate()
 
-        if self.critic_n <= 0:
-            raise ValueError(f"critic_n must be positive, got {self.critic_n}")
+        if self.use_hybrid_agent and self.hybrid_agent is None:
+            raise ValueError("use_hybrid_agent=True but no hybrid_agent config provided")
 
-        if self.actor_latent_size <= 0:
-            raise ValueError(f"actor_latent_size must be positive, got {self.actor_latent_size}")
-
-        if self.critic_latent_size <= 0:
-            raise ValueError(f"critic_latent_size must be positive, got {self.critic_latent_size}")
+        if not self.use_hybrid_agent and self.hybrid_agent is not None:
+            print(f"\033[93m[CONFIG]: Warning: hybrid_agent config provided but use_hybrid_agent=False\033[0m")
 
         # Validate scale factors
         if self.last_layer_scale <= 0:
@@ -83,22 +77,27 @@ class ExtendedModelConfig:
             raise ValueError(f"act_init_std must be positive, got {self.act_init_std}")
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        return {
+        """Convert to nested dictionary structure for launch_utils."""
+        result = {
+            'actor': {
+                'n': self.actor.n,
+                'latent_size': self.actor.latent_size
+            },
+            'critic': {
+                'n': self.critic.n,
+                'latent_size': self.critic.latent_size
+            },
             'force_encoding': self.force_encoding,
             'last_layer_scale': self.last_layer_scale,
             'act_init_std': self.act_init_std,
             'critic_output_init_mean': self.critic_output_init_mean,
-            'use_hybrid_agent': self.use_hybrid_agent,
-            'actor': {
-                'n': self.actor_n,
-                'latent_size': self.actor_latent_size
-            },
-            'critic': {
-                'n': self.critic_n,
-                'latent_size': self.critic_latent_size
-            }
+            'use_hybrid_agent': self.use_hybrid_agent
         }
+
+        if self.hybrid_agent is not None:
+            result['hybrid_agent'] = self.hybrid_agent.to_dict()
+
+        return result
 
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> 'ExtendedModelConfig':
@@ -106,17 +105,23 @@ class ExtendedModelConfig:
         # Handle nested actor/critic configuration
         actor_config = config_dict.get('actor', {})
         critic_config = config_dict.get('critic', {})
+        hybrid_config = config_dict.get('hybrid_agent')
 
         return cls(
+            actor=ActorConfig(
+                n=actor_config.get('n', 1),
+                latent_size=actor_config.get('latent_size', 256)
+            ),
+            critic=CriticConfig(
+                n=critic_config.get('n', 3),
+                latent_size=critic_config.get('latent_size', 1024)
+            ),
+            hybrid_agent=ExtendedHybridAgentConfig(**hybrid_config) if hybrid_config else None,
             force_encoding=config_dict.get('force_encoding'),
             last_layer_scale=config_dict.get('last_layer_scale', 1.0),
             act_init_std=config_dict.get('act_init_std', 1.0),
             critic_output_init_mean=config_dict.get('critic_output_init_mean', 50.0),
-            use_hybrid_agent=config_dict.get('use_hybrid_agent', False),
-            actor_n=actor_config.get('n', 1),
-            actor_latent_size=actor_config.get('latent_size', 256),
-            critic_n=critic_config.get('n', 3),
-            critic_latent_size=critic_config.get('latent_size', 1024)
+            use_hybrid_agent=config_dict.get('use_hybrid_agent', False)
         )
 
     def is_hybrid_agent(self) -> bool:
@@ -126,21 +131,21 @@ class ExtendedModelConfig:
     def get_actor_config(self) -> Dict[str, Any]:
         """Get actor-specific configuration."""
         return {
-            'n': self.actor_n,
-            'latent_size': self.actor_latent_size
+            'n': self.actor.n,
+            'latent_size': self.actor.latent_size
         }
 
     def get_critic_config(self) -> Dict[str, Any]:
         """Get critic-specific configuration."""
         return {
-            'n': self.critic_n,
-            'latent_size': self.critic_latent_size
+            'n': self.critic.n,
+            'latent_size': self.critic.latent_size
         }
 
     def __repr__(self) -> str:
         """String representation for debugging."""
         hybrid_info = f", hybrid={self.use_hybrid_agent}" if self.use_hybrid_agent else ""
-        return f"ExtendedModelConfig(actor={self.actor_n}x{self.actor_latent_size}, critic={self.critic_n}x{self.critic_latent_size}{hybrid_info})"
+        return f"ExtendedModelConfig(actor={self.actor.n}x{self.actor.latent_size}, critic={self.critic.n}x{self.critic.latent_size}{hybrid_info})"
 
 
 @configclass
