@@ -8,13 +8,14 @@ primary:
   break_forces: -1  # Break force conditions (-1 = unbreakable)
   # Derived: total_agents = len(break_forces) * agents_per_break_force = 5 * 2 = 10 agents
   # Derived: total_envs = total_agents * num_envs_per_agent = 10 * 256 = 2560 envs
-  episode_length_s: 12.0
-  decimation: 4
+  #episode_length_s: 12.0
+  decimation: 8
   policy_hz: 15
   max_steps: 10240000
   debug_mode: false
   seed: -1
   ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_tracker2.txt"
+  ctrl_torque: false
 
 # DEFAULT VALUES (moved from hardcoded constants)
 defaults:
@@ -46,18 +47,10 @@ environment:
 
   # Factory task configuration (will be merged into Isaac Lab's task config)
   task:
-    success_threshold: 0.02
-    engage_threshold: 0.05
+    #success_threshold: 0.04
+    #engage_threshold: 0.9
     name: "peg_insert"  # Used for task-specific logic
 
-  # Control configuration (will be merged into Isaac Lab's ctrl config)
-  ctrl:
-    pos_action_bounds: [0.05, 0.05, 0.05]
-    force_action_bounds: [50.0, 50.0, 50.0]
-    torque_action_bounds: [0.5, 0.5, 0.5]
-    force_action_threshold: [10.0, 10.0, 10.0]
-    torque_action_threshold: [0.1, 0.1, 0.1]
-    default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
 
 
 # MODEL CONFIGURATION (SimBa architecture parameters)
@@ -80,23 +73,6 @@ model:
 
   # Hybrid agent configuration (used when use_hybrid_agent is true)
   use_hybrid_agent: false
-  hybrid_agent:
-    ctrl_torque: false
-    unit_std_init: true
-    pos_init_std: 1.0
-    rot_init_std: 1.0
-    force_init_std: 1.0
-    pos_scale: 1.0
-    rot_scale: 1.0
-    force_scale: 1.0
-    torque_scale: 1.0
-    selection_adjustment_types: 'none'
-    init_scale_weights_factor: 0.1
-    init_bias: -2.5
-    pre_layer_scale_factor: 0.1
-    init_scale_last_layer: true
-    init_layer_scale: 1.0
-    uniform_sampling_rate: 0.0
 
 # WRAPPERS CONFIGURATION (all wrappers with enable/disable and defaults)
 wrappers:
@@ -150,7 +126,7 @@ wrappers:
   # Hybrid force-position control
   hybrid_control:
     enabled: false
-    ctrl_torque: false
+    ctrl_torque: ${primary.ctrl_torque}
     reward_type: "simp"
 
   # Factory-specific metrics tracking
@@ -189,7 +165,6 @@ experiment:
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
 agent:
   class: "PPO"
-  agent_is_list: false
   disable_progressbar: true
 
   # Checkpoint and experiment tracking
@@ -214,6 +189,8 @@ agent:
   lambda: 0.95
   random_timesteps: 0
   learning_starts: 0
+  # Value training
+  random_value_timesteps: 150
   mixed_precision: false
 
   # CUSTOM LEARNING PARAMETERS (extensions to SKRL)
@@ -256,7 +233,5 @@ agent:
     end_factor: 1.0
     total_iters: 80
 
-  # Value training
-  random_value_timesteps: 150
 
 
