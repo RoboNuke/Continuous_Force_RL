@@ -1195,6 +1195,11 @@ def create_block_ppo_agents(env_cfg, agent_cfg, env, models, memory, derived):
                 agent_exp_cfgs.append(agent_cfg['agent']['agent_0'])
 
     # Create BlockPPO agent
+    print(f"[LAUNCH DEBUG] Creating BlockPPO agent with action spaces:")
+    print(f"  env.action_space: {env.action_space}")
+    print(f"  env.action_space.shape: {env.action_space.shape if hasattr(env.action_space, 'shape') else 'N/A'}")
+    print(f"  env.cfg.action_space: {getattr(env.cfg, 'action_space', 'N/A')}")
+
     agent = BlockPPO(
         models=models,
         memory=memory,

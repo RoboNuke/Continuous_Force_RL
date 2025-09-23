@@ -101,11 +101,38 @@ class HybridForcePositionWrapper(gym.Wrapper):
         original_action_space = 6  # Original position + rotation actions
         self.action_space_size = 2*self.force_size + original_action_space
 
-        # Update environment action space
+        print(f"[HYBRID DEBUG] Action space calculation:")
+        print(f"  force_size: {self.force_size}")
+        print(f"  original_action_space: {original_action_space}")
+        print(f"  calculated action_space_size: {self.action_space_size}")
+
+        # Update environment action space - ensure both integer and gym.Space are consistent
         if hasattr(self.unwrapped, 'cfg'):
+            old_cfg_action_space = getattr(self.unwrapped.cfg, 'action_space', None)
             self.unwrapped.cfg.action_space = self.action_space_size
+            print(f"[HYBRID DEBUG] Updated cfg.action_space: {old_cfg_action_space} -> {self.action_space_size}")
+
             if hasattr(self.unwrapped, '_configure_gym_env_spaces'):
                 self.unwrapped._configure_gym_env_spaces()
+
+        # Update the gym.Space action_space to match the integer config
+        old_gym_action_space = getattr(self.unwrapped, 'action_space', None)
+        old_gym_shape = old_gym_action_space.shape if hasattr(old_gym_action_space, 'shape') else None
+
+        self.action_space = gym.spaces.Box(
+            low=-1.0, high=1.0, shape=(self.action_space_size,), dtype=np.float32
+        )
+        self.unwrapped.action_space = self.action_space
+
+        print(f"[HYBRID DEBUG] Updated gym action_space: {old_gym_shape} -> {self.action_space.shape}")
+
+        # Validation: ensure both sources match
+        cfg_size = getattr(self.unwrapped.cfg, 'action_space', None)
+        gym_size = self.unwrapped.action_space.shape[0] if hasattr(self.unwrapped.action_space, 'shape') else None
+        print(f"[HYBRID DEBUG] Action space validation: cfg={cfg_size}, gym={gym_size}")
+
+        if cfg_size != gym_size:
+            raise ValueError(f"Action space mismatch: cfg.action_space={cfg_size} != gym.action_space.shape[0]={gym_size}")
 
         # Initialize state variables
         self.num_envs = env.unwrapped.num_envs
