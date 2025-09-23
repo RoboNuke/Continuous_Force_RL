@@ -322,15 +322,23 @@ class BlockPPO(PPO):
 
             # time-limit (truncation) boostrapping
             if self._time_limit_bootstrap:
-                #print("Time limit boostrapping")
-                # Ensure values have the same shape as rewards for broadcasting
-                print("values:", values.size(), rewards.size(), truncated.size())
-                if values.dim() > 1:
-                    values_flat = values.squeeze(-1)
+                print("=== Time limit bootstrapping DEBUG ===")
+                print("Before operation:")
+                print(f"  rewards shape: {rewards.shape}, dtype: {rewards.dtype}")
+                print(f"  values shape: {values.shape}, dtype: {values.dtype}")
+                print(f"  truncated shape: {truncated.shape}, dtype: {truncated.dtype}")
+
+                # Ensure values matches rewards shape to prevent broadcasting issues
+                if values.dim() > rewards.dim():
+                    values_reshaped = values.squeeze(-1)
+                    print(f"  values reshaped from {values.shape} to {values_reshaped.shape}")
                 else:
-                    values_flat = values
-                print("val2:", values.size())
-                rewards += self._discount_factor * values_flat * truncated
+                    values_reshaped = values
+                    print(f"  values shape already compatible: {values.shape}")
+
+                print("Attempting time-limit bootstrapping...")
+                rewards += self._discount_factor * values_reshaped * truncated
+                print("=== Time limit bootstrapping SUCCESS ===")
             
             
             # alternative approach to deal with termination, see ppo but no matter what it 
