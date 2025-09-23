@@ -9,7 +9,7 @@ import sys
 
 from skrl.resources.schedulers.torch import KLAdaptiveLR
 from models.SimBa_hybrid_control import HybridControlBlockSimBaActor
-from configs.config_manager import ConfigManager
+# Removed import of legacy ConfigManager - using ConfigManagerV2 instead
 
 # Isaac Lab utilities are imported but not used in this file
 # They may be needed for future functionality
@@ -83,28 +83,37 @@ def apply_easy_mode(env_cfg, agent_cfg):
 
 def configure_environment_scene(env_cfg, primary, derived):
     """
-    Configure environment scene parameters for multi-agent factory training.
+    Validate environment scene configuration for multi-agent factory training.
 
-    Sets up the Isaac Lab environment scene configuration including number of
-    environments, physics replication settings, and derived environment counts
-    based on primary configuration parameters.
+    Verifies that the Isaac Lab environment scene configuration has been properly
+    set up by ConfigManagerV2 with correct number of environments, physics replication,
+    and agent counts.
 
     Args:
-        env_cfg: Environment configuration object with scene settings
+        env_cfg: Environment configuration object with scene settings (from ConfigManagerV2)
         primary: Primary configuration dictionary containing base parameters
         derived: Derived configuration dictionary with calculated values
 
     Side Effects:
-        - Sets env_cfg.scene.num_envs from derived['total_num_envs']
-        - Configures env_cfg.scene.replicate_physics based on environment count
+        - Validates env_cfg.scene.num_envs matches derived['total_num_envs']
+        - Validates env_cfg.num_agents matches derived['total_agents']
         - Prints scene configuration summary
     """
-    """Configure Isaac Lab environment scene settings."""
-    env_cfg.scene.num_envs = derived['total_num_envs']
-    env_cfg.scene.replicate_physics = True
-    env_cfg.num_agents = derived['total_agents']
+    """Validate Isaac Lab environment scene settings configured by ConfigManagerV2."""
+    # Validate that ConfigManagerV2 properly configured the environment
+    if hasattr(env_cfg, 'scene') and hasattr(env_cfg.scene, 'num_envs'):
+        expected_envs = derived['total_num_envs']
+        actual_envs = env_cfg.scene.num_envs
+        if actual_envs != expected_envs:
+            print(f"[WARNING]: Environment scene mismatch - expected {expected_envs} envs, got {actual_envs}")
 
-    print(f"  - Scene configured: {derived['total_num_envs']} envs, {derived['total_agents']} agents")
+    if hasattr(env_cfg, 'num_agents'):
+        expected_agents = derived['total_agents']
+        actual_agents = env_cfg.num_agents
+        if actual_agents != expected_agents:
+            print(f"[WARNING]: Agent count mismatch - expected {expected_agents} agents, got {actual_agents}")
+
+    print(f"  - Scene validated: {derived['total_num_envs']} envs, {derived['total_agents']} agents")
 
 
 def validate_factory_configuration(env_cfg):
@@ -290,7 +299,7 @@ def apply_model_config(agent_cfg, model_config):
     """Apply model configuration to agent."""
 
     # Debug: Print model configuration being applied
-    ConfigManager.print_model_config(model_config)
+    print(f"  - Applying model configuration: {model_config}")
 
     # Ensure models section exists
     if 'models' not in agent_cfg:
@@ -1118,7 +1127,7 @@ def create_block_wandb_agents(env_cfg, agent_cfg, env, models, memory, derived, 
         betas=tuple(learning_config['optimizer']['betas']),  # From config instead of hardcoded
         eps=learning_config['optimizer']['eps'],             # From config instead of hardcoded
         weight_decay=learning_config['optimizer']['weight_decay'],  # From config instead of hardcoded
-        debug=primary.get('debug_mode', False)
+        debug=agent_cfg['agent'].get('debug_mode', False)
     )
 
     print(f"  - Created {derived['total_agents']} BlockWandB agents with optimizer")
