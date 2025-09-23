@@ -23,8 +23,8 @@ class ExtendedPPOConfig:
     
     # CUSTOM EXTENSIONS FOR BLOCK PPO
     
-    #disable_progressbar: True
-    #"""Should we display a CLI progress bar?"""
+    disable_progressbar: bool = True
+    """Should we display a CLI progress bar?"""
     # Multi-agent parameters
     num_agents: int = 1
     """Number of agents in multi-agent setup"""
