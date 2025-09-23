@@ -1,0 +1,260 @@
+[
+  {
+    "config_path": "configs/base/factory_base_v2.yaml",
+    "success": false,
+    "error_message": "",
+    "num_differences": 42,
+    "differences": [
+      {
+        "path": "task_name",
+        "legacy_value": "Isaac-Factory-PegInsert-Direct-v0",
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "wrappers.observation_noise.global_scale",
+        "legacy_value": 1.0,
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "wrappers.observation_noise.global_noise_scale",
+        "legacy_value": "[MISSING]",
+        "new_value": 1.0
+      },
+      {
+        "path": "wrappers.fragile_objects.num_agents",
+        "legacy_value": "[MISSING]",
+        "new_value": 2
+      },
+      {
+        "path": "wrappers.fragile_objects.break_force",
+        "legacy_value": "[MISSING]",
+        "new_value": -1
+      },
+      {
+        "path": "wrappers.factory_metrics.num_agents",
+        "legacy_value": "[MISSING]",
+        "new_value": 2
+      },
+      {
+        "path": "wrappers.action_logging.track_action_histograms",
+        "legacy_value": "[MISSING]",
+        "new_value": true
+      },
+      {
+        "path": "wrappers.action_logging.track_observation_histograms",
+        "legacy_value": "[MISSING]",
+        "new_value": false
+      },
+      {
+        "path": "wrappers.hybrid_control.ctrl_torque",
+        "legacy_value": "[MISSING]",
+        "new_value": false
+      },
+      {
+        "path": "agent.write_interval",
+        "legacy_value": 150,
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "agent.optimizer_weight_decay",
+        "legacy_value": 0,
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "agent.wandb_project",
+        "legacy_value": "OVERRIDE_WITH_ARG",
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "agent.lambda_",
+        "legacy_value": 0.95,
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "agent.optimizer_eps",
+        "legacy_value": 1e-08,
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "agent.experiment_directory",
+        "legacy_value": "DEFAULT_DIRECTORY",
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "agent.optimizer_betas",
+        "legacy_value": [
+          0.999,
+          0.999
+        ],
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "agent.disable_progressbar",
+        "legacy_value": true,
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "agent.checkpoint_interval",
+        "legacy_value": 1500,
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "agent.wandb_group",
+        "legacy_value": "",
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "agent.experiment_name",
+        "legacy_value": "DEFAULT_EXP_NAME",
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "agent.class",
+        "legacy_value": "PPO",
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "agent.wandb_tags",
+        "legacy_value": [],
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "agent.break_force",
+        "legacy_value": "[MISSING]",
+        "new_value": null
+      },
+      {
+        "path": "agent.optimizer",
+        "legacy_value": "[MISSING]",
+        "new_value": {
+          "betas": [
+            0.999,
+            0.999
+          ],
+          "eps": 1e-08,
+          "weight_decay": 0
+        }
+      },
+      {
+        "path": "agent.easy_mode",
+        "legacy_value": "[MISSING]",
+        "new_value": false
+      },
+      {
+        "path": "agent.ckpt_tracker_path",
+        "legacy_value": "[MISSING]",
+        "new_value": "/nfs/stak/users/brownhun/ckpt_tracker2.txt"
+      },
+      {
+        "path": "agent.lambda",
+        "legacy_value": "[MISSING]",
+        "new_value": 0.95
+      },
+      {
+        "path": "agent.learning_rate",
+        "legacy_value": "[MISSING]",
+        "new_value": 0.001
+      },
+      {
+        "path": "agent.rollouts",
+        "legacy_value": "[MISSING]",
+        "new_value": 150
+      },
+      {
+        "path": "agent.experiment",
+        "legacy_value": "[MISSING]",
+        "new_value": {
+          "directory": "DEFAULT_DIRECTORY",
+          "experiment_name": "DEFAULT_EXP_NAME",
+          "write_interval": 150,
+          "checkpoint_interval": 1500,
+          "project": "OVERRIDE_WITH_ARG",
+          "tags": [],
+          "group": ""
+        }
+      },
+      {
+        "path": "agent.mini_batches",
+        "legacy_value": "[MISSING]",
+        "new_value": 18
+      },
+      {
+        "path": "experiment.wandb_entity",
+        "legacy_value": "hur",
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "experiment.group",
+        "legacy_value": "factory_experiments",
+        "new_value": ""
+      },
+      {
+        "path": "experiment.tags",
+        "legacy_value": [
+          "baseline",
+          "factory"
+        ],
+        "new_value": []
+      },
+      {
+        "path": "experiment.wandb_project",
+        "legacy_value": "Continuous_Force_RL",
+        "new_value": "OVERRIDE_WITH_ARG"
+      },
+      {
+        "path": "experiment.name",
+        "legacy_value": "factory_base",
+        "new_value": "DEFAULT_EXP_NAME"
+      },
+      {
+        "path": "environment.filter_collisions",
+        "legacy_value": true,
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "environment.task",
+        "legacy_value": {
+          "name": "peg_insert"
+        },
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "environment.component_attr_map",
+        "legacy_value": {
+          "fingertip_pos": "fingertip_midpoint_pos",
+          "fingertip_pos_rel_fixed": "fingertip_pos_rel_fixed",
+          "fingertip_quat": "fingertip_midpoint_quat",
+          "ee_linvel": "ee_linvel_fd",
+          "ee_angvel": "ee_angvel_fd",
+          "joint_pos": "joint_pos",
+          "prev_actions": "prev_actions",
+          "force_torque": "robot_force_torque",
+          "held_pos": "held_pos",
+          "held_pos_rel_fixed": "held_pos_rel_fixed",
+          "held_quat": "held_quat",
+          "fixed_pos": "fixed_pos",
+          "fixed_quat": "fixed_quat"
+        },
+        "new_value": "[MISSING]"
+      },
+      {
+        "path": "environment.episode_length_s",
+        "legacy_value": "[MISSING]",
+        "new_value": 10.0
+      },
+      {
+        "path": "environment.decimation",
+        "legacy_value": "[MISSING]",
+        "new_value": 8
+      },
+      {
+        "path": "derived.rollout_steps",
+        "legacy_value": 180,
+        "new_value": 150
+      }
+    ],
+    "legacy_load_time": 0.14580774307250977,
+    "new_load_time": 0.008672714233398438,
+    "performance_improvement": 94.05195221416635
+  }
+]

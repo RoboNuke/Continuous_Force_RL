@@ -74,9 +74,18 @@ except ImportError:
         print("  - Isaac Lab v1.4.1 or earlier (omni.isaac.lab_tasks)")
         sys.exit(1)
 
-# Load configuration system
-from configs.config_manager import ConfigManager
-from configs.isaac_lab_extensions.ctrl_cfg import ExtendedCtrlCfg
+# Load configuration system - support both old and new systems
+import os
+USE_NEW_CONFIG = os.getenv('USE_NEW_CONFIG', 'false').lower() == 'true'
+
+if USE_NEW_CONFIG:
+    print("[INFO]: Using NEW configuration system (ConfigManagerV2)")
+    from configs.config_manager_v2 import ConfigManagerV2
+    from configs.cfg_exts.ctrl_cfg import ExtendedCtrlCfg
+else:
+    print("[INFO]: Using LEGACY configuration system (ConfigManager)")
+    from configs.config_manager import ConfigManager
+    from configs.cfg_exts.ctrl_cfg import ExtendedCtrlCfg
 
 # seed for reproducibility - set once globally
 if args_cli.seed == -1:
@@ -86,14 +95,33 @@ set_seed(args_cli.seed)
 
 # Load and resolve configuration
 print(f"\n\n[INFO]: Loading configuration from {args_cli.config}\n")
-resolved_config = ConfigManager.load_and_resolve_config(args_cli.config, args_cli.override)
 
-# Use task name from config if not provided as argument
-if args_cli.task is None:
-    args_cli.task = resolved_config.get('defaults', {}).get('task_name', "Isaac-Factory-PegInsert-Local-v0")
-    print(f"[INFO]: Using task name from config: {args_cli.task}")
+if USE_NEW_CONFIG:
+    # Use new ConfigManagerV2 system
+    config_bundle = ConfigManagerV2.load_defaults_first_config(
+        config_path=args_cli.config,
+        cli_overrides=args_cli.override or [],
+        cli_task=args_cli.task
+    )
 
-# Extract configuration sections for convenience
+    # Convert to legacy format for compatibility with existing runner code
+    resolved_config = ConfigManagerV2.get_legacy_config_dict(config_bundle)
+
+    # Extract task name from bundle
+    if args_cli.task is None:
+        args_cli.task = config_bundle.task_name
+        print(f"[INFO]: Using task name from config: {args_cli.task}")
+
+else:
+    # Use legacy ConfigManager system
+    resolved_config = ConfigManager.load_and_resolve_config(args_cli.config, args_cli.override)
+
+    # Use task name from config if not provided as argument
+    if args_cli.task is None:
+        args_cli.task = resolved_config.get('defaults', {}).get('task_name', "Isaac-Factory-PegInsert-Local-v0")
+        print(f"[INFO]: Using task name from config: {args_cli.task}")
+
+# Extract configuration sections for convenience (same structure from both systems)
 primary = resolved_config['primary']
 derived = resolved_config['derived']
 environment = resolved_config.get('environment', {})

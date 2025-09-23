@@ -7,7 +7,7 @@ CtrlCfg and adds our custom force control parameters for wandb serialization.
 
 import pytest
 import copy
-from configs.isaac_lab_extensions.ctrl_cfg import ExtendedCtrlCfg
+from configs.cfg_exts.ctrl_cfg import ExtendedCtrlCfg
 
 
 class TestExtendedCtrlCfg:
@@ -158,7 +158,7 @@ class TestExtendedCtrlCfg:
         ctrl_cfg = ExtendedCtrlCfg()
 
         # Check that we inherit from the base class
-        from configs.isaac_lab_extensions.version_compat import get_isaac_lab_ctrl_imports
+        from configs.cfg_exts.version_compat import get_isaac_lab_ctrl_imports
         _, CtrlCfg = get_isaac_lab_ctrl_imports()
 
         # In testing environment, we use MockCtrlCfg, so check inheritance correctly

@@ -1,0 +1,136 @@
+# Hybrid Control Experiment Configuration V2
+# Updated for ConfigManagerV2 - No reference syntax, direct values only
+
+# Task name
+task_name: "Isaac-Factory-PegInsert-Direct-v0"
+
+# Override primary parameters for hybrid control experiment
+primary:
+  agents_per_break_force: 2  # 2 agents per break force condition
+  num_envs_per_agent: 256
+  break_forces: -1  # Break force condition (-1 = unbreakable)
+  max_steps: 15360000  # More training steps for hybrid control
+  decimation: 8
+  policy_hz: 15
+  debug_mode: false
+  seed: -1
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_tracker2.txt"
+  ctrl_torque: false  # Use position control, not torque
+
+# Environment overrides for hybrid control
+environment:
+  # episode_length_s comes from Isaac Lab defaults (10.0s for peg insert)
+  filter_collisions: true
+
+  # Control configuration (will be merged into Isaac Lab's ctrl config)
+  # These parameters will be applied to the ExtendedCtrlCfg
+  ctrl:
+    force_action_bounds: [50.0, 50.0, 50.0]
+    torque_action_bounds: [0.5, 0.5, 0.5]
+    force_action_threshold: [10.0, 10.0, 10.0]
+    torque_action_threshold: [0.1, 0.1, 0.1]
+    default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
+
+# Model configuration for hybrid agent
+model:
+  use_hybrid_agent: true
+  critic_output_init_mean: 60  # Higher initial value estimate for complex task
+
+  # Standard model parameters
+  force_encoding: null
+  last_layer_scale: 1.0
+  act_init_std: 1.0
+
+  # Actor/Critic architecture (can adjust for hybrid complexity)
+  actor:
+    n: 1
+    latent_size: 256
+
+  critic:
+    n: 3
+    latent_size: 1024
+
+  # Hybrid agent specific parameters
+  hybrid_agent:
+    ctrl_torque: false  # Match primary.ctrl_torque
+    unit_std_init: true
+    pos_init_std: 1.0
+    rot_init_std: 1.0
+    force_init_std: 1.0
+
+    # Output scaling
+    pos_scale: 1.0
+    rot_scale: 1.0
+    force_scale: 1.0
+    torque_scale: 1.0
+
+    # Selection network adjustments
+    selection_adjustment_types: 'none'
+    init_scale_weights_factor: 0.1
+    init_bias: -2.5
+    pre_layer_scale_factor: 0.1
+    init_scale_last_layer: true
+    init_layer_scale: 1.0
+    uniform_sampling_rate: 0.0
+
+# Enable hybrid control wrapper and related systems
+wrappers:
+  # Enable force-torque sensor for hybrid control
+  force_torque_sensor:
+    enabled: true
+    use_tanh_scaling: false
+    tanh_scale: 0.05  # Slightly higher scaling for hybrid control
+
+  # Enable hybrid control wrapper
+  hybrid_control:
+    enabled: true
+    # ctrl_torque will be computed from primary config automatically
+    reward_type: "simp"  # Simple reward structure to start
+
+  # Enable observation noise for robustness
+  observation_noise:
+    enabled: false
+    global_scale: 0.8  # Slightly reduced noise for complex control
+    apply_to_critic: false  # Clean critic observations for hybrid control
+    # Note: noise_groups are not implemented in ExtendedWrapperConfig yet
+
+  # Enhanced action logging for hybrid control analysis
+  action_logging:
+    enabled: false
+    track_action_histograms: true
+    track_observation_histograms: false
+    logging_frequency: 50  # More frequent logging for hybrid actions
+
+  # Wandb configuration
+  wandb_logging:
+    enabled: true
+    wandb_project: "Continuous_Force_RL"
+    wandb_entity: "hur"
+    wandb_name: null
+    wandb_group: "hybrid_control_experiments"
+    wandb_tags: ["hybrid_control", "force_position", "factory"]
+
+# Agent configuration adjustments for hybrid control
+agent:
+  # Keep most defaults from SKRL, but adjust learning rates for stability
+  policy_learning_rate: 5.0e-7  # Lower learning rate for stable hybrid learning
+  critic_learning_rate: 1.0e-5
+
+  # PPO parameters suitable for complex control
+  learning_epochs: 6  # More epochs for complex hybrid learning
+  discount_factor: 0.99
+  lambda_: 0.95
+
+  # Experiment metadata
+  experiment_name: "hybrid_control_exp"
+  wandb_tags: ["hybrid_control", "force_position", "factory"]
+  wandb_group: "hybrid_control_experiments"
+  wandb_project: "Continuous_Force_RL"
+
+# Experiment metadata
+experiment:
+  name: "hybrid_control_exp"
+  tags: ["hybrid_control", "force_position", "factory"]
+  group: "hybrid_control_experiments"
+  wandb_project: "Continuous_Force_RL"
+  wandb_entity: "hur"
