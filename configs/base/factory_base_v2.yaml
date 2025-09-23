@@ -39,10 +39,6 @@ environment:
     fixed_pos: "fixed_pos"
     fixed_quat: "fixed_quat"
 
-  # Factory task configuration (will be merged into Isaac Lab's task config)
-  task:
-    name: "peg_insert"  # Used for task-specific logic
-
 # MODEL CONFIGURATION (SimBa architecture parameters)
 model:
   # Standard model parameters
