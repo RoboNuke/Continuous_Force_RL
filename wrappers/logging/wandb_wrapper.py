@@ -56,6 +56,7 @@ class SimpleEpisodeTracker:
 
     def publish(self, onetime_metrics: Dict[str, torch.Tensor] = {}):
         """Add onetime metrics and publish everything to wandb."""
+        print(f"[DEBUG] Publishing metrics. Accumulated: {len(self.accumulated_metrics)}, Onetime: {len(onetime_metrics)}")
         # Aggregate accumulated metrics
         final_metrics = {}
 
@@ -63,7 +64,9 @@ class SimpleEpisodeTracker:
         for name, value_list in self.accumulated_metrics.items():
             if value_list:
                 stacked = torch.stack(value_list)
-                final_metrics[name] = stacked.mean().item()
+                result = stacked.mean().item()
+                print(f"[DEBUG] Metric '{name}': {len(value_list)} values, final={result}, type={type(result)}")
+                final_metrics[name] = result
 
         # Add onetime metrics
         for name, value in onetime_metrics.items():
@@ -74,6 +77,8 @@ class SimpleEpisodeTracker:
         final_metrics["env_steps"] = self.env_steps
 
         # Publish to wandb
+        print(f"[DEBUG] Publishing {len(final_metrics)} metrics to wandb: {list(final_metrics.keys())}")
+        print(f"[DEBUG] Sample metric types: {[(k, type(v)) for k, v in list(final_metrics.items())[:3]]}")
         self.run.log(final_metrics)
 
         # Clear accumulated data

@@ -589,8 +589,12 @@ class BlockPPO(PPO):
 
         # Publish accumulated learning metrics to wandb after all minibatches complete
         wrapper = self._get_logging_wrapper()
+        print(f"[DEBUG] Found wrapper: {wrapper is not None}, type: {type(wrapper) if wrapper else None}")
         if wrapper:
+            print(f"[DEBUG] Calling wrapper.publish()")
             wrapper.publish()
+        else:
+            print(f"[DEBUG] No wrapper found - publish() not called")
 
     def update_nets(self, loss):
                         
