@@ -233,7 +233,7 @@ class ExtendedPPOConfig:
         """
         computed_rollouts = self.get_computed_rollouts(episode_length_s)
         # Mini batches should divide rollouts evenly, with reasonable range
-        return max(min(computed_rollouts // 8, 32), 2)
+        return self.mini_batches #computed_rollouts #max(min(computed_rollouts // 8, 32), 2)
 
     def to_skrl_dict(self, episode_length_s: float) -> Dict[str, Any]:
         """
