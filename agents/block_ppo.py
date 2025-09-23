@@ -587,6 +587,11 @@ class BlockPPO(PPO):
                     )
                 mini_batch += 1
 
+        # Publish accumulated learning metrics to wandb after all minibatches complete
+        wrapper = self._get_logging_wrapper()
+        if wrapper:
+            wrapper.publish()
+
     def update_nets(self, loss):
                         
         self.optimizer.zero_grad()

@@ -36,7 +36,6 @@ class SimpleEpisodeTracker:
 
         # Metric storage
         self.accumulated_metrics = {}
-        self.learning_batches = []
         self.episode_count = 0
 
         # Step tracking for x-axis
@@ -55,12 +54,8 @@ class SimpleEpisodeTracker:
                 self.accumulated_metrics[name] = []
             self.accumulated_metrics[name].append(values)
 
-    def log_minibatch_update(self, learning_data: Dict[str, torch.Tensor]):
-        """Log learning data from a minibatch."""
-        self.learning_batches.append(learning_data)
-
-    def add_onetime_learning_metrics(self, learning_metrics: Dict[str, torch.Tensor]):
-        """Add final learning metrics and publish everything."""
+    def publish(self, onetime_metrics: Dict[str, torch.Tensor] = {}):
+        """Add onetime metrics and publish everything to wandb."""
         # Aggregate accumulated metrics
         final_metrics = {}
 
@@ -70,21 +65,8 @@ class SimpleEpisodeTracker:
                 stacked = torch.stack(value_list)
                 final_metrics[name] = stacked.mean().item()
 
-        # Process learning batches (aggregate across batches)
-        if self.learning_batches:
-            batch_aggregated = {}
-            for batch in self.learning_batches:
-                for key, value in batch.items():
-                    if key not in batch_aggregated:
-                        batch_aggregated[key] = []
-                    batch_aggregated[key].append(value.mean().item() if isinstance(value, torch.Tensor) else value)
-
-            # Average across batches
-            for key, values in batch_aggregated.items():
-                final_metrics[f"learning/{key}"] = sum(values) / len(values)
-
-        # Add one-time learning metrics
-        for name, value in learning_metrics.items():
+        # Add onetime metrics
+        for name, value in onetime_metrics.items():
             final_metrics[f"learning/{name}"] = value.mean().item() if isinstance(value, torch.Tensor) else value
 
         # Add required step metrics for x-axis
@@ -96,7 +78,6 @@ class SimpleEpisodeTracker:
 
         # Clear accumulated data
         self.accumulated_metrics.clear()
-        self.learning_batches.clear()
 
     def close(self):
         """Close wandb run."""
@@ -264,23 +245,14 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         """
         self._split_by_agent(metrics, 'add_metrics')
 
-    def log_minibatch_update(self, learning_data: Dict[str, torch.Tensor]):
+    def publish(self, onetime_metrics: Dict[str, torch.Tensor] = {}):
         """
-        Log learning data from a minibatch.
+        Add onetime metrics and publish everything to wandb.
 
         Args:
-            learning_data: Dictionary of learning metrics from this minibatch
+            onetime_metrics: Final onetime metrics to add before publishing
         """
-        self._split_by_agent(learning_data, 'log_minibatch_update')
-
-    def add_onetime_learning_metrics(self, learning_metrics: Dict[str, torch.Tensor]):
-        """
-        Add final learning metrics and publish everything.
-
-        Args:
-            learning_metrics: Final learning metrics to add before publishing
-        """
-        self._split_by_agent(learning_metrics, 'add_onetime_learning_metrics')
+        self._split_by_agent(onetime_metrics, 'publish')
 
     def step(self, action):
         """Step environment and track episode metrics."""
