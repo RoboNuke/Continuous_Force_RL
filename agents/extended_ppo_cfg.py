@@ -10,6 +10,8 @@ from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field
 
 from skrl.agents.torch.ppo import PPO_DEFAULT_CONFIG
+#print(PPO_DEFAULT_CONFIG)
+
 @dataclass
 class ExtendedPPOConfig:
     """
@@ -21,8 +23,8 @@ class ExtendedPPOConfig:
     
     # CUSTOM EXTENSIONS FOR BLOCK PPO
     
-    disable_progressbar: True
-    """Should we display a CLI progress bar?"""
+    #disable_progressbar: True
+    #"""Should we display a CLI progress bar?"""
     # Multi-agent parameters
     num_agents: int = 1
     """Number of agents in multi-agent setup"""
@@ -108,9 +110,16 @@ class ExtendedPPOConfig:
         """Post-initialization validation and setup."""
 
         # adds default ppo configs if not overwritten here
-        for key, value in PPO_DEFAULT_CONFIG:
+        #print(PPO_DEFAULT_CONFIG)
+        #print(PPO_DEFAULT_CONFIG.items())
+        for key, value in PPO_DEFAULT_CONFIG.items():
+            #print("Key:", key)
             if not hasattr(self, key):
-                setattr(self, key, value)
+                if key == 'lambda':
+                    #print("got lambda")
+                    setattr(self, key + "_", value)
+                else:
+                    setattr(self, key, value)
 
         self._validate_ppo_params()
         self._setup_computed_defaults()
