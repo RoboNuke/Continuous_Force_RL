@@ -230,6 +230,11 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
 
     def _split_by_agent(self, metrics: Dict[str, torch.Tensor], tracker_method_name: str):
         """Split metrics by agent based on vector length and call specified tracker method."""
+        if metrics == {}:
+            for tracker in self.trackers:
+                getattr(tracker,tracker_method_name)()
+            return
+        
         for name, values in metrics.items():
             if isinstance(values, torch.Tensor):
                 # Handle 0-dimensional tensors (scalars)
