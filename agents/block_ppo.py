@@ -139,22 +139,6 @@ class BlockPPO(PPO):
 
         # create tensors in memory
         if self.memory is not None:
-            print(f"[AGENT DEBUG] Creating memory tensors:")
-            print(f"  action_space (from constructor): {self.action_space}")
-            print(f"  state_size: {self.state_size}")
-
-            # Check environment action space for comparison
-            if hasattr(self, 'env'):
-                env_cfg_action_space = getattr(self.env.cfg, 'action_space', 'N/A') if hasattr(self.env, 'cfg') else 'N/A'
-                env_gym_action_space = self.env.action_space.shape[0] if hasattr(self.env, 'action_space') and hasattr(self.env.action_space, 'shape') else 'N/A'
-                print(f"  env.cfg.action_space: {env_cfg_action_space}")
-                print(f"  env.action_space.shape[0]: {env_gym_action_space}")
-
-                if env_cfg_action_space != 'N/A' and env_cfg_action_space != self.action_space:
-                    print(f"[AGENT WARNING] Action space mismatch: agent={self.action_space}, env.cfg={env_cfg_action_space}")
-                if env_gym_action_space != 'N/A' and env_gym_action_space != self.action_space:
-                    print(f"[AGENT WARNING] Action space mismatch: agent={self.action_space}, env.gym={env_gym_action_space}")
-
             self.memory.create_tensor(name="states", size=self.state_size, dtype=torch.float32)
             self.memory.create_tensor(name="actions", size=self.action_space, dtype=torch.float32)
             self.memory.create_tensor(name="rewards", size=1, dtype=torch.float32)
@@ -162,8 +146,6 @@ class BlockPPO(PPO):
             self.memory.create_tensor(name="truncated", size=1, dtype=torch.bool)
             self.memory.create_tensor(name="log_prob", size=1, dtype=torch.float32)
             self.memory.create_tensor(name="values", size=1, dtype=torch.float32)
-
-            print(f"[AGENT DEBUG] Memory tensors created successfully.")
             self.memory.create_tensor(name="returns", size=1, dtype=torch.float32)
             self.memory.create_tensor(name="advantages", size=1, dtype=torch.float32)
 
@@ -340,23 +322,12 @@ class BlockPPO(PPO):
 
             # time-limit (truncation) boostrapping
             if self._time_limit_bootstrap:
-                print("=== Time limit bootstrapping DEBUG ===")
-                print("Before operation:")
-                print(f"  rewards shape: {rewards.shape}, dtype: {rewards.dtype}")
-                print(f"  values shape: {values.shape}, dtype: {values.dtype}")
-                print(f"  truncated shape: {truncated.shape}, dtype: {truncated.dtype}")
-
                 # Ensure values matches rewards shape to prevent broadcasting issues
                 if values.dim() > rewards.dim():
                     values_reshaped = values.squeeze(-1)
-                    print(f"  values reshaped from {values.shape} to {values_reshaped.shape}")
                 else:
                     values_reshaped = values
-                    print(f"  values shape already compatible: {values.shape}")
-
-                print("Attempting time-limit bootstrapping...")
                 rewards += self._discount_factor * values_reshaped * truncated
-                print("=== Time limit bootstrapping SUCCESS ===")
             
             
             # alternative approach to deal with termination, see ppo but no matter what it 
