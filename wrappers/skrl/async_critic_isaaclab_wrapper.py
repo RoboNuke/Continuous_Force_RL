@@ -44,9 +44,20 @@ class AsyncCriticIsaacLabWrapper(Wrapper):
             else:
                 print(f"[INFO]: No state space needed (state_dim = {state_dim})")
 
+        # Override action_space to ensure correct dimensions (per-agent, not including batch)
+        action_dim = getattr(env.unwrapped.cfg, 'action_space', 6)
+        self.action_space = Box(low=-float('inf'), high=float('inf'), shape=(action_dim,), dtype=np.float32)
+
         print(f"[INFO]: AsyncCriticIsaacLabWrapper initialized")
         print(f"[INFO]: Environment observation space: {getattr(env, 'observation_space', 'Not available')}")
         print(f"[INFO]: Environment state space: {getattr(env, 'state_space', 'Not available')}")
+        print(f"[INFO]: Overrode action_space to correct dimensions: {self.action_space}")
+
+        # Debug: check if base class set wrong action space
+        if hasattr(env, 'action_space'):
+            print(f"[DEBUG]: Original env.action_space was: {env.action_space}")
+        if hasattr(self, '_action_space'):
+            print(f"[DEBUG]: SKRL base wrapper _action_space: {self._action_space}")
 
     def step(self, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Any]:
         """
