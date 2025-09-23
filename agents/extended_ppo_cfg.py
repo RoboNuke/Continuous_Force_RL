@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 from skrl.agents.torch.ppo import PPO_DEFAULT_CONFIG
 @dataclass
-class ExtendedPPOConfig(PPO_DEFAULT_CONFIG):
+class ExtendedPPOConfig:
     """
     Extended PPO configuration with SKRL defaults and our custom parameters.
 
@@ -106,6 +106,12 @@ class ExtendedPPOConfig(PPO_DEFAULT_CONFIG):
 
     def __post_init__(self):
         """Post-initialization validation and setup."""
+
+        # adds default ppo configs if not overwritten here
+        for key, value in PPO_DEFAULT_CONFIG:
+            if not hasattr(self, key):
+                setattr(self, key, value)
+
         self._validate_ppo_params()
         self._setup_computed_defaults()
 
