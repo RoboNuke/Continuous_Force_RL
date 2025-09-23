@@ -708,6 +708,7 @@ class BlockPPO(PPO):
             store_policy_state=False,
             store_critic_state=False
     ):
+        print(f"[DEBUG] _log_minibatch_update called with {sum(x is not None for x in [returns, values, advantages, old_log_probs, new_log_probs, entropies, policy_losses, value_losses])} non-None arguments")
         """Log minibatch update metrics through wrapper system with per-agent support.
 
         All metrics are computed per-agent and passed as lists to the wrapper system.
@@ -826,6 +827,7 @@ class BlockPPO(PPO):
                                                 for state in network_states]
 
             # Pass metrics to wrapper system
+            print(f"[DEBUG] Sending {len(stats)} metrics to wrapper: {list(stats.keys())}")
             wrapper.add_metrics(stats)
 
         except Exception as e:

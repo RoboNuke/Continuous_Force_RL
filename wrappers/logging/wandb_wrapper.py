@@ -248,6 +248,7 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         Args:
             metrics: Dictionary of metric_name -> tensor with length num_envs, num_agents, or scalar
         """
+        print(f"[DEBUG] GenericWandbLoggingWrapper.add_metrics called with {len(metrics)} metrics: {list(metrics.keys())}")
         self._split_by_agent(metrics, 'add_metrics')
 
     def publish(self, onetime_metrics: Dict[str, torch.Tensor] = {}):
