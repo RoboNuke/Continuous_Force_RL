@@ -346,6 +346,7 @@ def main():
     # Trainer uses pre-configured parameters from Step 1
     print("[INFO]: Step 6 - Creating and starting trainer")
 
+    print("Disable Progress:", agent_cfg['agent']['disable_progressbar'])
     cfg_trainer = {
         "timesteps": derived['max_steps'] // (derived['total_num_envs']),
         "headless": True,

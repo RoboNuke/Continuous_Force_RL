@@ -9,71 +9,20 @@ of keeping agent-specific configurations in the agents/ folder.
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field
 
-
+from skrl.agents.torch.ppo import PPO_DEFAULT_CONFIG
 @dataclass
-class ExtendedPPOConfig:
+class ExtendedPPOConfig(PPO_DEFAULT_CONFIG):
     """
     Extended PPO configuration with SKRL defaults and our custom parameters.
 
     This configuration includes all SKRL PPO defaults plus our custom extensions
     for Block PPO and computed properties for rollout calculations.
     """
-
-    # SKRL PPO DEFAULT PARAMETERS
-    # Core PPO parameters
-    rollouts: int = 16
-    """Number of rollouts before updating"""
-
-    learning_epochs: int = 8
-    """Number of learning epochs during each update"""
-
-    mini_batches: int = 2
-    """Number of mini batches during each learning epoch"""
-
-    discount_factor: float = 0.99
-    """Discount factor for future rewards"""
-
-    lambda_: float = 0.95
-    """TD(lambda) coefficient for GAE"""
-
-    learning_rate: float = 1e-3
-    """Learning rate for optimizer"""
-
-    # PPO-specific parameters
-    ratio_clip: float = 0.2
-    """PPO ratio clipping parameter"""
-
-    value_clip: float = 0.2
-    """Value function clipping parameter"""
-
-    entropy_loss_scale: float = 0.0
-    """Entropy loss scaling factor"""
-
-    value_loss_scale: float = 1.0
-    """Value loss scaling factor"""
-
-    # Training parameters
-    random_timesteps: int = 0
-    """Number of random exploration timesteps"""
-
-    learning_starts: int = 0
-    """Timesteps before learning starts"""
-
-    grad_norm_clip: float = 0.5
-    """Gradient norm clipping threshold"""
-
-    kl_threshold: float = 0
-    """KL divergence threshold (0 = disabled)"""
-
-    # Optional advanced parameters
-    mixed_precision: bool = False
-    """Use mixed precision training"""
-
-    time_limit_bootstrap: bool = False
-    """Bootstrap on time limits"""
-
+    
     # CUSTOM EXTENSIONS FOR BLOCK PPO
-
+    
+    disable_progressbar: True
+    """Should we display a CLI progress bar?"""
     # Multi-agent parameters
     num_agents: int = 1
     """Number of agents in multi-agent setup"""
@@ -102,9 +51,6 @@ class ExtendedPPOConfig:
     use_huber_value_loss: bool = False
     """Use Huber loss for value function"""
 
-    clip_predicted_values: bool = False
-    """Clip predicted values"""
-
     # Reward shaping
     reward_shaper_type: str = 'const_scale'
     """Type of reward shaper ('const_scale', etc.)"""
@@ -118,16 +64,6 @@ class ExtendedPPOConfig:
 
     value_preprocessor: bool = True
     """Enable value preprocessing"""
-
-    # Learning rate scheduling
-    learning_rate_scheduler: str = "KLAdaptiveLR"
-    """Type of learning rate scheduler"""
-
-    learning_rate_scheduler_kwargs: Dict[str, Any] = field(default_factory=lambda: {
-        'kl_threshold': 0.01,
-        'min_lr': 1.0e-9
-    })
-    """Learning rate scheduler keyword arguments"""
 
     # Block PPO specific parameters
     break_force: Optional[float] = None
