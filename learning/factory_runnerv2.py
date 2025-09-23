@@ -290,7 +290,7 @@ def main():
 
     print("Disable Progress:", agent_config.get('disable_progressbar', True))
     cfg_trainer = {
-        "timesteps": derived['max_steps'] // (derived['total_num_envs']),
+        "timesteps": derived['total_agents'] * derived['max_steps'] // (derived['total_num_envs']),
         "headless": True,
         "close_environment_at_exit": True,
         "disable_progressbar": agent_config.get('disable_progressbar', True)

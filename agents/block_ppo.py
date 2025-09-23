@@ -480,7 +480,7 @@ class BlockPPO(PPO):
                 #print(f"Mini Batch:{mini_batch}")
                 keep_mask = torch.ones((self.num_agents,), dtype=bool, device=self.device)
                 with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
-                    
+                    print("Sampled State Size:", sampled_states.size())
                     sampled_states = self._apply_per_agent_preprocessing(sampled_states, self._per_agent_state_preprocessors, train=not epoch)
                     _, next_log_prob, _ = self.policy.act(
                         {"states": sampled_states, "taken_actions": sampled_actions}, role="policy"
