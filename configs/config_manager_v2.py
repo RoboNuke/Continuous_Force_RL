@@ -186,6 +186,22 @@ class ConfigManagerV2:
         ConfigManagerV2._apply_yaml_overrides(env_cfg, yaml_config.get('environment', {}))
         ConfigManagerV2._apply_yaml_overrides(agent_cfg, yaml_config.get('agent', {}))
 
+        # Apply experiment configuration to agent config
+        experiment_config = yaml_config.get('experiment', {})
+        if experiment_config:
+            if 'name' in experiment_config:
+                agent_cfg.experiment_name = experiment_config['name']
+                print(f"[CONFIG V2]: Applied experiment.name: {agent_cfg.experiment_name}")
+            if 'tags' in experiment_config:
+                agent_cfg.wandb_tags = experiment_config['tags']
+                print(f"[CONFIG V2]: Applied experiment.tags: {agent_cfg.wandb_tags}")
+            if 'group' in experiment_config:
+                agent_cfg.wandb_group = experiment_config['group']
+                print(f"[CONFIG V2]: Applied experiment.group: {agent_cfg.wandb_group}")
+            if 'wandb_project' in experiment_config:
+                agent_cfg.wandb_project = experiment_config['wandb_project']
+                print(f"[CONFIG V2]: Applied experiment.wandb_project: {agent_cfg.wandb_project}")
+
         # 8. Create configuration bundle for CLI overrides
         config_bundle = ConfigBundle(
             env_cfg=env_cfg,
