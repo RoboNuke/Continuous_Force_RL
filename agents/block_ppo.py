@@ -388,6 +388,8 @@ class BlockPPO(PPO):
         :param timesteps: Number of timesteps
         :type timesteps: int
         """
+        # Store timestep for access in update_nets
+        self._current_timestep = timestep
         def compute_gae(
             rewards: torch.Tensor,
             dones: torch.Tensor,
@@ -552,9 +554,9 @@ class BlockPPO(PPO):
 
                 self.optimizer.zero_grad()
                 if timestep < self._random_value_timesteps:
-                    self.update_nets(value_loss)
+                    self.update_nets(value_loss)  # Auto-detects: policy=False, critic=True
                 else:
-                    self.update_nets(policy_loss + entropy_loss + value_loss)
+                    self.update_nets(policy_loss + entropy_loss + value_loss)  # Both networks
 
                 if self.value_update_ratio > 1:
                     for i in range(self.value_update_ratio-1): #minus one because we already updated critic once
@@ -566,7 +568,7 @@ class BlockPPO(PPO):
                             sample_size
                         )
                         value_losses += vls
-                        self.update_nets(value_loss)
+                        self.update_nets(value_loss, update_policy=False, update_critic=True)
 
                     value_losses /= self.value_update_ratio
 
@@ -598,10 +600,29 @@ class BlockPPO(PPO):
         if wrapper:
             wrapper.publish()
 
-    def update_nets(self, loss):
-                        
+    def update_nets(self, loss, update_policy=True, update_critic=True):
+        """
+        Update networks and collect gradients for logging.
+
+        Args:
+            loss: Combined loss tensor
+            update_policy: Whether policy network is being updated
+            update_critic: Whether critic network is being updated
+        """
+        # Override policy updates during random value phase
+        current_timestep = getattr(self, '_current_timestep', 0)
+        if current_timestep < self._random_value_timesteps:
+            update_policy = False
+
         self.optimizer.zero_grad()
         self.scaler.scale(loss).backward()
+
+        # Collect gradients immediately after backward pass while they exist
+        if update_policy or update_critic:
+            self._collect_and_store_gradients(
+                store_policy_state=update_policy,
+                store_critic_state=update_critic
+            )
 
         if config.torch.is_distributed:
             self.policy.reduce_parameters()
@@ -615,7 +636,7 @@ class BlockPPO(PPO):
             else:
                 nn.utils.clip_grad_norm_(
                     itertools.chain(self.policy.parameters(), self.value.parameters()), self._grad_norm_clip
-                )             
+                )
         self.scaler.step(self.optimizer)
         self.scaler.update()
         
@@ -743,6 +764,102 @@ class BlockPPO(PPO):
             print(f"[DEBUG] {role} network: {params_with_grad}/{total_params} parameters have gradients")
 
         return state
+
+    def _collect_and_store_gradients(self, store_policy_state=False, store_critic_state=False):
+        """Collect gradients immediately after backward pass for logging."""
+        if not hasattr(self, '_gradient_storage'):
+            self._gradient_storage = {}
+
+        network_states = [self._get_network_state(i) for i in range(self.num_agents)]
+
+        if store_policy_state:
+            grad_norms = torch.tensor([self._grad_norm_per_agent(state['policy']['gradients'])
+                                       for state in network_states], device=self.device)
+            step_sizes = torch.tensor([self._adam_step_size_per_agent(state['policy']['optimizer_state'])
+                                       for state in network_states], device=self.device)
+            self._gradient_storage['Policy/Gradient_Norm'] = grad_norms
+            self._gradient_storage['Policy/Step_Size'] = step_sizes
+            print(f"[DEBUG] Stored policy gradients: {grad_norms}, step sizes: {step_sizes}")
+
+        if store_critic_state:
+            critic_grad_norms = torch.tensor([self._grad_norm_per_agent(state['critic']['gradients'])
+                                              for state in network_states], device=self.device)
+            critic_step_sizes = torch.tensor([self._adam_step_size_per_agent(state['critic']['optimizer_state'])
+                                              for state in network_states], device=self.device)
+            self._gradient_storage['Critic/Gradient_Norm'] = critic_grad_norms
+            self._gradient_storage['Critic/Step_Size'] = critic_step_sizes
+            print(f"[DEBUG] Stored critic gradients: {critic_grad_norms}, step sizes: {critic_step_sizes}")
+
+    def _grad_norm_per_agent(self, agent_gradients):
+        """Calculate gradient norm for a single agent's gradients."""
+        print(f"[DEBUG] grad_norm_per_agent called with {len(agent_gradients)} gradients")
+        if len(agent_gradients) == 0:
+            print(f"[DEBUG] No gradients available, returning 0.0")
+            return 0.0
+
+        # Check individual gradient values
+        grad_values = [g.item() for g in agent_gradients]
+        print(f"[DEBUG] Individual gradient norms: {grad_values[:5]}...")  # First 5 values
+
+        # Calculate total norm
+        result = torch.norm(torch.stack(agent_gradients), 2).item()
+        print(f"[DEBUG] Calculated gradient norm: {result}")
+        return result
+
+    def _adam_step_size_per_agent(self, agent_optimizer_state):
+        """Calculate Adam step size for a single agent's optimizer state."""
+        print(f"[DEBUG] adam_step_size_per_agent called with {len(agent_optimizer_state)} optimizer states")
+
+        if len(agent_optimizer_state) == 0:
+            print(f"[DEBUG] No optimizer states available, returning 0.0")
+            return 0.0
+
+        step_sizes = []
+        for name, state in agent_optimizer_state.items():
+            print(f"[DEBUG] Processing optimizer state for {name}, keys: {list(state.keys()) if isinstance(state, dict) else 'Not dict'}")
+
+            # Check if state has required fields
+            if isinstance(state, dict) and 'exp_avg' in state and 'exp_avg_sq' in state and 'step' in state:
+                try:
+                    # Get learning rate from appropriate param group
+                    lr = None
+                    for group in self.optimizer.param_groups:
+                        if group.get('role') == 'policy':
+                            lr = group['lr']
+                            break
+                    if lr is None:
+                        lr = self.optimizer.param_groups[0]['lr']  # Fallback
+
+                    beta1, beta2 = self.optimizer.param_groups[0]['betas']
+                    eps = self.optimizer.param_groups[0]['eps']
+                    step_count = state['step']
+
+                    # Get the actual tensor values
+                    exp_avg = state['exp_avg']
+                    exp_avg_sq = state['exp_avg_sq']
+
+                    print(f"[DEBUG] {name}: step={step_count}, exp_avg_norm={torch.norm(exp_avg).item():.6f}, exp_avg_sq_norm={torch.norm(exp_avg_sq).item():.6f}")
+
+                    if step_count > 0 and torch.norm(exp_avg_sq).item() > 1e-8:
+                        bias_correction1 = 1 - beta1 ** step_count
+                        bias_correction2 = 1 - beta2 ** step_count
+
+                        # Calculate effective step size
+                        effective_step_direction = (exp_avg / bias_correction1) / (torch.sqrt(exp_avg_sq / bias_correction2) + eps)
+                        step_size = lr * torch.norm(effective_step_direction).item()
+                        step_sizes.append(step_size)
+                        print(f"[DEBUG] {name}: calculated step_size={step_size:.6f}")
+                    else:
+                        print(f"[DEBUG] {name}: step count is {step_count} or exp_avg_sq norm too small, skipping")
+
+                except Exception as e:
+                    print(f"[DEBUG] Error calculating step size for {name}: {e}")
+            else:
+                print(f"[DEBUG] {name}: missing required optimizer state fields")
+
+        result = sum(step_sizes) / max(len(step_sizes), 1) if step_sizes else 0.0
+        print(f"[DEBUG] Final average step size: {result:.6f}")
+        return result
 
     def _log_minibatch_update(
             self,
@@ -908,39 +1025,15 @@ class BlockPPO(PPO):
                     print(f"[DEBUG] Final average step size: {result:.6f}")
                     return result
 
-                # Collect network states if requested
-                network_states = None
-                if store_policy_state or store_critic_state:
-                    network_states = [self._get_network_state(i) for i in range(self.num_agents)]
-                    print(f"[DEBUG] Network states collected: {network_states is not None}, count: {len(network_states) if network_states else 0}")
-                    if network_states:
-                        print(f"[DEBUG] Sample network state keys: {list(network_states[0].keys()) if network_states[0] else 'None'}")
-
-                # Policy network diagnostics
-                if store_policy_state and network_states is not None:
-                    print(f"[DEBUG] Generating Policy/Step_Size metrics for {len(network_states)} agents")
-                    grad_norms = torch.tensor([grad_norm_per_agent(state['policy']['gradients'])
-                                                   for state in network_states], device=self.device)
-                    step_sizes = torch.tensor([adam_step_size_per_agent(state['policy']['optimizer_state'])
-                                                for state in network_states], device=self.device)
-                    stats['Policy/Gradient_Norm'] = grad_norms
-                    stats['Policy/Step_Size'] = step_sizes
-                    print(f"[DEBUG] Policy metrics created - Gradient_Norm: {grad_norms}, Step_Size: {step_sizes}")
-
-                # Critic network diagnostics
-                if store_critic_state and network_states is not None:
-                    print(f"[DEBUG] Generating Critic/Step_Size metrics for {len(network_states)} agents")
-                    critic_grad_norms = torch.tensor([grad_norm_per_agent(state['critic']['gradients'])
-                                                    for state in network_states], device=self.device)
-                    critic_step_sizes = torch.tensor([adam_step_size_per_agent(state['critic']['optimizer_state'])
-                                                for state in network_states], device=self.device)
-                    stats['Critic/Gradient_Norm'] = critic_grad_norms
-                    stats['Critic/Step_Size'] = critic_step_sizes
-                    print(f"[DEBUG] Critic metrics created - Gradient_Norm: {critic_grad_norms}, Step_Size: {critic_step_sizes}")
+                # Add stored gradients to stats if available
+                if hasattr(self, '_gradient_storage') and self._gradient_storage:
+                    stats.update(self._gradient_storage)
+                    print(f"[DEBUG] Adding stored gradients to stats: {list(self._gradient_storage.keys())}")
+                    self._gradient_storage.clear()
 
             # Pass metrics to wrapper system
-            print(f"[DEBUG] Sending {len(stats)} metrics to wrapper: {list(stats.keys())}")
-            print(f"[DEBUG] Step size present in stats: {'Policy/Step_Size' in stats}, {'Critic/Step_Size' in stats}")
+            print(f"[DEBUG] Final stats keys: {list(stats.keys())}")
+            print(f"[DEBUG] Step size present in final stats: {'Policy/Step_Size' in stats}, {'Critic/Step_Size' in stats}")
             wrapper.add_metrics(stats)
 
         except Exception as e:
