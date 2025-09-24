@@ -741,11 +741,6 @@ class BlockPPO(PPO):
                             "exp_avg_sq": op_state.get("exp_avg_sq", torch.tensor(0.0)),
                             "step": op_state.get("step", 0),
                         }
-                    else:
-                        if not should_collect_optimizer_state:
-                            pass
-                        else:
-                            pass
 
                 # Weight norms (always collect)
                 state[role]['weight_norms'][pname] = p.norm().item()
@@ -831,13 +826,9 @@ class BlockPPO(PPO):
                         effective_step_direction = (exp_avg / bias_correction1) / (torch.sqrt(exp_avg_sq / bias_correction2) + eps)
                         step_size = lr * torch.norm(effective_step_direction).item()
                         step_sizes.append(step_size)
-                    else:
-                        pass
 
                 except Exception as e:
                     pass
-            else:
-                pass
 
         result = sum(step_sizes) / max(len(step_sizes), 1) if step_sizes else 0.0
         return result
@@ -889,14 +880,10 @@ class BlockPPO(PPO):
                 if entropies is not None:
                     entropy_values = torch.tensor([entropies[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
                     stats["Policy/Entropy_Avg"] = entropy_values
-                else:
-                    pass
 
                 if policy_losses is not None:
                     policy_loss_values = torch.tensor([policy_losses[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
                     stats["Policy/Loss_Avg"] = policy_loss_values
-                else:
-                    pass
 
                 # --- Value stats (per-agent) ---
                 if value_losses is not None and values is not None and returns is not None:

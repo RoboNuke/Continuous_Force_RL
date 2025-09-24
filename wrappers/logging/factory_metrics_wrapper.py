@@ -291,7 +291,6 @@ class FactoryMetricsWrapper(gym.Wrapper):
             except Exception as e:
                 # Fallback - collect current state metrics only
                 should_collect = False
-        else:
 
         # Always provide current engagement and success states
         if hasattr(self.unwrapped, 'extras') and 'current_engagements' in self.unwrapped.extras:
