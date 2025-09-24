@@ -199,8 +199,18 @@ class BlockPPO(PPO):
             lock = FileLock(self.tracker_path + ".lock")
             with lock:
                 with open(self.tracker_path, "a") as f:
+                    # Get WandB wrapper to access tracker data
+                    wrapper = self._get_logging_wrapper()
                     for i in range(self.num_agents):
-                        f.write(f'{ckpt_paths[i]} {self.task_name} {vid_paths[i]} {self.loggers[i].wandb_cfg["project"]} {self.loggers[i].wandb_cfg["run_id"]}\n')
+                        # Extract project and run_id from WandB wrapper trackers
+                        if wrapper and hasattr(wrapper, 'trackers') and i < len(wrapper.trackers):
+                            project = wrapper.trackers[i].run.project
+                            run_id = wrapper.trackers[i].run.id
+                        else:
+                            # Fallback values if wrapper not available
+                            project = "unknown_project"
+                            run_id = "unknown_run_id"
+                        f.write(f'{ckpt_paths[i]} {self.task_name} {vid_paths[i]} {project} {run_id}\n')
 
     def load(self, path: str, **kwargs):
         """Load single agent checkpoint with policy, critic, and preprocessor states."""
