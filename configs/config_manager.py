@@ -922,14 +922,14 @@ class LoggingConfigPresets:
             wandb_name="Force / Avg Torque"
         ))
 
-        # Reward components (will be detected dynamically)
-        for component in ["reach_reward", "grasp_reward", "lift_reward", "align_reward"]:
+        # Reward components (using production logs_rew_ -> Rewards/ pattern)
+        for component in ["kp_baseline", "kp_coarse", "kp_fine", "action_penalty_ee", "curr_engaged", "curr_success"]:
             config.add_metric(MetricConfig(
-                name=f"Reward / {component}",
+                name=f"Rewards/{component}",
                 default_value=0.0,
                 metric_type="scalar",
                 aggregation="mean",
-                wandb_name=f"Reward / {component.replace('_', ' ').title()}"
+                wandb_name=f"Rewards / {component.replace('_', ' ').title()}"
             ))
 
         return config

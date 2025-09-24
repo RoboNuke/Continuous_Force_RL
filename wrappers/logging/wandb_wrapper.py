@@ -168,8 +168,13 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
                 'episode_lengths': [],
                 'episode_rewards': [],
                 'episode_avg_rewards': [],
-                'completed_count': []
+                'completed_count': [],
+                'component_rewards': {}  # Will store component reward lists dynamically
             }
+
+        # Component reward tracking
+        self.component_reward_keys = set()  # Discovered component reward keys
+        self.current_component_rewards = torch.zeros((self.num_envs, 0), device=self.device)  # Will expand as needed
 
     def _store_completed_episodes(self, completed_mask):
         """Store completed episode data in agent lists."""
@@ -229,6 +234,9 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             agent_data['episode_rewards'].clear()
             agent_data['episode_avg_rewards'].clear()
             agent_data['completed_count'].clear()
+            # Clear component rewards for this agent
+            for component_key in agent_data['component_rewards']:
+                agent_data['component_rewards'][component_key].clear()
 
     def _split_by_agent(self, metrics: Dict[str, torch.Tensor], tracker_method_name: str):
         """Split metrics by agent based on vector length and call specified tracker method."""
@@ -262,6 +270,46 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
                 # Non-tensor scalar - broadcast to all agents
                 for tracker in self.trackers:
                     getattr(tracker, tracker_method_name)({name: values})
+
+    def _extract_component_rewards(self) -> Dict[str, torch.Tensor]:
+        """
+        Extract component rewards from environment extras.
+
+        Looks for keys starting with 'logs_rew_' in self.unwrapped.extras
+        and transforms them into component reward metrics.
+
+        Returns:
+            Dictionary of component reward metrics with format 'Rewards/{component_name}' -> tensor
+        """
+        component_rewards = {}
+
+        if not hasattr(self.unwrapped, 'extras') or not self.unwrapped.extras:
+            return component_rewards
+
+        # Look for reward component keys starting with 'logs_rew_'
+        for key, value in self.unwrapped.extras.items():
+            if key.startswith('logs_rew_'):
+                # Extract component name (remove 'logs_rew_' prefix)
+                component_name = key[9:]  # Remove 'logs_rew_' prefix
+
+                # Convert value to tensor if needed
+                if not isinstance(value, torch.Tensor):
+                    value = torch.tensor(value, device=self.device)
+
+                # Ensure tensor is on correct device
+                if value.device != self.device:
+                    value = value.to(self.device)
+
+                # If scalar, broadcast to all environments
+                if value.dim() == 0:
+                    value = value.expand(self.num_envs)
+                elif len(value) == 1:
+                    value = value.expand(self.num_envs)
+
+                # Store with standardized naming
+                component_rewards[f"Rewards/{component_name}"] = value
+
+        return component_rewards
 
     def add_metrics(self, metrics: Dict[str, torch.Tensor]):
         """
@@ -308,6 +356,12 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             print(f"[DEBUG] Environment extras keys: {list(self.unwrapped.extras.keys())[:10]}")  # First 10 keys
         if info:
             print(f"[DEBUG] Environment info keys: {list(info.keys())[:10]}")  # First 10 keys
+
+        # Extract and collect component rewards
+        component_rewards = self._extract_component_rewards()
+        if component_rewards:
+            # Send component rewards to trackers immediately
+            self.add_metrics(component_rewards)
 
         # Track current episode metrics
         self.current_episode_rewards += reward

@@ -588,8 +588,8 @@ class TestLoggingConfigPresets:
         assert "avg_force" in config.tracked_metrics
         assert "avg_torque" in config.tracked_metrics
 
-        # Check reward components
-        reward_components = ["Reward / reach_reward", "Reward / grasp_reward", "Reward / lift_reward", "Reward / align_reward"]
+        # Check reward components (using production logs_rew_ -> Rewards/ pattern)
+        reward_components = ["Rewards/kp_baseline", "Rewards/kp_coarse", "Rewards/kp_fine", "Rewards/action_penalty_ee", "Rewards/curr_engaged", "Rewards/curr_success"]
         for component in reward_components:
             assert component in config.tracked_metrics
 

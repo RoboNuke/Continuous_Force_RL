@@ -251,14 +251,13 @@ def test_environment_info_extraction():
     # Create environment with comprehensive extras
     base_env = MockExtrasEnv(num_envs=4)
 
-    # Add component reward info to extras
+    # Add component reward info to extras (using production logs_rew_ pattern)
     base_env.extras.update({
-        'reward_components': {
-            'distance_reward': torch.randn(4),
-            'orientation_reward': torch.randn(4),
-            'force_penalty': torch.randn(4),
-            'success_bonus': torch.randn(4)
-        },
+        'logs_rew_kp_baseline': torch.randn(4),
+        'logs_rew_kp_coarse': torch.randn(4),
+        'logs_rew_action_penalty_ee': torch.randn(4),
+        'logs_rew_curr_engaged': torch.randn(4),
+        'logs_rew_curr_success': torch.randn(4),
         'current_actions': torch.randn(4, 6),
         'log_probs': torch.randn(4, 6)
     })
@@ -266,8 +265,10 @@ def test_environment_info_extraction():
     print("Environment extras available:")
     print(f"  Extras keys: {list(base_env.extras.keys())}")
 
-    if 'reward_components' in base_env.extras:
-        print(f"  Component rewards: {list(base_env.extras['reward_components'].keys())}")
+    # Check for component rewards using logs_rew_ pattern
+    component_rewards = [key for key in base_env.extras.keys() if key.startswith('logs_rew_')]
+    if component_rewards:
+        print(f"  Component rewards: {component_rewards}")
 
     if 'smoothness' in base_env.extras:
         print(f"  Smoothness metrics: {list(base_env.extras['smoothness'].keys())}")
@@ -336,7 +337,7 @@ def run_all_diagnostics():
             elif test_name == 'wrapper_chain':
                 print("  - Factory metrics not reaching wandb wrapper")
             elif test_name == 'environment_info':
-                print("  - Component rewards not extracted from environment")
+                print("  - Component rewards (logs_rew_*) not extracted from environment")
     else:
         print("\n✅ All tests passed - issue may be in production configuration")
 
