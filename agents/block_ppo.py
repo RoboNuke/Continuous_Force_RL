@@ -659,15 +659,20 @@ class BlockPPO(PPO):
         policy and critic. Assumes optimizer param_groups were created with
         make_agent_optimizer (policy first, critic second per agent).
         """
+        print(f"[DEBUG] _get_network_state called for agent {agent_idx}")
         state = {
             "policy": {"gradients":[], "weight_norms":{}, "optimizer_state":{}},
             "critic":{"gradients":[], "weight_norms":{}, "optimizer_state":{}}
         }
         for role in ['critic','policy']:
             net = self.value if role=='critic' else self.policy
+            params_with_grad = 0
+            total_params = 0
             for pname, p in net.named_parameters():
+                total_params += 1
                 #role = getattr(p, "role")
                 if p.grad is not None:
+                    params_with_grad += 1
                     try:
                         state[role]['gradients'].append(p.grad.detach()[agent_idx,:,:].norm(2))
                     except IndexError:
@@ -688,6 +693,7 @@ class BlockPPO(PPO):
 
                 # Weight norms
                 state[role]['weight_norms'][pname] = p.norm().item()
+            print(f"[DEBUG] {role} network: {params_with_grad}/{total_params} parameters have gradients")
 
         return state
 
@@ -786,14 +792,20 @@ class BlockPPO(PPO):
                 # --- Network state diagnostics (per-agent) ---
                 def grad_norm_per_agent(agent_gradients):
                     """Calculate gradient norm for a single agent's gradients."""
+                    print(f"[DEBUG] grad_norm_per_agent called with {len(agent_gradients)} gradients")
                     if len(agent_gradients) == 0:
+                        print(f"[DEBUG] No gradients available, returning 0.0")
                         return 0.0
-                    return torch.norm(torch.stack(agent_gradients), 2).item()
+                    result = torch.norm(torch.stack(agent_gradients), 2).item()
+                    print(f"[DEBUG] Calculated gradient norm: {result}")
+                    return result
 
                 def adam_step_size_per_agent(agent_optimizer_state):
                     """Calculate Adam step size for a single agent's optimizer state."""
+                    print(f"[DEBUG] adam_step_size_per_agent called with {len(agent_optimizer_state)} optimizer states")
                     step_sizes = []
                     for name, state in agent_optimizer_state.items():
+                        print(f"[DEBUG] Processing optimizer state for {name}, keys: {list(state.keys()) if state else 'None'}")
                         if 'exp_avg' in state and 'exp_avg_sq' in state and 'step' in state:
                             beta1, beta2 = self.optimizer.defaults['betas']
                             eps = self.optimizer.defaults['eps']
