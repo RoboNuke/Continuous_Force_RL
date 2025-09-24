@@ -666,35 +666,39 @@ class BlockPPO(PPO):
             "policy": {"gradients":[], "weight_norms":{}, "optimizer_state":{}},
             "critic":{"gradients":[], "weight_norms":{}, "optimizer_state":{}}
         }
+
+        # Collect all gradients and states first WITHOUT clearing
         for role in ['critic','policy']:
             net = self.value if role=='critic' else self.policy
             params_with_grad = 0
             total_params = 0
             for pname, p in net.named_parameters():
                 total_params += 1
-                #role = getattr(p, "role")
+
                 if p.grad is not None:
                     params_with_grad += 1
                     try:
-                        state[role]['gradients'].append(p.grad.detach()[agent_idx,:,:].norm(2))
+                        # Store the full gradient tensor for this agent
+                        grad_norm = p.grad.detach()[agent_idx,:,:].norm(2)
+                        state[role]['gradients'].append(grad_norm)
                     except IndexError:
-                        #print(pname, " re-indexed")
-                        state[role]['gradients'].append(p.grad.detach()[agent_idx,:].norm(2))
+                        # Handle different tensor shapes
+                        grad_norm = p.grad.detach()[agent_idx,:].norm(2)
+                        state[role]['gradients'].append(grad_norm)
 
+                    # Collect optimizer state if available
                     if pname in self.optimizer.state:
-                        # this is the same for every agent since they share the optimizer
                         op_state = self.optimizer.state[pname]
                         state[role]['optimizer_state'][pname] = {
-                            "exp_avg": op_state["exp_avg"].norm().item(),
-                            "exp_avg_sq": op_state["exp_avg_sq"].norm().item(),
-                            "step": op_state["step"],
+                            "exp_avg": op_state.get("exp_avg", torch.tensor(0.0)),
+                            "exp_avg_sq": op_state.get("exp_avg_sq", torch.tensor(0.0)),
+                            "step": op_state.get("step", 0),
                         }
-                    
-                    # Optional: clear grad after collection
-                    p.grad = None
+                        print(f"[DEBUG] Collected optimizer state for {pname}: step={op_state.get('step', 0)}")
 
-                # Weight norms
+                # Weight norms (always collect)
                 state[role]['weight_norms'][pname] = p.norm().item()
+
             print(f"[DEBUG] {role} network: {params_with_grad}/{total_params} parameters have gradients")
 
         return state
@@ -798,6 +802,12 @@ class BlockPPO(PPO):
                     if len(agent_gradients) == 0:
                         print(f"[DEBUG] No gradients available, returning 0.0")
                         return 0.0
+
+                    # Check individual gradient values
+                    grad_values = [g.item() for g in agent_gradients]
+                    print(f"[DEBUG] Individual gradient norms: {grad_values[:5]}...")  # First 5 values
+
+                    # Calculate total norm
                     result = torch.norm(torch.stack(agent_gradients), 2).item()
                     print(f"[DEBUG] Calculated gradient norm: {result}")
                     return result
@@ -805,24 +815,49 @@ class BlockPPO(PPO):
                 def adam_step_size_per_agent(agent_optimizer_state):
                     """Calculate Adam step size for a single agent's optimizer state."""
                     print(f"[DEBUG] adam_step_size_per_agent called with {len(agent_optimizer_state)} optimizer states")
+
+                    if len(agent_optimizer_state) == 0:
+                        print(f"[DEBUG] No optimizer states available, returning 0.0")
+                        return 0.0
+
                     step_sizes = []
                     for name, state in agent_optimizer_state.items():
-                        print(f"[DEBUG] Processing optimizer state for {name}, keys: {list(state.keys()) if state else 'None'}")
-                        if 'exp_avg' in state and 'exp_avg_sq' in state and 'step' in state:
-                            beta1, beta2 = self.optimizer.defaults['betas']
-                            eps = self.optimizer.defaults['eps']
-                            lr = self.optimizer.defaults['lr']
-                            step = state['step']
+                        print(f"[DEBUG] Processing optimizer state for {name}, keys: {list(state.keys()) if isinstance(state, dict) else 'Not dict'}")
 
-                            bias_correction1 = 1 - beta1 ** step
-                            bias_correction2 = 1 - beta2 ** step
+                        # Check if state has required fields
+                        if isinstance(state, dict) and 'exp_avg' in state and 'exp_avg_sq' in state and 'step' in state:
+                            try:
+                                beta1, beta2 = self.optimizer.defaults['betas']
+                                eps = self.optimizer.defaults['eps']
+                                lr = self.optimizer.defaults['lr']
+                                step_count = state['step']
 
-                            if state['exp_avg_sq'] > 1e-8:
-                                effective_step_direction = ((state['exp_avg'] / bias_correction1) /
-                                                           (torch.sqrt(torch.tensor(state['exp_avg_sq'] / bias_correction2)) + eps))
-                                net_step_sizes = (lr * effective_step_direction).item()
-                                step_sizes.append(net_step_sizes)
-                    return sum(step_sizes) / (len(step_sizes) + 1e-6)
+                                # Get the actual tensor values
+                                exp_avg = state['exp_avg']
+                                exp_avg_sq = state['exp_avg_sq']
+
+                                print(f"[DEBUG] {name}: step={step_count}, exp_avg_norm={torch.norm(exp_avg).item():.6f}, exp_avg_sq_norm={torch.norm(exp_avg_sq).item():.6f}")
+
+                                if step_count > 0 and torch.norm(exp_avg_sq).item() > 1e-8:
+                                    bias_correction1 = 1 - beta1 ** step_count
+                                    bias_correction2 = 1 - beta2 ** step_count
+
+                                    # Calculate effective step size
+                                    effective_step_direction = (exp_avg / bias_correction1) / (torch.sqrt(exp_avg_sq / bias_correction2) + eps)
+                                    step_size = lr * torch.norm(effective_step_direction).item()
+                                    step_sizes.append(step_size)
+                                    print(f"[DEBUG] {name}: calculated step_size={step_size:.6f}")
+                                else:
+                                    print(f"[DEBUG] {name}: step count is {step_count} or exp_avg_sq norm too small, skipping")
+
+                            except Exception as e:
+                                print(f"[DEBUG] Error calculating step size for {name}: {e}")
+                        else:
+                            print(f"[DEBUG] {name}: missing required optimizer state fields")
+
+                    result = sum(step_sizes) / max(len(step_sizes), 1) if step_sizes else 0.0
+                    print(f"[DEBUG] Final average step size: {result:.6f}")
+                    return result
 
                 # Collect network states if requested
                 network_states = None
