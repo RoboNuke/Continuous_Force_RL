@@ -245,6 +245,9 @@ def main():
     if wrappers_config.get('factory_metrics', {}).get('enabled', False):
         print("  - Applying FactoryMetricsWrapper")
         env = lUtils.apply_factory_metrics_wrapper(env, derived)
+        print(f"[DEBUG] FactoryMetricsWrapper applied successfully")
+    else:
+        print(f"[DEBUG] FactoryMetricsWrapper NOT applied - enabled: {wrappers_config.get('factory_metrics', {}).get('enabled', False)}")
 
     if wrappers_config.get('action_logging', {}).get('enabled', False):
         print("  - Applying EnhancedActionLoggingWrapper")

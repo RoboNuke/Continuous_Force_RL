@@ -738,10 +738,18 @@ class BlockPPO(PPO):
                     stats["Policy/Clip_Fraction"] = torch.tensor([clip_mask[:, i, :].float().mean().item() for i in range(self.num_agents)], device=self.device)
 
                 if entropies is not None:
-                    stats["Policy/Entropy_Avg"] = torch.tensor([entropies[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
+                    entropy_values = torch.tensor([entropies[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
+                    stats["Policy/Entropy_Avg"] = entropy_values
+                    print(f"[DEBUG] Policy entropy metrics created: {entropy_values}")
+                else:
+                    print(f"[DEBUG] No entropies provided for logging")
 
                 if policy_losses is not None:
-                    stats["Policy/Loss_Avg"] = torch.tensor([policy_losses[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
+                    policy_loss_values = torch.tensor([policy_losses[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
+                    stats["Policy/Loss_Avg"] = policy_loss_values
+                    print(f"[DEBUG] Policy loss metrics created: {policy_loss_values}")
+                else:
+                    print(f"[DEBUG] No policy_losses provided for logging")
 
                 # --- Value stats (per-agent) ---
                 if value_losses is not None and values is not None and returns is not None:
@@ -813,19 +821,28 @@ class BlockPPO(PPO):
                 # Policy network diagnostics
                 if store_policy_state and network_states is not None:
                     print(f"[DEBUG] Generating Policy/Step_Size metrics for {len(network_states)} agents")
-                    stats['Policy/Gradient_Norm'] = torch.tensor([grad_norm_per_agent(state['policy']['gradients'])
+                    grad_norms = torch.tensor([grad_norm_per_agent(state['policy']['gradients'])
                                                    for state in network_states], device=self.device)
-                    stats['Policy/Step_Size'] = torch.tensor([adam_step_size_per_agent(state['policy']['optimizer_state'])
+                    step_sizes = torch.tensor([adam_step_size_per_agent(state['policy']['optimizer_state'])
                                                 for state in network_states], device=self.device)
+                    stats['Policy/Gradient_Norm'] = grad_norms
+                    stats['Policy/Step_Size'] = step_sizes
+                    print(f"[DEBUG] Policy metrics created - Gradient_Norm: {grad_norms}, Step_Size: {step_sizes}")
 
                 # Critic network diagnostics
                 if store_critic_state and network_states is not None:
-                    stats['Critic/Gradient_Norm'] = torch.tensor([grad_norm_per_agent(state['critic']['gradients'])
+                    print(f"[DEBUG] Generating Critic/Step_Size metrics for {len(network_states)} agents")
+                    critic_grad_norms = torch.tensor([grad_norm_per_agent(state['critic']['gradients'])
                                                     for state in network_states], device=self.device)
-                    stats['Critic/Step_Size'] = torch.tensor([adam_step_size_per_agent(state['critic']['optimizer_state'])
+                    critic_step_sizes = torch.tensor([adam_step_size_per_agent(state['critic']['optimizer_state'])
                                                 for state in network_states], device=self.device)
+                    stats['Critic/Gradient_Norm'] = critic_grad_norms
+                    stats['Critic/Step_Size'] = critic_step_sizes
+                    print(f"[DEBUG] Critic metrics created - Gradient_Norm: {critic_grad_norms}, Step_Size: {critic_step_sizes}")
 
             # Pass metrics to wrapper system
+            print(f"[DEBUG] Sending {len(stats)} metrics to wrapper: {list(stats.keys())}")
+            print(f"[DEBUG] Step size present in stats: {'Policy/Step_Size' in stats}, {'Critic/Step_Size' in stats}")
             wrapper.add_metrics(stats)
 
         except Exception as e:
