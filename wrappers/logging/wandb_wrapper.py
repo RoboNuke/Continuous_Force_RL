@@ -28,7 +28,7 @@ class SimpleEpisodeTracker:
             entity=agent_config.get('wandb_entity'),
             project=agent_config.get('wandb_project'),
             name=agent_config.get('wandb_name'),
-            reinit=True,
+            reinit="create_new",
             config=combined_config,
             group=agent_config.get('wandb_group'),
             tags=agent_config.get('wandb_tags'),
