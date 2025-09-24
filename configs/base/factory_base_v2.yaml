@@ -67,7 +67,7 @@ wrappers:
     enabled: true
     # break_force and num_agents are computed from primary config automatically
 
-  # Efficient environment resetting
+  # Efficient environment resetting3
   efficient_reset:
     enabled: true
 
@@ -117,8 +117,8 @@ wrappers:
     track_rot: true
     track_force: true
     track_torque: true
-    force_size: 6
-    logging_frequency: 100
+    force_size: 3
+    logging_frequency: 150
 
 # EXPERIMENT CONFIGURATION
 experiment:
@@ -137,15 +137,6 @@ agent:
   # Checkpoint and experiment tracking
   track_ckpts: true
   # ckpt_tracker_path comes from primary config automatically
-
-  # Experiment logging (will be updated by launch_utils)
-  experiment_directory: "DEFAULT_DIRECTORY"
-  experiment_name: "DEFAULT_EXP_NAME"
-  write_interval: 150
-  checkpoint_interval: 1500
-  wandb_project: "OVERRIDE_WITH_ARG"
-  wandb_tags: []
-  wandb_group: ""
 
   # SKRL PPO PARAMETERS (these override SKRL defaults)
   # rollouts and mini_batches are auto-calculated from episode timing

@@ -406,7 +406,6 @@ class FactoryMetricsWrapper(gym.Wrapper):
             factory_metrics = self._collect_factory_metrics()
             if factory_metrics:
                 add_metrics_target.add_metrics(factory_metrics)
-            else:
         else:
             # Fallback: Copy relevant extras to info for downstream wrappers
             if hasattr(self.unwrapped, 'extras') and self.unwrapped.extras:

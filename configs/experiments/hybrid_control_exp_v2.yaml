@@ -115,20 +115,8 @@ wrappers:
 
 # Agent configuration adjustments for hybrid control
 agent:
-  # Keep most defaults from SKRL, but adjust learning rates for stability
-  policy_learning_rate: 5.0e-7  # Lower learning rate for stable hybrid learning
-  critic_learning_rate: 1.0e-5
-  disable_progressbar: false
-  # PPO parameters suitable for complex control
-  learning_epochs: 4  # More epochs for complex hybrid learning
-  discount_factor: 0.99
-  lambda_: 0.95
+  mini_batches: 150
 
-  # Experiment metadata
-  experiment_name: "hybrid_control_exp"
-  wandb_tags: ["hybrid_control", "force_position", "factory"]
-  wandb_group: "hybrid_control_experiments"
-  wandb_project: "Continuous_Force_RL"
 
 # Experiment metadata
 experiment:
