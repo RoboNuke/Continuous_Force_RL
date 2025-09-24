@@ -806,9 +806,13 @@ class BlockPPO(PPO):
                 network_states = None
                 if store_policy_state or store_critic_state:
                     network_states = [self._get_network_state(i) for i in range(self.num_agents)]
+                    print(f"[DEBUG] Network states collected: {network_states is not None}, count: {len(network_states) if network_states else 0}")
+                    if network_states:
+                        print(f"[DEBUG] Sample network state keys: {list(network_states[0].keys()) if network_states[0] else 'None'}")
 
                 # Policy network diagnostics
                 if store_policy_state and network_states is not None:
+                    print(f"[DEBUG] Generating Policy/Step_Size metrics for {len(network_states)} agents")
                     stats['Policy/Gradient_Norm'] = torch.tensor([grad_norm_per_agent(state['policy']['gradients'])
                                                    for state in network_states], device=self.device)
                     stats['Policy/Step_Size'] = torch.tensor([adam_step_size_per_agent(state['policy']['optimizer_state'])

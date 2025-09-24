@@ -303,6 +303,12 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         """Step environment and track episode metrics."""
         obs, reward, terminated, truncated, info = super().step(action)
 
+        # Debug environment info and extras for component rewards
+        if hasattr(self.unwrapped, 'extras') and self.unwrapped.extras:
+            print(f"[DEBUG] Environment extras keys: {list(self.unwrapped.extras.keys())[:10]}")  # First 10 keys
+        if info:
+            print(f"[DEBUG] Environment info keys: {list(info.keys())[:10]}")  # First 10 keys
+
         # Track current episode metrics
         self.current_episode_rewards += reward
         self.current_episode_lengths += 1
