@@ -11,7 +11,7 @@ task_name: "Isaac-Factory-PegInsert-Direct-v0"
 primary:
   agents_per_break_force: 2  # 2 agents per break force condition
   num_envs_per_agent: 256
-  break_forces: -1  # Break force condition (-1 = unbreakable)
+  break_forces: [-1, 5]  # Break force condition (-1 = unbreakable)
   max_steps: 15360000  # More training steps for hybrid control
   decimation: 8
   policy_hz: 15
