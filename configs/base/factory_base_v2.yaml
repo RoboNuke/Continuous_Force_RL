@@ -132,7 +132,7 @@ experiment:
 agent:
   # Core identification
   class: "PPO"
-  disable_progressbar: true
+  disable_progressbar: false
 
   # Checkpoint and experiment tracking
   track_ckpts: true
