@@ -192,7 +192,7 @@ def main():
     lUtils.apply_model_config(agent_cfg_wrapper, model)
 
     # Setup experiment logging
-    lUtils.setup_experiment_logging(env_cfg, agent_cfg_wrapper, resolved_config)
+    lUtils.setup_experiment_logging(env_cfg, agent_cfg_wrapper, resolved_config, config_bundle)
     # Extract the modified config back
     agent_config = agent_cfg_wrapper['agent']
 

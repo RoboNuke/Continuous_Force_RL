@@ -714,6 +714,18 @@ class ConfigManagerV2:
                 else:
                     print(f"\033[93m[CONFIG V2]: Warning: CLI override {key} - no such attribute\033[0m")
 
+            elif key == 'experiment.tags':
+                # Special handling for experiment tags - merge with existing
+                if isinstance(parsed_value, list):
+                    cli_tags = parsed_value
+                else:
+                    # Handle single tag or comma-separated string
+                    cli_tags = [tag.strip() for tag in str(parsed_value).split(',')]
+
+                # Store for later merging after launch_utils processes experiment config
+                config_bundle._cli_experiment_tags = cli_tags
+                print(f"[CONFIG V2]: CLI experiment tags to merge: {cli_tags}")
+
             # Handle existing flat overrides (primary, model flat attrs, etc.)
             else:
                 # Use existing logic for flat overrides
@@ -868,8 +880,25 @@ class ConfigManagerV2:
         def _deep_merge(base_dict, override_dict):
             for key, value in override_dict.items():
                 if key in base_dict and isinstance(base_dict[key], dict) and isinstance(value, dict):
-                    # Recursively merge nested dictionaries
-                    _deep_merge(base_dict[key], value)
+                    # Special handling for experiment tags - merge instead of replace
+                    if key == 'experiment' and 'tags' in base_dict[key] and 'tags' in value:
+                        # Merge tags, preserve other experiment fields normally
+                        merged_experiment = copy.deepcopy(base_dict[key])
+                        for exp_key, exp_value in value.items():
+                            if exp_key == 'tags':
+                                # Merge tags: base + experiment (remove duplicates, preserve order)
+                                merged_tags = list(base_dict[key]['tags'])
+                                for tag in exp_value:
+                                    if tag not in merged_tags:
+                                        merged_tags.append(tag)
+                                merged_experiment['tags'] = merged_tags
+                            else:
+                                # Normal override for other experiment fields
+                                merged_experiment[exp_key] = copy.deepcopy(exp_value)
+                        base_dict[key] = merged_experiment
+                    else:
+                        # Recursively merge nested dictionaries
+                        _deep_merge(base_dict[key], value)
                 else:
                     # Override value (including replacing entire nested dicts)
                     base_dict[key] = copy.deepcopy(value)

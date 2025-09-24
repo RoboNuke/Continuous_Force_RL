@@ -560,5 +560,190 @@ class TestConfigManagerV2CompleteLoading:
             os.unlink(temp_path)
 
 
+class TestConfigMergeTagMerging:
+    """Test experiment tag merging functionality."""
+
+    def test_merge_configs_experiment_tags_basic(self):
+        """Test basic experiment tag merging."""
+        base_config = {
+            'experiment': {
+                'name': 'base_exp',
+                'tags': ['baseline', 'factory'],
+                'group': 'base_group'
+            }
+        }
+
+        override_config = {
+            'experiment': {
+                'name': 'override_exp',
+                'tags': ['hybrid_control', 'force_position'],
+                'group': 'override_group'
+            }
+        }
+
+        result = ConfigManagerV2._merge_configs(base_config, override_config)
+
+        # Tags should be merged (base + override, no duplicates)
+        assert result['experiment']['tags'] == ['baseline', 'factory', 'hybrid_control', 'force_position']
+        # Other fields should be overridden normally
+        assert result['experiment']['name'] == 'override_exp'
+        assert result['experiment']['group'] == 'override_group'
+
+    def test_merge_configs_experiment_tags_with_duplicates(self):
+        """Test tag merging removes duplicates."""
+        base_config = {
+            'experiment': {
+                'tags': ['baseline', 'factory', 'common']
+            }
+        }
+
+        override_config = {
+            'experiment': {
+                'tags': ['hybrid_control', 'common', 'factory']
+            }
+        }
+
+        result = ConfigManagerV2._merge_configs(base_config, override_config)
+
+        # Should keep order from base, add new from override, no duplicates
+        expected_tags = ['baseline', 'factory', 'common', 'hybrid_control']
+        assert result['experiment']['tags'] == expected_tags
+
+    def test_merge_configs_experiment_tags_base_only(self):
+        """Test when only base has tags."""
+        base_config = {
+            'experiment': {
+                'tags': ['baseline', 'factory'],
+                'name': 'base'
+            }
+        }
+
+        override_config = {
+            'experiment': {
+                'name': 'override'
+            }
+        }
+
+        result = ConfigManagerV2._merge_configs(base_config, override_config)
+
+        # Base tags should be preserved
+        assert result['experiment']['tags'] == ['baseline', 'factory']
+        assert result['experiment']['name'] == 'override'
+
+    def test_merge_configs_experiment_tags_override_only(self):
+        """Test when only override has tags."""
+        base_config = {
+            'experiment': {
+                'name': 'base'
+            }
+        }
+
+        override_config = {
+            'experiment': {
+                'tags': ['hybrid_control', 'force_position'],
+                'name': 'override'
+            }
+        }
+
+        result = ConfigManagerV2._merge_configs(base_config, override_config)
+
+        # Override tags should be used
+        assert result['experiment']['tags'] == ['hybrid_control', 'force_position']
+        assert result['experiment']['name'] == 'override'
+
+    def test_merge_configs_no_experiment_section(self):
+        """Test normal merging when no experiment section."""
+        base_config = {
+            'primary': {
+                'agents_per_break_force': 2
+            }
+        }
+
+        override_config = {
+            'primary': {
+                'max_steps': 10000
+            }
+        }
+
+        result = ConfigManagerV2._merge_configs(base_config, override_config)
+
+        # Should merge normally
+        assert result['primary']['agents_per_break_force'] == 2
+        assert result['primary']['max_steps'] == 10000
+
+
+class TestCLIExperimentTagOverrides:
+    """Test CLI experiment tag override functionality."""
+
+    def test_cli_experiment_tags_single_tag(self):
+        """Test CLI override with single tag."""
+        from configs.cfg_exts.primary_cfg import PrimaryConfig
+        from configs.cfg_exts.extended_peg_insert_cfg import ExtendedFactoryTaskPegInsertCfg
+        from agents.extended_ppo_cfg import ExtendedPPOConfig
+        from configs.cfg_exts.extended_model_cfg import ExtendedModelConfig
+        from configs.cfg_exts.extended_wrapper_cfg import ExtendedWrapperConfig
+
+        config_bundle = ConfigBundle(
+            env_cfg=ExtendedFactoryTaskPegInsertCfg(),
+            agent_cfg=ExtendedPPOConfig(),
+            primary_cfg=PrimaryConfig(),
+            model_cfg=ExtendedModelConfig(),
+            wrapper_cfg=ExtendedWrapperConfig(),
+            task_name='peg_insert'
+        )
+
+        cli_overrides = ['experiment.tags=debug']
+        ConfigManagerV2._apply_cli_overrides(config_bundle, cli_overrides)
+
+        assert hasattr(config_bundle, '_cli_experiment_tags')
+        assert config_bundle._cli_experiment_tags == ['debug']
+
+    def test_cli_experiment_tags_multiple_comma_separated(self):
+        """Test CLI override with comma-separated tags."""
+        from configs.cfg_exts.primary_cfg import PrimaryConfig
+        from configs.cfg_exts.extended_peg_insert_cfg import ExtendedFactoryTaskPegInsertCfg
+        from agents.extended_ppo_cfg import ExtendedPPOConfig
+        from configs.cfg_exts.extended_model_cfg import ExtendedModelConfig
+        from configs.cfg_exts.extended_wrapper_cfg import ExtendedWrapperConfig
+
+        config_bundle = ConfigBundle(
+            env_cfg=ExtendedFactoryTaskPegInsertCfg(),
+            agent_cfg=ExtendedPPOConfig(),
+            primary_cfg=PrimaryConfig(),
+            model_cfg=ExtendedModelConfig(),
+            wrapper_cfg=ExtendedWrapperConfig(),
+            task_name='peg_insert'
+        )
+
+        cli_overrides = ['experiment.tags=debug,v2,test']
+        ConfigManagerV2._apply_cli_overrides(config_bundle, cli_overrides)
+
+        assert hasattr(config_bundle, '_cli_experiment_tags')
+        assert config_bundle._cli_experiment_tags == ['debug', 'v2', 'test']
+
+    def test_cli_experiment_tags_list_format(self):
+        """Test CLI override with Python list format."""
+        from configs.cfg_exts.primary_cfg import PrimaryConfig
+        from configs.cfg_exts.extended_peg_insert_cfg import ExtendedFactoryTaskPegInsertCfg
+        from agents.extended_ppo_cfg import ExtendedPPOConfig
+        from configs.cfg_exts.extended_model_cfg import ExtendedModelConfig
+        from configs.cfg_exts.extended_wrapper_cfg import ExtendedWrapperConfig
+
+        config_bundle = ConfigBundle(
+            env_cfg=ExtendedFactoryTaskPegInsertCfg(),
+            agent_cfg=ExtendedPPOConfig(),
+            primary_cfg=PrimaryConfig(),
+            model_cfg=ExtendedModelConfig(),
+            wrapper_cfg=ExtendedWrapperConfig(),
+            task_name='peg_insert'
+        )
+
+        cli_overrides = ['experiment.tags=["debug", "v2"]']
+        ConfigManagerV2._apply_cli_overrides(config_bundle, cli_overrides)
+
+        assert hasattr(config_bundle, '_cli_experiment_tags')
+        assert config_bundle._cli_experiment_tags == ['debug', 'v2']
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

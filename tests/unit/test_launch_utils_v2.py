@@ -849,5 +849,93 @@ class TestHelperFunctions:
         assert 'force_scale' in agent_cfg['agent']['hybrid_agent']
 
 
+class TestExperimentTagMerging:
+    """Test experiment tag merging in setup_experiment_logging."""
+
+    def test_setup_experiment_logging_tag_merging_no_cli(self):
+        """Test tag merging when no CLI tags provided."""
+        agent_cfg = create_mock_agent_config()
+        env_cfg = MockEnvConfig()
+        resolved_config = {
+            'primary': {'break_forces': [50.0, 75.0], 'agents_per_break_force': 2},
+            'derived': {'total_agents': 4, 'total_num_envs': 512},
+            'experiment': {
+                'name': 'test_exp',
+                'tags': ['baseline', 'factory'],  # Base + experiment merged tags
+                'group': 'test_group',
+                'wandb_project': 'test_project',
+                'wandb_entity': 'test_entity'
+            }
+        }
+
+        # No config_bundle (no CLI tags)
+        launch_utils.setup_experiment_logging(env_cfg, agent_cfg, resolved_config, config_bundle=None)
+
+        # Should use experiment tags + task name
+        assert agent_cfg['agent']['experiment']['tags'] == ['baseline', 'factory', 'MockTask']
+
+    def test_setup_experiment_logging_tag_merging_with_cli(self):
+        """Test tag merging with CLI tags."""
+        from configs.config_manager_v2 import ConfigBundle
+        from configs.cfg_exts.primary_cfg import PrimaryConfig
+
+        agent_cfg = create_mock_agent_config()
+        env_cfg = MockEnvConfig()
+        resolved_config = {
+            'primary': {'break_forces': [50.0], 'agents_per_break_force': 1},
+            'derived': {'total_agents': 1, 'total_num_envs': 256},
+            'experiment': {
+                'name': 'test_exp',
+                'tags': ['baseline', 'factory'],  # Base + experiment merged tags
+                'group': 'test_group',
+                'wandb_project': 'test_project',
+                'wandb_entity': 'test_entity'
+            }
+        }
+
+        # Mock config bundle with CLI tags
+        config_bundle = ConfigBundle(
+            env_cfg=None, agent_cfg=None, primary_cfg=PrimaryConfig(),
+            model_cfg=None, wrapper_cfg=None, task_name='test'
+        )
+        config_bundle._cli_experiment_tags = ['debug', 'v2']
+
+        launch_utils.setup_experiment_logging(env_cfg, agent_cfg, resolved_config, config_bundle)
+
+        # Should merge experiment + CLI tags + task name (no duplicates)
+        expected_tags = ['baseline', 'factory', 'debug', 'v2', 'MockTask']
+        assert agent_cfg['agent']['experiment']['tags'] == expected_tags
+
+    def test_setup_experiment_logging_tag_merging_with_cli_duplicates(self):
+        """Test tag merging with CLI tags that duplicate existing ones."""
+        from configs.config_manager_v2 import ConfigBundle
+        from configs.cfg_exts.primary_cfg import PrimaryConfig
+
+        agent_cfg = create_mock_agent_config()
+        env_cfg = MockEnvConfig()
+        resolved_config = {
+            'primary': {'break_forces': [50.0], 'agents_per_break_force': 1},
+            'derived': {'total_agents': 1, 'total_num_envs': 256},
+            'experiment': {
+                'name': 'test_exp',
+                'tags': ['baseline', 'factory', 'common'],
+                'group': 'test_group'
+            }
+        }
+
+        # Mock config bundle with overlapping CLI tags
+        config_bundle = ConfigBundle(
+            env_cfg=None, agent_cfg=None, primary_cfg=PrimaryConfig(),
+            model_cfg=None, wrapper_cfg=None, task_name='test'
+        )
+        config_bundle._cli_experiment_tags = ['debug', 'factory', 'common']
+
+        launch_utils.setup_experiment_logging(env_cfg, agent_cfg, resolved_config, config_bundle)
+
+        # Should preserve order, no duplicates + task name
+        expected_tags = ['baseline', 'factory', 'common', 'debug', 'MockTask']
+        assert agent_cfg['agent']['experiment']['tags'] == expected_tags
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

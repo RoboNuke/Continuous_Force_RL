@@ -335,7 +335,7 @@ def apply_model_config(agent_cfg, model_config):
             print(f"  - Set general model param: {key} = {value}")
 
 
-def setup_experiment_logging(env_cfg, agent_cfg, resolved_config):
+def setup_experiment_logging(env_cfg, agent_cfg, resolved_config, config_bundle=None):
     """
     Set up experiment logging configuration for multi-agent training.
 
@@ -372,16 +372,28 @@ def setup_experiment_logging(env_cfg, agent_cfg, resolved_config):
 
     # Set basic experiment parameters
     agent_cfg['agent']['experiment']['project'] = experiment.get('wandb_project', 'Continuous_Force_RL')
-    agent_cfg['agent']['experiment']['tags'] = experiment.get('tags', [])
+
+    # Handle tag merging: base + experiment (already merged) + CLI
+    base_exp_tags = experiment.get('tags', [])
+    cli_tags = getattr(config_bundle, '_cli_experiment_tags', []) if config_bundle else []
+
+    # Merge all tag sources: base+experiment (already merged) + CLI
+    final_tags = list(base_exp_tags)
+    for tag in cli_tags:
+        if tag not in final_tags:
+            final_tags.append(tag)
+
+    agent_cfg['agent']['experiment']['tags'] = final_tags
     agent_cfg['agent']['experiment']['group'] = experiment.get('group', '')
 
     # Set agent-specific data
     agent_cfg['agent']['break_force'] = primary['break_forces']
     agent_cfg['agent']['num_envs'] = resolved_config['derived']['total_num_envs']
 
-    # Add task tags
+    # Add task tags (avoid duplicates)
     task_name = env_cfg.task_name if hasattr(env_cfg, 'task_name') else 'factory'
-    agent_cfg['agent']['experiment']['tags'].append(task_name)
+    if task_name not in agent_cfg['agent']['experiment']['tags']:
+        agent_cfg['agent']['experiment']['tags'].append(task_name)
 
     # Set up individual agent logging paths
     _setup_individual_agent_logging(agent_cfg, resolved_config)
