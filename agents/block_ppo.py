@@ -537,7 +537,19 @@ class BlockPPO(PPO):
 
                 # optimization step
                 # zero out losses from cancelled
-                
+
+                # COLLECT NETWORK STATES BEFORE ANY OPTIMIZER STEP (Problem 1 Fix)
+                # Store policy and critic states while gradients still exist
+                self._log_minibatch_update(
+                    advantages = sampled_advantages,
+                    old_log_probs = sampled_log_prob,
+                    new_log_probs = next_log_prob,
+                    entropies = entropys,
+                    policy_losses = policy_losses,
+                    store_policy_state = True,
+                    store_critic_state = True
+                )
+
                 self.optimizer.zero_grad()
                 if timestep < self._random_value_timesteps:
                     self.update_nets(value_loss)
@@ -545,15 +557,6 @@ class BlockPPO(PPO):
                     self.update_nets(policy_loss + entropy_loss + value_loss)
 
                 if self.value_update_ratio > 1:
-                    
-                    self._log_minibatch_update(
-                        advantages = sampled_advantages,
-                        old_log_probs = sampled_log_prob,
-                        new_log_probs = next_log_prob,
-                        entropies = entropys,
-                        policy_losses = policy_losses,
-                        store_policy_state = True
-                    )
                     for i in range(self.value_update_ratio-1): #minus one because we already updated critic once
                         value_loss, vls, predicted_values = self.calc_value_loss(
                             sampled_states,
@@ -564,17 +567,18 @@ class BlockPPO(PPO):
                         )
                         value_losses += vls
                         self.update_nets(value_loss)
-                        
+
                     value_losses /= self.value_update_ratio
-                    
+
+                    # Log final results - network states already collected
                     self._log_minibatch_update(
                         returns = sampled_returns,
                         values = predicted_values,
                         value_losses = value_losses,
-                        store_critic_state = True
+                        store_critic_state = False  # Already collected before optimization
                     )
                 else:
-                    # log everything
+                    # Log all metrics - network states already collected
                     self._log_minibatch_update(
                         returns=sampled_returns,
                         values=predicted_values,
@@ -584,8 +588,8 @@ class BlockPPO(PPO):
                         entropies = entropys,
                         policy_losses = policy_losses,
                         value_losses=value_losses,
-                        store_policy_state = True,
-                        store_critic_state = True
+                        store_policy_state = False,  # Already collected before optimization
+                        store_critic_state = False   # Already collected before optimization
                     )
                 mini_batch += 1
 
@@ -677,24 +681,61 @@ class BlockPPO(PPO):
 
                 if p.grad is not None:
                     params_with_grad += 1
-                    try:
-                        # Store the full gradient tensor for this agent
-                        grad_norm = p.grad.detach()[agent_idx,:,:].norm(2)
-                        state[role]['gradients'].append(grad_norm)
-                    except IndexError:
-                        # Handle different tensor shapes
-                        grad_norm = p.grad.detach()[agent_idx,:].norm(2)
-                        state[role]['gradients'].append(grad_norm)
 
-                    # Collect optimizer state if available
-                    if pname in self.optimizer.state:
-                        op_state = self.optimizer.state[pname]
+                    # Problem 3 Fix: Handle different parameter architectures
+                    if hasattr(p, '_agent_id'):
+                        # ParameterList parameter - already agent-specific
+                        if p._agent_id == agent_idx:
+                            grad_norm = p.grad.detach().norm(2)
+                            state[role]['gradients'].append(grad_norm)
+                            print(f"[DEBUG] ParameterList param {pname}: agent_id={p._agent_id}, grad_norm={grad_norm.item():.6f}")
+                        # Skip parameters for other agents
+                    else:
+                        # Block parameter - has agent dimension
+                        try:
+                            # For 3D tensors: (num_agents, out_features, in_features)
+                            grad_norm = p.grad.detach()[agent_idx,:,:].norm(2)
+                            state[role]['gradients'].append(grad_norm)
+                            print(f"[DEBUG] Block param {pname}: 3D indexing, grad_norm={grad_norm.item():.6f}")
+                        except (IndexError, RuntimeError):
+                            try:
+                                # For 2D tensors: (num_agents, out_features)
+                                grad_norm = p.grad.detach()[agent_idx,:].norm(2)
+                                state[role]['gradients'].append(grad_norm)
+                                print(f"[DEBUG] Block param {pname}: 2D indexing, grad_norm={grad_norm.item():.6f}")
+                            except (IndexError, RuntimeError):
+                                # For 1D tensors or other cases: (num_agents,)
+                                try:
+                                    grad_norm = abs(p.grad.detach()[agent_idx])
+                                    state[role]['gradients'].append(grad_norm)
+                                    print(f"[DEBUG] Block param {pname}: 1D indexing, grad_norm={grad_norm.item():.6f}")
+                                except (IndexError, RuntimeError) as e:
+                                    print(f"[DEBUG] Failed to index gradient for {pname}: {e}, shape: {p.grad.shape}")
+                                    # Skip this parameter
+
+                    # Collect optimizer state if available (Problem 2 Fix - use parameter object as key)
+                    # Only collect for parameters that belong to this agent
+                    should_collect_optimizer_state = False
+                    if hasattr(p, '_agent_id'):
+                        # ParameterList parameter - only collect for matching agent
+                        should_collect_optimizer_state = (p._agent_id == agent_idx)
+                    else:
+                        # Block parameter - collect for all agents (shared optimizer state)
+                        should_collect_optimizer_state = True
+
+                    if should_collect_optimizer_state and p in self.optimizer.state:
+                        op_state = self.optimizer.state[p]
                         state[role]['optimizer_state'][pname] = {
                             "exp_avg": op_state.get("exp_avg", torch.tensor(0.0)),
                             "exp_avg_sq": op_state.get("exp_avg_sq", torch.tensor(0.0)),
                             "step": op_state.get("step", 0),
                         }
                         print(f"[DEBUG] Collected optimizer state for {pname}: step={op_state.get('step', 0)}")
+                    else:
+                        if not should_collect_optimizer_state:
+                            print(f"[DEBUG] Skipping optimizer state for {pname} (different agent: {getattr(p, '_agent_id', 'N/A')})")
+                        else:
+                            print(f"[DEBUG] No optimizer state found for parameter {pname}")
 
                 # Weight norms (always collect)
                 state[role]['weight_norms'][pname] = p.norm().item()
@@ -827,9 +868,17 @@ class BlockPPO(PPO):
                         # Check if state has required fields
                         if isinstance(state, dict) and 'exp_avg' in state and 'exp_avg_sq' in state and 'step' in state:
                             try:
-                                beta1, beta2 = self.optimizer.defaults['betas']
-                                eps = self.optimizer.defaults['eps']
-                                lr = self.optimizer.defaults['lr']
+                                # Get learning rate from appropriate param group
+                                lr = None
+                                for group in self.optimizer.param_groups:
+                                    if group.get('role') == 'policy':
+                                        lr = group['lr']
+                                        break
+                                if lr is None:
+                                    lr = self.optimizer.param_groups[0]['lr']  # Fallback
+
+                                beta1, beta2 = self.optimizer.param_groups[0]['betas']
+                                eps = self.optimizer.param_groups[0]['eps']
                                 step_count = state['step']
 
                                 # Get the actual tensor values
