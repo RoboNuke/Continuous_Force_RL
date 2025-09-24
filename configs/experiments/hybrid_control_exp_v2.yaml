@@ -2,7 +2,7 @@
 # Updated for ConfigManagerV2 - No reference syntax, direct values only
 
 # Base configuration to inherit from
-base_config: "configs/base/factory_base_v2.yaml"
+base_config: "configs/base/PiH_base.yaml"
 
 # Task name
 task_name: "Isaac-Factory-PegInsert-Direct-v0"
