@@ -351,10 +351,6 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         """Step environment and track episode metrics."""
         obs, reward, terminated, truncated, info = super().step(action)
 
-        # Debug environment info and extras for component rewards
-        if hasattr(self.unwrapped, 'extras') and self.unwrapped.extras:
-        if info:
-
         # Extract and collect component rewards
         component_rewards = self._extract_component_rewards()
         if component_rewards:
