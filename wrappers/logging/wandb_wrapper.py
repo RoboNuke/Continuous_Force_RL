@@ -353,9 +353,7 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
 
         # Debug environment info and extras for component rewards
         if hasattr(self.unwrapped, 'extras') and self.unwrapped.extras:
-            print(f"[DEBUG] Environment extras keys: {list(self.unwrapped.extras.keys())[:10]}")  # First 10 keys
         if info:
-            print(f"[DEBUG] Environment info keys: {list(info.keys())[:10]}")  # First 10 keys
 
         # Extract and collect component rewards
         component_rewards = self._extract_component_rewards()

@@ -288,13 +288,10 @@ class FactoryMetricsWrapper(gym.Wrapper):
             try:
                 _, time_out = self.unwrapped._get_dones()
                 should_collect = torch.any(time_out)
-                print(f"[DEBUG] Factory metrics collection check: timeout_any={should_collect}, timeout_count={time_out.sum().item() if hasattr(time_out, 'sum') else 'N/A'}")
             except Exception as e:
-                print(f"[DEBUG] Factory metrics _get_dones() failed: {e}")
                 # Fallback - collect current state metrics only
                 should_collect = False
         else:
-            print(f"[DEBUG] Factory metrics: unwrapped environment has no _get_dones method")
 
         # Always provide current engagement and success states
         if hasattr(self.unwrapped, 'extras') and 'current_engagements' in self.unwrapped.extras:
@@ -399,28 +396,18 @@ class FactoryMetricsWrapper(gym.Wrapper):
 
         # Check if wandb wrapper is available (check both env.unwrapped and env)
         add_metrics_target = None
-        print(f"[DEBUG] Factory wrapper checking for wandb wrapper access:")
-        print(f"[DEBUG]   self.env.unwrapped type: {type(self.env.unwrapped)}")
-        print(f"[DEBUG]   self.env.unwrapped has add_metrics: {hasattr(self.env.unwrapped, 'add_metrics')}")
-        print(f"[DEBUG]   self.env type: {type(self.env)}")
-        print(f"[DEBUG]   self.env has add_metrics: {hasattr(self.env, 'add_metrics')}")
 
         if hasattr(self.env.unwrapped, 'add_metrics'):
             add_metrics_target = self.env.unwrapped
-            print(f"[DEBUG] Using env.unwrapped for wandb logging")
         elif hasattr(self.env, 'add_metrics'):
             add_metrics_target = self.env
-            print(f"[DEBUG] Using env for wandb logging")
 
         if add_metrics_target:
             # Collect factory metrics and send to wandb wrapper
             factory_metrics = self._collect_factory_metrics()
             if factory_metrics:
-                print(f"[DEBUG] Factory metrics collected: {len(factory_metrics)} metrics")
-                print(f"[DEBUG] Factory metric types: {[(k, type(v)) for k, v in list(factory_metrics.items())[:3]]}")
                 add_metrics_target.add_metrics(factory_metrics)
             else:
-                print(f"[DEBUG] No factory metrics collected this step")
         else:
             # Fallback: Copy relevant extras to info for downstream wrappers
             if hasattr(self.unwrapped, 'extras') and self.unwrapped.extras:

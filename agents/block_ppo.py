@@ -681,7 +681,6 @@ class BlockPPO(PPO):
         policy and critic. Assumes optimizer param_groups were created with
         make_agent_optimizer (policy first, critic second per agent).
         """
-        print(f"[DEBUG] _get_network_state called for agent {agent_idx}")
         state = {
             "policy": {"gradients":[], "weight_norms":{}, "optimizer_state":{}},
             "critic":{"gradients":[], "weight_norms":{}, "optimizer_state":{}}
@@ -704,7 +703,6 @@ class BlockPPO(PPO):
                         if p._agent_id == agent_idx:
                             grad_norm = p.grad.detach().norm(2)
                             state[role]['gradients'].append(grad_norm)
-                            print(f"[DEBUG] ParameterList param {pname}: agent_id={p._agent_id}, grad_norm={grad_norm.item():.6f}")
                         # Skip parameters for other agents
                     else:
                         # Block parameter - has agent dimension
@@ -712,22 +710,19 @@ class BlockPPO(PPO):
                             # For 3D tensors: (num_agents, out_features, in_features)
                             grad_norm = p.grad.detach()[agent_idx,:,:].norm(2)
                             state[role]['gradients'].append(grad_norm)
-                            print(f"[DEBUG] Block param {pname}: 3D indexing, grad_norm={grad_norm.item():.6f}")
                         except (IndexError, RuntimeError):
                             try:
                                 # For 2D tensors: (num_agents, out_features)
                                 grad_norm = p.grad.detach()[agent_idx,:].norm(2)
                                 state[role]['gradients'].append(grad_norm)
-                                print(f"[DEBUG] Block param {pname}: 2D indexing, grad_norm={grad_norm.item():.6f}")
                             except (IndexError, RuntimeError):
                                 # For 1D tensors or other cases: (num_agents,)
                                 try:
                                     grad_norm = abs(p.grad.detach()[agent_idx])
                                     state[role]['gradients'].append(grad_norm)
-                                    print(f"[DEBUG] Block param {pname}: 1D indexing, grad_norm={grad_norm.item():.6f}")
                                 except (IndexError, RuntimeError) as e:
-                                    print(f"[DEBUG] Failed to index gradient for {pname}: {e}, shape: {p.grad.shape}")
                                     # Skip this parameter
+                                    pass
 
                     # Collect optimizer state if available (Problem 2 Fix - use parameter object as key)
                     # Only collect for parameters that belong to this agent
@@ -746,17 +741,15 @@ class BlockPPO(PPO):
                             "exp_avg_sq": op_state.get("exp_avg_sq", torch.tensor(0.0)),
                             "step": op_state.get("step", 0),
                         }
-                        print(f"[DEBUG] Collected optimizer state for {pname}: step={op_state.get('step', 0)}")
                     else:
                         if not should_collect_optimizer_state:
-                            print(f"[DEBUG] Skipping optimizer state for {pname} (different agent: {getattr(p, '_agent_id', 'N/A')})")
+                            pass
                         else:
-                            print(f"[DEBUG] No optimizer state found for parameter {pname}")
+                            pass
 
                 # Weight norms (always collect)
                 state[role]['weight_norms'][pname] = p.norm().item()
 
-            print(f"[DEBUG] {role} network: {params_with_grad}/{total_params} parameters have gradients")
 
         return state
 
@@ -776,7 +769,6 @@ class BlockPPO(PPO):
                                        for state in network_states], device=self.device)
             gradient_metrics['Policy/Gradient_Norm'] = grad_norms
             gradient_metrics['Policy/Step_Size'] = step_sizes
-            print(f"[DEBUG] Collected policy gradients: {grad_norms}, step sizes: {step_sizes}")
 
         if store_critic_state:
             critic_grad_norms = torch.tensor([self._grad_norm_per_agent(state['critic']['gradients'])
@@ -785,39 +777,30 @@ class BlockPPO(PPO):
                                               for state in network_states], device=self.device)
             gradient_metrics['Critic/Gradient_Norm'] = critic_grad_norms
             gradient_metrics['Critic/Step_Size'] = critic_step_sizes
-            print(f"[DEBUG] Collected critic gradients: {critic_grad_norms}, step sizes: {critic_step_sizes}")
 
         if gradient_metrics:
-            print(f"[DEBUG] Sending gradient metrics directly to wrapper: {list(gradient_metrics.keys())}")
             wrapper.add_metrics(gradient_metrics)
 
     def _grad_norm_per_agent(self, agent_gradients):
         """Calculate gradient norm for a single agent's gradients."""
-        print(f"[DEBUG] grad_norm_per_agent called with {len(agent_gradients)} gradients")
         if len(agent_gradients) == 0:
-            print(f"[DEBUG] No gradients available, returning 0.0")
             return 0.0
 
         # Check individual gradient values
         grad_values = [g.item() for g in agent_gradients]
-        print(f"[DEBUG] Individual gradient norms: {grad_values[:5]}...")  # First 5 values
 
         # Calculate total norm
         result = torch.norm(torch.stack(agent_gradients), 2).item()
-        print(f"[DEBUG] Calculated gradient norm: {result}")
         return result
 
     def _adam_step_size_per_agent(self, agent_optimizer_state):
         """Calculate Adam step size for a single agent's optimizer state."""
-        print(f"[DEBUG] adam_step_size_per_agent called with {len(agent_optimizer_state)} optimizer states")
 
         if len(agent_optimizer_state) == 0:
-            print(f"[DEBUG] No optimizer states available, returning 0.0")
             return 0.0
 
         step_sizes = []
         for name, state in agent_optimizer_state.items():
-            print(f"[DEBUG] Processing optimizer state for {name}, keys: {list(state.keys()) if isinstance(state, dict) else 'Not dict'}")
 
             # Check if state has required fields
             if isinstance(state, dict) and 'exp_avg' in state and 'exp_avg_sq' in state and 'step' in state:
@@ -839,7 +822,6 @@ class BlockPPO(PPO):
                     exp_avg = state['exp_avg']
                     exp_avg_sq = state['exp_avg_sq']
 
-                    print(f"[DEBUG] {name}: step={step_count}, exp_avg_norm={torch.norm(exp_avg).item():.6f}, exp_avg_sq_norm={torch.norm(exp_avg_sq).item():.6f}")
 
                     if step_count > 0 and torch.norm(exp_avg_sq).item() > 1e-8:
                         bias_correction1 = 1 - beta1 ** step_count
@@ -849,17 +831,15 @@ class BlockPPO(PPO):
                         effective_step_direction = (exp_avg / bias_correction1) / (torch.sqrt(exp_avg_sq / bias_correction2) + eps)
                         step_size = lr * torch.norm(effective_step_direction).item()
                         step_sizes.append(step_size)
-                        print(f"[DEBUG] {name}: calculated step_size={step_size:.6f}")
                     else:
-                        print(f"[DEBUG] {name}: step count is {step_count} or exp_avg_sq norm too small, skipping")
+                        pass
 
                 except Exception as e:
-                    print(f"[DEBUG] Error calculating step size for {name}: {e}")
+                    pass
             else:
-                print(f"[DEBUG] {name}: missing required optimizer state fields")
+                pass
 
         result = sum(step_sizes) / max(len(step_sizes), 1) if step_sizes else 0.0
-        print(f"[DEBUG] Final average step size: {result:.6f}")
         return result
 
     def _log_minibatch_update(
@@ -909,16 +889,14 @@ class BlockPPO(PPO):
                 if entropies is not None:
                     entropy_values = torch.tensor([entropies[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
                     stats["Policy/Entropy_Avg"] = entropy_values
-                    print(f"[DEBUG] Policy entropy metrics created: {entropy_values}")
                 else:
-                    print(f"[DEBUG] No entropies provided for logging")
+                    pass
 
                 if policy_losses is not None:
                     policy_loss_values = torch.tensor([policy_losses[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
                     stats["Policy/Loss_Avg"] = policy_loss_values
-                    print(f"[DEBUG] Policy loss metrics created: {policy_loss_values}")
                 else:
-                    print(f"[DEBUG] No policy_losses provided for logging")
+                    pass
 
                 # --- Value stats (per-agent) ---
                 if value_losses is not None and values is not None and returns is not None:
@@ -954,8 +932,6 @@ class BlockPPO(PPO):
 
 
             # Pass metrics to wrapper system
-            print(f"[DEBUG] Final stats keys: {list(stats.keys())}")
-            print(f"[DEBUG] Step size present in final stats: {'Policy/Step_Size' in stats}, {'Critic/Step_Size' in stats}")
             wrapper.add_metrics(stats)
 
         except Exception as e:
