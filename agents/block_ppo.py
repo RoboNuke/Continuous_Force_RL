@@ -589,12 +589,8 @@ class BlockPPO(PPO):
 
         # Publish accumulated learning metrics to wandb after all minibatches complete
         wrapper = self._get_logging_wrapper()
-        print(f"[DEBUG] Found wrapper: {wrapper is not None}, type: {type(wrapper) if wrapper else None}")
         if wrapper:
-            print(f"[DEBUG] Calling wrapper.publish()")
             wrapper.publish()
-        else:
-            print(f"[DEBUG] No wrapper found - publish() not called")
 
     def update_nets(self, loss):
                         
@@ -708,7 +704,6 @@ class BlockPPO(PPO):
             store_policy_state=False,
             store_critic_state=False
     ):
-        print(f"[DEBUG] _log_minibatch_update called with {sum(x is not None for x in [returns, values, advantages, old_log_probs, new_log_probs, entropies, policy_losses, value_losses])} non-None arguments")
         """Log minibatch update metrics through wrapper system with per-agent support.
 
         All metrics are computed per-agent and passed as lists to the wrapper system.
@@ -827,7 +822,6 @@ class BlockPPO(PPO):
                                                 for state in network_states], device=self.device)
 
             # Pass metrics to wrapper system
-            print(f"[DEBUG] Sending {len(stats)} metrics to wrapper: {list(stats.keys())}")
             wrapper.add_metrics(stats)
 
         except Exception as e:

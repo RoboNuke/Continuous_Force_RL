@@ -31,7 +31,14 @@ class SimpleEpisodeTracker:
             reinit=True,
             config=combined_config,
             group=agent_config.get('wandb_group'),
-            tags=agent_config.get('wandb_tags')
+            tags=agent_config.get('wandb_tags'),
+            #settings=wandb.Settings(
+            #    _disable_stats=True,  # Reduce wandb overhead
+            #    _disable_meta=True,   # Reduce metadata collection
+            #    console="off",        # Reduce console spam
+            #    _service_wait=300     # Longer service timeout
+            #)
+
         )
 
         # Metric storage
@@ -61,8 +68,6 @@ class SimpleEpisodeTracker:
 
     def publish(self, onetime_metrics: Dict[str, torch.Tensor] = {}):
         """Add onetime metrics and publish everything to wandb."""
-        print(f"[DEBUG] Publishing metrics. Accumulated: {len(self.accumulated_metrics)}, Onetime: {len(onetime_metrics)}")
-
         # Validate onetime_metrics are tensors
         for name, value in onetime_metrics.items():
             if not isinstance(value, torch.Tensor):
@@ -79,7 +84,6 @@ class SimpleEpisodeTracker:
             if value_list:
                 stacked = torch.stack(value_list)
                 result = stacked.mean().item()
-                print(f"[DEBUG] Metric '{name}': {len(value_list)} values, final={result}, type={type(result)}")
                 final_metrics[name] = result
 
         # Add onetime metrics (now guaranteed to be tensors)
@@ -92,8 +96,6 @@ class SimpleEpisodeTracker:
         final_metrics["env_steps"] = self.env_steps
 
         # Publish to wandb
-        print(f"[DEBUG] Publishing {len(final_metrics)} metrics to wandb: {list(final_metrics.keys())}")
-        print(f"[DEBUG] Sample metric types: {[(k, type(v)) for k, v in list(final_metrics.items())[:3]]}")
         self.run.log(final_metrics)
 
         # Clear accumulated data
@@ -268,8 +270,6 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         Args:
             metrics: Dictionary of metric_name -> tensor with length num_envs, num_agents, or scalar
         """
-        print(f"[DEBUG] GenericWandbLoggingWrapper.add_metrics called with {len(metrics)} metrics: {list(metrics.keys())}")
-
         # Validate all metrics are tensors
         for name, values in metrics.items():
             if not isinstance(values, torch.Tensor):
