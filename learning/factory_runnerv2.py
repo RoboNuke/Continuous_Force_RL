@@ -209,22 +209,22 @@ def main():
     if env_cfg.use_ft_sensor:
         resolved_config.experiment.tags.append('force')
     else:
-        resolved_config.experiment.tags.append('no-force')
+        resolved_config['experiment']['tags'].append('no-force')
     env_cfg.obs_type = 'local'
-    resolved_config.experiment.tags.append('local-obs')
+    resolved_config['experiment']['tags'].append('local-obs')
     if wrappers_config.get('hybrid_control', {}).get('enabled', False):
         env_cfg.ctrl_type = 'hybrid'
-        resolved_config.experiment.tags.append('hybrid-ctrl')
+        resolved_config['experiment']['tags'].append('hybrid-ctrl')
     else:
         env_cfg.ctrl_type = 'pose'
-        resolved_config.experiment.tags.append('pose-ctrl')
+        resolved_config['experiment']['tags'].append('pose-ctrl')
     
     if model.get('use_hybrid_agent', False):
         env_cfg.agent_type = 'CLoP'
-        resolved_config.experiment.tags.append('CLoP-agent')
+        resolved_config['experiment']['tags'].append('CLoP-agent')
     else:
         env_cfg.agent_type = 'basic'
-        resolved_config.experiment.tags.append('basic-agent')
+        resolved_config['experiment']['tags'].append('basic-agent')
         
 
     # ===== STEP 2: CREATE ENVIRONMENT =====
