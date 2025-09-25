@@ -191,20 +191,6 @@ def main():
     # Apply model configuration
     lUtils.apply_model_config(agent_cfg_wrapper, model)
 
-    # Setup experiment logging
-    lUtils.setup_experiment_logging(env_cfg, agent_cfg_wrapper, resolved_config, config_bundle)
-    # Extract the modified config back
-    agent_config = agent_cfg_wrapper['agent']
-
-    # Debug: Print configurations
-    if primary.get('debug_mode', False):
-        print("[DEBUG]: Environment and agent configurations applied successfully")
-
-    # Validate factory configuration
-    print("[INFO]: Step 1.5 - Validating factory configuration")
-    lUtils.validate_factory_configuration(env_cfg)
-    print(f"[INFO]: Configuration complete - rollout steps: {max_rollout_steps}")
-
     env_cfg.use_ft_sensor = wrappers_config.get('force_torque_sensor', {}).get('enabled', False)
     if env_cfg.use_ft_sensor:
         resolved_config['experiment']['tags'].append('force')
@@ -225,6 +211,20 @@ def main():
     else:
         env_cfg.agent_type = 'basic'
         resolved_config['experiment']['tags'].append('basic-agent')
+
+    # Setup experiment logging
+    lUtils.setup_experiment_logging(env_cfg, agent_cfg_wrapper, resolved_config, config_bundle)
+    # Extract the modified config back
+    agent_config = agent_cfg_wrapper['agent']
+
+    # Debug: Print configurations
+    if primary.get('debug_mode', False):
+        print("[DEBUG]: Environment and agent configurations applied successfully")
+
+    # Validate factory configuration
+    print("[INFO]: Step 1.5 - Validating factory configuration")
+    lUtils.validate_factory_configuration(env_cfg)
+    print(f"[INFO]: Configuration complete - rollout steps: {max_rollout_steps}")
         
 
     # ===== STEP 2: CREATE ENVIRONMENT =====
