@@ -205,25 +205,25 @@ def main():
     lUtils.validate_factory_configuration(env_cfg)
     print(f"[INFO]: Configuration complete - rollout steps: {max_rollout_steps}")
 
-    env_cfg['use_ft_sensor'] = wrappers_config.get('force_torque_sensor', {}).get('enabled', False)
-    if env_cfg['use_ft_sensor']:
+    env_cfg.use_ft_sensor = wrappers_config.get('force_torque_sensor', {}).get('enabled', False)
+    if env_cfg.use_ft_sensor:
         resolved_config.experiment.tags.append('force')
     else:
         resolved_config.experiment.tags.append('no-force')
-    env_cfg['obs_type'] = 'local'
+    env_cfg.obs_type = 'local'
     resolved_config.experiment.tags.append('local-obs')
     if wrappers_config.get('hybrid_control', {}).get('enabled', False):
-        env_cfg['ctrl_type'] = 'hybrid'
+        env_cfg.ctrl_type = 'hybrid'
         resolved_config.experiment.tags.append('hybrid-ctrl')
     else:
-        env_cfg['ctrl_type'] = 'pose'
+        env_cfg.ctrl_type = 'pose'
         resolved_config.experiment.tags.append('pose-ctrl')
     
     if model.get('use_hybrid_agent', False):
-        env_cfg['agent_type'] = 'CLoP'
+        env_cfg.agent_type = 'CLoP'
         resolved_config.experiment.tags.append('CLoP-agent')
     else:
-        env_cfg['agent_type'] = 'basic'
+        env_cfg.agent_type = 'basic'
         resolved_config.experiment.tags.append('basic-agent')
         
 
