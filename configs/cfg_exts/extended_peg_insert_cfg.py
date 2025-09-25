@@ -21,7 +21,11 @@ class ExtendedFactoryTaskPegInsertCfg(FactoryTaskPegInsertCfg):
     Inherits from Isaac Lab's FactoryTaskPegInsertCfg and adds our custom
     parameters and computed properties. Uses our ExtendedFactoryEnvCfg features.
     """
-
+    use_ft_sensor: bool = False
+    obs_type: str = ''
+    ctrl_type: str = ''
+    agent_type: str = ''
+    
     def __post_init__(self):
         """Post-initialization to set up extended configurations."""
         # Apply our extended factory env post_init logic

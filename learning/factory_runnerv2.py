@@ -210,7 +210,7 @@ def main():
         resolved_config.experiment.tags.append('force')
     else:
         resolved_config.experiment.tags.append('no-force')
-    env_cfg['observation_type'] = 'local'
+    env_cfg['obs_type'] = 'local'
     resolved_config.experiment.tags.append('local-obs')
     if wrappers_config.get('hybrid_control', {}).get('enabled', False):
         env_cfg['ctrl_type'] = 'hybrid'
