@@ -217,6 +217,7 @@ def main():
     # Extract the modified config back
     agent_config = agent_cfg_wrapper['agent']
 
+    print("Sim data:", env_cfg.sim.dt, env_cfg.sim.render_interval)
     # Debug: Print configurations
     if primary.get('debug_mode', False):
         print("[DEBUG]: Environment and agent configurations applied successfully")
@@ -230,6 +231,7 @@ def main():
     # ===== STEP 2: CREATE ENVIRONMENT =====
     # Environment creation using fully configured objects from Step 1
     print("[INFO]: Step 2 - Creating environment")
+    env_cfg.seed = args_cli.seed
     env = gym.make(
         args_cli.task,
         cfg=env_cfg,

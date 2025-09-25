@@ -6,15 +6,15 @@ task_name: "Isaac-Factory-PegInsert-Direct-v0"
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
-  agents_per_break_force: 3  # Number of agents per break force condition
-  num_envs_per_agent: 256    # Environments per individual agent
+  agents_per_break_force: 2  # Number of agents per break force condition
+  num_envs_per_agent: 128    # Environments per individual agent
   break_forces: [-1,5]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
   max_steps: 10240000
   debug_mode: false
   seed: -1
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_tracker2.txt"
+  ckpt_tracker_path: "~/ckpt_tracker2.txt" #"/nfs/stak/users/brownhun/ckpt_tracker2.txt"
   ctrl_torque: false
 
 # ENVIRONMENT OVERRIDES (Direct Isaac Lab FactoryEnvCfg parameters)
