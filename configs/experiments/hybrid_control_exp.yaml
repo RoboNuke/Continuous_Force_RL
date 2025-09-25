@@ -60,7 +60,5 @@ wrappers:
 # Experiment metadata
 experiment:
   name: "hybrid_control_exp"
-  tags: ["hybrid_control", "force_position", "factory"]
-  group: "hybrid_control_experiments"
-  wandb_project: "Continuous_Force_RL"
-  wandb_entity: "hur"
+  tags: []
+  group: "hybrid_exp"

@@ -118,9 +118,9 @@ wrappers:
 # EXPERIMENT CONFIGURATION
 experiment:
   name: "fPiH_base"
-  tags: ["factory", 'FPiH']
+  tags: ["factory", 'FPiH', 'sept_24']
   group: "fPiH_experiments"
-  wandb_project: "Continuous_Force_RL"
+  wandb_project: "Sept_24_Exps"
   wandb_entity: "hur"
 
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
