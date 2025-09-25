@@ -207,7 +207,7 @@ def main():
 
     env_cfg.use_ft_sensor = wrappers_config.get('force_torque_sensor', {}).get('enabled', False)
     if env_cfg.use_ft_sensor:
-        resolved_config.experiment.tags.append('force')
+        resolved_config['experiment']['tags'].append('force')
     else:
         resolved_config['experiment']['tags'].append('no-force')
     env_cfg.obs_type = 'local'
