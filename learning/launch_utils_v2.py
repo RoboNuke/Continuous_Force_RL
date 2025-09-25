@@ -468,7 +468,8 @@ def apply_force_torque_wrapper(env, wrapper_config):
     env = ForceTorqueWrapper(
         env,
         use_tanh_scaling=wrapper_config.get('use_tanh_scaling', False),
-        tanh_scale=wrapper_config.get('tanh_scale', 0.03)
+        tanh_scale=wrapper_config.get('tanh_scale', 0.03),
+        add_force_obs=wrapper_config.get('add_force_obs', False)
     )
     return env
 
@@ -1357,6 +1358,8 @@ def _setup_individual_agent_logging(agent_cfg, resolved_config):
             log_root_path = os.path.join("logs", f"{exp_name}_f({break_force})_{agent_idx}")
             log_root_path = os.path.abspath(log_root_path)
 
+            # current format
+            # name_FT({on/off})_{exp_tag}_{task_type}_{obs_type}_Hyb-Ctrl({0/1})_Hyb-Agent({0/1})_{date_time}_f({break_force})
             log_dir = f"{exp_name}_f({break_force})_{agent_idx}"
 
             agent_cfg["agent"][f'agent_{agent_idx}']["experiment"]["directory"] = log_root_path

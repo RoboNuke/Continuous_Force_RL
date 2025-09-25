@@ -30,7 +30,7 @@ class ForceTorqueWrapper(gym.Wrapper):
     - Supports tanh scaling for force readings
     """
 
-    def __init__(self, env, use_tanh_scaling=False, tanh_scale=0.03):
+    def __init__(self, env, use_tanh_scaling=False, tanh_scale=0.03, add_force_obs=False):
         """
         Initialize the force-torque sensor wrapper.
 
@@ -47,6 +47,9 @@ class ForceTorqueWrapper(gym.Wrapper):
 
         # Update observation and state dimensions using Isaac Lab's native approach
         if hasattr(self.unwrapped, 'cfg'):
+            if add_force_obs:
+                self.unwrapped.cfg.obs_order.append('force_torque')
+                self.unwrapped.cfg.state_order.append('force_torque')
             self._update_observation_config()
 
         # Flag to track if sensor is initialized
@@ -77,7 +80,6 @@ class ForceTorqueWrapper(gym.Wrapper):
         if hasattr(env_cfg, 'obs_order') and hasattr(env_cfg, 'state_order'):
             # Don't automatically add force_torque - let the user control where it goes
             # The wrapper will inject it if it's in the orders, skip if not
-
             # Try to find and update dimension configurations
             self._update_dimension_configs(env_cfg)
 

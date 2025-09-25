@@ -205,6 +205,19 @@ def main():
     lUtils.validate_factory_configuration(env_cfg)
     print(f"[INFO]: Configuration complete - rollout steps: {max_rollout_steps}")
 
+    env_cfg['use_ft_sensor'] = wrappers_config.get('force_torque_sensor', {}).get('enabled', False)
+    env_cfg['observation_type'] = 'local'
+    if wrappers_config.get('hybrid_control', {}).get('enabled', False):
+        env_cfg['ctrl_type'] = 'hybrid'
+    else:
+        env_cfg['ctrl_type'] = 'pose'
+    
+    if model.get('use_hybrid_agent', False):
+        env_cfg['agent_type'] = 'CLoP'
+    else:
+        env_cfg['agent_type'] = 'basic'
+
+
     # ===== STEP 2: CREATE ENVIRONMENT =====
     # Environment creation using fully configured objects from Step 1
     print("[INFO]: Step 2 - Creating environment")

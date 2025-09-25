@@ -107,7 +107,8 @@ class ExtendedWrapperConfig:
         return {
             'enabled': self.force_torque_sensor.enabled,
             'use_tanh_scaling': self.force_torque_sensor.use_tanh_scaling,
-            'tanh_scale': self.force_torque_sensor.tanh_scale
+            'tanh_scale': self.force_torque_sensor.tanh_scale,
+            'add_force_obs': self.force_torque_sensor.add_force_obs
         }
 
     def get_observation_noise_config(self) -> Dict[str, Any]:
@@ -177,7 +178,8 @@ class ExtendedWrapperConfig:
             'force_torque_sensor': {
                 'enabled': self.force_torque_sensor.enabled,
                 'use_tanh_scaling': self.force_torque_sensor.use_tanh_scaling,
-                'tanh_scale': self.force_torque_sensor.tanh_scale
+                'tanh_scale': self.force_torque_sensor.tanh_scale,
+                'add_force_obs': self.force_torque_sensor.add_force_obs
             },
             'observation_manager': {
                 'enabled': self.observation_manager_enabled,

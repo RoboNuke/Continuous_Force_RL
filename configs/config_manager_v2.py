@@ -433,7 +433,8 @@ class ConfigManagerV2:
                 wrapper_cfg.force_torque_sensor = ForceTorqueSensorConfig(
                     enabled=fts_data.get('enabled', wrapper_cfg.force_torque_sensor.enabled),
                     use_tanh_scaling=fts_data.get('use_tanh_scaling', wrapper_cfg.force_torque_sensor.use_tanh_scaling),
-                    tanh_scale=fts_data.get('tanh_scale', wrapper_cfg.force_torque_sensor.tanh_scale)
+                    tanh_scale=fts_data.get('tanh_scale', wrapper_cfg.force_torque_sensor.tanh_scale),
+                    add_force_obs=fts_data.get('add_force_obs', wrapper_cfg.force_torque_sensor.add_force_obs)
                 )
                 print(f"[CONFIG V2]: Applied force_torque_sensor config: enabled={wrapper_cfg.force_torque_sensor.enabled}")
 
@@ -601,7 +602,8 @@ class ConfigManagerV2:
             'force_torque_sensor': {
                 'enabled': 'force_torque_sensor_enabled',
                 'use_tanh_scaling': 'force_torque_use_tanh_scaling',
-                'tanh_scale': 'force_torque_tanh_scale'
+                'tanh_scale': 'force_torque_tanh_scale',
+                'add_force_obs' : 'add_force_obs'
             },
             'observation_noise': {
                 'enabled': 'observation_noise_enabled',

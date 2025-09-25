@@ -8,6 +8,7 @@ class ForceTorqueSensorConfig:
     enabled: bool = False
     use_tanh_scaling: bool = False
     tanh_scale: float = 0.03
+    add_force_obs: bool = False
 
 
 @dataclass
