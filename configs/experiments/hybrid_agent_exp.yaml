@@ -48,8 +48,6 @@ wrappers:
   # Enable force-torque sensor for hybrid control
   force_torque_sensor:
     enabled: true
-    use_tanh_scaling: false
-    tanh_scale: 0.03  # Slightly higher scaling for hybrid control
 
   # Enable hybrid control wrapper
   hybrid_control:

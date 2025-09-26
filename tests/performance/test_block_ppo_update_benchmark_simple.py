@@ -736,9 +736,9 @@ def run_benchmark(config_path=None, override_params=None):
             'log_minibatch_update': {},
             'optimizer_zero_grad': {},
             'update_nets': {
-                'optimizer_step': {}
-            },
-            'collect_gradients': {}
+                'optimizer_step': {},
+                'collect_gradients': {}
+            }
         }
     }
 

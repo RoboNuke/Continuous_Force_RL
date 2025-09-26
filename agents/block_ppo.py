@@ -511,15 +511,14 @@ class BlockPPO(PPO):
                             keep_mask = ~torch.logical_or( ~keep_mask, agent_kls > self._kl_threshold)
 
                     # compute entropy loss
+                    entropys = self.policy.get_entropy(role="policy")
+                    entropys = entropys.view(sample_size, self.num_agents, self.envs_per_agent,-1)
+                    entropys[:,~keep_mask,:] = 0.0
                     #print(self._entropy_loss_scale)
-                    if not self._entropy_loss_scale < 0.0:
-                        entropys = self.policy.get_entropy(role="policy")
-                        entropys = entropys.view(sample_size, self.num_agents, self.envs_per_agent,-1)
-                        entropys[:,~keep_mask,:] = 0.0
+                    if self._entropy_loss_scale > 0.0:
                         entropy_loss = -self._entropy_loss_scale * entropys[:,keep_mask,:].mean()
                     else:
                         entropy_loss = 0
-                        entropys = None
                     
 
                     # compute policy loss
