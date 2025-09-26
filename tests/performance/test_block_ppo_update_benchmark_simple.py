@@ -129,11 +129,18 @@ def instrument_block_ppo(agent: BlockPPO, profiler: PerformanceProfiler):
     original_optimizer_zero_grad = agent.optimizer.zero_grad
     original_optimizer_step = agent.optimizer.step
 
-    # Enhanced wrapper that profiles internals of _update
+    # Enhanced wrapper that profiles internals of _update with proper hierarchy
     def wrapped_update(timestep: int, timesteps: int):
         with profiler.time_function('_update_total'):
 
-            # Temporarily inject profiling into the actual methods used inside _update
+            # Store original methods for proper nested timing
+            original_memory_sample_all = agent.memory.sample_all
+
+            # Profile memory sampling
+            def profiled_memory_sample_all(*args, **kwargs):
+                with profiler.time_function('memory_sample_all'):
+                    return original_memory_sample_all(*args, **kwargs)
+            agent.memory.sample_all = profiled_memory_sample_all
 
             # Profile policy forward passes
             def profiled_policy_act(*args, **kwargs):
@@ -164,41 +171,24 @@ def instrument_block_ppo(agent: BlockPPO, profiler: PerformanceProfiler):
                     return original_optimizer_step(*args, **kwargs)
             agent.optimizer.step = profiled_optimizer_step
 
-            # Now call the real _update with all the profiling hooks in place
+            # Simple approach: Since calc_value_loss is the main issue,
+            # let's remove all autocast hijacking and rely on the individual method timings.
+            # The "minibatch_processing" concept isn't clearly defined anyway.
+
             try:
-                # We'll also add context managers to track specific sections
-                original_memory_sample_all = agent.memory.sample_all
-                def profiled_memory_sample_all(*args, **kwargs):
-                    with profiler.time_function('memory_sample_all'):
-                        return original_memory_sample_all(*args, **kwargs)
-                agent.memory.sample_all = profiled_memory_sample_all
+                # Call the original update with our instrumented methods
+                # The hierarchy will be:
+                # _update_total
+                #   ├── memory_sample_all
+                #   ├── policy_act (multiple calls)
+                #   ├── compute_entropy (multiple calls)
+                #   ├── calc_value_loss (multiple calls) <- wrapped separately
+                #   │   └── value_act (calls from within calc_value_loss)
+                #   ├── log_minibatch_update (multiple calls) <- wrapped separately
+                #   ├── optimizer_zero_grad (multiple calls)
+                #   └── update_nets (multiple calls) <- wrapped separately
+                #       └── optimizer_step (calls from within update_nets)
 
-                # Track mini-batch processing by intercepting the iteration
-                _profiler = profiler  # Capture in closure
-                _epoch_count = [0]
-                _minibatch_count = [0]
-
-                # Hook into torch operations for more detail
-                original_torch_autocast = torch.autocast
-                def profiled_autocast(*args, **kwargs):
-                    class ProfiledAutocastContext:
-                        def __init__(self, ctx):
-                            self.ctx = ctx
-
-                        def __enter__(self):
-                            _minibatch_count[0] += 1
-                            _profiler.start_timer(f'minibatch_processing')
-                            return self.ctx.__enter__()
-
-                        def __exit__(self, *args):
-                            _profiler.stop_timer(f'minibatch_processing')
-                            return self.ctx.__exit__(*args)
-
-                    return ProfiledAutocastContext(original_torch_autocast(*args, **kwargs))
-
-                torch.autocast = profiled_autocast
-
-                # Call the real update
                 result = original_update(timestep, timesteps)
 
             finally:
@@ -209,7 +199,6 @@ def instrument_block_ppo(agent: BlockPPO, profiler: PerformanceProfiler):
                 agent.optimizer.zero_grad = original_optimizer_zero_grad
                 agent.optimizer.step = original_optimizer_step
                 agent.memory.sample_all = original_memory_sample_all
-                torch.autocast = original_torch_autocast
 
             return result
 
@@ -734,24 +723,22 @@ def run_benchmark(config_path=None, override_params=None):
     print(f"{'Function':<50} {'Calls':<8} {'Total(ms)':<12} {'% of Total':<12}")
     print("-" * 94)
 
-    # Define hierarchy of function calls
+    # Define hierarchy of function calls (CORRECTED - no fake minibatch_processing)
     function_hierarchy = {
         '_update_total': {
             'memory_sample_all': {},
-            'minibatch_processing': {
-                'apply_preprocessing': {},
-                'policy_act': {},
-                'compute_entropy': {},
-                'calc_value_loss': {
-                    'value_act': {}
-                },
-                'log_minibatch_update': {},
-                'optimizer_zero_grad': {},
-                'update_nets': {
-                    'optimizer_step': {}
-                },
-                'collect_gradients': {}
-            }
+            'apply_preprocessing': {},
+            'policy_act': {},
+            'compute_entropy': {},
+            'calc_value_loss': {
+                'value_act': {}
+            },
+            'log_minibatch_update': {},
+            'optimizer_zero_grad': {},
+            'update_nets': {
+                'optimizer_step': {}
+            },
+            'collect_gradients': {}
         }
     }
 
