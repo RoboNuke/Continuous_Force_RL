@@ -475,7 +475,7 @@ class BlockPPO(PPO):
         # sample mini-batches from memory
         sampled_batches = self.memory.sample_all(names=self._tensors_names, mini_batches=self._mini_batches)
         sample_size = self._rollouts // self._mini_batches
-        
+        #print("\n\n\nIN UPDATE FUNCTION \n\n\n\n")
         # learning epochs
         for epoch in range(self._learning_epochs):
             mini_batch = 0
@@ -510,15 +510,16 @@ class BlockPPO(PPO):
                         if self._kl_threshold:
                             keep_mask = ~torch.logical_or( ~keep_mask, agent_kls > self._kl_threshold)
 
-                    entropys = self.policy.get_entropy(role="policy")
-                    entropys = entropys.view(sample_size, self.num_agents, self.envs_per_agent,-1)
-                    entropys[:,~keep_mask,:] = 0.0
-
                     # compute entropy loss
-                    if self._entropy_loss_scale:
+                    #print(self._entropy_loss_scale)
+                    if not self._entropy_loss_scale < 0.0:
+                        entropys = self.policy.get_entropy(role="policy")
+                        entropys = entropys.view(sample_size, self.num_agents, self.envs_per_agent,-1)
+                        entropys[:,~keep_mask,:] = 0.0
                         entropy_loss = -self._entropy_loss_scale * entropys[:,keep_mask,:].mean()
                     else:
                         entropy_loss = 0
+                        entropys = None
                     
 
                     # compute policy loss
@@ -623,11 +624,11 @@ class BlockPPO(PPO):
         self.scaler.scale(loss).backward()
 
         # Collect gradients immediately after backward pass while they exist
-        if update_policy or update_critic:
-            self._collect_and_store_gradients(
-                store_policy_state=update_policy,
-                store_critic_state=update_critic
-            )
+        #if update_policy or update_critic:
+        #    self._collect_and_store_gradients(
+        #        store_policy_state=update_policy,
+        #        store_critic_state=update_critic
+        #    )
 
         if config.torch.is_distributed:
             self.policy.reduce_parameters()
@@ -636,19 +637,111 @@ class BlockPPO(PPO):
 
         if self._grad_norm_clip > 0:
             self.scaler.unscale_(self.optimizer)
-            if self.policy is self.value:
-                nn.utils.clip_grad_norm_(self.policy.parameters(), self._grad_norm_clip)
-            else:
-                nn.utils.clip_grad_norm_(
-                    itertools.chain(self.policy.parameters(), self.value.parameters()), self._grad_norm_clip
-                )
+
+            # NEW: Per-agent gradient clipping for improved performance
+            if not hasattr(self, '_param_classification'):
+                # Cache parameter classification for efficiency - only compute once
+                self._param_classification = self.classify_model_parameters()
+
+            block_params, regular_params = self._param_classification
+            agent_grad_norms = self.compute_per_agent_grad_norms(block_params, regular_params)
+            self.apply_per_agent_gradient_clipping(
+                block_params, regular_params, agent_grad_norms, self._grad_norm_clip
+            )
         self.scaler.step(self.optimizer)
         self.scaler.update()
-        
+
+    def classify_model_parameters(self):
+        """Classify parameters into block vs regular for efficient per-agent processing.
+
+        Returns:
+            tuple: (block_params, regular_params) where:
+                - block_params: List of (name, param) with agent dimension shape[0] == num_agents
+                - regular_params: List of (name, param) for ParameterList items with _agent_id
+        """
+        block_params = []  # Parameters with agent dimension (shape[0] == num_agents)
+        regular_params = []  # Regular parameters (like actor_logstd from ParameterList)
+
+        for name, param in itertools.chain(
+            self.policy.named_parameters(),
+            self.value.named_parameters()
+        ):
+            if param.dim() > 0 and param.shape[0] == self.num_agents:
+                # Block parameter: (num_agents, ...)
+                block_params.append((name, param))
+            elif hasattr(param, '_agent_id'):
+                # ParameterList item with agent ID
+                regular_params.append((name, param))
+            # Skip other parameters (shouldn't be any in this architecture)
+
+        return block_params, regular_params
+
+    def compute_per_agent_grad_norms(self, block_params, regular_params):
+        """Compute gradient norms separately for each agent.
+
+        Args:
+            block_params: List of (name, param) tuples for block parameters
+            regular_params: List of (name, param) tuples for regular parameters
+
+        Returns:
+            torch.Tensor: Gradient norms for each agent, shape (num_agents,)
+        """
+        agent_grad_norms = torch.zeros(self.num_agents, device=self.device)
+
+        for agent_idx in range(self.num_agents):
+            grad_squares = []
+
+            # Process block parameters (slice by agent)
+            for name, param in block_params:
+                if param.grad is not None:
+                    # Slice agent's portion of the gradient
+                    agent_grad = param.grad[agent_idx]  # Shape: varies by parameter
+                    grad_squares.append(agent_grad.pow(2).sum())
+
+            # Process regular parameters (filter by _agent_id)
+            for name, param in regular_params:
+                if param.grad is not None and param._agent_id == agent_idx:
+                    grad_squares.append(param.grad.pow(2).sum())
+
+            # Compute total norm for this agent
+            if grad_squares:
+                agent_grad_norms[agent_idx] = torch.sqrt(sum(grad_squares))
+
+        return agent_grad_norms
+
+    def apply_per_agent_gradient_clipping(self, block_params, regular_params, grad_norms, clip_value):
+        """Apply gradient clipping separately for each agent.
+
+        Args:
+            block_params: List of (name, param) tuples for block parameters
+            regular_params: List of (name, param) tuples for regular parameters
+            grad_norms: Agent gradient norms, shape (num_agents,)
+            clip_value: Maximum allowed gradient norm
+        """
+        for agent_idx in range(self.num_agents):
+            if grad_norms[agent_idx] > clip_value:
+                scale_factor = clip_value / grad_norms[agent_idx]
+
+                # Clip block parameters
+                for name, param in block_params:
+                    if param.grad is not None:
+                        param.grad[agent_idx].mul_(scale_factor)
+
+                # Clip regular parameters
+                for name, param in regular_params:
+                    if param.grad is not None and param._agent_id == agent_idx:
+                        param.grad.mul_(scale_factor)
+
     def adaptive_huber_delta(self, predicted, sampled, k=1.35):
+        """Compute adaptive Huber delta with minimal GPU-CPU synchronization.
+
+        F.huber_loss() requires delta as a Python float, so we still need .item()
+        but we can optimize the computation to minimize the synchronization cost.
+        """
         e = (sampled - predicted)
         med = e.median()
         mad = (e - med).abs().median() + 1e-8
+        # F.huber_loss requires float, so we need .item() but only once at the end
         return float(k * mad)
     
     def calc_value_loss(self, sampled_states, sampled_values, sampled_returns, keep_mask, sample_size):
@@ -660,8 +753,13 @@ class BlockPPO(PPO):
             predicted_values = predicted_values.view( sample_size, self.num_agents, self.envs_per_agent)
 
             if self._clip_predicted_values:
-                predicted_values = sampled_values + torch.clip(
-                    predicted_values - sampled_values, min=-self._value_clip, max=self._value_clip
+                # Optimized value clipping - use clamp directly, avoid intermediate tensors
+                # Original: sampled_values + torch.clip(predicted_values - sampled_values, ...)
+                # Optimized: torch.clamp(predicted_values, min=sampled_values-clip, max=sampled_values+clip)
+                predicted_values = torch.clamp(
+                    predicted_values,
+                    min=sampled_values - self._value_clip,
+                    max=sampled_values + self._value_clip
                 )
 
             sampled_returns = sampled_returns.view(sample_size, self.num_agents, self.envs_per_agent)
@@ -675,12 +773,18 @@ class BlockPPO(PPO):
                 )
             else:
                 vls = self._value_loss_scale * F.mse_loss(sampled_returns, predicted_values, reduction='none')
-            vls[:,~keep_mask,:] = 0.0
+            # Optimized masked loss computation - avoid boolean indexing
+            # Create mask tensor for vectorized operations (broadcasting compatible)
+            mask_tensor = keep_mask.float().unsqueeze(0).unsqueeze(2)  # Shape: (1, num_agents, 1)
 
-            # make sure we get average losses for each update
-            #value_losses += vls
+            # Apply mask using multiplication (vectorized, no indexing)
+            # Modify vls in-place to match original behavior
+            vls = vls * mask_tensor
 
-            value_loss = vls[:,keep_mask,:].mean()
+            # Compute mean only over valid (masked) elements
+            # Sum masked losses and divide by number of valid elements
+            total_valid_elements = keep_mask.sum() * sample_size * self.envs_per_agent
+            value_loss = vls.sum() / total_valid_elements.clamp(min=1)
 
             return value_loss, vls, predicted_values
 
@@ -856,12 +960,21 @@ class BlockPPO(PPO):
     ):
         """Log minibatch update metrics through wrapper system with per-agent support.
 
-        All metrics are computed per-agent and passed as lists to the wrapper system.
+        All metrics are computed per-agent using vectorized operations for efficiency.
         Tensors are assumed to be shaped as (sample_size, num_agents, envs_per_agent).
 
+        Optimized version that eliminates GPU-CPU synchronization and uses vectorized operations
+        instead of per-agent loops. All operations stay on GPU until passed to wrapper.
+
         Args:
-            store_policy_state: If True, collect and log policy network state metrics
-            store_critic_state: If True, collect and log critic network state metrics
+            returns: Return values tensor (sample_size, num_agents, envs_per_agent)
+            values: Value predictions tensor (sample_size, num_agents, envs_per_agent)
+            advantages: Advantage values tensor (sample_size, num_agents, envs_per_agent)
+            old_log_probs: Old log probabilities tensor (sample_size, num_agents, envs_per_agent)
+            new_log_probs: New log probabilities tensor (sample_size, num_agents, envs_per_agent)
+            entropies: Entropy values tensor (sample_size, num_agents, envs_per_agent)
+            policy_losses: Policy loss values tensor (sample_size, num_agents, envs_per_agent)
+            value_losses: Value loss values tensor (sample_size, num_agents, envs_per_agent)
         """
         wrapper = self._get_logging_wrapper()
         if wrapper is None:
@@ -871,64 +984,59 @@ class BlockPPO(PPO):
         try:
             stats = {}
 
-            # Calculate index ranges for each agent
-            idx_ranges = [(i * self.envs_per_agent, (i + 1) * self.envs_per_agent)
-                         for i in range(self.num_agents)]
-
             with torch.no_grad():
-                # --- Policy stats (per-agent) ---
+                # --- Policy stats (vectorized) ---
                 if new_log_probs is not None and old_log_probs is not None:
                     ratio = (new_log_probs - old_log_probs).exp()
                     clip_mask = (ratio < 1 - self._ratio_clip) | (ratio > 1 + self._ratio_clip)
                     kl = old_log_probs - new_log_probs
 
-                    # Calculate per-agent metrics (as tensors)
-                    stats["Policy/KL_Divergence_Avg"] = torch.tensor([kl[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
-                    stats["Policy/KL_Divergence_95_Quantile"] = torch.tensor([kl[:, i, :].quantile(0.95).item() for i in range(self.num_agents)], device=self.device)
-                    stats["Policy/Clip_Fraction"] = torch.tensor([clip_mask[:, i, :].float().mean().item() for i in range(self.num_agents)], device=self.device)
+                    # Vectorized means across samples and environments, keep agents dimension
+                    stats["Policy/KL_Divergence_Avg"] = kl.mean(dim=(0, 2))  # Shape: (num_agents,)
+                    stats["Policy/Clip_Fraction"] = clip_mask.float().mean(dim=(0, 2))  # Shape: (num_agents,)
 
+                    # Vectorized quantiles - reshape to (sample_size * envs_per_agent, num_agents)
+                    kl_per_agent = kl.permute(1, 0, 2).reshape(self.num_agents, -1).T
+                    stats["Policy/KL_Divergence_95_Quantile"] = kl_per_agent.quantile(0.95, dim=0)  # Shape: (num_agents,)
+
+                # Vectorized entropy and policy loss
                 if entropies is not None:
-                    entropy_values = torch.tensor([entropies[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
-                    stats["Policy/Entropy_Avg"] = entropy_values
+                    stats["Policy/Entropy_Avg"] = entropies.mean(dim=(0, 2))  # Shape: (num_agents,)
 
                 if policy_losses is not None:
-                    policy_loss_values = torch.tensor([policy_losses[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
-                    stats["Policy/Loss_Avg"] = policy_loss_values
+                    stats["Policy/Loss_Avg"] = policy_losses.mean(dim=(0, 2))  # Shape: (num_agents,)
 
-                # --- Value stats (per-agent) ---
+                # --- Value stats (vectorized) ---
                 if value_losses is not None and values is not None and returns is not None:
-                    stats["Critic/Loss_Avg"] = torch.tensor([value_losses[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
-                    stats["Critic/Loss_Median"] = torch.tensor([value_losses[:, i, :].median().item() for i in range(self.num_agents)], device=self.device)
-                    stats["Critic/Loss_95_Quantile"] = torch.tensor([value_losses[:, i, :].quantile(0.95).item() for i in range(self.num_agents)], device=self.device)
-                    stats["Critic/Loss_90_Quantile"] = torch.tensor([value_losses[:, i, :].quantile(0.90).item() for i in range(self.num_agents)], device=self.device)
-                    stats["Critic/Predicted_Values_Avg"] = torch.tensor([values[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
-                    stats["Critic/Predicted_Values_Std"] = torch.tensor([values[:, i, :].std().item() for i in range(self.num_agents)], device=self.device)
+                    # Vectorized basic statistics
+                    stats["Critic/Loss_Avg"] = value_losses.mean(dim=(0, 2))  # Shape: (num_agents,)
+                    stats["Critic/Predicted_Values_Avg"] = values.mean(dim=(0, 2))  # Shape: (num_agents,)
+                    stats["Critic/Predicted_Values_Std"] = values.std(dim=(0, 2))  # Shape: (num_agents,)
 
-                    # Explained variance per agent
-                    explained_var_list = []
-                    for i in range(self.num_agents):
-                        agent_returns = returns[:, i, :]
-                        agent_values = values[:, i, :]
-                        explained_var = (1 - ((agent_returns - agent_values).var(unbiased=False) /
-                                            agent_returns.var(unbiased=False).clamp(min=1e-8))).item()
-                        explained_var_list.append(explained_var)
-                    stats["Critic/Explained_Variance"] = torch.tensor(explained_var_list, device=self.device)
+                    # Vectorized quantiles - reshape to (sample_size * envs_per_agent, num_agents)
+                    value_losses_per_agent = value_losses.permute(1, 0, 2).reshape(self.num_agents, -1).T
+                    stats["Critic/Loss_Median"] = value_losses_per_agent.median(dim=0).values  # Shape: (num_agents,)
+                    stats["Critic/Loss_95_Quantile"] = value_losses_per_agent.quantile(0.95, dim=0)  # Shape: (num_agents,)
+                    stats["Critic/Loss_90_Quantile"] = value_losses_per_agent.quantile(0.90, dim=0)  # Shape: (num_agents,)
 
-                # --- Advantage diagnostics (per-agent) ---
+                    # Vectorized explained variance - all operations stay on GPU
+                    returns_var = returns.var(dim=(0, 2), unbiased=False).clamp(min=1e-8)  # Shape: (num_agents,)
+                    residual_var = (returns - values).var(dim=(0, 2), unbiased=False)  # Shape: (num_agents,)
+                    stats["Critic/Explained_Variance"] = 1 - (residual_var / returns_var)  # Shape: (num_agents,)
+
+                # --- Advantage diagnostics (vectorized) ---
                 if advantages is not None:
-                    stats["Advantage/Mean"] = torch.tensor([advantages[:, i, :].mean().item() for i in range(self.num_agents)], device=self.device)
-                    stats["Advantage/Std_Dev"] = torch.tensor([advantages[:, i, :].std().item() for i in range(self.num_agents)], device=self.device)
+                    # Vectorized mean and standard deviation
+                    stats["Advantage/Mean"] = advantages.mean(dim=(0, 2))  # Shape: (num_agents,)
+                    stats["Advantage/Std_Dev"] = advantages.std(dim=(0, 2))  # Shape: (num_agents,)
 
-                    # Skewness per agent
-                    skew_list = []
-                    for i in range(self.num_agents):
-                        agent_adv = advantages[:, i, :]
-                        skew = (((agent_adv - agent_adv.mean()) ** 3).mean() / (agent_adv.std() ** 3 + 1e-8)).item()
-                        skew_list.append(skew)
-                    stats["Advantage/Skew"] = torch.tensor(skew_list, device=self.device)
+                    # Vectorized skewness calculation
+                    adv_mean = advantages.mean(dim=(0, 2), keepdim=True)  # Shape: (1, num_agents, 1)
+                    adv_std = advantages.std(dim=(0, 2), keepdim=True).clamp(min=1e-8)  # Shape: (1, num_agents, 1)
+                    adv_centered = advantages - adv_mean  # Shape: (sample_size, num_agents, envs_per_agent)
+                    stats["Advantage/Skew"] = (adv_centered ** 3).mean(dim=(0, 2)) / (adv_std.squeeze() ** 3)  # Shape: (num_agents,)
 
-
-            # Pass metrics to wrapper system
+            # Pass vectorized tensors to wrapper system (no .item() calls!)
             wrapper.add_metrics(stats)
 
         except Exception as e:

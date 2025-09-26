@@ -35,7 +35,7 @@ model:
     torque_scale: 1.0
 
     # Selection network adjustments
-    selection_adjustment_types: 'none'
+    selection_adjustment_types: ['none']
     init_scale_weights_factor: 0.1
     init_bias: -2.5
     pre_layer_scale_factor: 0.1

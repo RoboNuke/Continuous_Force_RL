@@ -1452,15 +1452,4 @@ def _configure_hybrid_agent_parameters(env_cfg, agent_cfg, model_config, wrapper
     # Extract ctrl_torque from wrappers_config
     agent_cfg['agent']['hybrid_agent']['ctrl_torque'] = wrappers_config.get('hybrid_control', {}).get('ctrl_torque', False)
 
-    # Set uniform sampling rate (typically a constant)
-    agent_cfg['agent']['hybrid_agent']['uniform_sampling_rate'] = 0.1  # Default value
-
-    # Set additional hybrid model parameters with defaults
-    agent_cfg['agent']['hybrid_agent']['selection_adjustment_types'] = ['l2_norm']  # Default adjustment type
-    agent_cfg['agent']['hybrid_agent']['init_scale_last_layer'] = True
-    agent_cfg['agent']['hybrid_agent']['init_layer_scale'] = 0.1
-    agent_cfg['agent']['hybrid_agent']['init_scale_weights_factor'] = 0.01
-    agent_cfg['agent']['hybrid_agent']['init_bias'] = -1.1
-    agent_cfg['agent']['hybrid_agent']['pre_layer_scale_factor'] = 0.01
-
     print("  - Hybrid agent parameters configured")

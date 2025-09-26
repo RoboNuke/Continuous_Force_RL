@@ -6,7 +6,7 @@ parameters for SimBa and hybrid agents. This is not an Isaac Lab config
 but our own organizational structure for model configuration.
 """
 
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, Union, List
 from dataclasses import dataclass, field
 
 from .version_compat import get_isaac_lab_ctrl_imports
@@ -15,6 +15,10 @@ from .critic_cfg import CriticConfig
 
 # Get configclass decorator with version compatibility
 configclass, _ = get_isaac_lab_ctrl_imports()
+
+def _default_selection_adjustment_types():
+    """Default factory for selection_adjustment_types field."""
+    return ['l2_norm', 'none']
 
 
 @configclass
@@ -158,6 +162,10 @@ class ExtendedHybridAgentConfig:
     parameters organized.
     """
 
+    # Selection network parameters (field with factory must come first)
+    selection_adjustment_types: List[str] = field(default_factory=_default_selection_adjustment_types)
+    """List of selection adjustment types ('none', 'l2_norm', 'bias', 'scale', etc.)"""
+
     # Control mode
     ctrl_torque: bool = False
     """Use torque control instead of position control"""
@@ -187,10 +195,6 @@ class ExtendedHybridAgentConfig:
 
     torque_scale: float = 1.0
     """Torque output scaling factor"""
-
-    # Selection network parameters
-    selection_adjustment_types: str = 'none'
-    """Type of selection adjustment ('none', 'bias', 'scale', etc.)"""
 
     init_scale_weights_factor: float = 0.1
     """Factor for initializing scale weights"""
