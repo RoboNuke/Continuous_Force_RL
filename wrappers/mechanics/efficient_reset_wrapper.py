@@ -36,7 +36,8 @@ class EfficientResetWrapper(gym.Wrapper):
         self._wrapper_initialized = False
 
         # Store original methods
-        self._original_reset_idx = None
+        self._original_factory_reset_idx = None
+        self._directrl_reset_idx = None
 
         # Initialize wrapper if environment is ready
         if hasattr(self.unwrapped, 'scene'):
@@ -49,11 +50,13 @@ class EfficientResetWrapper(gym.Wrapper):
 
         # Store and override _reset_idx method
         if hasattr(self.unwrapped, '_reset_idx'):
-            # CRITICAL FIX: Use DirectRLEnv's _reset_idx instead of factory env's
-            # Factory env's _reset_idx does expensive operations not suitable for partial resets
+            # Store original FactoryEnv method for full resets
+            self._original_factory_reset_idx = self.unwrapped._reset_idx
 
-            # Find DirectRLEnv's _reset_idx in the method resolution order
-            self._original_reset_idx = self._find_directrlenv_reset_method()
+            # Find DirectRLEnv's _reset_idx for partial resets
+            self._directrl_reset_idx = self._find_directrlenv_reset_method()
+
+            # Override with our wrapper method
             self.unwrapped._reset_idx = self._wrapped_reset_idx
 
         self._wrapper_initialized = True
@@ -102,13 +105,9 @@ class EfficientResetWrapper(gym.Wrapper):
         Reset specified environments efficiently using state shuffling.
 
         This method implements two reset strategies:
-        1. Full reset: When all environments are reset simultaneously
-        2. Partial reset: When only some environments are reset (uses state shuffling)
+        1. Full reset: When all environments are reset simultaneously (uses original FactoryEnv method)
+        2. Partial reset: When only some environments are reset (uses DirectRLEnv + state shuffling)
         """
-        # Call original reset for logging and other side effects
-        if self._original_reset_idx:
-            self._original_reset_idx(env_ids)
-
         if env_ids is None:
             env_ids = torch.arange(self.unwrapped.num_envs, device=self.unwrapped.device)
 
@@ -118,12 +117,19 @@ class EfficientResetWrapper(gym.Wrapper):
 
         # Check if this is a full reset (all environments)
         if len(env_ids) == self.unwrapped.num_envs:
-            # Full reset - let the original method handle it and cache the result
-            # The original reset sets up initial states, we just need to cache them
+            # Full reset - use original FactoryEnv method to ensure complete initialization
+            if self._original_factory_reset_idx:
+                self._original_factory_reset_idx(env_ids)
+
+            # Cache the initial state after full reset
             if hasattr(self.unwrapped, 'scene') and hasattr(self.unwrapped.scene, 'get_state'):
                 self.start_state = self.unwrapped.scene.get_state()
         else:
-            # Partial reset - use efficient state shuffling
+            # Partial reset - use DirectRLEnv method + efficient state shuffling
+            if self._directrl_reset_idx:
+                self._directrl_reset_idx(env_ids)
+
+            # Use efficient state shuffling for partial resets
             if self.start_state is not None:
                 self._perform_efficient_reset(env_ids)
 

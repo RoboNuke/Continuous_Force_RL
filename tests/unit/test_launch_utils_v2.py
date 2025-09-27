@@ -275,6 +275,29 @@ class TestWrapperApplicationFunctions:
         # Should use primary break_forces
         assert torch.allclose(wrapped_env.break_force, torch.tensor([100.0] * 16))  # All 16 envs get same break force
 
+    def test_apply_efficient_reset_wrapper(self):
+        """Test apply_efficient_reset_wrapper function."""
+        env = MockIsaacLabEnv()
+        wrapper_config = {}  # Configuration currently unused but maintained for consistency
+
+        wrapped_env = launch_utils.apply_efficient_reset_wrapper(env, wrapper_config)
+
+        # Check that the environment is wrapped correctly
+        assert hasattr(wrapped_env, '_wrapper_initialized')
+        assert hasattr(wrapped_env, 'start_state')
+        assert hasattr(wrapped_env, 'has_cached_state')
+        assert hasattr(wrapped_env, 'clear_cached_state')
+        assert hasattr(wrapped_env, 'get_reset_efficiency_stats')
+
+        # Check that it preserves the original environment
+        assert wrapped_env.unwrapped == env or wrapped_env.env == env
+
+        # Test that the wrapper methods are callable
+        stats = wrapped_env.get_reset_efficiency_stats()
+        assert isinstance(stats, dict)
+        assert 'has_cached_state' in stats
+        assert 'supports_efficient_reset' in stats
+
     def test_apply_force_torque_wrapper(self):
         """Test apply_force_torque_wrapper function."""
         env = MockIsaacLabEnv()

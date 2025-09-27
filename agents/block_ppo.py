@@ -222,11 +222,9 @@ class BlockPPO(PPO):
             self.models['policy'].actor_mean.load_state_dict(checkpoint['net_state_dict'])
             if 'log_std' in checkpoint:
                 self.models['policy'].actor_logstd = checkpoint['log_std']
-            print("Loaded policy network")
         else:
             # Fallback: assume entire checkpoint is the policy state dict
             self.models['policy'].actor_mean.load_state_dict(checkpoint)
-            print("Loaded policy network (fallback format)")
 
         # Load critic network - need to construct critic checkpoint path
         # Policy path: "agent_0_12345.pt" -> Critic path: "critic_0_12345.pt"
@@ -241,11 +239,10 @@ class BlockPPO(PPO):
                 else:
                     # Fallback: assume entire checkpoint is the critic state dict
                     self.models['value'].critic.load_state_dict(critic_checkpoint)
-                print("Loaded critic network")
             except Exception as e:
-                print(f"Warning: Failed to load critic from {critic_path}: {e}")
+                pass
         else:
-            print(f"Warning: Critic checkpoint not found at {critic_path}")
+            pass
 
         ## ORIGINAL SHARED PREPROCESSOR LOADING ##
         # for ckpt_name, ckpt in [("policy", checkpoint), ("critic", critic_checkpoint if 'critic_checkpoint' in locals() else {})]:
@@ -274,7 +271,6 @@ class BlockPPO(PPO):
                         key = f'agent_{i}_state_preprocessor'
                         if key in ckpt and ckpt[key] is not None and preprocessor is not None:
                             preprocessor.load_state_dict(ckpt[key])
-                            print(f"Loaded agent {i} state preprocessor from {ckpt_name} checkpoint")
 
                 # Load per-agent value preprocessors
                 if hasattr(self, '_per_agent_value_preprocessors'):
@@ -282,20 +278,16 @@ class BlockPPO(PPO):
                         key = f'agent_{i}_value_preprocessor'
                         if key in ckpt and ckpt[key] is not None and preprocessor is not None:
                             preprocessor.load_state_dict(ckpt[key])
-                            print(f"Loaded agent {i} value preprocessor from {ckpt_name} checkpoint")
 
                 # Backward compatibility: Load shared preprocessor states
                 if 'state_preprocessor' in ckpt and ckpt['state_preprocessor'] is not None:
                     if hasattr(self, '_state_preprocessor') and self._state_preprocessor is not None:
                         self._state_preprocessor.load_state_dict(ckpt['state_preprocessor'])
-                        print(f"Loaded shared state preprocessor from {ckpt_name} checkpoint")
 
                 if 'value_preprocessor' in ckpt and ckpt['value_preprocessor'] is not None:
                     if hasattr(self, '_value_preprocessor') and self._value_preprocessor is not None:
                         self._value_preprocessor.load_state_dict(ckpt['value_preprocessor'])
-                        print(f"Loaded shared value preprocessor from {ckpt_name} checkpoint")
 
-        print(f"Loaded checkpoint from {path}")
 
     def add_sample_to_memory(self, **tensors: torch.Tensor) -> None:
         self.memory.add_samples( **tensors )
@@ -398,8 +390,7 @@ class BlockPPO(PPO):
         :param timesteps: Number of timesteps
         :type timesteps: int
         """
-        # Store timestep for access in update_nets
-        self._current_timestep = timestep
+        # Note: timestep parameter available for use in update logic
         def compute_gae(
             rewards: torch.Tensor,
             dones: torch.Tensor,
@@ -507,6 +498,7 @@ class BlockPPO(PPO):
                         agent_kls = ((torch.exp(ratio) - 1) - ratio)
 
                         agent_kls = torch.mean(agent_kls, (0,2)) # assumes sample_size x num_agents x num_envs_per_agent x 1
+
                         if self._kl_threshold:
                             keep_mask = ~torch.logical_or( ~keep_mask, agent_kls > self._kl_threshold)
 
@@ -545,7 +537,7 @@ class BlockPPO(PPO):
 
                     sampled_returns = sampled_returns.view(sample_size, self.num_agents, self.envs_per_agent)
                     
-                    value_loss, value_losses, predicted_values = self.calc_value_loss(sampled_states, sampled_values, sampled_returns, keep_mask, sample_size)
+                    value_loss, value_losses, predicted_values = self.calc_value_loss(sampled_states, sampled_values, sampled_returns, sample_size)
 
                 # optimization step
                 # zero out losses from cancelled
@@ -562,9 +554,9 @@ class BlockPPO(PPO):
 
                 self.optimizer.zero_grad()
                 if timestep < self._random_value_timesteps:
-                    self.update_nets(value_loss)  # Auto-detects: policy=False, critic=True
+                    self.update_nets(value_loss, update_policy=False, update_critic=True)  # Value-only training
                 else:
-                    self.update_nets(policy_loss + entropy_loss + value_loss)  # Both networks
+                    self.update_nets(policy_loss + entropy_loss + value_loss, update_policy=True, update_critic=True)  # Both networks
 
                 if self.value_update_ratio > 1:
                     for i in range(self.value_update_ratio-1): #minus one because we already updated critic once
@@ -572,7 +564,6 @@ class BlockPPO(PPO):
                             sampled_states,
                             sampled_values,
                             sampled_returns,
-                            keep_mask,
                             sample_size
                         )
                         value_losses += vls
@@ -614,11 +605,6 @@ class BlockPPO(PPO):
             update_policy: Whether policy network is being updated
             update_critic: Whether critic network is being updated
         """
-        # Override policy updates during random value phase
-        current_timestep = getattr(self, '_current_timestep', 0)
-        if current_timestep < self._random_value_timesteps:
-            update_policy = False
-
         self.optimizer.zero_grad()
         self.scaler.scale(loss).backward()
 
@@ -743,7 +729,7 @@ class BlockPPO(PPO):
         # F.huber_loss requires float, so we need .item() but only once at the end
         return float(k * mad)
     
-    def calc_value_loss(self, sampled_states, sampled_values, sampled_returns, keep_mask, sample_size):
+    def calc_value_loss(self, sampled_states, sampled_values, sampled_returns, sample_size):
 
         with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
             # compute value loss
@@ -772,18 +758,8 @@ class BlockPPO(PPO):
                 )
             else:
                 vls = self._value_loss_scale * F.mse_loss(sampled_returns, predicted_values, reduction='none')
-            # Optimized masked loss computation - avoid boolean indexing
-            # Create mask tensor for vectorized operations (broadcasting compatible)
-            mask_tensor = keep_mask.float().unsqueeze(0).unsqueeze(2)  # Shape: (1, num_agents, 1)
 
-            # Apply mask using multiplication (vectorized, no indexing)
-            # Modify vls in-place to match original behavior
-            vls = vls * mask_tensor
-
-            # Compute mean only over valid (masked) elements
-            # Sum masked losses and divide by number of valid elements
-            total_valid_elements = keep_mask.sum() * sample_size * self.envs_per_agent
-            value_loss = vls.sum() / total_valid_elements.clamp(min=1)
+            value_loss = vls.mean()
 
             return value_loss, vls, predicted_values
 
@@ -977,7 +953,7 @@ class BlockPPO(PPO):
         """
         wrapper = self._get_logging_wrapper()
         if wrapper is None:
-            print("[INFO] Unable to log minibatch due to no logging wrapper!")
+            pass
             return  # No wrapper system available, skip logging
 
         try:
@@ -1007,6 +983,7 @@ class BlockPPO(PPO):
 
                 # --- Value stats (vectorized) ---
                 if value_losses is not None and values is not None and returns is not None:
+
                     # Vectorized basic statistics
                     stats["Critic/Loss_Avg"] = value_losses.mean(dim=(0, 2))  # Shape: (num_agents,)
                     stats["Critic/Predicted_Values_Avg"] = values.mean(dim=(0, 2))  # Shape: (num_agents,)
@@ -1050,7 +1027,6 @@ class BlockPPO(PPO):
         preprocessor type/config specified in the main config. Much simpler than
         requiring per-agent config entries.
         """
-        print(f"  - Setting up per-agent preprocessors for {self.num_agents} agents")
 
         # Initialize per-agent preprocessor lists
         self._per_agent_state_preprocessors = []
@@ -1068,26 +1044,21 @@ class BlockPPO(PPO):
                 # Create separate instance for this agent
                 state_preprocessor = state_preprocessor_class(**state_preprocessor_kwargs)
                 self._per_agent_state_preprocessors.append(state_preprocessor)
-                print(f"    - Agent {i}: State preprocessor enabled ({state_preprocessor_class.__name__})")
             else:
                 self._per_agent_state_preprocessors.append(None)
-                print(f"    - Agent {i}: No state preprocessor")
 
             # Create independent value preprocessor for this agent
             if value_preprocessor_class is not None:
                 # Create separate instance for this agent
                 value_preprocessor = value_preprocessor_class(**value_preprocessor_kwargs)
                 self._per_agent_value_preprocessors.append(value_preprocessor)
-                print(f"    - Agent {i}: Value preprocessor enabled ({value_preprocessor_class.__name__})")
             else:
                 self._per_agent_value_preprocessors.append(None)
-                print(f"    - Agent {i}: No value preprocessor")
 
         # Set the primary preprocessors to the first agent's for SKRL compatibility
         self._state_preprocessor = self._per_agent_state_preprocessors[0] if self._per_agent_state_preprocessors[0] is not None else None
         self._value_preprocessor = self._per_agent_value_preprocessors[0] if self._per_agent_value_preprocessors[0] is not None else None
 
-        print(f"  - Per-agent preprocessor setup complete")
 
     def _apply_per_agent_preprocessing(self, tensor_input, preprocessor_list, train=False, inverse=False):
         """Apply per-agent preprocessing to input tensor.
@@ -1162,12 +1133,10 @@ class BlockPPO(PPO):
         """
         # Method 1: Check direct unwrapped access
         if hasattr(self.env, 'unwrapped') and hasattr(self.env.unwrapped, 'add_metrics'):
-            print(f"  - Wrapper integration validated: Found logging wrapper at self.env.unwrapped")
             return True
 
         # Method 2: Check if SKRL wrapper has the base environment with add_metrics
         if hasattr(self.env, '_env') and hasattr(self.env._env, 'add_metrics'):
-            print(f"  - Wrapper integration validated: Found logging wrapper at self.env._env")
             return True
 
         # Method 3: Search through wrapper chain manually
@@ -1177,7 +1146,6 @@ class BlockPPO(PPO):
 
         while current_env is not None and search_depth < max_depth:
             if hasattr(current_env, 'add_metrics'):
-                print(f"  - Wrapper integration validated: Found logging wrapper at depth {search_depth}")
                 return True
 
             # Try different wrapper access patterns

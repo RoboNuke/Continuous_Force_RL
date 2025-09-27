@@ -540,8 +540,8 @@ class HybridForcePositionWrapper(gym.Wrapper):
             fingertip_midpoint_angvel=self.unwrapped.ee_angvel_fd,
             ctrl_target_fingertip_midpoint_pos=self.unwrapped.ctrl_target_fingertip_midpoint_pos,
             ctrl_target_fingertip_midpoint_quat=self.unwrapped.ctrl_target_fingertip_midpoint_quat,
-            task_prop_gains=self.unwrapped.task_prop_gains,
-            task_deriv_gains=self.unwrapped.task_deriv_gains,
+            task_prop_gains=self.unwrapped.cfg.ctrl.default_task_prop_gains,
+            task_deriv_gains=[self.unwrapped.cfg.ctrl.kd_null] * 6,  # Use kd_null for all axes
             device=self.unwrapped.device
         )
 

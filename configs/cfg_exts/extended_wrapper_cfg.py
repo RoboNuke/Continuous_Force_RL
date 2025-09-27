@@ -66,6 +66,12 @@ class ExtendedWrapperConfig:
         self._validate_wrapper_params()
         self._setup_defaults()
 
+        # FORCE our custom to_dict to override @configclass behavior
+        # Store the original class method and replace with our implementation
+        if not hasattr(self.__class__, '_original_configclass_to_dict'):
+            self.__class__._original_configclass_to_dict = self.__class__.to_dict
+            self.__class__.to_dict = self._custom_to_dict
+
     def _validate_wrapper_params(self):
         """Validate wrapper configuration parameters."""
         # Validate string parameters
@@ -96,10 +102,20 @@ class ExtendedWrapperConfig:
         if not hasattr(self, '_primary_cfg'):
             raise ValueError("Primary config not applied. Call apply_primary_cfg() first.")
 
+        # The fragile object wrapper expects:
+        # - break_force list length to match the TOTAL number of agents
+        # - num_agents to be the TOTAL number of agents (for environment division)
+        # Expand break forces from conditions to per-agent assignment
+        expanded_break_forces = []
+        for break_force in self._primary_cfg.break_forces:
+            # Add this break force for each agent in this break force group
+            for _ in range(self._primary_cfg.agents_per_break_force):
+                expanded_break_forces.append(break_force)
+
         return {
             'enabled': self.fragile_objects_enabled,
-            'break_force': self._primary_cfg.break_forces,
-            'num_agents': self._primary_cfg.total_agents
+            'break_force': expanded_break_forces,  # [10, 10, 20, 20] - one per agent
+            'num_agents': self._primary_cfg.total_agents  # 4 - total number of agents
         }
 
     def get_force_torque_sensor_config(self) -> Dict[str, Any]:
@@ -165,57 +181,23 @@ class ExtendedWrapperConfig:
             'num_agents': self._primary_cfg.total_agents
         }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def _custom_to_dict(self) -> Dict[str, Any]:
         """Convert to nested dictionary structure for launch_utils."""
         return {
-            'fragile_objects': {
-                'enabled': self.fragile_objects_enabled,
-                # num_agents and break_force computed from primary config
-            },
+            'fragile_objects': self.get_fragile_objects_config(),
             'efficient_reset': {
                 'enabled': self.efficient_reset_enabled
             },
-            'force_torque_sensor': {
-                'enabled': self.force_torque_sensor.enabled,
-                'use_tanh_scaling': self.force_torque_sensor.use_tanh_scaling,
-                'tanh_scale': self.force_torque_sensor.tanh_scale,
-                'add_force_obs': self.force_torque_sensor.add_force_obs
-            },
+            'force_torque_sensor': self.get_force_torque_sensor_config(),
             'observation_manager': {
                 'enabled': self.observation_manager_enabled,
                 'merge_strategy': self.observation_manager_merge_strategy
             },
-            'observation_noise': {
-                'enabled': self.observation_noise.enabled,
-                'global_scale': self.observation_noise.global_scale,
-                'apply_to_critic': self.observation_noise.apply_to_critic,
-                'seed': self.observation_noise.seed
-            },
-            'hybrid_control': {
-                'enabled': self.hybrid_control.enabled,
-                'reward_type': self.hybrid_control.reward_type
-            },
-            'factory_metrics': {
-                'enabled': self.factory_metrics_enabled
-            },
-            'wandb_logging': {
-                'enabled': self.wandb_logging.enabled,
-                'wandb_project': self.wandb_logging.wandb_project,
-                'wandb_entity': self.wandb_logging.wandb_entity,
-                'wandb_name': self.wandb_logging.wandb_name,
-                'wandb_group': self.wandb_logging.wandb_group,
-                'wandb_tags': self.wandb_logging.wandb_tags
-            },
-            'action_logging': {
-                'enabled': self.action_logging.enabled,
-                'track_selection': self.action_logging.track_selection,
-                'track_pos': self.action_logging.track_pos,
-                'track_rot': self.action_logging.track_rot,
-                'track_force': self.action_logging.track_force,
-                'track_torque': self.action_logging.track_torque,
-                'force_size': self.action_logging.force_size,
-                'logging_frequency': self.action_logging.logging_frequency
-            }
+            'observation_noise': self.get_observation_noise_config(),
+            'hybrid_control': self.get_hybrid_control_config(),
+            'factory_metrics': self.get_factory_metrics_config(),
+            'wandb_logging': self.get_wandb_config(),
+            'action_logging': self.get_action_logging_config()
         }
 
     def __repr__(self) -> str:

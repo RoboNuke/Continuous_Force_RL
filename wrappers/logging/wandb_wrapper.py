@@ -351,6 +351,13 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         """Step environment and track episode metrics."""
         obs, reward, terminated, truncated, info = super().step(action)
 
+        # Check for pending factory metrics from FactoryMetricsWrapper
+        if hasattr(self.env, '_pending_factory_metrics'):
+            factory_metrics = self.env._pending_factory_metrics
+            self.add_metrics(factory_metrics)
+            # Clear the pending metrics to avoid double-processing
+            delattr(self.env, '_pending_factory_metrics')
+
         # Extract and collect component rewards
         component_rewards = self._extract_component_rewards()
         if component_rewards:

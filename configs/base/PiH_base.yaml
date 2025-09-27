@@ -7,7 +7,7 @@ task_name: "Isaac-Factory-PegInsert-Direct-v0"
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
   agents_per_break_force: 2  # Number of agents per break force condition
-  num_envs_per_agent: 256    # Environments per individual agent
+  num_envs_per_agent: 4 #256    # Environments per individual agent
   break_forces: [10,20]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
@@ -136,7 +136,7 @@ agent:
 
   # SKRL PPO PARAMETERS (these override SKRL defaults)
   # rollouts and mini_batches are auto-calculated from episode timing
-  learning_epochs: 4
+  learning_epochs: 1 #4
   mini_batches: 150
   discount_factor: 0.99
   lambda_: 0.95  # Note: underscore for Python compatibility

@@ -24,8 +24,10 @@ class ExtendedFactoryEnvCfg(FactoryEnvCfg):
 
     def __post_init__(self):
         """Post-initialization to set up extended configurations."""
-        self.sim.render_interval=self.decimation
-        self.sim.physx.gpu_collision_stack_size = 2**29
+        # Only set sim parameters if sim attribute exists (for FactoryEnvCfg, not TaskCfg)
+        if hasattr(self, 'sim') and self.sim is not None:
+            self.sim.render_interval=self.decimation
+            self.sim.physx.gpu_collision_stack_size = 2**29
         # Replace ctrl with our extended version if it's not already extended
         if not isinstance(self.ctrl, ExtendedCtrlCfg):
             # Preserve any existing ctrl settings while upgrading to extended version

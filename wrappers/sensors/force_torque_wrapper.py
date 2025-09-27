@@ -443,9 +443,9 @@ class ForceTorqueWrapper(gym.Wrapper):
             "held_quat": self.unwrapped.held_quat,
             "fixed_pos": self.unwrapped.fixed_pos,
             "fixed_quat": self.unwrapped.fixed_quat,
-            "task_prop_gains": self.unwrapped.task_prop_gains,
-            "pos_threshold": self.unwrapped.pos_threshold,
-            "rot_threshold": self.unwrapped.rot_threshold,
+            "task_prop_gains": self.unwrapped.cfg.ctrl.default_task_prop_gains,
+            "pos_threshold": self.unwrapped.cfg.ctrl.pos_action_threshold,
+            "rot_threshold": self.unwrapped.cfg.ctrl.rot_action_threshold,
             "prev_actions": prev_actions,
         }
 

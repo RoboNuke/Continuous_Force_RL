@@ -30,6 +30,8 @@ class ExtendedFactoryTaskPegInsertCfg(FactoryTaskPegInsertCfg):
         """Post-initialization to set up extended configurations."""
         # Apply our extended factory env post_init logic
         ExtendedFactoryEnvCfg.__post_init__(self)
+        # Set up our extended configuration features
+        self._setup_extended_config()
 
     def _setup_extended_config(self):
         """Set up extended configuration features."""
@@ -76,6 +78,7 @@ class ExtendedFactoryTaskPegInsertCfg(FactoryTaskPegInsertCfg):
             return self._primary_cfg.total_agents
         # Fallback to single agent if no primary config
         return 1
+
 
     @property
     def total_envs(self) -> int:

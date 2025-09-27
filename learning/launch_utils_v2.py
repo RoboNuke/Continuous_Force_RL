@@ -16,6 +16,7 @@ from models.SimBa_hybrid_control import HybridControlBlockSimBaActor
 
 # Import wrappers
 from wrappers.mechanics.fragile_object_wrapper import FragileObjectWrapper
+from wrappers.mechanics.efficient_reset_wrapper import EfficientResetWrapper
 from wrappers.sensors.force_torque_wrapper import ForceTorqueWrapper
 from wrappers.observations.observation_manager_wrapper import ObservationManagerWrapper
 from wrappers.observations.observation_noise_wrapper import ObservationNoiseWrapper, ObservationNoiseConfig, NoiseGroupConfig
@@ -433,9 +434,36 @@ def apply_fragile_object_wrapper(env, wrapper_config, primary, derived):
     env = FragileObjectWrapper(
         env,
         break_force=wrapper_config.get('break_force', primary['break_forces']),
-        num_agents=derived['total_agents']
+        num_agents=wrapper_config.get('num_agents', derived['total_agents'])
     )
     return env
+
+
+def apply_efficient_reset_wrapper(env, wrapper_config):
+    """
+    Apply efficient reset wrapper for optimized environment resetting.
+
+    Wraps the environment with EfficientResetWrapper to enable efficient
+    partial environment resets using state caching and shuffling instead
+    of expensive full simulation resets.
+
+    Args:
+        env: Base environment to wrap
+        wrapper_config: Configuration dictionary (currently unused but maintained for consistency)
+
+    Returns:
+        Wrapped environment with efficient reset capability
+
+    Side Effects:
+        - Prints efficient reset wrapper configuration details
+        - Enables state caching for faster partial resets
+    """
+    print(f"    - Efficient reset wrapper configuration:")
+    print(f"      - Wrapper enabled: True")
+    print(f"      - State caching: Automatic")
+    print(f"      - Partial reset optimization: Enabled")
+
+    return EfficientResetWrapper(env)
 
 
 def apply_force_torque_wrapper(env, wrapper_config):
@@ -1217,10 +1245,6 @@ def create_block_ppo_agents(env_cfg, agent_cfg, env, models, memory, derived):
                 agent_exp_cfgs.append(agent_cfg['agent']['agent_0'])
 
     # Create BlockPPO agent
-    print(f"[LAUNCH DEBUG] Creating BlockPPO agent with action spaces:")
-    print(f"  env.action_space: {env.action_space}")
-    print(f"  env.action_space.shape: {env.action_space.shape if hasattr(env.action_space, 'shape') else 'N/A'}")
-    print(f"  env.cfg.action_space: {getattr(env.cfg, 'action_space', 'N/A')}")
 
     agent = BlockPPO(
         models=models,
@@ -1378,7 +1402,7 @@ def _setup_individual_agent_logging(agent_cfg, resolved_config):
 
             agent_cfg["agent"][f'agent_{agent_idx}']["experiment"]["wandb_kwargs"] = wandb_kwargs
 
-            # Create simplified config for wandb wrapper
+            # Create config for wandb wrapper including SKRL learning parameters
             agent_config = {
                 'agent_index': agent_idx,
                 'break_force': break_force,
@@ -1389,6 +1413,27 @@ def _setup_individual_agent_logging(agent_cfg, resolved_config):
                 'wandb_tags': agent_cfg['agent']['experiment']['tags'],
                 'api_key': '-1'
             }
+
+            # Add SKRL learning parameters to wandb config
+            for key, value in agent_cfg['agent'].items():
+                # Skip preprocessor classes that can't be serialized by wandb
+                if key in ['state_preprocessor', 'value_preprocessor']:
+                    continue
+                # Skip top-level experiment data (we want agent-specific experiment data only)
+                if key == 'experiment':
+                    continue
+                # Skip top-level break_force to avoid confusion (agent has their own break_force)
+                if key == 'break_force':
+                    continue
+                # Skip all agent-specific configs (we'll handle this agent's separately)
+                if key.startswith('agent_'):
+                    continue
+                # Include everything else (SKRL params, models, etc.)
+                agent_config[key] = value
+
+            # Add this agent's specific data under agent_specific_kwargs
+            if f'agent_{agent_idx}' in agent_cfg['agent']:
+                agent_config['agent_specific_kwargs'] = agent_cfg['agent'][f'agent_{agent_idx}']
             agent_specific_configs[f'agent_{agent_idx}'] = agent_config
 
             agent_idx += 1
