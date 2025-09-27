@@ -58,6 +58,11 @@ class EfficientResetWrapper(gym.Wrapper):
 
             # Override with our wrapper method
             self.unwrapped._reset_idx = self._wrapped_reset_idx
+        
+        # Store and override _get_dones method
+        if hasattr(self.unwrapped, '_get_dones'):
+            self._original_get_dones = self.unwrapped._get_dones
+            self.unwrapped._get_dones = self._wrapped_get_dones
 
         self._wrapper_initialized = True
 
@@ -94,12 +99,17 @@ class EfficientResetWrapper(gym.Wrapper):
                         break
 
         except ImportError:
-            print("Warning: Could not import DirectRLEnv")
 
         # Final fallback: use the environment's own method (preserves original behavior)
-        print("Warning: Using factory environment's _reset_idx. Efficient reset may be less efficient.")
         return self.unwrapped._reset_idx
-
+    
+    def _wrapped_get_dones(self):
+        """Make sure that every max_episode_length we reset all envs so we don't overfit."""
+        term, time_out = self._original_get_dones()
+        if self.unwrapped.common_step_counter > 1:
+            time_out = torch.ones_like(self.unwrapped.episode_length_buf) * ((self.unwrapped.common_step_counter % self.unwrapped.max_episode_length ) ==0)
+        return term, time_out
+    
     def _wrapped_reset_idx(self, env_ids):
         """
         Reset specified environments efficiently using state shuffling.
@@ -128,6 +138,10 @@ class EfficientResetWrapper(gym.Wrapper):
             # Partial reset - use DirectRLEnv method + efficient state shuffling
             if self._directrl_reset_idx:
                 self._directrl_reset_idx(env_ids)
+
+            # Ensure episode_length_buf is reset (safety measure)
+            if hasattr(self.unwrapped, 'episode_length_buf'):
+                self.unwrapped.episode_length_buf[env_ids] = 0
 
             # Use efficient state shuffling for partial resets
             if self.start_state is not None:

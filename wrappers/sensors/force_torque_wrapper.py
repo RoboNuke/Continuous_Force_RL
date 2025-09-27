@@ -320,7 +320,6 @@ class ForceTorqueWrapper(gym.Wrapper):
         # Also initialize force_torque attribute for factory obs_dict creation
         # This is what the factory environment will access when creating obs_dict
         self.unwrapped.force_torque = self.unwrapped.robot_force_torque
-        print("inited tensors")
 
 
     def _wrapped_compute_intermediate_values(self, dt):

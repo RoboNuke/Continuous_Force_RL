@@ -13,7 +13,7 @@ primary:
   policy_hz: 15
   max_steps: 10240000
   debug_mode: true
-  seed: -1
+  seed: 2720 #-1
   ckpt_tracker_path: "~/ckpt_tracker2.txt" #"/nfs/stak/users/brownhun/ckpt_tracker2.txt"
   ctrl_torque: false
 

@@ -466,7 +466,6 @@ class BlockPPO(PPO):
         # sample mini-batches from memory
         sampled_batches = self.memory.sample_all(names=self._tensors_names, mini_batches=self._mini_batches)
         sample_size = self._rollouts // self._mini_batches
-        #print("\n\n\nIN UPDATE FUNCTION \n\n\n\n")
         # learning epochs
         for epoch in range(self._learning_epochs):
             mini_batch = 0

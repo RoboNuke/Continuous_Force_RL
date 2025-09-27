@@ -159,7 +159,12 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
 
         # Current episode tracking (per environment)
         self.current_episode_rewards = torch.zeros(self.num_envs, device=self.device)
-        self.current_episode_lengths = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+
+        # Store original _reset_idx method for wrapper chaining
+        self._original_reset_idx = None
+        if hasattr(self.unwrapped, '_reset_idx'):
+            self._original_reset_idx = self.unwrapped._reset_idx
+            self.unwrapped._reset_idx = self._wrapped_reset_idx
 
         # Per-agent completed episode data storage
         self.agent_episode_data = {}
@@ -175,6 +180,9 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         # Component reward tracking
         self.component_reward_keys = set()  # Discovered component reward keys
         self.current_component_rewards = torch.zeros((self.num_envs, 0), device=self.device)  # Will expand as needed
+
+        # Flag to prevent publishing on first reset (all zeros)
+        self._first_reset = True
 
     def _store_completed_episodes(self, completed_mask):
         """Store completed episode data in agent lists."""
@@ -193,7 +201,7 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             agent_id = env_idx // self.envs_per_agent
 
             # Get episode data
-            episode_length = self.current_episode_lengths[env_idx].item()
+            episode_length = getattr(self.unwrapped, 'episode_length_buf', torch.zeros(self.num_envs, device=self.device, dtype=torch.long))[env_idx].item()
             episode_reward = self.current_episode_rewards[env_idx].item()
             episode_avg_reward = episode_reward / episode_length if episode_length > 0 else 0.0
 
@@ -217,6 +225,7 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             mean_reward = sum(agent_data['episode_rewards']) / len(agent_data['episode_rewards'])
             mean_avg_reward = sum(agent_data['episode_avg_rewards']) / len(agent_data['episode_avg_rewards'])
             total_completed = sum(agent_data['completed_count'])
+
 
             # Create metrics for this agent (as single-element tensors)
             agent_metrics = {
@@ -350,7 +359,6 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
     def step(self, action):
         """Step environment and track episode metrics."""
         obs, reward, terminated, truncated, info = super().step(action)
-
         # Check for pending factory metrics from FactoryMetricsWrapper
         if hasattr(self.env, '_pending_factory_metrics'):
             factory_metrics = self.env._pending_factory_metrics
@@ -366,30 +374,85 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
 
         # Track current episode metrics
         self.current_episode_rewards += reward
-        self.current_episode_lengths += 1
 
         # Increment step counters for all trackers
         for tracker in self.trackers:
             tracker.increment_steps()
 
-        # Check for episode endings
-        any_ended = torch.any(terminated | truncated)
-        if any_ended:
-            # Store completed episodes (terminated OR full-length truncated)
-            completed_mask = terminated | (truncated & (self.current_episode_lengths >= self.max_episode_length))
-            self._store_completed_episodes(completed_mask)
-
-            # Reset tracking for ALL ended episodes (terminated or truncated)
-            reset_mask = terminated | truncated
-            self.current_episode_rewards[reset_mask] = 0
-            self.current_episode_lengths[reset_mask] = 0
-
-            # Send aggregated metrics when ANY environment truncates
-            any_truncated = torch.any(truncated)
-            if any_truncated:
-                self._send_aggregated_episode_metrics()
-
         return obs, reward, terminated, truncated, info
+
+    def _wrapped_reset_idx(self, env_ids):
+        """Handle environment resets via _reset_idx calls."""
+
+        # Convert to tensor if needed
+        if not isinstance(env_ids, torch.Tensor):
+            env_ids = torch.tensor(env_ids, device=self.device)
+
+        # Skip processing on first reset (all data would be zeros)
+        if self._first_reset:
+            self._first_reset = False
+        else:
+            if len(env_ids) == self.num_envs:
+                # Full reset - all environments hit max_steps
+                # All environments that hit max_steps are completed episodes
+                episode_lengths = getattr(self.unwrapped, 'episode_length_buf', torch.zeros(self.num_envs, device=self.device, dtype=torch.long))
+                max_step_mask = episode_lengths >= self.max_episode_length
+                max_step_env_ids = max_step_mask.nonzero(as_tuple=False).squeeze(-1).tolist()
+
+
+                # Show per-agent breakdown for verification
+                for agent_id in range(self.num_agents):
+                    start_idx = agent_id * self.envs_per_agent
+                    end_idx = (agent_id + 1) * self.envs_per_agent
+                    agent_max_step = [env_id for env_id in max_step_env_ids if start_idx <= env_id < end_idx]
+
+                if torch.any(max_step_mask):
+                    self._store_completed_episodes(max_step_mask)
+
+                # Publish all accumulated metrics and reset all tracking
+                self._send_aggregated_episode_metrics()
+                self._reset_all_tracking_variables()
+            else:
+                # Partial reset - these environments terminated
+                env_ids_list = env_ids.tolist() if isinstance(env_ids, torch.Tensor) else env_ids
+
+                # Show per-agent breakdown for verification
+                for agent_id in range(self.num_agents):
+                    start_idx = agent_id * self.envs_per_agent
+                    end_idx = (agent_id + 1) * self.envs_per_agent
+                    agent_terminated = [env_id for env_id in env_ids_list if start_idx <= env_id < end_idx]
+
+                # Store all environments in env_ids as completed episodes
+                completed_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+                completed_mask[env_ids] = True
+                self._store_completed_episodes(completed_mask)
+
+                # Reset env-specific tracking only for completed environments
+                self.current_episode_rewards[env_ids] = 0
+
+        # Call original _reset_idx to maintain wrapper chain
+        if self._original_reset_idx is not None:
+            self._original_reset_idx(env_ids)
+
+    def reset(self, **kwargs):
+        """Reset environment - now just calls super().reset()."""
+        return super().reset(**kwargs)
+
+    def _reset_all_tracking_variables(self):
+        """Reset all tracking variables to initial state."""
+        # Reset current episode tracking
+        self.current_episode_rewards.fill_(0)
+
+        # Clear all agent episode data
+        for agent_id in range(self.num_agents):
+            agent_data = self.agent_episode_data[agent_id]
+            agent_data['episode_lengths'].clear()
+            agent_data['episode_rewards'].clear()
+            agent_data['episode_avg_rewards'].clear()
+            agent_data['completed_count'].clear()
+            # Clear component rewards for this agent
+            for component_key in agent_data['component_rewards']:
+                agent_data['component_rewards'][component_key].clear()
 
     def close(self):
         """Close all wandb runs."""

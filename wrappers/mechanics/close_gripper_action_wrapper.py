@@ -70,9 +70,7 @@ class GripperCloseEnv(gym.ActionWrapper):
             >>> modified = wrapper.action(action)
             >>> print(modified)  # [[1.0, 2.0, -1.0], [0.5, -0.3, -1.0]]
         """
-        print(action)
         action[:, -1] = -1.0
-        print("Post:", action)
         return action
 
     def step(self, action):

@@ -170,7 +170,7 @@ class FragileObjectWrapper(gym.Wrapper):
         if self.fragile and self._has_force_torque_data():
             force_magnitude = torch.linalg.norm(self.unwrapped.robot_force_torque[:, :3], axis=1)
             force_violations = force_magnitude >= self.break_force
-            terminated = torch.logical_or(terminated, force_violations)
+            terminated = force_violations #torch.logical_or(terminated, force_violations)
 
         return terminated, time_out
 

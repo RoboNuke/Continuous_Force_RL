@@ -40,24 +40,16 @@ class AsyncCriticIsaacLabWrapper(Wrapper):
             state_dim = getattr(env.unwrapped.cfg, 'state_space', 0)
             if state_dim > 0:
                 env.state_space = Box(low=-float('inf'), high=float('inf'), shape=(state_dim,), dtype=np.float32)
-                print(f"[INFO]: Created env.state_space with {state_dim} dimensions")
             else:
-                print(f"[INFO]: No state space needed (state_dim = {state_dim})")
 
         # Store correct action space dimensions for property override
         self._correct_action_dim = getattr(env.unwrapped.cfg, 'action_space', 6)
         self._correct_action_space = Box(low=-float('inf'), high=float('inf'), shape=(self._correct_action_dim,), dtype=np.float32)
 
-        print(f"[INFO]: AsyncCriticIsaacLabWrapper initialized")
-        print(f"[INFO]: Environment observation space: {getattr(env, 'observation_space', 'Not available')}")
-        print(f"[INFO]: Environment state space: {getattr(env, 'state_space', 'Not available')}")
-        print(f"[INFO]: Will override action_space to correct dimensions: {self._correct_action_space}")
 
         # Debug: check if base class set wrong action space
         if hasattr(env, 'action_space'):
-            print(f"[DEBUG]: Original env.action_space was: {env.action_space}")
         if hasattr(self, '_action_space'):
-            print(f"[DEBUG]: SKRL base wrapper _action_space: {self._action_space}")
 
     @property
     def action_space(self):
@@ -120,27 +112,25 @@ class AsyncCriticIsaacLabWrapper(Wrapper):
         Returns:
             Tuple of (observations, info)
         """
-        if self._reset_once:
-            observations, self._info = self._env.reset()
+        # ALWAYS call the underlying environment's reset - don't block subsequent resets!
+        observations, self._info = self._env.reset()
 
-            # Process both policy and critic observations together
-            # Create proper per-environment spaces (Isaac Lab incorrectly includes batch dimension)
-            obs_dim = getattr(self._env.unwrapped.cfg, 'observation_space', 0)
-            state_dim = getattr(self._env.unwrapped.cfg, 'state_space', 0)
+        # Process both policy and critic observations together
+        # Create proper per-environment spaces (Isaac Lab incorrectly includes batch dimension)
+        obs_dim = getattr(self._env.unwrapped.cfg, 'observation_space', 0)
+        state_dim = getattr(self._env.unwrapped.cfg, 'state_space', 0)
 
-            env_obs_space = Box(low=-float('inf'), high=float('inf'), shape=(obs_dim,), dtype=np.float32)
-            env_state_space = Box(low=-float('inf'), high=float('inf'), shape=(state_dim,), dtype=np.float32) if state_dim > 0 else None
+        env_obs_space = Box(low=-float('inf'), high=float('inf'), shape=(obs_dim,), dtype=np.float32)
+        env_state_space = Box(low=-float('inf'), high=float('inf'), shape=(state_dim,), dtype=np.float32) if state_dim > 0 else None
 
-            if env_state_space is not None:
-                # Create dict of spaces to match observation structure for SKRL
-                spaces = Dict({'policy': env_obs_space, 'critic': env_state_space})
-                self._observations = flatten_tensorized_space(tensorize_space(spaces, observations))
-            else:
-                # Fallback to just observation space if no state space
-                self._observations = flatten_tensorized_space(
-                    tensorize_space(env_obs_space, observations["policy"])
-                )
-
-            self._reset_once = False
+        if env_state_space is not None:
+            # Create dict of spaces to match observation structure for SKRL
+            spaces = Dict({'policy': env_obs_space, 'critic': env_state_space})
+            self._observations = flatten_tensorized_space(tensorize_space(spaces, observations))
+        else:
+            # Fallback to just observation space if no state space
+            self._observations = flatten_tensorized_space(
+                tensorize_space(env_obs_space, observations["policy"])
+            )
 
         return self._observations, self._info

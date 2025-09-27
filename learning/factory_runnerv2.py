@@ -74,6 +74,8 @@ except ImportError:
         print("  - Isaac Lab v1.4.1 or earlier (omni.isaac.lab_tasks)")
         sys.exit(1)
 
+print("\n\nImports complete\n\n")
+
 # Load configuration system
 print("[INFO]: Using ConfigManagerV2 configuration system")
 from configs.config_manager_v2 import ConfigManagerV2
@@ -120,41 +122,20 @@ print(f"  - Break forces: {primary['break_forces']}")
 print(f"  - Rollout steps: {derived['rollout_steps']}")
 
 # Debug: Compare old vs new wrapper config behavior
-print(f"\n[DEBUG]: Checking wrapper config output:")
-print(f"  - wrappers_config type: {type(wrappers_config)}")
-print(f"  - wrappers_config keys: {list(wrappers_config.keys())}")
 
 # Check specifically what our override is producing
 if 'fragile_objects' in wrappers_config:
     fragile_config = wrappers_config['fragile_objects']
-    print(f"  - fragile_objects config: {fragile_config}")
-    print(f"  - fragile_objects type: {type(fragile_config)}")
     if isinstance(fragile_config, dict):
-        print(f"    - enabled: {fragile_config.get('enabled', 'MISSING')}")
         break_forces = fragile_config.get('break_force', 'MISSING')
-        print(f"    - break_force: {break_forces}")
-        print(f"    - break_force length: {len(break_forces) if isinstance(break_forces, list) else 'NOT_LIST'}")
-        print(f"    - num_agents: {fragile_config.get('num_agents', 'MISSING')}")
 
 if 'factory_metrics' in wrappers_config:
     factory_config = wrappers_config['factory_metrics']
-    print(f"  - factory_metrics config: {factory_config}")
-    print(f"  - factory_metrics type: {type(factory_config)}")
 
 # Check if our override broke the overall config structure
-print(f"  - Total derived agents: {derived.get('total_agents', 'MISSING')}")
-print(f"  - Total environments: {derived.get('total_num_envs', 'MISSING')}")
-print(f"  - Primary break forces: {primary.get('break_forces', 'MISSING')}")
-print(f"  - Primary agents per break force: {primary.get('agents_per_break_force', 'MISSING')}")
 
 # Debug: Check the actual env_cfg that gets passed to Isaac Lab
-print(f"\n[DEBUG]: Isaac Lab Environment Configuration:")
-print(f"  - env_cfg type: {type(config_bundle.env_cfg)}")
-print(f"  - env_cfg.scene.num_envs: {getattr(config_bundle.env_cfg.scene, 'num_envs', 'MISSING')}")
-print(f"  - env_cfg.episode_length_s: {getattr(config_bundle.env_cfg, 'episode_length_s', 'MISSING')}")
-print(f"  - env_cfg.decimation: {getattr(config_bundle.env_cfg, 'decimation', 'MISSING')}")
 
-print("\n\nImports complete\n\n")
 
 def add_force_torque_to_isaaclab_configs():
     """Add force-torque dimensions to IsaacLab configuration dictionaries if force-torque sensor is enabled."""
@@ -255,7 +236,6 @@ def main():
     print("Sim data:", env_cfg.sim.dt, env_cfg.sim.render_interval)
     # Debug: Print configurations
     if primary.get('debug_mode', False):
-        print("[DEBUG]: Environment and agent configurations applied successfully")
 
     # Validate factory configuration
     print("[INFO]: Step 1.5 - Validating factory configuration")
@@ -307,16 +287,11 @@ def main():
         env = lUtils.apply_wandb_logging_wrapper(env, wrappers_config['wandb_logging'], derived, agent_cfg_wrapper, env_cfg, resolved_config)
 
     factory_metrics_enabled = wrappers_config.get('factory_metrics', {}).get('enabled', False)
-    print(f"[DEBUG] Before factory_metrics application:")
-    print(f"  - wrappers_config.get('factory_metrics'): {wrappers_config.get('factory_metrics', 'NOT_FOUND')}")
-    print(f"  - factory_metrics_enabled: {factory_metrics_enabled}")
 
     if factory_metrics_enabled:
         print("  - Applying FactoryMetricsWrapper")
         env = lUtils.apply_factory_metrics_wrapper(env, derived)
-        print(f"[DEBUG] FactoryMetricsWrapper applied successfully")
     else:
-        print(f"[DEBUG] FactoryMetricsWrapper NOT applied - enabled: {factory_metrics_enabled}")
 
     if wrappers_config.get('action_logging', {}).get('enabled', False):
         print("  - Applying EnhancedActionLoggingWrapper")

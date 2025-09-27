@@ -85,6 +85,9 @@ class FactoryMetricsWrapper(gym.Wrapper):
         # Wrapper initialization flag for compatibility with tests
         self._wrapper_initialized = hasattr(self.unwrapped, '_robot')
 
+        # Flag to prevent publishing on first reset (all zeros)
+        self._first_reset = True
+
         # Override the base environment's _update_rew_buf to use our version
         # This ensures per-environment reward components instead of averaged scalars
         if hasattr(self.unwrapped, '_update_rew_buf'):
@@ -120,6 +123,12 @@ class FactoryMetricsWrapper(gym.Wrapper):
         # Smoothness metrics
         self.ep_ssv = torch.zeros((self.num_envs,), device=self.device)  # Sum squared velocity
         self.ep_ssjv = torch.zeros((self.num_envs,), device=self.device)  # Sum squared joint velocity
+
+        # Store original _reset_idx method for wrapper chaining
+        self._original_reset_idx = None
+        if hasattr(self.unwrapped, '_reset_idx'):
+            self._original_reset_idx = self.unwrapped._reset_idx
+            self.unwrapped._reset_idx = self._wrapped_reset_idx
 
     def _collect_step_metrics(self):
         """Collect metrics for this step."""
@@ -325,6 +334,7 @@ class FactoryMetricsWrapper(gym.Wrapper):
             mean_ssv = sum(agent_data['ssv_values']) / len(agent_data['ssv_values'])
             mean_ssjv = sum(agent_data['ssjv_values']) / len(agent_data['ssjv_values'])
 
+
             # Populate tensors for this agent
             all_agent_metrics['Episode/success_rate'][agent_id] = mean_success_rate
             all_agent_metrics['Episode/success_time'][agent_id] = mean_success_time
@@ -364,21 +374,21 @@ class FactoryMetricsWrapper(gym.Wrapper):
                 agent_data['avg_forces'].clear()
                 agent_data['avg_torques'].clear()
 
-    def _reset_completed_episodes(self, reset_mask):
+    def _reset_completed_episodes(self, env_ids):
         """Reset tracking variables for completed episodes."""
-        self.ep_succeeded[reset_mask] = False
-        self.ep_success_times[reset_mask] = 0
-        self.ep_engaged[reset_mask] = False
-        self.ep_engaged_times[reset_mask] = 0
-        self.ep_engaged_length[reset_mask] = 0
-        self.ep_ssv[reset_mask] = 0
-        self.ep_ssjv[reset_mask] = 0
+        self.ep_succeeded[env_ids] = False
+        self.ep_success_times[env_ids] = 0
+        self.ep_engaged[env_ids] = False
+        self.ep_engaged_times[env_ids] = 0
+        self.ep_engaged_length[env_ids] = 0
+        self.ep_ssv[env_ids] = 0
+        self.ep_ssjv[env_ids] = 0
 
         if self.has_force_data and hasattr(self, 'ep_max_force'):
-            self.ep_max_force[reset_mask] = 0
-            self.ep_max_torque[reset_mask] = 0
-            self.ep_sum_force[reset_mask] = 0
-            self.ep_sum_torque[reset_mask] = 0
+            self.ep_max_force[env_ids] = 0
+            self.ep_max_torque[env_ids] = 0
+            self.ep_sum_force[env_ids] = 0
+            self.ep_sum_torque[env_ids] = 0
 
     def get_agent_assignment(self):
         """Get environment indices assigned to each agent."""
@@ -442,38 +452,109 @@ class FactoryMetricsWrapper(gym.Wrapper):
         return metrics
 
     def step(self, action):
-        """Step environment and collect factory metrics (following WandbWrapper pattern)."""
+        """Step environment and collect factory metrics."""
         obs, reward, terminated, truncated, info = super().step(action)
 
         # Collect step metrics
         self._collect_step_metrics()
 
-        # Check for episode endings (following WandbWrapper pattern exactly)
-        any_ended = torch.any(terminated | truncated)
-        if any_ended:
-            # Store completed episodes (terminated OR full-length truncated)
-            # Only count episodes as "completed" if they either:
-            # 1. Terminated naturally (reached success/failure condition), OR
-            # 2. Truncated after reaching full episode length (normal timeout)
-            # Early terminations (e.g. terminate at step 20/150) are incomplete and shouldn't be counted
-            episode_lengths = getattr(self.unwrapped, 'episode_length_buf', torch.zeros(self.num_envs, device=self.device))
-            completed_mask = terminated | (truncated & (episode_lengths >= self.max_episode_length))
-            self._store_completed_episodes(completed_mask)
-
-            # Reset tracking for ALL ended episodes (terminated or truncated)
-            reset_mask = terminated | truncated
-            self._reset_completed_episodes(reset_mask)
-
-            # Send aggregated metrics when ANY environment truncates
-            any_truncated = torch.any(truncated)
-            if any_truncated:
-                self._send_aggregated_factory_metrics()
-
         return obs, reward, terminated, truncated, info
 
+    def _wrapped_reset_idx(self, env_ids):
+        """Handle environment resets via _reset_idx calls."""
+
+        # Convert to tensor if needed
+        if not isinstance(env_ids, torch.Tensor):
+            env_ids = torch.tensor(env_ids, device=self.device)
+
+        # Skip processing on first reset (all data would be zeros)
+        if self._first_reset:
+            self._first_reset = False
+        else:
+            if len(env_ids) == self.num_envs:
+                # Full reset - all environments hit max_steps
+
+                # All environments that hit max_steps are completed episodes
+                episode_lengths = getattr(self.unwrapped, 'episode_length_buf', torch.zeros(self.num_envs, device=self.device, dtype=torch.long))
+                max_step_mask = episode_lengths == self.max_episode_length
+                max_step_env_ids = max_step_mask.nonzero(as_tuple=False).squeeze(-1).tolist()
+
+
+                # Show per-agent breakdown for verification
+                for agent_id in range(self.num_agents):
+                    start_idx = agent_id * self.envs_per_agent
+                    end_idx = (agent_id + 1) * self.envs_per_agent
+                    agent_max_step = [env_id for env_id in max_step_env_ids if start_idx <= env_id < end_idx]
+
+                if torch.any(max_step_mask):
+                    self._store_completed_episodes(max_step_mask)
+
+                # Publish all accumulated metrics and reset all tracking
+                self._send_aggregated_factory_metrics()
+                self._reset_all_tracking_variables()
+            else:
+                # Partial reset - these environments terminated
+                env_ids_list = env_ids.tolist() if isinstance(env_ids, torch.Tensor) else env_ids
+
+                # Show per-agent breakdown for verification
+                for agent_id in range(self.num_agents):
+                    start_idx = agent_id * self.envs_per_agent
+                    end_idx = (agent_id + 1) * self.envs_per_agent
+                    agent_terminated = [env_id for env_id in env_ids_list if start_idx <= env_id < end_idx]
+
+                # Store all environments in env_ids as completed episodes
+                completed_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+                completed_mask[env_ids] = True
+                self._store_completed_episodes(completed_mask)
+
+                # Reset env-specific tracking only for completed environments
+                self._reset_completed_episodes(env_ids)
+
+        # Call original _reset_idx to maintain wrapper chain
+        if self._original_reset_idx is not None:
+            self._original_reset_idx(env_ids)
+
     def reset(self, **kwargs):
-        """Reset environment."""
+        """Reset environment - now just calls super().reset()."""
         return super().reset(**kwargs)
+
+    def _reset_all_tracking_variables(self):
+        """Reset all tracking variables to initial state."""
+        # Reset episode tracking
+        self.ep_succeeded.fill_(False)
+        self.ep_success_times.fill_(0)
+        self.ep_engaged.fill_(False)
+        self.ep_engaged_times.fill_(0)
+        self.ep_engaged_length.fill_(0)
+        self.ep_ssv.fill_(0)
+        self.ep_ssjv.fill_(0)
+
+        # Reset force tracking if available
+        if self.has_force_data and hasattr(self, 'ep_max_force'):
+            self.ep_max_force.fill_(0)
+            self.ep_max_torque.fill_(0)
+            self.ep_sum_force.fill_(0)
+            self.ep_sum_torque.fill_(0)
+
+        # Clear all agent episode data
+        for agent_id in range(self.num_agents):
+            agent_data = self.agent_episode_data[agent_id]
+            agent_data['success_rates'].clear()
+            agent_data['success_times'].clear()
+            agent_data['engagement_rates'].clear()
+            agent_data['engagement_times'].clear()
+            agent_data['engagement_lengths'].clear()
+            agent_data['ssv_values'].clear()
+            agent_data['ssjv_values'].clear()
+            if self.has_force_data:
+                if agent_data['max_forces'] is not None:
+                    agent_data['max_forces'].clear()
+                if agent_data['max_torques'] is not None:
+                    agent_data['max_torques'].clear()
+                if agent_data['avg_forces'] is not None:
+                    agent_data['avg_forces'].clear()
+                if agent_data['avg_torques'] is not None:
+                    agent_data['avg_torques'].clear()
 
     def close(self):
         """Close wrapper."""
