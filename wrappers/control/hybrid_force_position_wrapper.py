@@ -527,9 +527,6 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         self.unwrapped.ctrl_target_gripper_dof_pos = 0.0
 
-        # Check for out-of-bounds positions
-        out_of_bounds = self._get_target_out_of_bounds()
-
         # Compute pose wrench using filtered targets
         pose_wrench = compute_pose_task_wrench(
             cfg=self.unwrapped.cfg,
@@ -540,8 +537,8 @@ class HybridForcePositionWrapper(gym.Wrapper):
             fingertip_midpoint_angvel=self.unwrapped.ee_angvel_fd,
             ctrl_target_fingertip_midpoint_pos=self.unwrapped.ctrl_target_fingertip_midpoint_pos,
             ctrl_target_fingertip_midpoint_quat=self.unwrapped.ctrl_target_fingertip_midpoint_quat,
-            task_prop_gains=self.unwrapped.cfg.ctrl.default_task_prop_gains,
-            task_deriv_gains=[self.unwrapped.cfg.ctrl.kd_null] * 6,  # Use kd_null for all axes
+            task_prop_gains=self.unwrapped.task_prop_gains,
+            task_deriv_gains=self.unwrapped.task_deriv_gains,  
             device=self.unwrapped.device
         )
 
@@ -555,11 +552,24 @@ class HybridForcePositionWrapper(gym.Wrapper):
             device=self.unwrapped.device
         )
 
-        # Zero force wrench if position is out of bounds
-        force_wrench[:, :3][out_of_bounds] = 0.0
-
         # Combine wrenches using filtered selection matrix
         task_wrench = (1 - self.sel_matrix) * pose_wrench + self.sel_matrix * force_wrench
+
+        # Apply bounds constraint to final wrench - prevent motion outside boundaries
+        delta_pos = self.unwrapped.fingertip_midpoint_pos - self.unwrapped.fixed_pos_action_frame
+        pos_bounds = self.unwrapped.cfg.ctrl.pos_action_bounds
+
+        # Zero wrench components that would drive further out of bounds
+        for i in range(3):  # x, y, z
+            # If at negative bound and wrench would push more negative, zero it
+            at_neg_bound = delta_pos[:, i] <= -pos_bounds[0]
+            neg_wrench = task_wrench[:, i] < 0
+            task_wrench[:, i] = torch.where(at_neg_bound & neg_wrench, 0.0, task_wrench[:, i])
+
+            # If at positive bound and wrench would push more positive, zero it
+            at_pos_bound = delta_pos[:, i] >= pos_bounds[1]
+            pos_wrench = task_wrench[:, i] > 0
+            task_wrench[:, i] = torch.where(at_pos_bound & pos_wrench, 0.0, task_wrench[:, i])
 
         # For torque, always use position control (if not controlling torques)
         if not self.ctrl_torque:
