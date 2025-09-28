@@ -3,29 +3,9 @@
 # Base configuration to inherit from
 base_config: "configs/base/PiH_base.yaml"
 
-
-# Environment overrides for hybrid control
-environment:
-  # Control configuration (will be merged into Isaac Lab's ctrl config)
-  # These parameters will be applied to the ExtendedCtrlCfg
-  ctrl:
-    force_action_bounds: [50.0, 50.0, 50.0]
-    torque_action_bounds: [0.5, 0.5, 0.5]
-    force_action_threshold: [10.0, 10.0, 10.0]
-    torque_action_threshold: [0.1, 0.1, 0.1]
-    default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
-
 # Model configuration for hybrid agent
 model:
   use_hybrid_agent: false
-
-# Enable hybrid control wrapper and related systems
-wrappers:
-  # Enable force-torque sensor for hybrid control
-  force_torque_sensor:
-    enabled: true
-    use_tanh_scaling: false
-    tanh_scale: 0.03  # Slightly higher scaling for hybrid control
 
 # Experiment metadata
 experiment:

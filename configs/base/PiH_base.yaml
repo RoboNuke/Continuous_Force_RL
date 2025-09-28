@@ -6,15 +6,15 @@ task_name: "Isaac-Factory-PegInsert-Direct-v0"
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
-  agents_per_break_force: 2  # Number of agents per break force condition
-  num_envs_per_agent: 4 #256    # Environments per individual agent
+  agents_per_break_force: 5  # Number of agents per break force condition
+  num_envs_per_agent: 2    # Environments per individual agent
   break_forces: [10,20]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
-  max_steps: 10240000
-  debug_mode: true
-  seed: 2720 #-1
-  ckpt_tracker_path: "~/ckpt_tracker2.txt" #"/nfs/stak/users/brownhun/ckpt_tracker2.txt"
+  max_steps: 25000192
+  debug_mode: false
+  seed: -1
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_tracker2.txt"
   ctrl_torque: false
 
 # ENVIRONMENT OVERRIDES (Direct Isaac Lab FactoryEnvCfg parameters)
@@ -65,6 +65,7 @@ wrappers:
   # Fragile object behavior
   fragile_objects:
     enabled: true
+    peg_break_rew: -1.0
     # break_force and num_agents are computed from primary config automatically
 
   # Efficient environment resetting3
@@ -73,7 +74,7 @@ wrappers:
 
   # Force-torque sensor
   force_torque_sensor:
-    enabled: false
+    enabled: true
     use_tanh_scaling: false
     tanh_scale: 0.03
     add_force_obs: true
@@ -116,19 +117,64 @@ wrappers:
     force_size: 3
     logging_frequency: 150
 
+  # Force reward system with 8 reward functions
+  force_reward:
+    enabled: false
+    contact_force_threshold: 1.0
+    contact_window_size: 10
+
+    # Force Magnitude Reward
+    enable_force_magnitude_reward: false
+    force_magnitude_reward_weight: 1.0
+    force_magnitude_base_force: 5.0
+    force_magnitude_keep_sign: true
+
+    # Alignment Award (contact only)
+    enable_alignment_award: false
+    alignment_award_reward_weight: 1.0
+    alignment_goal_orientation: [0.0, 0.0, -1.0]
+
+    # Force Action Error
+    enable_force_action_error: false
+    force_action_error_reward_weight: 1.0
+
+    # Contact Consistency (contact only)
+    enable_contact_consistency: false
+    contact_consistency_reward_weight: 1.0
+    contact_consistency_beta: 1.0
+    contact_consistency_use_ema: true
+    contact_consistency_ema_alpha: 0.1
+
+    # Oscillation Penalty
+    enable_oscillation_penalty: false
+    oscillation_penalty_reward_weight: 1.0
+    oscillation_penalty_window_size: 5
+
+    # Contact Transition Reward
+    enable_contact_transition_reward: false
+    contact_transition_reward_weight: 1.0
+
+    # Efficiency
+    enable_efficiency: false
+    efficiency_reward_weight: 1.0
+
+    # Force Ratio (contact only)
+    enable_force_ratio: false
+    force_ratio_reward_weight: 1.0
+
 # EXPERIMENT CONFIGURATION
 experiment:
   name: "fPiH_base"
-  tags: ["factory", 'FPiH', 'sept_26']
+  tags: ["factory", 'FPiH', 'sept_27']
   group: "fPiH_experiments"
-  wandb_project: "Sept_26_Exps"
+  wandb_project: "Sept_27_Exps"
   wandb_entity: "hur"
 
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
 agent:
   # Core identification
   class: "PPO"
-  disable_progressbar: false
+  disable_progressbar: true
 
   # Checkpoint and experiment tracking
   track_ckpts: true
@@ -136,7 +182,7 @@ agent:
 
   # SKRL PPO PARAMETERS (these override SKRL defaults)
   # rollouts and mini_batches are auto-calculated from episode timing
-  learning_epochs: 1 #4
+  learning_epochs: 4
   mini_batches: 150
   discount_factor: 0.99
   lambda_: 0.95  # Note: underscore for Python compatibility

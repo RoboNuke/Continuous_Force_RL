@@ -174,6 +174,7 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
                 'episode_rewards': [],
                 'episode_avg_rewards': [],
                 'completed_count': [],
+                'terminations': [],  
                 'component_rewards': {}  # Will store component reward lists dynamically
             }
 
@@ -184,7 +185,7 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         # Flag to prevent publishing on first reset (all zeros)
         self._first_reset = True
 
-    def _store_completed_episodes(self, completed_mask):
+    def _store_completed_episodes(self, completed_mask, is_termination=False):
         """Store completed episode data in agent lists."""
         if not torch.any(completed_mask):
             return
@@ -211,6 +212,9 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             self.agent_episode_data[agent_id]['episode_avg_rewards'].append(episode_avg_reward)
             self.agent_episode_data[agent_id]['completed_count'].append(1.0)
 
+            # Add termination tracking - 1.0 if termination, 0.0 if timeout
+            self.agent_episode_data[agent_id]['terminations'].append(1.0 if is_termination else 0.0)
+
     def _send_aggregated_episode_metrics(self):
         """Send aggregated episode metrics for all agents."""
         # Create agent-level aggregated metrics
@@ -225,14 +229,15 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             mean_reward = sum(agent_data['episode_rewards']) / len(agent_data['episode_rewards'])
             mean_avg_reward = sum(agent_data['episode_avg_rewards']) / len(agent_data['episode_avg_rewards'])
             total_completed = sum(agent_data['completed_count'])
-
+            terms = sum(agent_data['terminations'])
 
             # Create metrics for this agent (as single-element tensors)
             agent_metrics = {
                 'Episode/length': torch.tensor([mean_length], dtype=torch.float32),
                 'Episode/total_reward': torch.tensor([mean_reward], dtype=torch.float32),
                 'Episode/avg_reward_per_step': torch.tensor([mean_avg_reward], dtype=torch.float32),
-                'Episode/completed_episodes': torch.tensor([total_completed], dtype=torch.float32)
+                'Episode/completed_episodes': torch.tensor([total_completed], dtype=torch.float32),
+                'Episode/terminations': torch.tensor([terms],dtype=torch.float32)
             }
 
             # Send directly to the specific agent's tracker
@@ -243,6 +248,7 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             agent_data['episode_rewards'].clear()
             agent_data['episode_avg_rewards'].clear()
             agent_data['completed_count'].clear()
+            agent_data['terminations'].clear()
             # Clear component rewards for this agent
             for component_key in agent_data['component_rewards']:
                 agent_data['component_rewards'][component_key].clear()
@@ -400,14 +406,8 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
                 max_step_env_ids = max_step_mask.nonzero(as_tuple=False).squeeze(-1).tolist()
 
 
-                # Show per-agent breakdown for verification
-                for agent_id in range(self.num_agents):
-                    start_idx = agent_id * self.envs_per_agent
-                    end_idx = (agent_id + 1) * self.envs_per_agent
-                    agent_max_step = [env_id for env_id in max_step_env_ids if start_idx <= env_id < end_idx]
-
                 if torch.any(max_step_mask):
-                    self._store_completed_episodes(max_step_mask)
+                    self._store_completed_episodes(max_step_mask, is_termination=False)
 
                 # Publish all accumulated metrics and reset all tracking
                 self._send_aggregated_episode_metrics()
@@ -416,16 +416,10 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
                 # Partial reset - these environments terminated
                 env_ids_list = env_ids.tolist() if isinstance(env_ids, torch.Tensor) else env_ids
 
-                # Show per-agent breakdown for verification
-                for agent_id in range(self.num_agents):
-                    start_idx = agent_id * self.envs_per_agent
-                    end_idx = (agent_id + 1) * self.envs_per_agent
-                    agent_terminated = [env_id for env_id in env_ids_list if start_idx <= env_id < end_idx]
-
-                # Store all environments in env_ids as completed episodes
+                # Store all environments in env_ids as completed episodes (these are terminations)
                 completed_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
                 completed_mask[env_ids] = True
-                self._store_completed_episodes(completed_mask)
+                self._store_completed_episodes(completed_mask, is_termination=True)
 
                 # Reset env-specific tracking only for completed environments
                 self.current_episode_rewards[env_ids] = 0
@@ -450,6 +444,7 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             agent_data['episode_rewards'].clear()
             agent_data['episode_avg_rewards'].clear()
             agent_data['completed_count'].clear()
+            agent_data['terminations'].clear()
             # Clear component rewards for this agent
             for component_key in agent_data['component_rewards']:
                 agent_data['component_rewards'][component_key].clear()

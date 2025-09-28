@@ -59,7 +59,7 @@ class FragileObjectWrapper(gym.Wrapper):
         - Lazy initialization allows wrapper to work even if base environment isn't fully initialized
     """
 
-    def __init__(self, env, break_force, num_agents=1):
+    def __init__(self, env, break_force, num_agents=1, config=None):
         """
         Initialize the fragile object wrapper.
 
@@ -71,6 +71,7 @@ class FragileObjectWrapper(gym.Wrapper):
                 - Use -1 for unbreakable objects (sets very high threshold: 2^23)
             num_agents (int): Number of agents for static environment assignment.
                             Total environments must be divisible by this number.
+            config (dict): Configuration dictionary containing wrapper parameters including peg_break_rew.
 
         Raises:
             ValueError: If num_envs is not divisible by num_agents, or if break_force list
@@ -80,6 +81,11 @@ class FragileObjectWrapper(gym.Wrapper):
 
         self.num_agents = num_agents
         self.num_envs = env.unwrapped.num_envs
+        self.config = config or {}
+
+        # Extract peg break reward configuration
+        self.enabled = self.config.get('enabled', True)
+        self.peg_break_rew = self.config.get('peg_break_rew', -10.0)
 
         # Validate num_agents
         if self.num_envs % self.num_agents != 0:
@@ -119,6 +125,7 @@ class FragileObjectWrapper(gym.Wrapper):
 
         # Store original methods
         self._original_get_dones = None
+        self._original_get_rewards = None
 
         # Flag to track if wrapper is initialized
         self._wrapper_initialized = False
@@ -142,6 +149,11 @@ class FragileObjectWrapper(gym.Wrapper):
         if hasattr(self.unwrapped, '_get_dones'):
             self._original_get_dones = self.unwrapped._get_dones
             self.unwrapped._get_dones = self._wrapped_get_dones
+
+        # Store and override _get_rewards method for peg break rewards
+        if hasattr(self.unwrapped, '_get_rewards'):
+            self._original_get_rewards = self.unwrapped._get_rewards
+            self.unwrapped._get_rewards = self._wrapped_get_rewards
 
         self._wrapper_initialized = True
 
@@ -293,3 +305,43 @@ class FragileObjectWrapper(gym.Wrapper):
             return force_magnitude >= self.break_force
         else:
             return torch.zeros(self.num_envs, dtype=torch.bool, device=self.unwrapped.device)
+
+    def _wrapped_get_rewards(self):
+        """
+        Calculate rewards including peg break penalties.
+
+        Extends the original environment's reward calculation to include
+        negative rewards when force violations (peg breaks) occur.
+
+        Returns:
+            torch.Tensor: Combined rewards including base rewards and peg break penalties.
+                         Shape: (num_envs,).
+        """
+        # Get original rewards
+        if self._original_get_rewards:
+            base_rewards = self._original_get_rewards()
+        else:
+            # Fallback if original method doesn't exist
+            base_rewards = torch.zeros(self.num_envs, dtype=torch.float32, device=self.unwrapped.device)
+
+        # If wrapper is disabled, return base rewards only
+        if not self.enabled:
+            return base_rewards
+
+        # Calculate peg break penalties
+        peg_break_rewards = torch.zeros_like(base_rewards)
+
+        # Check for force violations and apply penalty
+        if self.fragile and self._has_force_torque_data():
+            force_violations = self.get_force_violations()
+            peg_break_rewards = torch.where(
+                force_violations,
+                torch.full_like(base_rewards, self.peg_break_rew),
+                torch.zeros_like(base_rewards)
+            )
+
+        # Log peg break reward component
+        if hasattr(self.unwrapped, 'extras'):
+            self.unwrapped.extras['logs_rew_peg_break'] = peg_break_rewards
+
+        return base_rewards + peg_break_rewards

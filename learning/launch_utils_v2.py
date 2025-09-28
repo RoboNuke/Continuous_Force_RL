@@ -17,6 +17,7 @@ from models.SimBa_hybrid_control import HybridControlBlockSimBaActor
 # Import wrappers
 from wrappers.mechanics.fragile_object_wrapper import FragileObjectWrapper
 from wrappers.mechanics.efficient_reset_wrapper import EfficientResetWrapper
+from wrappers.mechanics.force_reward_wrapper import ForceRewardWrapper
 from wrappers.sensors.force_torque_wrapper import ForceTorqueWrapper
 from wrappers.observations.observation_manager_wrapper import ObservationManagerWrapper
 from wrappers.observations.observation_noise_wrapper import ObservationNoiseWrapper, ObservationNoiseConfig, NoiseGroupConfig
@@ -500,6 +501,48 @@ def apply_force_torque_wrapper(env, wrapper_config):
         add_force_obs=wrapper_config.get('add_force_obs', False)
     )
     return env
+
+
+def apply_force_reward_wrapper(env, wrapper_config):
+    """
+    Apply force reward wrapper for comprehensive force-based reward functions.
+
+    This wrapper adds 8 configurable force-based reward functions to enhance
+    training with force feedback. Must be applied after force_torque_wrapper.
+
+    Args:
+        env: Environment to wrap (must have force_torque_wrapper applied)
+        wrapper_config: Configuration dictionary with force reward settings:
+                       - 'enabled': bool, enable/disable the wrapper
+                       - Individual enable flags for each of 8 reward functions
+                       - Reward weights and mathematical parameters
+                       - Contact detection and state management settings
+
+    Returns:
+        Environment: Wrapped environment with force reward functionality
+
+    Note:
+        - Requires force_torque_wrapper to be applied first for force data access
+        - Logs component rewards to wandb via extras system
+        - Supports individual enable/disable and weight control for each reward function
+        - Integrates with Isaac Lab's _reset_idx pattern for proper state management
+    """
+    print(f"    - Force reward wrapper configuration:")
+    print(f"      - Enabled: {wrapper_config.get('enabled', False)}")
+    if wrapper_config.get('enabled', False):
+        enabled_rewards = []
+        for reward_type in ['force_magnitude', 'alignment_award', 'force_action_error',
+                           'contact_consistency', 'oscillation_penalty', 'contact_transition',
+                           'efficiency', 'force_ratio']:
+            if wrapper_config.get(f'enable_{reward_type}_reward', False):
+                weight = wrapper_config.get(f'{reward_type}_reward_weight', 1.0)
+                enabled_rewards.append(f"{reward_type}(w={weight})")
+        print(f"      - Enabled rewards: {', '.join(enabled_rewards) if enabled_rewards else 'None'}")
+        print(f"      - Contact threshold: {wrapper_config.get('contact_force_threshold', 1.0)}")
+        print(f"      - Contact window size: {wrapper_config.get('contact_window_size', 10)}")
+
+    """Apply force reward wrapper to environment."""
+    return ForceRewardWrapper(env, wrapper_config)
 
 
 def apply_observation_manager_wrapper(env, wrapper_config):

@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from .version_compat import get_isaac_lab_ctrl_imports
 from .wrapper_sub_configs import (
     ForceTorqueSensorConfig, HybridControlConfig, ObservationNoiseConfig,
-    WandbLoggingConfig, ActionLoggingConfig
+    WandbLoggingConfig, ActionLoggingConfig, ForceRewardConfig
 )
 
 # Get configclass decorator with version compatibility
@@ -44,6 +44,9 @@ class ExtendedWrapperConfig:
 
     action_logging: ActionLoggingConfig = field(default_factory=ActionLoggingConfig)
     """Action logging wrapper configuration"""
+
+    force_reward: ForceRewardConfig = field(default_factory=ForceRewardConfig)
+    """Force reward wrapper configuration"""
 
     # Simple wrapper configurations (flat)
     fragile_objects_enabled: bool = True
@@ -181,6 +184,37 @@ class ExtendedWrapperConfig:
             'num_agents': self._primary_cfg.total_agents
         }
 
+    def get_force_reward_config(self) -> Dict[str, Any]:
+        """Get force reward wrapper configuration."""
+        return {
+            'enabled': self.force_reward.enabled,
+            'contact_force_threshold': self.force_reward.contact_force_threshold,
+            'contact_window_size': self.force_reward.contact_window_size,
+            'enable_force_magnitude_reward': self.force_reward.enable_force_magnitude_reward,
+            'force_magnitude_reward_weight': self.force_reward.force_magnitude_reward_weight,
+            'force_magnitude_base_force': self.force_reward.force_magnitude_base_force,
+            'force_magnitude_keep_sign': self.force_reward.force_magnitude_keep_sign,
+            'enable_alignment_award': self.force_reward.enable_alignment_award,
+            'alignment_award_reward_weight': self.force_reward.alignment_award_reward_weight,
+            'alignment_goal_orientation': self.force_reward.alignment_goal_orientation,
+            'enable_force_action_error': self.force_reward.enable_force_action_error,
+            'force_action_error_reward_weight': self.force_reward.force_action_error_reward_weight,
+            'enable_contact_consistency': self.force_reward.enable_contact_consistency,
+            'contact_consistency_reward_weight': self.force_reward.contact_consistency_reward_weight,
+            'contact_consistency_beta': self.force_reward.contact_consistency_beta,
+            'contact_consistency_use_ema': self.force_reward.contact_consistency_use_ema,
+            'contact_consistency_ema_alpha': self.force_reward.contact_consistency_ema_alpha,
+            'enable_oscillation_penalty': self.force_reward.enable_oscillation_penalty,
+            'oscillation_penalty_reward_weight': self.force_reward.oscillation_penalty_reward_weight,
+            'oscillation_penalty_window_size': self.force_reward.oscillation_penalty_window_size,
+            'enable_contact_transition_reward': self.force_reward.enable_contact_transition_reward,
+            'contact_transition_reward_weight': self.force_reward.contact_transition_reward_weight,
+            'enable_efficiency': self.force_reward.enable_efficiency,
+            'efficiency_reward_weight': self.force_reward.efficiency_reward_weight,
+            'enable_force_ratio': self.force_reward.enable_force_ratio,
+            'force_ratio_reward_weight': self.force_reward.force_ratio_reward_weight
+        }
+
     def _custom_to_dict(self) -> Dict[str, Any]:
         """Convert to nested dictionary structure for launch_utils."""
         return {
@@ -197,7 +231,8 @@ class ExtendedWrapperConfig:
             'hybrid_control': self.get_hybrid_control_config(),
             'factory_metrics': self.get_factory_metrics_config(),
             'wandb_logging': self.get_wandb_config(),
-            'action_logging': self.get_action_logging_config()
+            'action_logging': self.get_action_logging_config(),
+            'force_reward': self.get_force_reward_config()
         }
 
     def __repr__(self) -> str:
@@ -213,5 +248,7 @@ class ExtendedWrapperConfig:
             enabled_wrappers.append("obs_noise")
         if self.action_logging.enabled:
             enabled_wrappers.append("action_logging")
+        if self.force_reward.enabled:
+            enabled_wrappers.append("force_reward")
 
         return f"ExtendedWrapperConfig(enabled: {', '.join(enabled_wrappers) if enabled_wrappers else 'none'})"

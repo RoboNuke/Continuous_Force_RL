@@ -24,7 +24,7 @@ from .cfg_exts.actor_cfg import ActorConfig
 from .cfg_exts.critic_cfg import CriticConfig
 from .cfg_exts.wrapper_sub_configs import (
     ForceTorqueSensorConfig, HybridControlConfig, ObservationNoiseConfig,
-    WandbLoggingConfig, ActionLoggingConfig
+    WandbLoggingConfig, ActionLoggingConfig, ForceRewardConfig
 )
 import sys
 import os
@@ -482,10 +482,42 @@ class ConfigManagerV2:
                 )
                 print(f"[CONFIG V2]: Applied action_logging config: enabled={wrapper_cfg.action_logging.enabled}")
 
+            if 'force_reward' in wrapper_data:
+                fr_data = wrapper_data['force_reward']
+                wrapper_cfg.force_reward = ForceRewardConfig(
+                    enabled=fr_data.get('enabled', wrapper_cfg.force_reward.enabled),
+                    contact_force_threshold=fr_data.get('contact_force_threshold', wrapper_cfg.force_reward.contact_force_threshold),
+                    contact_window_size=fr_data.get('contact_window_size', wrapper_cfg.force_reward.contact_window_size),
+                    enable_force_magnitude_reward=fr_data.get('enable_force_magnitude_reward', wrapper_cfg.force_reward.enable_force_magnitude_reward),
+                    force_magnitude_reward_weight=fr_data.get('force_magnitude_reward_weight', wrapper_cfg.force_reward.force_magnitude_reward_weight),
+                    force_magnitude_base_force=fr_data.get('force_magnitude_base_force', wrapper_cfg.force_reward.force_magnitude_base_force),
+                    force_magnitude_keep_sign=fr_data.get('force_magnitude_keep_sign', wrapper_cfg.force_reward.force_magnitude_keep_sign),
+                    enable_alignment_award=fr_data.get('enable_alignment_award', wrapper_cfg.force_reward.enable_alignment_award),
+                    alignment_award_reward_weight=fr_data.get('alignment_award_reward_weight', wrapper_cfg.force_reward.alignment_award_reward_weight),
+                    alignment_goal_orientation=fr_data.get('alignment_goal_orientation', wrapper_cfg.force_reward.alignment_goal_orientation),
+                    enable_force_action_error=fr_data.get('enable_force_action_error', wrapper_cfg.force_reward.enable_force_action_error),
+                    force_action_error_reward_weight=fr_data.get('force_action_error_reward_weight', wrapper_cfg.force_reward.force_action_error_reward_weight),
+                    enable_contact_consistency=fr_data.get('enable_contact_consistency', wrapper_cfg.force_reward.enable_contact_consistency),
+                    contact_consistency_reward_weight=fr_data.get('contact_consistency_reward_weight', wrapper_cfg.force_reward.contact_consistency_reward_weight),
+                    contact_consistency_beta=fr_data.get('contact_consistency_beta', wrapper_cfg.force_reward.contact_consistency_beta),
+                    contact_consistency_use_ema=fr_data.get('contact_consistency_use_ema', wrapper_cfg.force_reward.contact_consistency_use_ema),
+                    contact_consistency_ema_alpha=fr_data.get('contact_consistency_ema_alpha', wrapper_cfg.force_reward.contact_consistency_ema_alpha),
+                    enable_oscillation_penalty=fr_data.get('enable_oscillation_penalty', wrapper_cfg.force_reward.enable_oscillation_penalty),
+                    oscillation_penalty_reward_weight=fr_data.get('oscillation_penalty_reward_weight', wrapper_cfg.force_reward.oscillation_penalty_reward_weight),
+                    oscillation_penalty_window_size=fr_data.get('oscillation_penalty_window_size', wrapper_cfg.force_reward.oscillation_penalty_window_size),
+                    enable_contact_transition_reward=fr_data.get('enable_contact_transition_reward', wrapper_cfg.force_reward.enable_contact_transition_reward),
+                    contact_transition_reward_weight=fr_data.get('contact_transition_reward_weight', wrapper_cfg.force_reward.contact_transition_reward_weight),
+                    enable_efficiency=fr_data.get('enable_efficiency', wrapper_cfg.force_reward.enable_efficiency),
+                    efficiency_reward_weight=fr_data.get('efficiency_reward_weight', wrapper_cfg.force_reward.efficiency_reward_weight),
+                    enable_force_ratio=fr_data.get('enable_force_ratio', wrapper_cfg.force_reward.enable_force_ratio),
+                    force_ratio_reward_weight=fr_data.get('force_ratio_reward_weight', wrapper_cfg.force_reward.force_ratio_reward_weight)
+                )
+                print(f"[CONFIG V2]: Applied force_reward config: enabled={wrapper_cfg.force_reward.enabled}")
+
             # Handle flat wrapper configurations
             flat_configs = {k: v for k, v in wrapper_data.items()
                            if k not in ['force_torque_sensor', 'hybrid_control', 'observation_noise',
-                                       'wandb_logging', 'action_logging']}
+                                       'wandb_logging', 'action_logging', 'force_reward']}
 
             for key, value in flat_configs.items():
                 flat_attr_map = {
@@ -729,6 +761,14 @@ class ConfigManagerV2:
                 if hasattr(config_bundle.wrapper_cfg.action_logging, param):
                     setattr(config_bundle.wrapper_cfg.action_logging, param, parsed_value)
                     print(f"[CONFIG V2]: CLI override wrappers.action_logging.{param} = {parsed_value}")
+                else:
+                    print(f"\033[93m[CONFIG V2]: Warning: CLI override {key} - no such attribute\033[0m")
+
+            elif key.startswith('wrappers.force_reward.'):
+                param = key.replace('wrappers.force_reward.', '')
+                if hasattr(config_bundle.wrapper_cfg.force_reward, param):
+                    setattr(config_bundle.wrapper_cfg.force_reward, param, parsed_value)
+                    print(f"[CONFIG V2]: CLI override wrappers.force_reward.{param} = {parsed_value}")
                 else:
                     print(f"\033[93m[CONFIG V2]: Warning: CLI override {key} - no such attribute\033[0m")
 

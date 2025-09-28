@@ -81,11 +81,7 @@ print("[INFO]: Using ConfigManagerV2 configuration system")
 from configs.config_manager_v2 import ConfigManagerV2
 from configs.cfg_exts.ctrl_cfg import ExtendedCtrlCfg
 
-# seed for reproducibility - set once globally
-if args_cli.seed == -1:
-    args_cli.seed = random.randint(0, 10000)
-print(f"[INFO]: Setting global seed: {args_cli.seed}")
-set_seed(args_cli.seed)
+
 
 # Load and resolve configuration
 print(f"\n\n[INFO]: Loading configuration from {args_cli.config}\n")
@@ -96,6 +92,11 @@ config_bundle = ConfigManagerV2.load_defaults_first_config(
     cli_overrides=args_cli.override or [],
     cli_task=args_cli.task
 )
+# seed for reproducibility - set once globally
+if config_bundle.primary_cfg.seed == -1:
+    config_bundle.primary_cfg.seed = random.randint(0, 10000)
+print(f"[INFO]: Setting global seed: {config_bundle.primary_cfg.seed}")
+set_seed(config_bundle.primary_cfg.seed)
 
 # Convert to dictionary format for compatibility with existing runner code
 resolved_config = ConfigManagerV2.get_legacy_config_dict(config_bundle)
@@ -234,8 +235,6 @@ def main():
     agent_config = agent_cfg_wrapper['agent']
 
     print("Sim data:", env_cfg.sim.dt, env_cfg.sim.render_interval)
-    # Debug: Print configurations
-    if primary.get('debug_mode', False):
 
     # Validate factory configuration
     print("[INFO]: Step 1.5 - Validating factory configuration")
@@ -246,7 +245,7 @@ def main():
     # ===== STEP 2: CREATE ENVIRONMENT =====
     # Environment creation using fully configured objects from Step 1
     print("[INFO]: Step 2 - Creating environment")
-    env_cfg.seed = args_cli.seed
+    env_cfg.seed = config_bundle.primary_cfg.seed
     env = gym.make(
         args_cli.task,
         cfg=env_cfg,
@@ -268,6 +267,10 @@ def main():
     if wrappers_config.get('force_torque_sensor', {}).get('enabled', False):
         print("  - Applying ForceTorqueWrapper")
         env = lUtils.apply_force_torque_wrapper(env, wrappers_config['force_torque_sensor'])
+
+    if wrappers_config.get('force_reward', {}).get('enabled', False):
+        print("  - Applying ForceRewardWrapper")
+        env = lUtils.apply_force_reward_wrapper(env, wrappers_config['force_reward'])
 
     if wrappers_config.get('observation_manager', {}).get('enabled', False):
         print("  - Applying ObservationManagerWrapper")
@@ -291,7 +294,6 @@ def main():
     if factory_metrics_enabled:
         print("  - Applying FactoryMetricsWrapper")
         env = lUtils.apply_factory_metrics_wrapper(env, derived)
-    else:
 
     if wrappers_config.get('action_logging', {}).get('enabled', False):
         print("  - Applying EnhancedActionLoggingWrapper")

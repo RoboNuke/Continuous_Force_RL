@@ -40,16 +40,11 @@ class AsyncCriticIsaacLabWrapper(Wrapper):
             state_dim = getattr(env.unwrapped.cfg, 'state_space', 0)
             if state_dim > 0:
                 env.state_space = Box(low=-float('inf'), high=float('inf'), shape=(state_dim,), dtype=np.float32)
-            else:
 
         # Store correct action space dimensions for property override
         self._correct_action_dim = getattr(env.unwrapped.cfg, 'action_space', 6)
         self._correct_action_space = Box(low=-float('inf'), high=float('inf'), shape=(self._correct_action_dim,), dtype=np.float32)
 
-
-        # Debug: check if base class set wrong action space
-        if hasattr(env, 'action_space'):
-        if hasattr(self, '_action_space'):
 
     @property
     def action_space(self):

@@ -99,6 +99,7 @@ class EfficientResetWrapper(gym.Wrapper):
                         break
 
         except ImportError:
+            print("Error in find directrlenv_reset method")
 
         # Final fallback: use the environment's own method (preserves original behavior)
         return self.unwrapped._reset_idx
