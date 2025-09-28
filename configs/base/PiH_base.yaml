@@ -167,7 +167,7 @@ experiment:
   name: "fPiH_base"
   tags: ["factory", 'FPiH']
   group: "fPiH_experiments"
-  wandb_project: "Sept_27_debug" #Exps"
+  wandb_project: "Sept_27_Exps"
   wandb_entity: "hur"
 
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
