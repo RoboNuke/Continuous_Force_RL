@@ -138,6 +138,8 @@ class ForceRewardWrapper(gym.Wrapper):
             self.config.get('alignment_goal_orientation', [0.0, 0.0, -1.0]),
             dtype=torch.float32, device=self.device
         )
+        if self.alignment_goal_orientation.dim() == 1:
+            self.alignment_goal_orientation = self.alignment_goal_orientation.unsqueeze(0).expand(self.num_envs, -1)
 
         # Force Action Error
         self.enable_force_action_error = self.config.get('enable_force_action_error', False)
@@ -362,7 +364,7 @@ class ForceRewardWrapper(gym.Wrapper):
         # Return combined rewards
         return base_rewards + total_force_reward
 
-    def _update_contact_detection(self):
+    def _update_contact_detection(self): # TODO: NOT SURE THIS TAKES FORCE HISTORY EVEN IF INDES EMPTY
         """Update contact detection state based on force magnitude moving average."""
         # Get current force magnitude
         current_force = self.unwrapped.robot_force_torque[:, :3]
@@ -393,30 +395,19 @@ class ForceRewardWrapper(gym.Wrapper):
             self.starting_keypoint_dist[new_episodes] = current_keypoint_dist[new_episodes]
             self.episode_initialized[new_episodes] = True
 
-        # Update energy usage
+        # Update energy usage  
         if hasattr(self.unwrapped, 'joint_vel') and hasattr(self.unwrapped, 'joint_torque'):
-            joint_vel = self.unwrapped.joint_vel
-            joint_torque = self.unwrapped.joint_torque
+            joint_vel = self.unwrapped.joint_vel # REAL
+            joint_torque = self.unwrapped.joint_torque # REAL (calculated in ctrl action logic)
             energy_step = torch.linalg.norm(joint_vel * joint_torque, dim=1)
             self.energy_used += energy_step
 
-    def _get_keypoint_dist(self):
+    def _get_keypoint_dist(self): 
         """Get current keypoint distance from environment."""
         # Try to access factory environment's keypoint distance calculation
-        if hasattr(self.unwrapped, '_get_keypoint_dist'):
-            return self.unwrapped._get_keypoint_dist()
-        elif hasattr(self.unwrapped, 'keypoint_dist'):
-            return self.unwrapped.keypoint_dist
-        else:
-            # Fallback: use fingertip to fixed object distance
-            if hasattr(self.unwrapped, 'fingertip_midpoint_pos') and hasattr(self.unwrapped, 'fixed_pos'):
-                fingertip_pos = self.unwrapped.fingertip_midpoint_pos
-                fixed_pos = self.unwrapped.fixed_pos
-                return torch.linalg.norm(fingertip_pos - fixed_pos, dim=1)
-            else:
-                return torch.zeros(self.num_envs, device=self.device)
+        return self.unwrapped.keypoint_dist
 
-    def _get_force_action_from_env(self):
+    def _get_force_action_from_env(self): #TODO NEEDS TO KNOW WHAT IDXS ARE FORCE RELATED
         """Extract force action commands from environment action space."""
         # This is a placeholder - actual implementation depends on environment's action space structure
         # For factory environments, force commands are typically in actions[:, 6:9] or similar
@@ -430,7 +421,6 @@ class ForceRewardWrapper(gym.Wrapper):
             return torch.zeros((self.num_envs, 3), device=self.device)
 
     # Reward Function Implementations
-
     def _calculate_force_magnitude_reward(self) -> torch.Tensor:
         """
         Calculate force magnitude reward.
@@ -450,7 +440,7 @@ class ForceRewardWrapper(gym.Wrapper):
 
         return reward
 
-    def _calculate_alignment_award(self) -> torch.Tensor:
+    def _calculate_alignment_award(self) -> torch.Tensor: #TODO SHOULD GET CURRENT FORCE ONCE, 
         """
         Calculate alignment award (contact only).
 
@@ -458,13 +448,8 @@ class ForceRewardWrapper(gym.Wrapper):
         """
         current_force = self.unwrapped.robot_force_torque[:, :3]
 
-        # Normalize goal orientation if needed
-        goal_orientation = self.alignment_goal_orientation
-        if goal_orientation.dim() == 1:
-            goal_orientation = goal_orientation.unsqueeze(0).expand(self.num_envs, -1)
-
         # Calculate dot product
-        reward = torch.sum(current_force * goal_orientation, dim=1)
+        reward = torch.sum(current_force * self.alignment_goal_orientation, dim=1)
 
         # Apply only when in contact
         reward = torch.where(self.in_contact, reward, torch.zeros_like(reward))
@@ -499,7 +484,7 @@ class ForceRewardWrapper(gym.Wrapper):
                              (1 - self.contact_consistency_ema_alpha) * self.force_ema)
             running_avg = self.force_ema
         else:
-            # Use true running average (simplified implementation)
+            # Use true running average (simplified implementation) #TODO NEED REAL RUNNING AVG
             running_avg = current_force  # Placeholder - would need proper circular buffer
 
         # Calculate consistency reward
@@ -519,7 +504,7 @@ class ForceRewardWrapper(gym.Wrapper):
         """
         force_action = self._get_force_action_from_env()
 
-        # Update force action history
+        # Update force action history 
         self.force_action_history[torch.arange(self.num_envs), self.force_action_history_idx] = force_action
         self.force_action_history_idx = (self.force_action_history_idx + 1) % self.oscillation_penalty_window_size
 
@@ -541,14 +526,14 @@ class ForceRewardWrapper(gym.Wrapper):
         current_force = self.unwrapped.robot_force_torque[:, :3]
         force_magnitude = torch.linalg.norm(current_force, dim=1)
 
-        # Update force magnitude history
+        # Update force magnitude history 
         self.force_magnitude_history[torch.arange(self.num_envs), self.force_history_idx] = force_magnitude
 
         # Detect transitions (not-in-contact -> in-contact)
         transitions = self.in_contact & ~self.prev_contact
 
         # Calculate max acceleration over window for transitioning environments
-        if torch.any(transitions):
+        if torch.any(transitions): #TODO NEED TO CALCULATE ACTUAL ACCELERATIONS
             # Calculate acceleration (simplified as magnitude differences)
             force_diffs = torch.diff(self.force_magnitude_history, dim=1)
             max_acceleration = torch.max(torch.abs(force_diffs), dim=1)[0]

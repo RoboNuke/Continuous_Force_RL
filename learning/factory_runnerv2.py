@@ -287,7 +287,7 @@ def main():
     # Apply WandbWrapper BEFORE FactoryMetricsWrapper so factory metrics can send data to wandb
     if wrappers_config.get('wandb_logging', {}).get('enabled', False):
         print("  - Applying GenericWandbLoggingWrapper")
-        env = lUtils.apply_wandb_logging_wrapper(env, wrappers_config['wandb_logging'], derived, agent_cfg_wrapper, env_cfg, resolved_config)
+        env = lUtils.apply_wandb_logging_wrapper(env, wrappers_config['wandb_logging'], derived, agent_cfg_wrapper, env_cfg, resolved_config, config_path=args_cli.config)
 
     factory_metrics_enabled = wrappers_config.get('factory_metrics', {}).get('enabled', False)
 

@@ -9,13 +9,46 @@ import torch
 import gymnasium as gym
 import wandb
 import copy
+import yaml
+import os
 from typing import Dict, Any, Optional, List, Union
+
+
+def _extract_base_config_path(experiment_config_path: str) -> Optional[str]:
+    """
+    Extract base_config path from experiment YAML file.
+
+    Args:
+        experiment_config_path: Path to the experiment configuration YAML file
+
+    Returns:
+        Path to base configuration file if it exists, None otherwise
+    """
+    try:
+        if not os.path.exists(experiment_config_path):
+            return None
+
+        with open(experiment_config_path, 'r') as f:
+            config = yaml.safe_load(f) or {}
+
+        base_config_path = config.get('base_config')
+        if base_config_path:
+            # Handle relative paths - if relative, treat as relative to current working directory
+            if not os.path.isabs(base_config_path):
+                # Don't modify relative paths - they should be relative to the project root
+                base_config_path = os.path.normpath(base_config_path)
+            return base_config_path
+
+        return None
+    except Exception as e:
+        print(f"Warning: Could not extract base_config path from {experiment_config_path}: {e}")
+        return None
 
 
 class SimpleEpisodeTracker:
     """Simple episode tracker that accumulates metrics and publishes to wandb."""
 
-    def __init__(self, num_envs: int, device: torch.device, agent_config: Dict[str, Any], env_config: Any):
+    def __init__(self, num_envs: int, device: torch.device, agent_config: Dict[str, Any], env_config: Any, config_path: Optional[str] = None):
         """Initialize simple episode tracker."""
         self.num_envs = num_envs
         self.device = device
@@ -41,6 +74,9 @@ class SimpleEpisodeTracker:
 
         )
 
+        # Upload YAML configuration artifacts
+        self._upload_config_artifacts(config_path)
+
         # Metric storage
         self.accumulated_metrics = {}
         self.episode_count = 0
@@ -48,6 +84,48 @@ class SimpleEpisodeTracker:
         # Step tracking for x-axis
         self.env_steps = 0  # Number of environment steps taken
         self.total_steps = 0  # env_steps * num_envs
+
+    def _upload_config_artifacts(self, config_path: Optional[str]) -> None:
+        """
+        Upload YAML configuration files as wandb artifacts.
+
+        Args:
+            config_path: Path to the experiment configuration file
+        """
+        if not config_path or not os.path.exists(config_path):
+            print(f"Warning: Config path not provided or doesn't exist: {config_path}")
+            return
+
+        try:
+            # Create configuration artifact
+            config_artifact = wandb.Artifact(
+                name="configuration",
+                type="config",
+                description="Experiment configuration files"
+            )
+
+            # Upload experiment configuration
+            config_artifact.add_file(
+                local_path=config_path,
+                name="experiment_config.yaml"
+            )
+            print(f"Added experiment config: {config_path}")
+
+            # Upload base configuration if it exists
+            base_config_path = _extract_base_config_path(config_path)
+            if base_config_path and os.path.exists(base_config_path):
+                config_artifact.add_file(
+                    local_path=base_config_path,
+                    name="base_config.yaml"
+                )
+                print(f"Added base config: {base_config_path}")
+
+            # Log the artifact to wandb
+            self.run.log_artifact(config_artifact)
+            print("Successfully uploaded configuration artifacts to wandb")
+
+        except Exception as e:
+            print(f"Warning: Failed to upload configuration artifacts: {e}")
 
     def increment_steps(self):
         """Increment step counters for this agent."""
@@ -113,7 +191,7 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
     Other wrappers call these functions to add their metrics.
     """
 
-    def __init__(self, env: gym.Env, num_agents: int = 1, env_cfg: Any = None):
+    def __init__(self, env: gym.Env, num_agents: int = 1, env_cfg: Any = None, config_path: Optional[str] = None):
         """
         Initialize simple Wandb logging wrapper.
 
@@ -121,6 +199,7 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             env: Base environment to wrap
             num_agents: Number of agents for static assignment
             env_cfg: Environment configuration - REQUIRED, contains agent_configs
+            config_path: Path to the experiment configuration file (for artifact upload)
         """
         super().__init__(env)
 
@@ -151,7 +230,7 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         self.trackers = []
         for i in range(self.num_agents):
             agent_config = agent_configs.get(f'agent_{i}', {})
-            tracker = SimpleEpisodeTracker(self.envs_per_agent, self.device, agent_config, self.clean_env_cfg)
+            tracker = SimpleEpisodeTracker(self.envs_per_agent, self.device, agent_config, self.clean_env_cfg, config_path)
             self.trackers.append(tracker)
 
         # Episode tracking for basic metrics

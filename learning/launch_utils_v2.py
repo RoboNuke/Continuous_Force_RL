@@ -435,7 +435,8 @@ def apply_fragile_object_wrapper(env, wrapper_config, primary, derived):
     env = FragileObjectWrapper(
         env,
         break_force=wrapper_config.get('break_force', primary['break_forces']),
-        num_agents=wrapper_config.get('num_agents', derived['total_agents'])
+        num_agents=wrapper_config.get('num_agents', derived['total_agents']),
+        config=wrapper_config
     )
     return env
 
@@ -757,7 +758,7 @@ def apply_factory_metrics_wrapper(env, derived):
     return env
 
 
-def apply_wandb_logging_wrapper(env, wrapper_config, derived, agent_cfg, env_cfg, resolved_config, logging_config=None):
+def apply_wandb_logging_wrapper(env, wrapper_config, derived, agent_cfg, env_cfg, resolved_config, logging_config=None, config_path=None):
     """
     Apply Weights & Biases logging wrapper for experiment tracking.
 
@@ -801,7 +802,7 @@ def apply_wandb_logging_wrapper(env, wrapper_config, derived, agent_cfg, env_cfg
     env_cfg_with_agents = copy.deepcopy(env_cfg)
     env_cfg_with_agents.agent_configs = agent_specific_configs
 
-    env = GenericWandbLoggingWrapper(env, num_agents=derived['total_agents'], env_cfg=env_cfg_with_agents)
+    env = GenericWandbLoggingWrapper(env, num_agents=derived['total_agents'], env_cfg=env_cfg_with_agents, config_path=config_path)
     return env
 
 
