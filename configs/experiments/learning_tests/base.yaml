@@ -1,0 +1,10 @@
+# Hybrid Agent Control Experiment Configuration 
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+
+# Experiment metadata
+experiment:
+  name: "base_learning"
+  tags: []
+  group: "base_learning"
