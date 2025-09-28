@@ -608,11 +608,11 @@ class BlockPPO(PPO):
         self.scaler.scale(loss).backward()
 
         # Collect gradients immediately after backward pass while they exist
-        #if update_policy or update_critic:
-        #    self._collect_and_store_gradients(
-        #        store_policy_state=update_policy,
-        #        store_critic_state=update_critic
-        #    )
+        if update_policy or update_critic:
+            self._collect_and_store_gradients(
+                store_policy_state=update_policy,
+                store_critic_state=update_critic
+            )
 
         if config.torch.is_distributed:
             self.policy.reduce_parameters()
@@ -837,32 +837,138 @@ class BlockPPO(PPO):
         return state
 
     def _collect_and_store_gradients(self, store_policy_state=False, store_critic_state=False):
-        """Collect gradients immediately after backward pass and send to logging wrapper."""
+        """Optimized gradient collection using vectorized operations."""
         wrapper = self._get_logging_wrapper()
         if not wrapper:
             return
 
-        network_states = [self._get_network_state(i) for i in range(self.num_agents)]
+        # Use cached parameter classification for efficiency
+        if not hasattr(self, '_param_classification'):
+            self._param_classification = self.classify_model_parameters()
+
+        block_params, regular_params = self._param_classification
         gradient_metrics = {}
 
-        if store_policy_state:
-            grad_norms = torch.tensor([self._grad_norm_per_agent(state['policy']['gradients'])
-                                       for state in network_states], device=self.device)
-            step_sizes = torch.tensor([self._adam_step_size_per_agent(state['policy']['optimizer_state'])
-                                       for state in network_states], device=self.device)
-            gradient_metrics['Policy/Gradient_Norm'] = grad_norms
-            gradient_metrics['Policy/Step_Size'] = step_sizes
+        with torch.no_grad():
+            if store_policy_state:
+                policy_grad_norms, policy_step_sizes = self._compute_vectorized_metrics(
+                    self.policy, block_params, regular_params, 'policy'
+                )
+                gradient_metrics['Policy/Gradient_Norm'] = policy_grad_norms
+                gradient_metrics['Policy/Step_Size'] = policy_step_sizes
 
-        if store_critic_state:
-            critic_grad_norms = torch.tensor([self._grad_norm_per_agent(state['critic']['gradients'])
-                                              for state in network_states], device=self.device)
-            critic_step_sizes = torch.tensor([self._adam_step_size_per_agent(state['critic']['optimizer_state'])
-                                              for state in network_states], device=self.device)
-            gradient_metrics['Critic/Gradient_Norm'] = critic_grad_norms
-            gradient_metrics['Critic/Step_Size'] = critic_step_sizes
+            if store_critic_state:
+                critic_grad_norms, critic_step_sizes = self._compute_vectorized_metrics(
+                    self.value, block_params, regular_params, 'critic'
+                )
+                gradient_metrics['Critic/Gradient_Norm'] = critic_grad_norms
+                gradient_metrics['Critic/Step_Size'] = critic_step_sizes
 
         if gradient_metrics:
             wrapper.add_metrics(gradient_metrics)
+
+    def _compute_vectorized_metrics(self, network, block_params, regular_params, role):
+        """Compute gradient norms and step sizes for all agents in one vectorized operation."""
+        # Pre-allocate tensors for all agents
+        grad_norms = torch.zeros(self.num_agents, device=self.device)
+        step_sizes = torch.zeros(self.num_agents, device=self.device)
+
+        # Collect all gradients for block parameters (vectorized)
+        block_grad_squares = torch.zeros(self.num_agents, device=self.device)
+        for name, param in block_params:
+            if param.grad is not None and self._param_belongs_to_network(param, network):
+                # Compute per-agent gradient norms in one operation
+                # Shape: (num_agents, ...) -> (num_agents,)
+                agent_grads = param.grad.view(self.num_agents, -1)  # Flatten non-agent dimensions
+                block_grad_squares += torch.sum(agent_grads ** 2, dim=1)
+
+        # Collect gradients for regular parameters (agent-specific)
+        regular_grad_squares = torch.zeros(self.num_agents, device=self.device)
+        for name, param in regular_params:
+            if param.grad is not None and hasattr(param, '_agent_id') and self._param_belongs_to_network(param, network):
+                agent_id = param._agent_id
+                regular_grad_squares[agent_id] += torch.sum(param.grad ** 2)
+
+        # Compute final gradient norms
+        grad_norms = torch.sqrt(block_grad_squares + regular_grad_squares)
+
+        # Vectorized step size computation
+        step_sizes = self._compute_vectorized_step_sizes(network, block_params, regular_params)
+
+        return grad_norms, step_sizes
+
+    def _compute_vectorized_step_sizes(self, network, block_params, regular_params):
+        """Compute Adam step sizes for all agents using vectorized operations."""
+        step_sizes = torch.zeros(self.num_agents, device=self.device)
+
+        # Get optimizer parameters once
+        lr = self._get_learning_rate()
+        beta1, beta2 = self.optimizer.param_groups[0]['betas']
+        eps = self.optimizer.param_groups[0]['eps']
+
+        # Process block parameters
+        for name, param in block_params:
+            if (param in self.optimizer.state and
+                param.grad is not None and
+                self._param_belongs_to_network(param, network)):
+
+                opt_state = self.optimizer.state[param]
+                if all(key in opt_state for key in ['exp_avg', 'exp_avg_sq', 'step']):
+                    step_count = opt_state['step']
+                    if step_count > 0:
+                        # Vectorized bias correction
+                        bias_correction1 = 1 - beta1 ** step_count
+                        bias_correction2 = 1 - beta2 ** step_count
+
+                        # Vectorized step size calculation for all agents
+                        exp_avg = opt_state['exp_avg'].view(self.num_agents, -1)
+                        exp_avg_sq = opt_state['exp_avg_sq'].view(self.num_agents, -1)
+
+                        corrected_exp_avg = exp_avg / bias_correction1
+                        corrected_exp_avg_sq = exp_avg_sq / bias_correction2
+
+                        effective_step = corrected_exp_avg / (torch.sqrt(corrected_exp_avg_sq) + eps)
+                        param_step_sizes = lr * torch.norm(effective_step, dim=1)
+                        step_sizes += param_step_sizes
+
+        # Process regular parameters
+        for name, param in regular_params:
+            if (param in self.optimizer.state and
+                param.grad is not None and
+                hasattr(param, '_agent_id') and
+                self._param_belongs_to_network(param, network)):
+
+                agent_id = param._agent_id
+                opt_state = self.optimizer.state[param]
+
+                if all(key in opt_state for key in ['exp_avg', 'exp_avg_sq', 'step']):
+                    step_count = opt_state['step']
+                    if step_count > 0:
+                        bias_correction1 = 1 - beta1 ** step_count
+                        bias_correction2 = 1 - beta2 ** step_count
+
+                        exp_avg = opt_state['exp_avg']
+                        exp_avg_sq = opt_state['exp_avg_sq']
+
+                        corrected_exp_avg = exp_avg / bias_correction1
+                        corrected_exp_avg_sq = exp_avg_sq / bias_correction2
+
+                        effective_step = corrected_exp_avg / (torch.sqrt(corrected_exp_avg_sq) + eps)
+                        step_sizes[agent_id] += lr * torch.norm(effective_step)
+
+        return step_sizes
+
+    def _param_belongs_to_network(self, param, network):
+        """Check if parameter belongs to the specified network."""
+        # Simple check based on parameter being in network's parameters
+        return any(p is param for p in network.parameters())
+
+    def _get_learning_rate(self):
+        """Get learning rate from optimizer."""
+        for group in self.optimizer.param_groups:
+            if group.get('role') == 'policy':
+                return group['lr']
+        return self.optimizer.param_groups[0]['lr']  # Fallback
 
     def _grad_norm_per_agent(self, agent_gradients):
         """Calculate gradient norm for a single agent's gradients."""
