@@ -173,7 +173,6 @@ experiment:
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
 agent:
   # Core identification
-  class: "PPO"
   disable_progressbar: true
 
   # Checkpoint and experiment tracking

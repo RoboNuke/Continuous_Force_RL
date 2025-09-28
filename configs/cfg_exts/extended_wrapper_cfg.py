@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from .version_compat import get_isaac_lab_ctrl_imports
 from .wrapper_sub_configs import (
     ForceTorqueSensorConfig, HybridControlConfig, ObservationNoiseConfig,
-    WandbLoggingConfig, ActionLoggingConfig, ForceRewardConfig
+    WandbLoggingConfig, ActionLoggingConfig, ForceRewardConfig, FragileObjectConfig
 )
 
 # Get configclass decorator with version compatibility
@@ -49,7 +49,7 @@ class ExtendedWrapperConfig:
     """Force reward wrapper configuration"""
 
     # Simple wrapper configurations (flat)
-    fragile_objects_enabled: bool = True
+    fragile_objects: FragileObjectConfig = field(default_factory=FragileObjectConfig)
     """Enable fragile objects wrapper"""
 
     efficient_reset_enabled: bool = True
@@ -68,12 +68,6 @@ class ExtendedWrapperConfig:
         """Post-initialization validation and setup."""
         self._validate_wrapper_params()
         self._setup_defaults()
-
-        # FORCE our custom to_dict to override @configclass behavior
-        # Store the original class method and replace with our implementation
-        if not hasattr(self.__class__, '_original_configclass_to_dict'):
-            self.__class__._original_configclass_to_dict = self.__class__.to_dict
-            self.__class__.to_dict = self._custom_to_dict
 
     def _validate_wrapper_params(self):
         """Validate wrapper configuration parameters."""
@@ -215,25 +209,45 @@ class ExtendedWrapperConfig:
             'force_ratio_reward_weight': self.force_reward.force_ratio_reward_weight
         }
 
-    def _custom_to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:
         """Convert to nested dictionary structure for launch_utils."""
-        return {
-            'fragile_objects': self.get_fragile_objects_config(),
-            'efficient_reset': {
-                'enabled': self.efficient_reset_enabled
-            },
-            'force_torque_sensor': self.get_force_torque_sensor_config(),
-            'observation_manager': {
-                'enabled': self.observation_manager_enabled,
-                'merge_strategy': self.observation_manager_merge_strategy
-            },
-            'observation_noise': self.get_observation_noise_config(),
-            'hybrid_control': self.get_hybrid_control_config(),
-            'factory_metrics': self.get_factory_metrics_config(),
-            'wandb_logging': self.get_wandb_config(),
-            'action_logging': self.get_action_logging_config(),
-            'force_reward': self.get_force_reward_config()
-        }
+        # Only call methods that require primary_cfg if it has been applied
+        if hasattr(self, '_primary_cfg'):
+            return {
+                'fragile_objects': self.get_fragile_objects_config(),
+                'efficient_reset': {
+                    'enabled': self.efficient_reset_enabled
+                },
+                'force_torque_sensor': self.get_force_torque_sensor_config(),
+                'observation_manager': {
+                    'enabled': self.observation_manager_enabled,
+                    'merge_strategy': self.observation_manager_merge_strategy
+                },
+                'observation_noise': self.get_observation_noise_config(),
+                'hybrid_control': self.get_hybrid_control_config(),
+                'factory_metrics': self.get_factory_metrics_config(),
+                'wandb_logging': self.get_wandb_config(),
+                'action_logging': self.get_action_logging_config(),
+                'force_reward': self.get_force_reward_config()
+            }
+        else:
+            # Fallback for when primary config not applied yet
+            return {
+                'fragile_objects': {'enabled': self.fragile_objects_enabled},
+                'efficient_reset': {'enabled': self.efficient_reset_enabled},
+                'force_torque_sensor': self.get_force_torque_sensor_config(),
+                'observation_manager': {
+                    'enabled': self.observation_manager_enabled,
+                    'merge_strategy': self.observation_manager_merge_strategy
+                },
+                'observation_noise': self.get_observation_noise_config(),
+                'hybrid_control': {'enabled': self.hybrid_control.enabled},
+                'factory_metrics': {'enabled': self.factory_metrics_enabled},
+                'wandb_logging': self.get_wandb_config(),
+                'action_logging': self.get_action_logging_config(),
+                'force_reward': self.get_force_reward_config()
+            }
+
 
     def __repr__(self) -> str:
         """String representation for debugging."""

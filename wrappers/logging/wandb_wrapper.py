@@ -14,6 +14,10 @@ import os
 from typing import Dict, Any, Optional, List, Union
 
 
+# Global tracking to ensure artifacts are uploaded only once per config path
+_uploaded_artifacts = set()
+
+
 def _extract_base_config_path(experiment_config_path: str) -> Optional[str]:
     """
     Extract base_config path from experiment YAML file.
@@ -88,12 +92,19 @@ class SimpleEpisodeTracker:
     def _upload_config_artifacts(self, config_path: Optional[str]) -> None:
         """
         Upload YAML configuration files as wandb artifacts.
+        Only uploads once per unique config path to avoid duplicates.
 
         Args:
             config_path: Path to the experiment configuration file
         """
         if not config_path or not os.path.exists(config_path):
             print(f"Warning: Config path not provided or doesn't exist: {config_path}")
+            return
+
+        # Check if artifacts for this config path have already been uploaded
+        config_key = os.path.abspath(config_path)
+        if config_key in _uploaded_artifacts:
+            print(f"Config artifacts already uploaded for: {config_path}")
             return
 
         try:
@@ -123,6 +134,9 @@ class SimpleEpisodeTracker:
             # Log the artifact to wandb
             self.run.log_artifact(config_artifact)
             print("Successfully uploaded configuration artifacts to wandb")
+
+            # Mark this config path as uploaded to prevent duplicates
+            _uploaded_artifacts.add(config_key)
 
         except Exception as e:
             print(f"Warning: Failed to upload configuration artifacts: {e}")

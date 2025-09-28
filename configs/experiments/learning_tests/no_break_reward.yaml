@@ -17,7 +17,6 @@ wrappers:
 
 agent:
   # Core identification
-  class: "PPO"
   disable_progressbar: true
 
   # Checkpoint and experiment tracking

@@ -193,14 +193,20 @@ class ConfigManagerV2:
                 agent_cfg.experiment_name = experiment_config['name']
                 print(f"[CONFIG V2]: Applied experiment.name: {agent_cfg.experiment_name}")
             if 'tags' in experiment_config:
-                agent_cfg.wandb_tags = experiment_config['tags']
-                print(f"[CONFIG V2]: Applied experiment.tags: {agent_cfg.wandb_tags}")
+                # Additive behavior for tags - combine with existing
+                existing_tags = getattr(agent_cfg, 'wandb_tags', []) or []
+                new_tags = experiment_config['tags'] if isinstance(experiment_config['tags'], list) else [experiment_config['tags']]
+                agent_cfg.wandb_tags = existing_tags + new_tags
+                print(f"[CONFIG V2]: Applied experiment.tags (additive): {agent_cfg.wandb_tags}")
             if 'group' in experiment_config:
                 agent_cfg.wandb_group = experiment_config['group']
                 print(f"[CONFIG V2]: Applied experiment.group: {agent_cfg.wandb_group}")
             if 'wandb_project' in experiment_config:
                 agent_cfg.wandb_project = experiment_config['wandb_project']
                 print(f"[CONFIG V2]: Applied experiment.wandb_project: {agent_cfg.wandb_project}")
+            if 'wandb_entity' in experiment_config:
+                wrapper_cfg.wandb_logging.wandb_entity = experiment_config['wandb_entity']
+                print(f"[CONFIG V2]: Applied experiment.wandb_entity: {experiment_config['wandb_entity']}")
 
         # 8. Create configuration bundle for CLI overrides
         config_bundle = ConfigBundle(
@@ -772,17 +778,42 @@ class ConfigManagerV2:
                 else:
                     print(f"\033[93m[CONFIG V2]: Warning: CLI override {key} - no such attribute\033[0m")
 
-            elif key == 'experiment.tags':
-                # Special handling for experiment tags - merge with existing
-                if isinstance(parsed_value, list):
-                    cli_tags = parsed_value
-                else:
-                    # Handle single tag or comma-separated string
-                    cli_tags = [tag.strip() for tag in str(parsed_value).split(',')]
+            elif key.startswith('experiment.'):
+                # Handle experiment parameter CLI overrides
+                param = key.replace('experiment.', '')
 
-                # Store for later merging after launch_utils processes experiment config
-                config_bundle._cli_experiment_tags = cli_tags
-                print(f"[CONFIG V2]: CLI experiment tags to merge: {cli_tags}")
+                if param == 'tags':
+                    # Special handling for experiment tags - merge with existing
+                    if isinstance(parsed_value, list):
+                        cli_tags = parsed_value
+                    else:
+                        # Handle single tag or comma-separated string
+                        cli_tags = [tag.strip() for tag in str(parsed_value).split(',')]
+
+                    # Merge with existing tags instead of replacing
+                    existing_tags = getattr(config_bundle.agent_cfg, 'wandb_tags', []) or []
+                    combined_tags = existing_tags + cli_tags
+                    config_bundle.agent_cfg.wandb_tags = combined_tags
+                    print(f"[CONFIG V2]: CLI merged experiment tags: {combined_tags}")
+
+                elif param == 'name':
+                    config_bundle.agent_cfg.experiment_name = parsed_value
+                    print(f"[CONFIG V2]: CLI override experiment.name = {parsed_value}")
+
+                elif param == 'group':
+                    config_bundle.agent_cfg.wandb_group = parsed_value
+                    print(f"[CONFIG V2]: CLI override experiment.group = {parsed_value}")
+
+                elif param == 'wandb_project':
+                    config_bundle.agent_cfg.wandb_project = parsed_value
+                    print(f"[CONFIG V2]: CLI override experiment.wandb_project = {parsed_value}")
+
+                elif param == 'wandb_entity':
+                    config_bundle.wrapper_cfg.wandb_logging.wandb_entity = parsed_value
+                    print(f"[CONFIG V2]: CLI override experiment.wandb_entity = {parsed_value}")
+
+                else:
+                    print(f"\033[93m[CONFIG V2]: Warning: CLI override experiment.{param} - unknown experiment parameter (skipping)\033[0m")
 
             # Handle existing flat overrides (primary, model flat attrs, etc.)
             else:

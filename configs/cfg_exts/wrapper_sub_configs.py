@@ -1,7 +1,11 @@
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-
+@dataclass
+class FragileObjectConfig:
+    enabled: bool = False
+    peg_break_rew: float = -10.0
+    
 @dataclass
 class ForceTorqueSensorConfig:
     """Force-torque sensor wrapper configuration."""
