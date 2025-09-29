@@ -17,6 +17,13 @@ environment:
     torque_action_threshold: [0.1, 0.1, 0.1]
     default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
 
+  hybrid_task:
+    force_active_threshold: 0.1
+    torque_active_threshold: 0.01
+    good_force_cmd_rew: 0.1
+    bad_force_cmd_rew: -0.1
+    wrench_norm_scale: 0.01
+
 # Model configuration for hybrid agent
 model:
   use_hybrid_agent: false
