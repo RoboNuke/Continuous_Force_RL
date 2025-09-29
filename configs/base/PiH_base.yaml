@@ -8,7 +8,7 @@
 primary:
   agents_per_break_force: 5  # Number of agents per break force condition
   num_envs_per_agent: 256    # Environments per individual agent
-  break_forces: [20] #[10,20]  # Break force conditions (-1 = unbreakable)
+  break_forces: [10,20]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
   max_steps: 25000192
@@ -166,7 +166,7 @@ wrappers:
 # EXPERIMENT CONFIGURATION
 experiment:
   name: "fPiH_base"
-  tags: ["factory", 'FPiH', 'Sept_29_baselines']
+  tags: ["factory", 'FPiH']
   group: "fPiH_experiments"
   wandb_project: "Sept_29_Exps"
   wandb_entity: "hur"
