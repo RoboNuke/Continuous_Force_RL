@@ -533,10 +533,26 @@ class ConfigManagerV3:
             True if additive behavior was applied, False if normal override should be used
         """
         # Only apply additive behavior to 'tags' field
-        if key == 'tags' and isinstance(current_attr, list) and isinstance(value, list):
-            combined_tags = self._combine_tags(current_attr, value)
-            setattr(config_instance, key, combined_tags)
-            return True
+        if key == 'tags':
+            if isinstance(current_attr, list) and isinstance(value, list):
+                combined_tags = self._combine_tags(current_attr, value)
+                setattr(config_instance, key, combined_tags)
+                return True
+    
+            if  not isinstance(current_attr, list) and not isinstance(value, list):
+                setattr(config_instance, key, [value])
+                return True
+            
+            if isinstance(current_attr, list) and not isinstance(value, list):
+                current_attr.append(value)
+                setattr(config_instance, key, current_attr)
+                return True
+            
+            if not isinstance(current_attr, list) and isinstance(value, list):
+                combined_tags = value
+                setattr(config_instance, key, combined_tags)
+                return True
+            
 
         # For all other fields, use normal override behavior
         return False
