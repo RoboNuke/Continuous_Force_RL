@@ -137,8 +137,8 @@ def define_agent_configs(configs):
     for break_force in configs['primary'].break_forces:
         for i in range(configs['primary'].agents_per_break_force):
             configs['agent'].agent_exp_cfgs.append({})
-            configs['agent'].agent_exp_cfgs[i]['break_force'] = break_force
-            configs['agent'].agent_exp_cfgs[i]['experiment'] = {}
+            configs['agent'].agent_exp_cfgs[agent_idx]['break_force'] = break_force
+            configs['agent'].agent_exp_cfgs[agent_idx]['experiment'] = {}
 
             # Set up logging directory
             exp_name = experiment.name
@@ -149,11 +149,11 @@ def define_agent_configs(configs):
             # name_FT({on/off})_{exp_tag}_{task_type}_{obs_type}_Hyb-Ctrl({0/1})_Hyb-Agent({0/1})_{date_time}_f({break_force})
             log_dir = f"{exp_name}_f({break_force})_{agent_idx}"
 
-            configs['agent'].agent_exp_cfgs[i]['experiment']["directory"] = log_root_path
-            configs['agent'].agent_exp_cfgs[i]['experiment']["experiment_name"] = log_dir
+            configs['agent'].agent_exp_cfgs[agent_idx]['experiment']["directory"] = log_root_path
+            configs['agent'].agent_exp_cfgs[agent_idx]['experiment']["experiment_name"] = log_dir
 
             # Set up wandb configuration
-            configs['agent'].agent_exp_cfgs[i]['experiment']['wandb'] = True
+            configs['agent'].agent_exp_cfgs[agent_idx]['experiment']['wandb'] = True
             wandb_kwargs = {
                 "project": configs['experiment'].wandb_project,
                 "entity": configs['experiment'].wandb_entity,
@@ -163,7 +163,8 @@ def define_agent_configs(configs):
                 "run_name": log_dir
             }
 
-            configs['agent'].agent_exp_cfgs[i]['experiment']["wandb_kwargs"] = wandb_kwargs
+            configs['agent'].agent_exp_cfgs[agent_idx]['experiment']["wandb_kwargs"] = wandb_kwargs
+            agent_idx += 1
             
 
 # ===== MODEL CREATION =====
