@@ -34,7 +34,7 @@ echo "Conda env: $CONDA_DEFAULT_ENV"
 echo ""
 
 # Build the python command
-python_cmd="python -m learning.factory_runnerv2"
+python_cmd="python -m learning.factory_runnerv3"
 python_cmd="$python_cmd --config $CONFIG_PATH"
 python_cmd="$python_cmd --override experiment.tags=$EXPERIMENT_TAG"
 
