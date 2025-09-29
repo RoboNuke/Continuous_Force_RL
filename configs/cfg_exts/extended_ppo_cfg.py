@@ -8,7 +8,7 @@ of keeping agent-specific configurations in the agents/ folder.
 
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field
-
+from configs.cfg_exts.experiment_cfg import ExperimentConfig
 from skrl.agents.torch.ppo import PPO_DEFAULT_CONFIG
 #print(PPO_DEFAULT_CONFIG)
 
@@ -84,27 +84,20 @@ class ExtendedPPOConfig:
     random_value_timesteps: int = 150
     """Number of random timesteps for value function warmup"""
 
-    # Experiment tracking
-    experiment_directory: str = "DEFAULT_DIRECTORY"
-    """Experiment directory (set by launch utils)"""
-
-    experiment_name: str = "DEFAULT_EXP_NAME"
-    """Experiment name (set by launch utils)"""
-
     write_interval: int = 150
     """Logging write interval"""
 
     checkpoint_interval: int = 1500
     """Checkpoint save interval"""
 
-    wandb_project: str = "OVERRIDE_WITH_ARG"
-    """Wandb project name"""
+    # Experiment tracking
+    wandb_experiment: ExperimentConfig = None
 
-    wandb_tags: List[str] = field(default_factory=list)
-    """Wandb tags"""
+    state_preprocessor_kwargs: dict = None
 
-    wandb_group: str = ""
-    """Wandb group name"""
+    value_preprocessor_kwargs: dict = None
+
+    agent_exp_cfgs: list = None
 
     def __post_init__(self):
         """Post-initialization validation and setup."""
@@ -283,10 +276,12 @@ class ExtendedPPOConfig:
             'reward_shaper_type': self.reward_shaper_type,
             'rewards_shaper_scale': self.rewards_shaper_scale,
             'state_preprocessor': self.state_preprocessor,
+            'state_preprocessor_kwargs': self.state_preprocessor_kwargs,
             'value_preprocessor': self.value_preprocessor,
+            'value_preprocessor_kwargs': self.value_preprocessor_kwargs,
             'learning_rate_scheduler': self.learning_rate_scheduler,
             'learning_rate_scheduler_kwargs': self.learning_rate_scheduler_kwargs,
-
+            'agent_exp_cfgs': self.agent_exp_cfgs,
             # Optimizer parameters
             'optimizer': {
                 'betas': self.optimizer_betas,
@@ -303,15 +298,15 @@ class ExtendedPPOConfig:
             'random_value_timesteps': self.random_value_timesteps,
 
             # Experiment tracking
-            'experiment': {
-                'directory': self.experiment_directory,
-                'experiment_name': self.experiment_name,
-                'write_interval': self.write_interval,
-                'checkpoint_interval': self.checkpoint_interval,
-                'project': self.wandb_project,
-                'tags': self.wandb_tags,
-                'group': self.wandb_group
-            }
+            #'experiment': {
+            #    'directory': self.,
+            #    'experiment_name': self.experiment_name,
+            #    'write_interval': self.write_interval,
+            #    'checkpoint_interval': self.checkpoint_interval,
+            #    'project': self.wandb_project,
+            #    'tags': self.wandb_tags,
+            #    'group': self.wandb_group
+            #}
         }
 
     def __repr__(self) -> str:

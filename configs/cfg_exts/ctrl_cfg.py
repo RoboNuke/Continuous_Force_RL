@@ -5,7 +5,7 @@ This module defines ExtendedCtrlCfg which inherits from Isaac Lab's CtrlCfg
 and adds our custom force control parameters for hybrid control.
 """
 
-from typing import List
+from typing import List, Literal
 from .version_compat import get_isaac_lab_ctrl_imports
 
 # Get Isaac Lab imports with version compatibility
@@ -21,6 +21,16 @@ class ExtendedCtrlCfg(CtrlCfg):
     for hybrid force-position control. All attributes are properly defined as
     class members, ensuring correct serialization with wandb and other systems.
     """
+    # EMA (Exponential Moving Average) parameters
+    ema_factor: float = 0.2
+    """Factor for EMA filtering of targets. target = ema_factor * goal + (1-ema_factor) * prev_target"""
+
+    no_sel_ema: bool = True
+    """If True, selection matrix is not filtered with EMA (set directly from action)"""
+
+    # Target initialization strategy
+    target_init_mode: Literal["zero", "first_goal"] = "zero"
+    """How to initialize targets: 'zero' for zeros, 'first_goal' for first goal after reset"""
 
     # Force control parameters (our extensions)
     force_action_bounds: List[float] = None
@@ -43,7 +53,12 @@ class ExtendedCtrlCfg(CtrlCfg):
         # Call parent post_init if it exists
         if hasattr(super(), '__post_init__'):
             super().__post_init__()
+        
+        if self.ema_factor < 0.0 or self.ema_factor > 1.0:
+            raise ValueError(f"ema_factor must be between 0 and 1, got {self.ema_factor}")
 
+        if self.target_init_mode not in ["zero", "first_goal"]:
+            raise ValueError(f"target_init_mode must be 'zero' or 'first_goal', got {self.target_init_mode}")
         # Set defaults for our custom parameters if not provided
         if self.force_action_bounds is None:
             self.force_action_bounds = [50.0, 50.0, 50.0]

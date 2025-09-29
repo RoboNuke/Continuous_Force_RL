@@ -2,7 +2,7 @@
 # Updated for ConfigManagerV2 - No reference syntax, direct values only
 
 # Task name (required for new config system)
-task_name: "Isaac-Factory-PegInsert-Direct-v0"
+
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
@@ -21,7 +21,8 @@ primary:
 environment:
   # episode_length_s comes from Isaac Lab defaults (10.0s for peg insert)
   # decimation comes from primary config applied automatically
-  filter_collisions: true
+  scene:
+    filter_collisions: true
 
   # Observation attribute mapping for Isaac Lab integration
   component_attr_map:
@@ -165,10 +166,11 @@ wrappers:
 # EXPERIMENT CONFIGURATION
 experiment:
   name: "fPiH_base"
-  tags: ["factory", 'FPiH']
+  tags: ["factory", 'FPiH', 'Sept_29_baselines']
   group: "fPiH_experiments"
-  wandb_project: "Sept_27_Exps"
+  wandb_project: "Sept_29_Exps"
   wandb_entity: "hur"
+  task_name: "Isaac-Factory-PegInsert-Direct-v0"
 
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
 agent:

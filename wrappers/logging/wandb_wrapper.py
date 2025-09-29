@@ -15,44 +15,21 @@ from typing import Dict, Any, Optional, List, Union
 
 
 # Global tracking to ensure artifacts are uploaded only once per config path
-_uploaded_artifacts = set()
 
 
-def _extract_base_config_path(experiment_config_path: str) -> Optional[str]:
-    """
-    Extract base_config path from experiment YAML file.
-
-    Args:
-        experiment_config_path: Path to the experiment configuration YAML file
-
-    Returns:
-        Path to base configuration file if it exists, None otherwise
-    """
-    try:
-        if not os.path.exists(experiment_config_path):
-            return None
-
-        with open(experiment_config_path, 'r') as f:
-            config = yaml.safe_load(f) or {}
-
-        base_config_path = config.get('base_config')
-        if base_config_path:
-            # Handle relative paths - if relative, treat as relative to current working directory
-            if not os.path.isabs(base_config_path):
-                # Don't modify relative paths - they should be relative to the project root
-                base_config_path = os.path.normpath(base_config_path)
-            return base_config_path
-
-        return None
-    except Exception as e:
-        print(f"Warning: Could not extract base_config path from {experiment_config_path}: {e}")
-        return None
 
 
 class SimpleEpisodeTracker:
     """Simple episode tracker that accumulates metrics and publishes to wandb."""
 
-    def __init__(self, num_envs: int, device: torch.device, agent_config: Dict[str, Any], env_config: Any, config_path: Optional[str] = None):
+    def __init__(
+            self, 
+            num_envs: int, 
+            device: torch.device, 
+            agent_config: Dict[str, Any], 
+            env_config: Any, 
+            config_path: dict = None
+        ):
         """Initialize simple episode tracker."""
         self.num_envs = num_envs
         self.device = device
@@ -61,14 +38,15 @@ class SimpleEpisodeTracker:
         combined_config = copy.deepcopy(env_config)
         combined_config.__dict__.update(agent_config)
 
+        wandb_kwargs = agent_config['experiment']['wandb_kwargs']
         self.run = wandb.init(
-            entity=agent_config.get('wandb_entity'),
-            project=agent_config.get('wandb_project'),
-            name=agent_config.get('wandb_name'),
+            entity=wandb_kwargs.get('entity'),
+            project=wandb_kwargs.get('project'),
+            name=wandb_kwargs.get('run_name'),
             reinit="create_new",
             config=combined_config,
-            group=agent_config.get('wandb_group'),
-            tags=agent_config.get('wandb_tags'),
+            group=wandb_kwargs.get('group'),
+            tags=wandb_kwargs.get('tags'),
             #settings=wandb.Settings(
             #    _disable_stats=True,  # Reduce wandb overhead
             #    _disable_meta=True,   # Reduce metadata collection
@@ -77,9 +55,10 @@ class SimpleEpisodeTracker:
             #)
 
         )
-
+        self._uploaded_artifacts = set()
         # Upload YAML configuration artifacts
-        self._upload_config_artifacts(config_path)
+        #self._upload_config_artifacts(config_path)
+        self._upload_files(config_path)
 
         # Metric storage
         self.accumulated_metrics = {}
@@ -89,7 +68,11 @@ class SimpleEpisodeTracker:
         self.env_steps = 0  # Number of environment steps taken
         self.total_steps = 0  # env_steps * num_envs
 
-    def _upload_config_artifacts(self, config_path: Optional[str]) -> None:
+    def _upload_files(self, config_path: dict):
+        for k, v in config_path.items():
+            self.run.save(v)
+
+    def _upload_config_artifacts(self, config_path: dict) -> None:
         """
         Upload YAML configuration files as wandb artifacts.
         Only uploads once per unique config path to avoid duplicates.
@@ -97,13 +80,13 @@ class SimpleEpisodeTracker:
         Args:
             config_path: Path to the experiment configuration file
         """
-        if not config_path or not os.path.exists(config_path):
+        if not config_path or not os.path.exists(config_path['base']) or not os.path.exists(config_path['exp']):
             print(f"Warning: Config path not provided or doesn't exist: {config_path}")
             return
 
         # Check if artifacts for this config path have already been uploaded
-        config_key = os.path.abspath(config_path)
-        if config_key in _uploaded_artifacts:
+        config_key = os.path.abspath(config_path['exp'])
+        if config_key in self._uploaded_artifacts:
             print(f"Config artifacts already uploaded for: {config_path}")
             return
 
@@ -116,27 +99,29 @@ class SimpleEpisodeTracker:
             )
 
             # Upload experiment configuration
+            exp_path = config_path['exp']
+            
             config_artifact.add_file(
-                local_path=config_path,
+                local_path = exp_path,
                 name="experiment_config.yaml"
             )
-            print(f"Added experiment config: {config_path}")
+            print(f"Added experiment config: {config_path['exp']}")
 
             # Upload base configuration if it exists
-            base_config_path = _extract_base_config_path(config_path)
-            if base_config_path and os.path.exists(base_config_path):
-                config_artifact.add_file(
-                    local_path=base_config_path,
-                    name="base_config.yaml"
-                )
-                print(f"Added base config: {base_config_path}")
+            base_config_path = config_path['base']
+            
+            config_artifact.add_file(
+                local_path=base_config_path,
+                name="base_config.yaml"
+            )
+            print(f"Added base config: {base_config_path}")
 
             # Log the artifact to wandb
             self.run.log_artifact(config_artifact)
             print("Successfully uploaded configuration artifacts to wandb")
 
             # Mark this config path as uploaded to prevent duplicates
-            _uploaded_artifacts.add(config_key)
+            self._uploaded_artifacts.add(config_key)
 
         except Exception as e:
             print(f"Warning: Failed to upload configuration artifacts: {e}")
@@ -205,7 +190,7 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
     Other wrappers call these functions to add their metrics.
     """
 
-    def __init__(self, env: gym.Env, num_agents: int = 1, env_cfg: Any = None, config_path: Optional[str] = None):
+    def __init__(self, env: gym.Env, num_agents: int = 1, env_cfg: Any = None, config_path: dict = None):
         """
         Initialize simple Wandb logging wrapper.
 
@@ -221,13 +206,9 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             raise ValueError("env_cfg is required and cannot be None")
 
         # Extract agent configs from env_cfg and remove them
-        if hasattr(env_cfg, 'agent_configs'):
-            agent_configs = copy.deepcopy(env_cfg.agent_configs)
-            # Create clean env_cfg without agent configs
-            clean_env_cfg = copy.deepcopy(env_cfg)
-            delattr(clean_env_cfg, 'agent_configs')
-        else:
-            raise ValueError("env_cfg must contain agent_configs")
+        agent_configs = env_cfg.agent_exp_cfgs
+        clean_env_cfg = copy.deepcopy(env_cfg)
+        delattr(clean_env_cfg, 'agent_exp_cfgs')
 
         self.num_agents = num_agents
         self.num_envs = env.unwrapped.num_envs
@@ -243,7 +224,7 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         # Create episode trackers for each agent
         self.trackers = []
         for i in range(self.num_agents):
-            agent_config = agent_configs.get(f'agent_{i}', {})
+            agent_config = agent_configs[i]
             tracker = SimpleEpisodeTracker(self.envs_per_agent, self.device, agent_config, self.clean_env_cfg, config_path)
             self.trackers.append(tracker)
 

@@ -99,6 +99,9 @@ class FactoryMetricsWrapper(gym.Wrapper):
             # Replace the method
             self.unwrapped._update_rew_buf = patched_update_rew_buf
 
+    @property
+    def cfg(self):
+        return self.unwrapped.cfg
     def _find_wandb_wrapper(self):
         """Find GenericWandbLoggingWrapper in the wrapper chain."""
         current = self.env

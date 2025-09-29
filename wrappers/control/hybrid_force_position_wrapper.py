@@ -17,7 +17,7 @@ import torch
 import gymnasium as gym
 import numpy as np
 from .factory_control_utils import compute_pose_task_wrench, compute_force_task_wrench, compute_dof_torque_from_wrench
-from .hybrid_control_cfg import HybridCtrlCfg, HybridTaskCfg
+
 
 try:
     import isaacsim.core.utils.torch as torch_utils
@@ -40,7 +40,14 @@ class HybridForcePositionWrapper(gym.Wrapper):
     - Action space management for hybrid control
     """
 
-    def __init__(self, env, ctrl_torque=False, reward_type="simp", ctrl_cfg=None, task_cfg=None):
+    def __init__(
+            self, 
+            env, 
+            ctrl_torque=False, 
+            reward_type="simp", 
+            ctrl_cfg=None, 
+            task_cfg=None
+        ):
         """
         Initialize hybrid force-position control wrapper.
 

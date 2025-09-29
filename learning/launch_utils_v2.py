@@ -663,7 +663,7 @@ def apply_hybrid_control_wrapper(env, wrapper_config):
         - Hybrid: Combined position and force control
     """
     """Apply hybrid force-position control wrapper to environment."""
-    from wrappers.control.hybrid_control_cfg import HybridCtrlCfg, HybridTaskCfg
+    from configs.cfg_exts.hybrid_task_cfg import HybridCtrlCfg, HybridTaskCfg
 
     ctrl_torque = wrapper_config.get('ctrl_torque', False)
 

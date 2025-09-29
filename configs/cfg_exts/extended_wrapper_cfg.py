@@ -11,7 +11,8 @@ from dataclasses import dataclass, field
 from .version_compat import get_isaac_lab_ctrl_imports
 from .wrapper_sub_configs import (
     ForceTorqueSensorConfig, HybridControlConfig, ObservationNoiseConfig,
-    WandbLoggingConfig, ActionLoggingConfig, ForceRewardConfig, FragileObjectConfig, ObsManagerConfig
+    WandbLoggingConfig, ActionLoggingConfig, ForceRewardConfig, 
+    FragileObjectConfig, ObsManagerConfig, FactoryMetricsConfig
 )
 
 # Get configclass decorator with version compatibility
@@ -56,7 +57,7 @@ class ExtendedWrapperConfig:
     efficient_reset_enabled: bool = True
     """Enable efficient environment resetting"""
 
-    factory_metrics_enabled: bool = True
+    factory_metrics: FactoryMetricsConfig = field(default_factory=FactoryMetricsConfig)
     """Enable factory-specific metrics tracking"""
 
     def apply_primary_cfg(self, primary_cfg) -> None:

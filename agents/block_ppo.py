@@ -14,7 +14,7 @@ import gymnasium
 import itertools
 from filelock import FileLock
 from models.block_simba import export_policies
-
+from dataclasses import asdict
 class BlockPPO(PPO):
     def __init__(
         self,
@@ -41,7 +41,7 @@ class BlockPPO(PPO):
             raise ValueError("Environment must have GenericWandbLoggingWrapper with add_metrics method.")
 
         self.env = env  ## STORE ENVIRONMENT FOR WRAPPER ACCESS ##
-
+        print(cfg["state_preprocessor_kwargs"])
         super().__init__(
             models=models,
             memory=memory,
@@ -75,8 +75,8 @@ class BlockPPO(PPO):
         self._random_value_timesteps = cfg['random_value_timesteps']
 
         # Initialize agent experiment configs
-        self.agent_exp_cfgs = []
-        for i in range(self.num_agents):
+        self.agent_exp_cfgs = cfg['agent_exp_cfgs']
+        """for i in range(self.num_agents):
             if f'agent_{i}' in cfg:
                 self.agent_exp_cfgs.append(cfg[f'agent_{i}'])
             else:
@@ -87,7 +87,7 @@ class BlockPPO(PPO):
                         'experiment_name': cfg.get('experiment', {}).get('experiment_name', 'default_experiment')
                     }
                 })
-
+        """
         # Initialize secondary memories list
         if type(memory) is list:
             self.memory = memory[0]
@@ -124,8 +124,8 @@ class BlockPPO(PPO):
         if self.checkpoint_interval > 0:
             for i in range(self.num_agents):
                 os.makedirs(os.path.join(
-                    self.cfg[f'agent_{i}']['experiment']['directory'],
-                    self.cfg[f'agent_{i}']['experiment']['experiment_name'],
+                    self.agent_exp_cfgs[i]['experiment']['directory'],
+                    self.agent_exp_cfgs[i]['experiment']['experiment_name'],
                     "checkpoints"
                 ), exist_ok=True)
 

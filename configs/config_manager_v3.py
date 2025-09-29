@@ -24,7 +24,7 @@ from configs.cfg_exts.extended_wrapper_cfg import ExtendedWrapperConfig
 from configs.cfg_exts.experiment_cfg import ExperimentConfig
 from configs.cfg_exts.extended_ppo_cfg import ExtendedPPOConfig
 from configs.cfg_exts.ctrl_cfg import ExtendedCtrlCfg
-
+from configs.cfg_exts.hybrid_task_cfg import HybridTaskCfg
 
 from configs.cfg_exts.actor_cfg import ActorConfig
 from configs.cfg_exts.critic_cfg import CriticConfig
@@ -48,7 +48,8 @@ SECTION_MAPPING = {
     'fragile_objects': FragileObjectConfig,
     'hybrid_control': HybridControlConfig,
     'observation_manager': ObsManagerConfig,
-    'observation_noise': ObservationNoiseConfig
+    'observation_noise': ObservationNoiseConfig,
+    'hybrid_task': HybridTaskCfg
 }
 
 
@@ -219,15 +220,21 @@ class ConfigManagerV3:
         # Create config instances
         configs = {}
 
-        # Create instance for each mapped section
-        for section, config_class in self.section_mapping.items():
+        # Create instance only for sections present in YAML
+        for section in yaml_data.keys():
+            # Validate section exists in mapping
+            if section not in self.section_mapping:
+                raise KeyError(f"Unknown section '{section}' in config file '{base_config_path}'. "
+                             f"Available sections: {list(self.section_mapping.keys())}")
+
+            config_class = self.section_mapping[section]
+
             # Create instance with defaults
             config_instance = config_class()
 
-            # Apply YAML overrides if section exists in YAML
-            if section in yaml_data:
-                print(f"\t{section}")
-                self._apply_yaml_overrides(config_instance, yaml_data[section], indent_level=2)
+            # Apply YAML overrides
+            print(f"\t{section}")
+            self._apply_yaml_overrides(config_instance, yaml_data[section], indent_level=2)
 
             configs[section] = config_instance
 
@@ -276,10 +283,21 @@ class ConfigManagerV3:
             if section == 'base_config':
                 continue
 
-            # Apply overrides to existing config instance if section is mapped
-            if section in self.section_mapping:
+            # Validate section exists in mapping
+            if section not in self.section_mapping:
+                raise KeyError(f"Unknown section '{section}' in experiment config '{experiment_config_path}'. "
+                             f"Available sections: {list(self.section_mapping.keys())}")
+
+            # Apply overrides to existing config instance if it exists
+            if section in configs:
                 print(f"\t{section}")
                 self._apply_yaml_overrides(configs[section], section_overrides, indent_level=2)
+            else:
+                print(f"\t{section}: creating new config instance for experiment override")
+                config_class = self.section_mapping[section]
+                config_instance = config_class()
+                self._apply_yaml_overrides(config_instance, section_overrides, indent_level=2)
+                configs[section] = config_instance
 
         # Update metadata to include both config paths
         configs['config_paths'] = {

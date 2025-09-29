@@ -4,6 +4,8 @@
 base_config: "configs/base/PiH_base.yaml"
 
 
+primary:
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/hybrid_control_tracker.txt"
 # Environment overrides for hybrid control
 environment:
   # Control configuration (will be merged into Isaac Lab's ctrl config)

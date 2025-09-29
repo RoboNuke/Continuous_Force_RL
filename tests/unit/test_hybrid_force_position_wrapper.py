@@ -66,7 +66,7 @@ from wrappers.control.factory_control_utils import (
     get_pose_error,
     _apply_task_space_gains
 )
-from wrappers.control.hybrid_control_cfg import (
+from configs.cfg_exts.hybrid_task_cfg import (
     HybridCtrlCfg,
     HybridTaskCfg,
     DEFAULT_HYBRID_CTRL_CFG,

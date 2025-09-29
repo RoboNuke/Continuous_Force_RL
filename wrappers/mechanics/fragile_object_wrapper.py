@@ -84,8 +84,8 @@ class FragileObjectWrapper(gym.Wrapper):
         self.config = config or {}
 
         # Extract peg break reward configuration
-        self.enabled = self.config.get('enabled', True)
-        self.peg_break_rew = self.config.get('peg_break_rew', -10.0)
+        self.enabled = self.config.enabled
+        self.peg_break_rew = self.config.peg_break_rew
 
         # Validate num_agents
         if self.num_envs % self.num_agents != 0:
@@ -95,30 +95,19 @@ class FragileObjectWrapper(gym.Wrapper):
 
         # Initialize break force tensor
         device = env.unwrapped.device
+        break_force = break_force if type(break_force) == list else [break_force]
         self.break_force = torch.ones((self.num_envs,), dtype=torch.float32, device=device)
 
-        # Configure break forces
-        if isinstance(break_force, list):
-            if len(break_force) != self.num_agents:
-                raise ValueError(f"Break force list length ({len(break_force)}) must match number of agents ({self.num_agents})")
 
-            # Assign break forces per agent group
-            for i, force in enumerate(break_force):
-                start_idx = i * self.envs_per_agent
-                end_idx = (i + 1) * self.envs_per_agent
+        envs_per_break_force = self.num_envs // len(break_force)
 
-                if force == -1:
-                    # Unbreakable - set very high threshold
-                    self.break_force[start_idx:end_idx] *= 2**23
-                else:
-                    self.break_force[start_idx:end_idx] *= force
-        else:
-            # Single value for all environments
-            if break_force == -1:
-                # Unbreakable - set very high threshold
-                self.break_force *= 2**23
+        for i, force in enumerate(break_force):
+            start_idx = i * envs_per_break_force
+            end_idx = (i+1) * envs_per_break_force
+            if force == -1:
+                self.break_force[start_idx:end_idx] *= 2**23
             else:
-                self.break_force *= break_force
+                self.break_force[start_idx:end_idx] *= force
 
         # Determine if any objects are fragile
         self.fragile = torch.any(self.break_force < 2**20)  # Threshold to distinguish "unbreakable"

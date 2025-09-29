@@ -12,6 +12,7 @@ from typing import List, Optional
 class ExperimentConfig:
     """Configuration for experiment metadata."""
 
+    task_name: str = "Isaac-Factory-PegInsert-Direct-v0"
     name: str = "default_experiment"
     tags: List[str] = field(default_factory=list)
     group: str = "default_group"
