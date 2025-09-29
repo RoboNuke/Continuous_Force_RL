@@ -2,12 +2,10 @@
 Extended Peg Insert Task Configuration
 
 This module defines ExtendedFactoryTaskPegInsertCfg which extends Isaac Lab's
-FactoryTaskPegInsertCfg with our custom parameters and computed properties.
+FactoryTaskPegInsertCfg with our custom parameters.
 """
 
-from typing import Optional
 from .version_compat import get_isaac_lab_task_imports
-from .extended_factory_env_cfg import ExtendedFactoryEnvCfg
 
 # Get Isaac Lab imports with version compatibility
 configclass, FactoryTaskPegInsertCfg, _, _ = get_isaac_lab_task_imports()
@@ -18,117 +16,16 @@ class ExtendedFactoryTaskPegInsertCfg(FactoryTaskPegInsertCfg):
     """
     Extended peg insert task configuration.
 
-    Inherits from Isaac Lab's FactoryTaskPegInsertCfg and adds our custom
-    parameters and computed properties. Uses our ExtendedFactoryEnvCfg features.
+    Inherits from Isaac Lab's FactoryTaskPegInsertCfg and adds our custom parameters.
     """
     use_ft_sensor: bool = False
     obs_type: str = ''
     ctrl_type: str = ''
     agent_type: str = ''
-    
-    def __post_init__(self):
-        """Post-initialization to set up extended configurations."""
-        # Apply our extended factory env post_init logic
-        ExtendedFactoryEnvCfg.__post_init__(self)
-        # Set up our extended configuration features
-        self._setup_extended_config()
-
-    def _setup_extended_config(self):
-        """Set up extended configuration features."""
-        from .ctrl_cfg import ExtendedCtrlCfg
-
-        # Replace ctrl with our extended version if it's not already extended
-        if not isinstance(self.ctrl, ExtendedCtrlCfg):
-            # Preserve any existing ctrl settings while upgrading to extended version
-            if hasattr(self, 'ctrl') and self.ctrl is not None:
-                # Copy existing settings to extended config
-                extended_ctrl = ExtendedCtrlCfg()
-                for attr_name in dir(self.ctrl):
-                    if not attr_name.startswith('_') and hasattr(extended_ctrl, attr_name):
-                        setattr(extended_ctrl, attr_name, getattr(self.ctrl, attr_name))
-                self.ctrl = extended_ctrl
-            else:
-                # Create new extended ctrl config
-                self.ctrl = ExtendedCtrlCfg()
 
     def apply_primary_cfg(self, primary_cfg) -> None:
-        """
-        Apply primary configuration values to this task config.
-
-        Args:
-            primary_cfg: PrimaryConfig instance containing shared parameters
-        """
-        # Apply primary config values that belong to environment
+        """Apply primary configuration values to this task config."""
         self.decimation = primary_cfg.decimation
-
-        # Update scene configuration for multi-agent setup
         if hasattr(self, 'scene') and self.scene is not None:
             self.scene.num_envs = primary_cfg.total_num_envs
-            # Isaac Lab scene configs typically have replicate_physics
-            if hasattr(self.scene, 'replicate_physics'):
-                self.scene.replicate_physics = True
-
-        # Store reference to primary config for computed properties
         self._primary_cfg = primary_cfg
-
-    @property
-    def num_agents(self) -> int:
-        """Number of agents (computed from primary config if available)."""
-        if hasattr(self, '_primary_cfg'):
-            return self._primary_cfg.total_agents
-        # Fallback to single agent if no primary config
-        return 1
-
-
-    @property
-    def total_envs(self) -> int:
-        """Total number of environments (computed from primary config if available)."""
-        if hasattr(self, '_primary_cfg'):
-            return self._primary_cfg.total_num_envs
-        # Fallback to scene.num_envs if available
-        if hasattr(self, 'scene') and hasattr(self.scene, 'num_envs'):
-            return self.scene.num_envs
-        return 1
-
-    @property
-    def sim_dt(self) -> float:
-        """Simulation time step (computed from primary config if available)."""
-        if hasattr(self, '_primary_cfg'):
-            return self._primary_cfg.sim_dt
-        # Fallback calculation using decimation and policy_hz
-        policy_hz = getattr(self, 'policy_hz', 15)  # Default to 15 Hz
-        return (1.0 / policy_hz) / self.decimation
-
-    def get_rollout_steps(self) -> int:
-        """
-        Get rollout steps for this environment's episode length.
-
-        Returns:
-            Number of rollout steps based on episode_length_s and primary config timing
-        """
-        if not hasattr(self, '_primary_cfg'):
-            raise ValueError("Primary config not applied. Call apply_primary_cfg() first.")
-
-        return self._primary_cfg.rollout_steps(self.episode_length_s)
-
-    def validate_configuration(self) -> None:
-        """
-        Validate that the peg insert task configuration is complete and consistent.
-
-        Raises:
-            ValueError: If configuration is invalid or incomplete
-        """
-        # Use the extended factory env validation
-        ExtendedFactoryEnvCfg.validate_configuration(self)
-
-        # Peg insert specific validation
-        if not hasattr(self, 'task_name') or self.task_name != "peg_insert":
-            raise ValueError(f"task_name must be 'peg_insert', got {getattr(self, 'task_name', 'None')}")
-
-        # Validate episode length is reasonable for peg insert
-        if self.episode_length_s < 5.0 or self.episode_length_s > 60.0:
-            raise ValueError(f"episode_length_s for peg insert should be 5-60 seconds, got {self.episode_length_s}")
-
-    def __repr__(self) -> str:
-        """String representation for debugging."""
-        return f"ExtendedFactoryTaskPegInsertCfg(task_name={self.task_name}, episode_length_s={self.episode_length_s}, decimation={self.decimation})"
