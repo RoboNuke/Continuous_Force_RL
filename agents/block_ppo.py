@@ -35,11 +35,6 @@ class BlockPPO(PPO):
         if env is None:
             raise ValueError("env parameter is required for BlockPPO. Must pass environment with wrapper system.")
 
-        ## VALIDATE WRAPPER INTEGRATION ##
-        wandb_wrapper = self._find_wandb_wrapper(env)
-        if wandb_wrapper is None:
-            raise ValueError("Environment must have GenericWandbLoggingWrapper with add_metrics method.")
-
         self.env = env  ## STORE ENVIRONMENT FOR WRAPPER ACCESS ##
         print(cfg["state_preprocessor_kwargs"])
         super().__init__(
