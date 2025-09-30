@@ -1,0 +1,25 @@
+# Hybrid Control Experiment Configuration 
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+
+
+primary:
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/hybrid_control_tracker.txt"
+  agents_per_break_force: 3
+  break_forces: 20
+  max_steps: 3000000
+  seed: 42
+
+agent:
+  policy_learning_rate: 3.0e-8
+
+model:
+  critic_output_init_mean: 25
+
+# Experiment metadata
+experiment:
+  name: "policyLR_test_pose"
+  tags: []
+  group: "policyLR_test_pose"
+  wandb_project: "hyper_tests"
