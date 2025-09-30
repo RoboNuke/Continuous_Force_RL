@@ -7,7 +7,7 @@ base_config: "configs/base/PiH_base.yaml"
 primary:
   ckpt_tracker_path: "/nfs/stak/users/brownhun/hybrid_control_tracker.txt"
   agents_per_break_force: 3
-  break_forces: 20
+  break_forces: [20]
   max_steps: 3000000
   seed: 42
 
