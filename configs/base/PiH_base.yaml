@@ -195,7 +195,7 @@ agent:
   # CUSTOM LEARNING PARAMETERS (extensions to SKRL)
   policy_learning_rate: 1.0e-6
   critic_learning_rate: 1.0e-5
-  value_update_ratio: 5
+  value_update_ratio: 2
 
   # Optimizer parameters
   optimizer_betas: [0.999, 0.999]
