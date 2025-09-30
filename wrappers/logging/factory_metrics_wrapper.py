@@ -185,6 +185,14 @@ class FactoryMetricsWrapper(gym.Wrapper):
 
     def _update_rew_buf_for_env(self, env, curr_successes):
         """Compute reward at current timestep."""
+        # First, get base rewards from previous wrappers (e.g., HybridForcePositionWrapper)
+        # This ensures we don't overwrite rewards added by other wrappers in the chain
+        if self._original_update_rew_buf is not None:
+            rew_buf = self._original_update_rew_buf(curr_successes)
+        else:
+            # Fallback: start with zero rewards if no original method exists
+            rew_buf = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+
         rew_dict = {}
 
         # Keypoint rewards.
@@ -208,7 +216,8 @@ class FactoryMetricsWrapper(gym.Wrapper):
         )
         rew_dict["curr_successes"] = curr_successes.clone().float()
 
-        rew_buf = (
+        # Add factory-specific reward components to the base rewards
+        rew_buf += (
             rew_dict["kp_coarse"]
             + rew_dict["kp_baseline"]
             + rew_dict["kp_fine"]
@@ -465,7 +474,6 @@ class FactoryMetricsWrapper(gym.Wrapper):
 
     def _wrapped_reset_idx(self, env_ids):
         """Handle environment resets via _reset_idx calls."""
-
         # Convert to tensor if needed
         if not isinstance(env_ids, torch.Tensor):
             env_ids = torch.tensor(env_ids, device=self.device)

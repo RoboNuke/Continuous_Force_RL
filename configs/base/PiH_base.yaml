@@ -6,7 +6,7 @@
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
-  agents_per_break_force: 5  # Number of agents per break force condition
+  agents_per_break_force: 2  # Number of agents per break force condition
   num_envs_per_agent: 256    # Environments per individual agent
   break_forces: [10,20]  # Break force conditions (-1 = unbreakable)
   decimation: 8
@@ -14,7 +14,7 @@ primary:
   max_steps: 25000192
   debug_mode: false
   seed: -1
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_tracker2.txt"
+  ckpt_tracker_path: "/home/hunter/ckpt_tracker.txt" #"/nfs/stak/users/brownhun/ckpt_tracker2.txt"
   ctrl_torque: false
 
 # ENVIRONMENT OVERRIDES (Direct Isaac Lab FactoryEnvCfg parameters)
@@ -178,7 +178,7 @@ agent:
   disable_progressbar: true
 
   # Checkpoint and experiment tracking
-  track_ckpts: true
+  track_ckpts: false
   # ckpt_tracker_path comes from primary config automatically
 
   # SKRL PPO PARAMETERS (these override SKRL defaults)
@@ -189,7 +189,7 @@ agent:
   lambda_: 0.95  # Note: underscore for Python compatibility
   random_timesteps: 0
   learning_starts: 0
-  random_value_timesteps: 150
+  random_value_timesteps: 0
   mixed_precision: false
 
   # CUSTOM LEARNING PARAMETERS (extensions to SKRL)

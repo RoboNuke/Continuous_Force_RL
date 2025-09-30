@@ -307,11 +307,7 @@ class FragileObjectWrapper(gym.Wrapper):
                          Shape: (num_envs,).
         """
         # Get original rewards
-        if self._original_get_rewards:
-            base_rewards = self._original_get_rewards()
-        else:
-            # Fallback if original method doesn't exist
-            base_rewards = torch.zeros(self.num_envs, dtype=torch.float32, device=self.unwrapped.device)
+        base_rewards = self._original_get_rewards()
 
         # If wrapper is disabled, return base rewards only
         if not self.enabled:

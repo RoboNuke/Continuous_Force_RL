@@ -15,6 +15,42 @@ import itertools
 from filelock import FileLock
 from models.block_simba import export_policies
 from dataclasses import asdict
+
+class PerAgentPreprocessorWrapper:
+    """Wrapper that makes per-agent preprocessing compatible with SKRL's single preprocessor interface."""
+
+    def __init__(self, agent, preprocessor_list):
+        self.agent = agent
+        self.preprocessor_list = preprocessor_list
+
+    def __call__(self, tensor_input, train=False, inverse=False):
+        """Called by SKRL as if it's a regular preprocessor."""
+        return self.agent._apply_per_agent_preprocessing(
+            tensor_input,
+            self.preprocessor_list,
+            train=train,
+            inverse=inverse
+        )
+
+    def __bool__(self):
+        """Return True if preprocessors exist (for SKRL's if self._state_preprocessor checks)."""
+        return any(p is not None for p in self.preprocessor_list)
+
+    def state_dict(self):
+        """Return state dicts for all per-agent preprocessors (for checkpointing)."""
+        state_dicts = {}
+        for i, preprocessor in enumerate(self.preprocessor_list):
+            if preprocessor is not None and hasattr(preprocessor, 'state_dict'):
+                state_dicts[f'agent_{i}'] = preprocessor.state_dict()
+        return state_dicts
+
+    def load_state_dict(self, state_dict):
+        """Load state dicts for all per-agent preprocessors (from checkpoint)."""
+        for i, preprocessor in enumerate(self.preprocessor_list):
+            key = f'agent_{i}'
+            if key in state_dict and preprocessor is not None and hasattr(preprocessor, 'load_state_dict'):
+                preprocessor.load_state_dict(state_dict[key])
+
 class BlockPPO(PPO):
     def __init__(
         self,
@@ -312,9 +348,9 @@ class BlockPPO(PPO):
                     rewards = self._rewards_shaper(rewards)
 
             # compute values with per-agent preprocessing
-            processed_states = self._apply_per_agent_preprocessing(states, self._per_agent_state_preprocessors)
+            processed_states = self._state_preprocessor(states)
             values, _, _ = self.value.act({"states": processed_states}, role="value")
-            values = self._apply_per_agent_preprocessing(values, self._per_agent_value_preprocessors, inverse=True)
+            values = self._value_preprocessor(values, inverse=True)
             #print("Applied value preprocessor in record transition")
 
             # time-limit (truncation) boostrapping
@@ -437,12 +473,12 @@ class BlockPPO(PPO):
         # compute returns and advantages
         with torch.no_grad(), torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
             self.value.train(False)
-            processed_next_states = self._apply_per_agent_preprocessing(self._current_next_states.float(), self._per_agent_state_preprocessors)
+            processed_next_states = self._state_preprocessor(self._current_next_states.float())
             last_values, _, _ = self.value.act(
                 {"states": processed_next_states}, role="value"
             )
             self.value.train(True)
-            last_values = self._apply_per_agent_preprocessing(last_values, self._per_agent_value_preprocessors, inverse=True)
+            last_values = self._value_preprocessor(last_values, inverse=True)
 
         values = self.memory.get_tensor_by_name("values")
         returns, advantages = compute_gae(
@@ -453,16 +489,21 @@ class BlockPPO(PPO):
             discount_factor=self._discount_factor,
             lambda_coefficient=self._lambda,
         )
-        
-        self.memory.set_tensor_by_name("values", self._apply_per_agent_preprocessing(values, self._per_agent_value_preprocessors, train=True))
-        self.memory.set_tensor_by_name("returns", self._apply_per_agent_preprocessing(returns, self._per_agent_value_preprocessors, train=True))
+
+        self.memory.set_tensor_by_name("values", self._value_preprocessor(values, train=True))
+        self.memory.set_tensor_by_name("returns", self._value_preprocessor(returns, train=True))
         self.memory.set_tensor_by_name("advantages", advantages)
 
         # sample mini-batches from memory
         sampled_batches = self.memory.sample_all(names=self._tensors_names, mini_batches=self._mini_batches)
         sample_size = self._rollouts // self._mini_batches
+        # Initialize keep_mask at epoch start - persists across mini-batches
+        keep_mask = torch.ones((self.num_agents,), dtype=bool, device=self.device)
+        # Track how many minibatches each agent completed before KL violation
+        minibatch_count = torch.zeros((self.num_agents,), dtype=torch.long, device=self.device)
         # learning epochs
         for epoch in range(self._learning_epochs):
+            #print(f"Epoch:{epoch+1}:{keep_mask}")
             mini_batch = 0
             #print(f"Epoch:{epoch}")
             # mini-batches loop
@@ -477,9 +518,8 @@ class BlockPPO(PPO):
                 #print(f"Mini Batch:{mini_batch}")
                 #if mini_batch > 5:
                 #    continue
-                keep_mask = torch.ones((self.num_agents,), dtype=bool, device=self.device)
                 with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
-                    sampled_states = self._apply_per_agent_preprocessing(sampled_states, self._per_agent_state_preprocessors, train=not epoch)
+                    sampled_states = self._state_preprocessor(sampled_states, train=not epoch)
                     _, next_log_prob, _ = self.policy.act(
                         {"states": sampled_states, "taken_actions": sampled_actions}, role="policy"
                     )
@@ -496,10 +536,12 @@ class BlockPPO(PPO):
                         if self._kl_threshold:
                             keep_mask = ~torch.logical_or( ~keep_mask, agent_kls > self._kl_threshold)
 
+                        # Increment minibatch count for agents still active (not yet violated KL)
+                        minibatch_count += keep_mask.long()
+
                     # compute entropy loss
                     entropys = self.policy.get_entropy(role="policy")
                     entropys = entropys.view(sample_size, self.num_agents, self.envs_per_agent,-1)
-                    entropys[:,~keep_mask,:] = 0.0
                     #print(self._entropy_loss_scale)
                     if self._entropy_loss_scale > 0.0:
                         entropy_loss = -self._entropy_loss_scale * entropys[:,keep_mask,:].mean()
@@ -516,7 +558,6 @@ class BlockPPO(PPO):
                     )
 
                     policy_losses = -torch.min(surrogate, surrogate_clipped)
-                    policy_losses[:,~keep_mask,:]=0.0
                     policy_loss = policy_losses[:,keep_mask,:].mean()
 
                     # compute value loss
@@ -539,6 +580,7 @@ class BlockPPO(PPO):
                 # COLLECT NETWORK STATES BEFORE ANY OPTIMIZER STEP (Problem 1 Fix)
                 # Store policy and critic states while gradients still exist
                 self._log_minibatch_update(
+                    keep_mask = keep_mask,
                     advantages = sampled_advantages,
                     old_log_probs = sampled_log_prob,
                     new_log_probs = next_log_prob,
@@ -567,6 +609,7 @@ class BlockPPO(PPO):
 
                     # Log final results - network states already collected
                     self._log_minibatch_update(
+                        keep_mask = keep_mask,
                         returns = sampled_returns,
                         values = predicted_values,
                         value_losses = value_losses
@@ -574,6 +617,7 @@ class BlockPPO(PPO):
                 else:
                     # Log all metrics - network states already collected
                     self._log_minibatch_update(
+                        keep_mask = keep_mask,
                         returns=sampled_returns,
                         values=predicted_values,
                         advantages = sampled_advantages,
@@ -588,7 +632,11 @@ class BlockPPO(PPO):
         # Publish accumulated learning metrics to wandb after all minibatches complete
         wrapper = self._get_logging_wrapper()
         if wrapper:
-            wrapper.publish()
+            # Log minibatch counts before KL violation as onetime metric
+            onetime_metrics = {
+                "Policy/Minibatches_Before_KL_Violation": minibatch_count.float()
+            }
+            wrapper.publish(onetime_metrics=onetime_metrics)
 
     def update_nets(self, loss, update_policy=True, update_critic=True):
         """
@@ -1024,6 +1072,7 @@ class BlockPPO(PPO):
 
     def _log_minibatch_update(
             self,
+            keep_mask=None,
             returns=None,
             values=None,
             advantages=None,
@@ -1067,27 +1116,48 @@ class BlockPPO(PPO):
                     kl = old_log_probs - new_log_probs
 
                     # Vectorized means across samples and environments, keep agents dimension
-                    stats["Policy/KL_Divergence_Avg"] = kl.mean(dim=(0, 2))  # Shape: (num_agents,)
-                    stats["Policy/Clip_Fraction"] = clip_mask.float().mean(dim=(0, 2))  # Shape: (num_agents,)
+                    kl_avg = kl.mean(dim=(0, 2))  # Shape: (num_agents,)
+                    if keep_mask is not None:
+                        kl_avg[~keep_mask] = float('nan')
+                    stats["Policy/KL_Divergence_Avg"] = kl_avg
+
+                    clip_fraction = clip_mask.float().mean(dim=(0, 2))  # Shape: (num_agents,)
+                    if keep_mask is not None:
+                        clip_fraction[~keep_mask] = float('nan')
+                    stats["Policy/Clip_Fraction"] = clip_fraction
 
                     # Vectorized quantiles - reshape to (sample_size * envs_per_agent, num_agents)
                     kl_per_agent = kl.permute(1, 0, 2).reshape(self.num_agents, -1).T
-                    stats["Policy/KL_Divergence_95_Quantile"] = kl_per_agent.quantile(0.95, dim=0)  # Shape: (num_agents,)
+                    kl_95 = kl_per_agent.quantile(0.95, dim=0)  # Shape: (num_agents,)
+                    if keep_mask is not None:
+                        kl_95[~keep_mask] = float('nan')
+                    stats["Policy/KL_Divergence_95_Quantile"] = kl_95
 
                 # Vectorized entropy and policy loss
                 if entropies is not None:
-                    stats["Policy/Entropy_Avg"] = entropies.mean(dim=(0, 2))  # Shape: (num_agents,)
+                    entropy_avg = entropies.mean(dim=(0, 2))  # Shape: (num_agents,)
+                    if keep_mask is not None:
+                        entropy_avg[~keep_mask] = float('nan')
+                    stats["Policy/Entropy_Avg"] = entropy_avg
 
                 if policy_losses is not None:
-                    stats["Policy/Loss_Avg"] = policy_losses.mean(dim=(0, 2))  # Shape: (num_agents,)
+                    policy_loss_avg = policy_losses.mean(dim=(0, 2))  # Shape: (num_agents,)
+                    if keep_mask is not None:
+                        policy_loss_avg[~keep_mask] = float('nan')
+                    stats["Policy/Loss_Avg"] = policy_loss_avg
 
                 # --- Value stats (vectorized) ---
                 if value_losses is not None and values is not None and returns is not None:
+                    #inverse_values = self._value_preprocessor(values, inverse=True)
+                    sample_size = values.shape[0]
+                    batch_total = sample_size * self.num_agents * self.envs_per_agent
+                    inverse_values = self._value_preprocessor(values.view(batch_total, 1), inverse=True).view(sample_size, self.num_agents, self.envs_per_agent)
+                    #print(f"Inverse values - has NaN: {torch.isnan(inverse_values).any()}, has Inf: {torch.isinf(inverse_values).any()}")
 
                     # Vectorized basic statistics
                     stats["Critic/Loss_Avg"] = value_losses.mean(dim=(0, 2))  # Shape: (num_agents,)
-                    stats["Critic/Predicted_Values_Avg"] = values.mean(dim=(0, 2))  # Shape: (num_agents,)
-                    stats["Critic/Predicted_Values_Std"] = values.std(dim=(0, 2))  # Shape: (num_agents,)
+                    stats["Critic/Predicted_Values_Avg"] = inverse_values.mean(dim=(0, 2))  # Shape: (num_agents,)
+                    stats["Critic/Predicted_Values_Std"] = inverse_values.std(dim=(0, 2))  # Shape: (num_agents,)
 
                     # Vectorized quantiles - reshape to (sample_size * envs_per_agent, num_agents)
                     value_losses_per_agent = value_losses.permute(1, 0, 2).reshape(self.num_agents, -1).T
@@ -1103,21 +1173,32 @@ class BlockPPO(PPO):
                 # --- Advantage diagnostics (vectorized) ---
                 if advantages is not None:
                     # Vectorized mean and standard deviation
-                    stats["Advantage/Mean"] = advantages.mean(dim=(0, 2))  # Shape: (num_agents,)
-                    stats["Advantage/Std_Dev"] = advantages.std(dim=(0, 2))  # Shape: (num_agents,)
+                    adv_mean_stat = advantages.mean(dim=(0, 2))  # Shape: (num_agents,)
+                    if keep_mask is not None:
+                        adv_mean_stat[~keep_mask] = float('nan')
+                    stats["Advantage/Mean"] = adv_mean_stat
+
+                    adv_std_stat = advantages.std(dim=(0, 2))  # Shape: (num_agents,)
+                    if keep_mask is not None:
+                        adv_std_stat[~keep_mask] = float('nan')
+                    stats["Advantage/Std_Dev"] = adv_std_stat
 
                     # Vectorized skewness calculation
                     adv_mean = advantages.mean(dim=(0, 2), keepdim=True)  # Shape: (1, num_agents, 1)
                     adv_std = advantages.std(dim=(0, 2), keepdim=True).clamp(min=1e-8)  # Shape: (1, num_agents, 1)
                     adv_centered = advantages - adv_mean  # Shape: (sample_size, num_agents, envs_per_agent)
-                    stats["Advantage/Skew"] = (adv_centered ** 3).mean(dim=(0, 2)) / (adv_std.squeeze() ** 3)  # Shape: (num_agents,)
+                    adv_skew = (adv_centered ** 3).mean(dim=(0, 2)) / (adv_std.squeeze() ** 3)  # Shape: (num_agents,)
+                    if keep_mask is not None:
+                        adv_skew[~keep_mask] = float('nan')
+                    stats["Advantage/Skew"] = adv_skew
 
             # Pass vectorized tensors to wrapper system (no .item() calls!)
             wrapper.add_metrics(stats)
 
         except Exception as e:
             # Silently fail if wrapper system not available
-            pass
+            print(e)
+            raise RuntimeError
 
 
     def _setup_per_agent_preprocessors(self):
@@ -1155,9 +1236,9 @@ class BlockPPO(PPO):
             else:
                 self._per_agent_value_preprocessors.append(None)
 
-        # Set the primary preprocessors to the first agent's for SKRL compatibility
-        self._state_preprocessor = self._per_agent_state_preprocessors[0] if self._per_agent_state_preprocessors[0] is not None else None
-        self._value_preprocessor = self._per_agent_value_preprocessors[0] if self._per_agent_value_preprocessors[0] is not None else None
+        # Set the primary preprocessors using wrapper for SKRL compatibility
+        self._state_preprocessor = PerAgentPreprocessorWrapper(self, self._per_agent_state_preprocessors)
+        self._value_preprocessor = PerAgentPreprocessorWrapper(self, self._per_agent_value_preprocessors)
 
 
     def _apply_per_agent_preprocessing(self, tensor_input, preprocessor_list, train=False, inverse=False):

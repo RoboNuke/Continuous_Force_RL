@@ -346,22 +346,22 @@ class ForceTorqueWrapper(gym.Wrapper):
 
         # Get force-torque sensor data and make it available for obs_dict creation
         if self._robot_av is not None:
-            try:
-                # Force-torque sensor is at joint 8 (end-effector)
-                joint_forces = self._robot_av.get_measured_joint_forces()
-                if joint_forces.shape[1] > 8:  # Ensure joint 8 exists
-                    force_torque_data = joint_forces[:, 8, :]
-                    self.unwrapped.robot_force_torque = force_torque_data
-                    # Also set as force_torque attribute for factory obs_dict creation
-                    self.unwrapped.force_torque = force_torque_data
-                else:
-                    # Fallback to zeros if joint 8 doesn't exist
-                    self.unwrapped.robot_force_torque.fill_(0.0)
-                    self.unwrapped.force_torque = self.unwrapped.robot_force_torque
-            except Exception as e:
-                # Fallback to zeros if measurement fails
+            #try:
+            # Force-torque sensor is at joint 8 (end-effector)
+            joint_forces = self._robot_av.get_measured_joint_forces()
+            if joint_forces.shape[1] > 8:  # Ensure joint 8 exists
+                force_torque_data = joint_forces[:, 8, :]
+                self.unwrapped.robot_force_torque = force_torque_data
+                # Also set as force_torque attribute for factory obs_dict creation
+                self.unwrapped.force_torque = force_torque_data
+            else:
+                # Fallback to zeros if joint 8 doesn't exist
                 self.unwrapped.robot_force_torque.fill_(0.0)
                 self.unwrapped.force_torque = self.unwrapped.robot_force_torque
+            #except Exception as e:
+            #    # Fallback to zeros if measurement fails
+            #    self.unwrapped.robot_force_torque.fill_(0.0)
+            #    self.unwrapped.force_torque = self.unwrapped.robot_force_torque
 
     def _wrapped_reset_buffers(self, env_ids):
         """

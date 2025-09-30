@@ -160,8 +160,13 @@ class SimpleEpisodeTracker:
         for name, value_list in self.accumulated_metrics.items():
             if value_list:
                 stacked = torch.stack(value_list)
-                result = stacked.mean().item()
-                final_metrics[name] = result
+                # Filter out NaN values (from blocked agents in KL masking)
+                valid_mask = ~torch.isnan(stacked)
+                if valid_mask.any():
+                    valid_values = stacked[valid_mask]
+                    result = valid_values.mean().item()
+                    final_metrics[name] = result
+                # If all values are NaN, skip this metric entirely
 
         # Add onetime metrics (now guaranteed to be tensors)
         for name, value in onetime_metrics.items():
@@ -463,7 +468,6 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
 
     def _wrapped_reset_idx(self, env_ids):
         """Handle environment resets via _reset_idx calls."""
-
         # Convert to tensor if needed
         if not isinstance(env_ids, torch.Tensor):
             env_ids = torch.tensor(env_ids, device=self.device)

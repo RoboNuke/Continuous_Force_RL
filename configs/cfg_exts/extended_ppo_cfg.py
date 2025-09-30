@@ -275,6 +275,7 @@ class ExtendedPPOConfig:
             'clip_predicted_values': self.clip_predicted_values,
             'reward_shaper_type': self.reward_shaper_type,
             'rewards_shaper_scale': self.rewards_shaper_scale,
+            'rewards_shaper': self.rewards_shaper if hasattr(self, 'rewards_shaper') else None,
             'state_preprocessor': self.state_preprocessor,
             'state_preprocessor_kwargs': self.state_preprocessor_kwargs,
             'value_preprocessor': self.value_preprocessor,

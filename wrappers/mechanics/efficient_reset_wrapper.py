@@ -61,8 +61,11 @@ class EfficientResetWrapper(gym.Wrapper):
         
         # Store and override _get_dones method
         if hasattr(self.unwrapped, '_get_dones'):
+            print(f"[DEBUG] EfficientResetWrapper: Overwriting _get_dones")
+            print(f"[DEBUG]   Original was: {self.unwrapped._get_dones}")
             self._original_get_dones = self.unwrapped._get_dones
             self.unwrapped._get_dones = self._wrapped_get_dones
+            print(f"[DEBUG]   Now is: {self.unwrapped._get_dones}")
 
         self._wrapper_initialized = True
 

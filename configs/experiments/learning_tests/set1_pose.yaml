@@ -12,7 +12,13 @@ primary:
   seed: 42
 
 agent:
-  policy_learning_rate: 3.0e-8
+  rewards_shaper_scale: 0.2
+
+wrappers:
+  # Fragile object behavior
+  fragile_objects:
+    enabled: true
+    peg_break_rew: -0.5
 
 model:
   critic_output_init_mean: 25

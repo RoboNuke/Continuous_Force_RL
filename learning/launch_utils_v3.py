@@ -18,6 +18,17 @@ from dataclasses import asdict
 from skrl.resources.schedulers.torch import KLAdaptiveLR
 from skrl.resources.preprocessors.torch import RunningStandardScaler
 
+def set_reward_shaping(env_cfg, agent_cfg):
+    """Set up reward shaping function based on config."""
+    if agent_cfg.reward_shaper_type == 'const_scale':
+        scale = agent_cfg.rewards_shaper_scale
+        def scale_reward(rew, timestep, timesteps):
+            return rew * scale
+        agent_cfg.rewards_shaper = scale_reward
+    elif agent_cfg.reward_shaper_type == 'running_scalar':
+        agent_cfg.rewards_shaper = RunningStandardScaler(**{"size": 1, "device": env_cfg.sim.device})
+
+
 def apply_wrappers(env, configs):
     wrappers_config = configs['wrappers']
     if wrappers_config.fragile_objects.enabled:

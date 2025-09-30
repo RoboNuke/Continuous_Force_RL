@@ -24,6 +24,7 @@ args_cli, hydra_args = parser.parse_known_args()
 
 args_cli.video = False
 args_cli.enable_cameras = False
+args_cli.headless = True
 
 # clear out sys.argv for Hydra
 sys.argv = [sys.argv[0]] + hydra_args
@@ -163,7 +164,7 @@ def main(
     print("[INFO]: Wrappers Applied successfully")
     print("=" * 100)
     
-    print_configs(configs)
+    #print_configs(configs)
     
     print("[INFO]: Step 4 - Creating learning objects")
     # Define memory
@@ -185,6 +186,10 @@ def main(
     models = lUtils.create_policy_and_value_models(env, configs)
     print("[INFO]:   Models Created")
 
+
+    # Set up reward shaping function
+    print("[INFO]:   Setting up reward shaping")
+    lUtils.set_reward_shaping(configs['environment'], configs['agent'])
 
     # Create agents using pre-configured parameters
     print("[INFO]:   Creating agents")

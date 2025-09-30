@@ -349,8 +349,16 @@ class ConfigManagerV3:
                     setattr(config_instance, key, value)
             else:
                 # Attribute doesn't exist, create it
-                print(f"{indent}{key}: <new> → {value}")
-                setattr(config_instance, key, value)
+                # Check if this is a dict that should be instantiated as a config object
+                if isinstance(value, dict) and key in self.section_mapping:
+                    nested_class = self.section_mapping[key]
+                    nested_instance = nested_class()
+                    print(f"{indent}{key}: instantiating nested {nested_class.__name__} object")
+                    self._apply_yaml_overrides(nested_instance, value, indent_level + 1)
+                    setattr(config_instance, key, nested_instance)
+                else:
+                    print(f"{indent}{key}: <new> → {value}")
+                    setattr(config_instance, key, value)
 
     # =============================================================================
     # CLI Override Methods (Feature 6)
