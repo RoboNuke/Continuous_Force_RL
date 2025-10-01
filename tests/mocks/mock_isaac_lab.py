@@ -295,6 +295,12 @@ class MockBaseEnv(gym.Env):
         # Add actions attribute for dynamic observation calculation
         self.actions = torch.randn(self.num_envs, 6, device=self.device)
 
+        # Add extras dict for wandb wrapper integration
+        self.extras = {}
+
+        # Add episode tracking for wandb wrapper
+        self.episode_length_buf = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+
     @property
     def unwrapped(self):
         return self._unwrapped

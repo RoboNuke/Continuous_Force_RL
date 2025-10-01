@@ -360,13 +360,13 @@ class FactoryMetricsWrapper(gym.Wrapper):
             all_agent_metrics['Smoothness/sum_square_joint_velocity'][agent_id] = mean_ssjv
 
             if self.has_force_data and agent_data['max_forces']:
-                mean_max_force = sum(agent_data['max_forces']) / len(agent_data['max_forces'])
-                mean_max_torque = sum(agent_data['max_torques']) / len(agent_data['max_torques'])
+                max_max_force = max(agent_data['max_forces'])
+                max_max_torque = max(agent_data['max_torques'])
                 mean_avg_force = sum(agent_data['avg_forces']) / len(agent_data['avg_forces'])
                 mean_avg_torque = sum(agent_data['avg_torques']) / len(agent_data['avg_torques'])
 
-                all_agent_metrics['Smoothness/max_force'][agent_id] = mean_max_force
-                all_agent_metrics['Smoothness/max_torque'][agent_id] = mean_max_torque
+                all_agent_metrics['Smoothness/max_force'][agent_id] = max_max_force
+                all_agent_metrics['Smoothness/max_torque'][agent_id] = max_max_torque
                 all_agent_metrics['Smoothness/avg_force'][agent_id] = mean_avg_force
                 all_agent_metrics['Smoothness/avg_torque'][agent_id] = mean_avg_torque
 

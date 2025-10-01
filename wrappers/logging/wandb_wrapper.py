@@ -69,6 +69,8 @@ class SimpleEpisodeTracker:
         self.total_steps = 0  # env_steps * num_envs
 
     def _upload_files(self, config_path: dict):
+        if config_path is None:
+            return
         for k, v in config_path.items():
             self.run.save(v)
 
@@ -156,7 +158,7 @@ class SimpleEpisodeTracker:
         # Aggregate accumulated metrics
         final_metrics = {}
 
-        # Process regular metrics (take mean across all accumulated values)
+        # Process regular metrics (take mean or max across all accumulated values)
         for name, value_list in self.accumulated_metrics.items():
             if value_list:
                 stacked = torch.stack(value_list)
@@ -164,7 +166,11 @@ class SimpleEpisodeTracker:
                 valid_mask = ~torch.isnan(stacked)
                 if valid_mask.any():
                     valid_values = stacked[valid_mask]
-                    result = valid_values.mean().item()
+                    # Use max aggregation for metrics with 'max' in name, mean for others
+                    if 'max' in name:
+                        result = valid_values.max().item()
+                    else:
+                        result = valid_values.mean().item()
                     final_metrics[name] = result
                 # If all values are NaN, skip this metric entirely
 

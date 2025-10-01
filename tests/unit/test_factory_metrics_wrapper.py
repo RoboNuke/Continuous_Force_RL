@@ -406,3 +406,52 @@ class TestFactoryMetricsWrapper:
         # Should be proportional to num_envs
         expected_elements = wrapper.num_envs * 7  # 7 tracking variables
         assert total_elements == expected_elements
+
+    def test_max_force_aggregation(self):
+        """Test that factory metrics uses max aggregation for max_force and max_torque."""
+        wrapper = FactoryMetricsWrapper(self.wandb_env, num_agents=1, publish_to_wandb=True)
+
+        # Enable force data tracking
+        wrapper.has_force_data = True
+
+        # Manually populate agent episode data to test aggregation logic
+        # Simulate 4 completed episodes with different max forces
+        wrapper.agent_episode_data[0]['max_forces'] = [30.0, 20.0, 35.0, 25.0]
+        wrapper.agent_episode_data[0]['max_torques'] = [15.0, 10.0, 20.0, 12.0]
+        wrapper.agent_episode_data[0]['avg_forces'] = [5.0, 6.0, 7.0, 8.0]
+        wrapper.agent_episode_data[0]['avg_torques'] = [2.0, 3.0, 4.0, 5.0]
+
+        # Also need to populate other required fields to avoid errors
+        wrapper.agent_episode_data[0]['success_rates'] = [1.0, 0.0, 1.0, 0.0]
+        wrapper.agent_episode_data[0]['success_times'] = [100.0, 0.0, 120.0, 0.0]
+        wrapper.agent_episode_data[0]['engagement_rates'] = [1.0, 1.0, 1.0, 1.0]
+        wrapper.agent_episode_data[0]['engagement_times'] = [50.0, 60.0, 55.0, 65.0]
+        wrapper.agent_episode_data[0]['engagement_lengths'] = [200.0, 180.0, 190.0, 210.0]
+        wrapper.agent_episode_data[0]['ssv_values'] = [100.0, 120.0, 110.0, 130.0]
+        wrapper.agent_episode_data[0]['ssjv_values'] = [50.0, 55.0, 52.0, 58.0]
+
+        # Call the aggregation method directly
+        wrapper._send_aggregated_factory_metrics()
+
+        # Check that wandb wrapper received the metrics
+        assert len(self.wandb_env.metrics_calls) > 0
+
+        # Get the most recent metrics call
+        latest_metrics = self.wandb_env.metrics_calls[-1]
+
+        # Check that max_force is in the metrics
+        assert 'Smoothness/max_force' in latest_metrics
+
+        # The value sent should be the max across all completed episodes
+        # For agent 0: max_forces = [30.0, 20.0, 35.0, 25.0]
+        # Factory wrapper currently sends the MEAN: (30+20+35+25)/4 = 27.5
+        # After our fix, it should send the MAX: 35.0
+        max_force_values = latest_metrics['Smoothness/max_force']
+
+        # Verify it's a tensor with one value (for agent 0)
+        assert isinstance(max_force_values, torch.Tensor)
+        assert len(max_force_values) == 1
+
+        # This test will FAIL initially with value 27.5 (mean)
+        # After fix, it should PASS with value 35.0 (max)
+        assert max_force_values[0].item() == 35.0, f"Expected max of maxes (35.0), got {max_force_values[0].item()}"

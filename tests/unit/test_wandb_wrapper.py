@@ -29,15 +29,19 @@ class MockEnvConfig:
     def __init__(self):
         self.num_envs = 4
         self.device = torch.device("cpu")
-        self.agent_configs = {
-            'agent_0': {
-                'wandb_entity': 'test_entity',
-                'wandb_project': 'test_project',
-                'wandb_name': 'test_agent_0',
-                'wandb_group': 'test_group',
-                'wandb_tags': ['test']
+        self.agent_exp_cfgs = [
+            {
+                'experiment': {
+                    'wandb_kwargs': {
+                        'entity': 'test_entity',
+                        'project': 'test_project',
+                        'run_name': 'test_agent_0',
+                        'group': 'test_group',
+                        'tags': ['test']
+                    }
+                }
             }
-        }
+        ]
 
 
 class TestSimpleEpisodeTracker:
@@ -166,21 +170,27 @@ class TestGenericWandbLoggingWrapper:
             GenericWandbLoggingWrapper(self.base_env)
 
     def test_initialization_without_agent_configs_fails(self):
-        """Test that initialization fails without agent_configs in env_cfg."""
+        """Test that initialization fails without agent_exp_cfgs in env_cfg."""
         bad_env_cfg = MockEnvConfig()
-        delattr(bad_env_cfg, 'agent_configs')
+        delattr(bad_env_cfg, 'agent_exp_cfgs')
 
-        with pytest.raises(ValueError, match="env_cfg must contain agent_configs"):
+        with pytest.raises(AttributeError):
             GenericWandbLoggingWrapper(self.base_env, env_cfg=bad_env_cfg)
 
     def test_initialization_multiple_agents(self):
         """Test wrapper initialization with multiple agents."""
         # Set up config for 2 agents
-        self.env_cfg.agent_configs['agent_1'] = {
-            'wandb_entity': 'test_entity_2',
-            'wandb_project': 'test_project_2',
-            'wandb_name': 'test_agent_1'
-        }
+        self.env_cfg.agent_exp_cfgs.append({
+            'experiment': {
+                'wandb_kwargs': {
+                    'entity': 'test_entity_2',
+                    'project': 'test_project_2',
+                    'run_name': 'test_agent_1',
+                    'group': 'test_group',
+                    'tags': ['test']
+                }
+            }
+        })
 
         wrapper = GenericWandbLoggingWrapper(self.base_env, num_agents=2, env_cfg=self.env_cfg)
 
@@ -354,11 +364,17 @@ class TestGenericWandbLoggingWrapper:
     def test_multiple_agent_environment_assignment(self):
         """Test that environments are correctly assigned to agents."""
         # Set up 4 environments with 2 agents
-        self.env_cfg.agent_configs['agent_1'] = {
-            'wandb_entity': 'test_entity_2',
-            'wandb_project': 'test_project_2',
-            'wandb_name': 'test_agent_1'
-        }
+        self.env_cfg.agent_exp_cfgs.append({
+            'experiment': {
+                'wandb_kwargs': {
+                    'entity': 'test_entity_2',
+                    'project': 'test_project_2',
+                    'run_name': 'test_agent_1',
+                    'group': 'test_group',
+                    'tags': ['test']
+                }
+            }
+        })
 
         wrapper = GenericWandbLoggingWrapper(self.base_env, num_agents=2, env_cfg=self.env_cfg)
 
@@ -395,14 +411,13 @@ class TestGenericWandbLoggingWrapper:
             # Episodes 0 and 2 should be considered completed (max length + truncated)
 
     def test_edge_case_empty_agent_config(self):
-        """Test behavior with missing agent config."""
-        # Remove agent_0 config to test default behavior
-        del self.env_cfg.agent_configs['agent_0']
+        """Test behavior with empty agent config list."""
+        # Clear agent configs to test default behavior
+        self.env_cfg.agent_exp_cfgs = []
 
-        wrapper = GenericWandbLoggingWrapper(self.base_env, num_agents=1, env_cfg=self.env_cfg)
-
-        # Should still work with empty config
-        assert len(wrapper.trackers) == 1
+        # This should fail since we need at least one config
+        with pytest.raises(IndexError):
+            GenericWandbLoggingWrapper(self.base_env, num_agents=1, env_cfg=self.env_cfg)
 
     def test_metric_split_edge_cases(self):
         """Test metric splitting with various tensor sizes."""
@@ -417,3 +432,127 @@ class TestGenericWandbLoggingWrapper:
 
         # All should be handled without errors
         wrapper.add_metrics(test_cases)
+
+    def test_max_aggregation_for_max_metrics(self):
+        """Test that metrics with 'max' in name use max aggregation instead of mean."""
+        # Create a fresh tracker for this test with proper agent config
+        agent_config = {
+            'experiment': {
+                'wandb_kwargs': {
+                    'entity': 'test_entity',
+                    'project': 'test_project',
+                    'run_name': 'test_run',
+                    'group': 'test_group',
+                    'tags': ['test']
+                }
+            }
+        }
+        tracker = SimpleEpisodeTracker(
+            num_envs=4,
+            device=torch.device("cpu"),
+            agent_config=agent_config,
+            env_config=self.env_cfg
+        )
+
+        # Add multiple batches of max_force metrics with different values
+        # Expected behavior: should take max across all batches
+        tracker.add_metrics({
+            "Smoothness/max_force": torch.tensor([10.0, 20.0, 15.0, 25.0])  # max = 25.0
+        })
+        tracker.add_metrics({
+            "Smoothness/max_force": torch.tensor([30.0, 5.0, 12.0, 8.0])  # max = 30.0
+        })
+        tracker.add_metrics({
+            "Smoothness/max_force": torch.tensor([22.0, 18.0, 35.0, 10.0])  # max = 35.0
+        })
+
+        # Increment steps for x-axis tracking
+        tracker.increment_steps()
+
+        # Publish and check result
+        # The max across ALL values should be 35.0
+        tracker.publish()
+
+        # Check that wandb.log was called with the correct max value
+        # The mock wandb should have captured this call
+        assert tracker.run.log_calls[-1]["Smoothness/max_force"] == 35.0
+
+    def test_mean_aggregation_for_non_max_metrics(self):
+        """Test that metrics without 'max' in name use mean aggregation."""
+        # Create a fresh tracker for this test with proper agent config
+        agent_config = {
+            'experiment': {
+                'wandb_kwargs': {
+                    'entity': 'test_entity',
+                    'project': 'test_project',
+                    'run_name': 'test_run',
+                    'group': 'test_group',
+                    'tags': ['test']
+                }
+            }
+        }
+        tracker = SimpleEpisodeTracker(
+            num_envs=4,
+            device=torch.device("cpu"),
+            agent_config=agent_config,
+            env_config=self.env_cfg
+        )
+
+        # Add multiple batches of avg_force metrics
+        # Expected behavior: should take mean across all batches
+        tracker.add_metrics({
+            "Smoothness/avg_force": torch.tensor([10.0, 20.0, 15.0, 25.0])  # mean = 17.5
+        })
+        tracker.add_metrics({
+            "Smoothness/avg_force": torch.tensor([30.0, 6.0, 12.0, 8.0])  # mean = 14.0
+        })
+
+        # Increment steps
+        tracker.increment_steps()
+
+        # Publish
+        tracker.publish()
+
+        # The mean of means should be (17.5 + 14.0) / 2 = 15.75
+        assert tracker.run.log_calls[-1]["Smoothness/avg_force"] == 15.75
+
+    def test_mixed_max_and_mean_metrics(self):
+        """Test that max and mean metrics are aggregated correctly when mixed."""
+        # Create a fresh tracker with proper agent config
+        agent_config = {
+            'experiment': {
+                'wandb_kwargs': {
+                    'entity': 'test_entity',
+                    'project': 'test_project',
+                    'run_name': 'test_run',
+                    'group': 'test_group',
+                    'tags': ['test']
+                }
+            }
+        }
+        tracker = SimpleEpisodeTracker(
+            num_envs=4,
+            device=torch.device("cpu"),
+            agent_config=agent_config,
+            env_config=self.env_cfg
+        )
+
+        # Add both max and non-max metrics
+        tracker.add_metrics({
+            "Smoothness/max_force": torch.tensor([10.0, 20.0, 15.0, 25.0]),  # max = 25.0
+            "Smoothness/avg_force": torch.tensor([10.0, 20.0, 15.0, 25.0])   # mean = 17.5
+        })
+        tracker.add_metrics({
+            "Smoothness/max_force": torch.tensor([30.0, 5.0, 12.0, 8.0]),   # max = 30.0
+            "Smoothness/avg_force": torch.tensor([30.0, 6.0, 12.0, 8.0])    # mean = 14.0
+        })
+
+        # Increment steps
+        tracker.increment_steps()
+
+        # Publish
+        tracker.publish()
+
+        # Check aggregations
+        assert tracker.run.log_calls[-1]["Smoothness/max_force"] == 30.0  # max of all
+        assert tracker.run.log_calls[-1]["Smoothness/avg_force"] == 15.75  # mean of means

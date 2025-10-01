@@ -7,11 +7,16 @@ class MockRun:
     def __init__(self):
         self.id = "test_run_id"
         self.name = "test_run_name"
+        self.log_calls = []  # Track all log calls for testing
 
     def log(self, data, step=None):
-        pass
+        self.log_calls.append(data)
 
     def finish(self):
+        pass
+
+    def save(self, path):
+        """Mock save method for file uploads."""
         pass
 
 class MockWandb:
