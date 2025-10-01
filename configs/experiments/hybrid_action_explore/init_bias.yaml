@@ -3,10 +3,11 @@
 base_config: "configs/base/PiH_base.yaml"
 # Experiment metadata
 experiment:
-  name: "no_init_bias"
+  name: "init_bias"
   tags: []
-  group: "no_init_bias"
+  group: "init_bias"
   wandb_project: "hybrid_action_tests"
+
 
 primary:
   ckpt_tracker_path: "/nfs/stak/users/brownhun/hybrid_action_test_tracker.txt"
@@ -21,7 +22,7 @@ wrappers:
   hybrid_control:
     enabled: true
     # ctrl_torque will be computed from primary config automatically
-    reward_type: "none"  # Simple reward structure to start
+    reward_type: "simp"  # Simple reward structure to start
 
 environment:
   # Control configuration (will be merged into Isaac Lab's ctrl config)
@@ -38,12 +39,12 @@ environment:
     torque_active_threshold: 0.01
     good_force_cmd_rew: 0.1
     bad_force_cmd_rew: -0.1
-    wrench_norm_scale: 0.01
+    wrench_norm_scale: 0.1
 
 # Model configuration for hybrid agent
 model:
-  use_hybrid_agent: false
-  critic_output_init_mean: 40  # Higher initial value estimate for complex task
+  use_hybrid_agent: true
+  critic_output_init_mean: 30  # Higher initial value estimate for complex task
 
   # Hybrid agent specific parameters
   hybrid_agent:
@@ -60,13 +61,13 @@ model:
     torque_scale: 1.0
 
     # Selection network adjustments
-    selection_adjustment_types: ['none']
+    selection_adjustment_types: ['init_bias']
 
     # scale on selection parameters only
     init_scale_weights_factor: 0.1
 
     # bias on selection parameters
-    init_bias: 0.0 #-2.5
+    init_bias: -2.5
 
     # adds scale layer if adj has scale_zin
     pre_layer_scale_factor: 0.1

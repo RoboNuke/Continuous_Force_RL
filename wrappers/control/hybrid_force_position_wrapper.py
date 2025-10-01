@@ -634,7 +634,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
         sel_rew = self.task_cfg.good_force_cmd_rew * good_force_cmd + self.task_cfg.bad_force_cmd_rew * bad_force_cmd
 
         if hasattr(self.unwrapped, 'extras'):
-            self.unwrapped.extras['Reward / Selection Matrix'] = sel_rew
+            self.unwrapped.extras['logs_rew_Selection Matrix'] = sel_rew
 
         return sel_rew
 
@@ -653,7 +653,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
         bad_rew = self.task_cfg.bad_force_cmd_rew * torch.sum(bad_dims, dim=1)
 
         if hasattr(self.unwrapped, 'extras'):
-            self.unwrapped.extras['Reward / Selection Matrix'] = good_rew + bad_rew
+            self.unwrapped.extras['logs_rew_Selection Matrix'] = good_rew + bad_rew
 
         return good_rew + bad_rew
 
@@ -663,7 +663,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
         self._old_sel_matrix = self.sel_matrix.clone()
 
         if hasattr(self.unwrapped, 'extras'):
-            self.unwrapped.extras['Reward / Selection Matrix'] = sel_rew
+            self.unwrapped.extras['logs_rew_Selection Matrix'] = sel_rew
 
         return sel_rew
 
@@ -679,13 +679,15 @@ class HybridForcePositionWrapper(gym.Wrapper):
         sel_rew = self.task_cfg.good_force_cmd_rew * good_force_cmd
 
         if hasattr(self.unwrapped, 'extras'):
-            self.unwrapped.extras['Reward / Selection Matrix'] = sel_rew
+            self.unwrapped.extras['logs_rew_Selection Matrix'] = sel_rew
 
         return sel_rew
 
     def _low_wrench_reward(self):
         """Reward for low wrench magnitude."""
         wrench_norm = self.unwrapped.actions[:, self.force_size:].norm(dim=-1)
+        if hasattr(self.unwrapped, 'extras'):
+            self.unwrapped.extras['log_rew_Wrench_Norm'] = wrench_norm
         return -wrench_norm * self.task_cfg.wrench_norm_scale
 
     def step(self, action):

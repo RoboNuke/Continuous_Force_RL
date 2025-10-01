@@ -140,6 +140,7 @@ class BlockSimBaActor(GaussianMixin, Model):
             reduction="sum",
             sigma_idx=0
         ):
+        print("[INFO]: \t\tInstantiating Block SimBa Actor")
         Model.__init__(self, observation_space, action_space, device)
         GaussianMixin.__init__(self, clip_actions, clip_log_std, min_log_std, max_log_std, reduction)
 
@@ -153,6 +154,8 @@ class BlockSimBaActor(GaussianMixin, Model):
                 for _ in range(num_agents)
             ]
         ).to(device)
+
+        print(f"[INFO]: \t\tInit Std Dev:{act_init_std}")
         for i in range(num_agents):
             self.actor_logstd[i]._agent_id = i
             self.actor_logstd[i]._name=f"logstd_{i}"
@@ -171,7 +174,9 @@ class BlockSimBaActor(GaussianMixin, Model):
 
         with torch.no_grad():
             self.actor_mean.fc_out.weight *= last_layer_scale
+            print(f"[INFO]: \t\tScaled model last layer by {last_layer_scale}")
             if sigma_idx > 0:
+                print(f"[INFO]: \t\tSigma Idx={sigma_idx} so last layer bias[:{sigma_idx}] set to -1.1")
                 self.actor_mean.fc_out.bias[:sigma_idx] = -1.1
 
     def act(self, inputs, role):
