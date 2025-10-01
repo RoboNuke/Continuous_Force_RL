@@ -92,8 +92,9 @@ def apply_wrappers(env, configs):
     if wrappers_config.factory_metrics.enabled:
         print("  - Applying Factory Metrics Wrapper")
         env = FactoryMetricsWrapper(
-            env, 
-            num_agents=configs['primary'].total_agents
+            env,
+            num_agents=configs['primary'].total_agents,
+            publish_to_wandb=wrappers_config.factory_metrics.publish_to_wandb
         )
 
     if wrappers_config.action_logging.enabled:

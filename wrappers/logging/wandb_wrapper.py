@@ -264,6 +264,9 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         # Flag to prevent publishing on first reset (all zeros)
         self._first_reset = True
 
+        # Initialize to_log dictionary for wrappers to publish arbitrary metrics
+        self.unwrapped.extras['to_log'] = {}
+
     def _store_completed_episodes(self, completed_mask, is_termination=False):
         """Store completed episode data in agent lists."""
         if not torch.any(completed_mask):
@@ -405,6 +408,46 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
 
         return component_rewards
 
+    def _extract_to_log_metrics(self) -> Dict[str, torch.Tensor]:
+        """
+        Extract metrics from environment extras['to_log'] dictionary.
+
+        Looks for the 'to_log' key in self.unwrapped.extras and extracts
+        all key-value pairs as metrics.
+
+        Returns:
+            Dictionary of metrics with format '{metric_name}' -> tensor
+        """
+        to_log_metrics = {}
+
+        if not hasattr(self.unwrapped, 'extras') or not self.unwrapped.extras:
+            return to_log_metrics
+
+        # Check if 'to_log' key exists
+        if 'to_log' not in self.unwrapped.extras:
+            return to_log_metrics
+
+        # Extract all metrics from to_log dictionary
+        for key, value in self.unwrapped.extras['to_log'].items():
+            # Convert value to tensor if needed
+            if not isinstance(value, torch.Tensor):
+                value = torch.tensor(value, device=self.device)
+
+            # Ensure tensor is on correct device
+            if value.device != self.device:
+                value = value.to(self.device)
+
+            # If scalar, broadcast to all environments
+            if value.dim() == 0:
+                value = value.expand(self.num_envs)
+            elif len(value) == 1:
+                value = value.expand(self.num_envs)
+
+            # Store with metric name as provided
+            to_log_metrics[key] = value
+
+        return to_log_metrics
+
     def add_metrics(self, metrics: Dict[str, torch.Tensor]):
         """
         Add metrics from other wrappers. Automatically splits by agent.
@@ -457,6 +500,14 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             # Send component rewards to trackers immediately
             self.add_metrics(component_rewards)
 
+        # Extract and collect to_log metrics
+        to_log_metrics = self._extract_to_log_metrics()
+        if to_log_metrics:
+            # Send to_log metrics to trackers immediately
+            self.add_metrics(to_log_metrics)
+            # Clear the to_log dictionary after extraction
+            self.unwrapped.extras['to_log'].clear()
+
         # Track current episode metrics
         self.current_episode_rewards += reward
 
@@ -505,6 +556,9 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         # Call original _reset_idx to maintain wrapper chain
         if self._original_reset_idx is not None:
             self._original_reset_idx(env_ids)
+
+        # Re-initialize to_log dictionary (defensive, in case extras was cleared)
+        #self.unwrapped.extras['to_log'] = {}
 
     def reset(self, **kwargs):
         """Reset environment - now just calls super().reset()."""

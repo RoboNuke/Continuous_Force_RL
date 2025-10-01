@@ -6,7 +6,7 @@
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
-  agents_per_break_force: 2  # Number of agents per break force condition
+  agents_per_break_force: 5  # Number of agents per break force condition
   num_envs_per_agent: 256    # Environments per individual agent
   break_forces: [10,20]  # Break force conditions (-1 = unbreakable)
   decimation: 8
@@ -66,7 +66,7 @@ wrappers:
   # Fragile object behavior
   fragile_objects:
     enabled: true
-    peg_break_rew: -1.0
+    peg_break_rew: -0.1 #-1.0
     # break_force and num_agents are computed from primary config automatically
 
   # Efficient environment resetting3
@@ -101,6 +101,7 @@ wrappers:
   # Factory-specific metrics tracking
   factory_metrics:
     enabled: true
+    publish_to_wandb: true
     # num_agents is computed from primary config automatically
 
   # Wandb logging with factory metrics
@@ -195,7 +196,7 @@ agent:
   # CUSTOM LEARNING PARAMETERS (extensions to SKRL)
   policy_learning_rate: 1.0e-6
   critic_learning_rate: 1.0e-5
-  value_update_ratio: 2
+  value_update_ratio: 1
 
   # Optimizer parameters
   optimizer_betas: [0.999, 0.999]
@@ -215,7 +216,7 @@ agent:
 
   # Reward shaping
   reward_shaper_type: 'const_scale'
-  rewards_shaper_scale: 0.1
+  rewards_shaper_scale: 0.25 #0.1
 
   # Preprocessors
   state_preprocessor: true

@@ -25,20 +25,23 @@ class FactoryMetricsWrapper(gym.Wrapper):
     - Simple step-by-step collection following WandbWrapper pattern
     """
 
-    def __init__(self, env, num_agents=1):
+    def __init__(self, env, num_agents=1, publish_to_wandb=True):
         """
         Initialize factory metrics wrapper.
 
         Args:
-            env: Base environment to wrap (must have GenericWandbLoggingWrapper in chain)
+            env: Base environment to wrap (must have GenericWandbLoggingWrapper in chain if publish_to_wandb=True)
             num_agents: Number of agents for static assignment
+            publish_to_wandb: Whether to publish metrics to WandB (default: True)
         """
         super().__init__(env)
 
-        # Validate that we have access to add_metrics (WandbWrapper in chain)
-        if not self._find_wandb_wrapper():
+        self.publish_to_wandb = publish_to_wandb
+
+        # Validate that we have access to add_metrics (WandbWrapper in chain) only if publishing
+        if self.publish_to_wandb and not self._find_wandb_wrapper():
             raise ValueError(
-                "Factory Metrics Wrapper requires GenericWandbLoggingWrapper to be applied first. "
+                "Factory Metrics Wrapper requires GenericWandbLoggingWrapper to be applied first when publish_to_wandb=True. "
                 "Apply wrappers in order: base_env -> WandbWrapper -> FactoryMetricsWrapper"
             )
 
@@ -366,9 +369,11 @@ class FactoryMetricsWrapper(gym.Wrapper):
                 all_agent_metrics['Smoothness/max_torque'][agent_id] = mean_max_torque
                 all_agent_metrics['Smoothness/avg_force'][agent_id] = mean_avg_force
                 all_agent_metrics['Smoothness/avg_torque'][agent_id] = mean_avg_torque
-        # Send all metrics as num_agents-sized tensors to WandbWrapper
+
+        # Send all metrics as num_agents-sized tensors to WandbWrapper (only if publishing enabled)
         # This will trigger the "Direct agent assignment" path in _split_by_agent
-        self.env.add_metrics(all_agent_metrics)
+        if self.publish_to_wandb:
+            self.env.add_metrics(all_agent_metrics)
 
         # Clear all agent episode data after sending
         for agent_id in range(self.num_agents):
@@ -470,11 +475,27 @@ class FactoryMetricsWrapper(gym.Wrapper):
         # Collect step metrics
         self._collect_step_metrics()
 
+        # Add smoothness metrics to info dict for evaluation
+        info['smoothness'] = {
+            'ssv': self.ep_ssv.clone(),  # [num_envs] tensor
+            'ssjv': self.ep_ssjv.clone(),  # [num_envs] tensor
+        }
+
+        # Add force/torque metrics if available
+        if self.has_force_data and hasattr(self, 'ep_max_force'):
+            info['smoothness']['max_force'] = self.ep_max_force.clone()
+            info['smoothness']['max_torque'] = self.ep_max_torque.clone()
+            info['smoothness']['sum_force'] = self.ep_sum_force.clone()
+            info['smoothness']['sum_torque'] = self.ep_sum_torque.clone()
+
         return obs, reward, terminated, truncated, info
 
     def _wrapped_reset_idx(self, env_ids):
         """Handle environment resets via _reset_idx calls."""
-        # Convert to tensor if needed
+        # Store original env_ids for passing to original _reset_idx
+        original_env_ids = env_ids
+
+        # Convert to tensor if needed for our processing
         if not isinstance(env_ids, torch.Tensor):
             env_ids = torch.tensor(env_ids, device=self.device)
 
@@ -521,9 +542,9 @@ class FactoryMetricsWrapper(gym.Wrapper):
                 # Reset env-specific tracking only for completed environments
                 self._reset_completed_episodes(env_ids)
 
-        # Call original _reset_idx to maintain wrapper chain
+        # Call original _reset_idx to maintain wrapper chain (use original format)
         if self._original_reset_idx is not None:
-            self._original_reset_idx(env_ids)
+            self._original_reset_idx(original_env_ids)
 
     def reset(self, **kwargs):
         """Reset environment - now just calls super().reset()."""

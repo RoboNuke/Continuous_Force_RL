@@ -58,6 +58,67 @@ class TestFactoryMetricsWrapper:
         assert wrapper.device == torch.device("cpu")
         assert wrapper.num_agents == 1
         assert wrapper.envs_per_agent == 4
+        assert wrapper.publish_to_wandb == True  # Default value
+
+    def test_initialization_without_wandb_when_not_publishing(self):
+        """Test wrapper initialization without wandb when publish_to_wandb=False."""
+        # Should not raise error even without wandb wrapper
+        wrapper = FactoryMetricsWrapper(self.base_env, num_agents=1, publish_to_wandb=False)
+
+        assert wrapper.num_envs == 4
+        assert wrapper.device == torch.device("cpu")
+        assert wrapper.num_agents == 1
+        assert wrapper.publish_to_wandb == False
+
+    def test_smoothness_info_added_to_step(self):
+        """Test that smoothness metrics are added to info dict on each step."""
+        wrapper = FactoryMetricsWrapper(self.wandb_env, num_agents=1, publish_to_wandb=False)
+
+        # Reset to initialize
+        wrapper.reset()
+
+        # Take a step
+        action = torch.zeros((4, 6), device=self.base_env.device)
+        obs, reward, terminated, truncated, info = wrapper.step(action)
+
+        # Check that smoothness is in info
+        assert 'smoothness' in info, "smoothness key should be in info dict"
+        assert 'ssv' in info['smoothness'], "ssv should be in smoothness dict"
+        assert 'ssjv' in info['smoothness'], "ssjv should be in smoothness dict"
+
+        # Check tensor shapes
+        assert info['smoothness']['ssv'].shape == (4,), "ssv should have shape [num_envs]"
+        assert info['smoothness']['ssjv'].shape == (4,), "ssjv should have shape [num_envs]"
+
+        # Check that values are tensors
+        assert isinstance(info['smoothness']['ssv'], torch.Tensor)
+        assert isinstance(info['smoothness']['ssjv'], torch.Tensor)
+
+    def test_publish_to_wandb_flag_guards_add_metrics(self):
+        """Test that publish_to_wandb=False prevents add_metrics calls."""
+        wrapper = FactoryMetricsWrapper(self.wandb_env, num_agents=1, publish_to_wandb=False)
+
+        # Reset and step multiple times to trigger episode completion
+        wrapper.reset()
+        for _ in range(self.base_env.max_episode_length):
+            action = torch.zeros((4, 6), device=self.base_env.device)
+            wrapper.step(action)
+
+        # Check that no metrics were sent to wandb
+        assert len(self.wandb_env.metrics_calls) == 0, "No metrics should be published when publish_to_wandb=False"
+
+    def test_publish_to_wandb_true_calls_add_metrics(self):
+        """Test that publish_to_wandb=True calls add_metrics as expected."""
+        wrapper = FactoryMetricsWrapper(self.wandb_env, num_agents=1, publish_to_wandb=True)
+
+        # Reset and step multiple times to trigger episode completion
+        wrapper.reset()
+        for _ in range(self.base_env.max_episode_length):
+            action = torch.zeros((4, 6), device=self.base_env.device)
+            wrapper.step(action)
+
+        # Check that metrics were sent to wandb
+        assert len(self.wandb_env.metrics_calls) > 0, "Metrics should be published when publish_to_wandb=True"
 
     def test_initialization_without_wandb_wrapper_fails(self):
         """Test that initialization fails without wandb wrapper."""

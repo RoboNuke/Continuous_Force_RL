@@ -5,6 +5,7 @@ from typing import List, Optional
 @dataclass
 class FactoryMetricsConfig:
     enabled: bool = False
+    publish_to_wandb: bool = True
 
 @dataclass
 class ObsManagerConfig:

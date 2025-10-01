@@ -317,14 +317,14 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         # Log selection matrix for debugging
         if hasattr(self.unwrapped, 'extras'):
-            self.unwrapped.extras['Hybrid Controller / Force Control X'] = self.target_selection[:, 0]
-            self.unwrapped.extras['Hybrid Controller / Force Control Y'] = self.target_selection[:, 1]
-            self.unwrapped.extras['Hybrid Controller / Force Control Z'] = self.target_selection[:, 2]
+            self.unwrapped.extras['to_log']['Hybrid Controller / Force Control X'] = self.target_selection[:, 0]
+            self.unwrapped.extras['to_log']['Hybrid Controller / Force Control Y'] = self.target_selection[:, 1]
+            self.unwrapped.extras['to_log']['Hybrid Controller / Force Control Z'] = self.target_selection[:, 2]
 
             if self.force_size > 3:
-                self.unwrapped.extras['Hybrid Controller / Force Control RX'] = self.target_selection[:, 3]
-                self.unwrapped.extras['Hybrid Controller / Force Control RY'] = self.target_selection[:, 4]
-                self.unwrapped.extras['Hybrid Controller / Force Control RZ'] = self.target_selection[:, 5]
+                self.unwrapped.extras['to_log']['Hybrid Controller / Force Control RX'] = self.target_selection[:, 3]
+                self.unwrapped.extras['to_log']['Hybrid Controller / Force Control RY'] = self.target_selection[:, 4]
+                self.unwrapped.extras['to_log']['Hybrid Controller / Force Control RZ'] = self.target_selection[:, 5]
 
         # Update intermediate values
         if hasattr(self.unwrapped, '_compute_intermediate_values'):
