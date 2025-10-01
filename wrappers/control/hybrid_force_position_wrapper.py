@@ -197,6 +197,9 @@ class HybridForcePositionWrapper(gym.Wrapper):
         self._wrapper_initialized = False
         if hasattr(self.unwrapped, '_robot'):
             self._initialize_wrapper()
+        if hasattr(self.unwrapped, 'extras'):
+            if 'to_log' not in self.unwrapped.extras.keys():
+                self.unwrapped.extras['to_log'] = {}
 
     def _update_observation_dimensions(self):
         """Update observation and state space dimensions for action space change."""
