@@ -1,4 +1,6 @@
 
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
 # Experiment metadata
 experiment:
   name: "no_init_bias"
