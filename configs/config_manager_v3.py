@@ -62,9 +62,15 @@ class ConfigManagerV3:
     with a simple, easy-to-maintain approach.
     """
 
-    def __init__(self):
-        """Initialize the configuration manager."""
+    def __init__(self, verbose: bool = False):
+        """Initialize the configuration manager.
+
+        Args:
+            verbose: If True, print detailed configuration processing information.
+                    If False, suppress all output. Default is False.
+        """
         self.section_mapping = SECTION_MAPPING.copy()
+        self.verbose = verbose
 
     # =============================================================================
     # YAML Loading Methods (Feature 1)
@@ -181,7 +187,8 @@ class ConfigManagerV3:
         if cli_overrides:
             parsed_cli_overrides = self.parse_cli_overrides(cli_overrides)
             self.apply_cli_overrides(configs, parsed_cli_overrides)
-            print("CLI overrides applied")
+            if self.verbose:
+                print("CLI overrides applied")
 
             # Re-apply primary config after CLI overrides to ensure consistency
             self._apply_primary_config_to_all(configs)
@@ -215,7 +222,8 @@ class ConfigManagerV3:
         Returns:
             Dictionary containing config instances and metadata
         """
-        print(f"Base config overrides from: {base_config_path}")
+        if self.verbose:
+            print(f"Base config overrides from: {base_config_path}")
 
         # Create config instances
         configs = {}
@@ -233,7 +241,8 @@ class ConfigManagerV3:
             config_instance = config_class()
 
             # Apply YAML overrides
-            print(f"\t{section}")
+            if self.verbose:
+                print(f"\t{section}")
             self._apply_yaml_overrides(config_instance, yaml_data[section], indent_level=2)
 
             configs[section] = config_instance
@@ -276,7 +285,8 @@ class ConfigManagerV3:
         configs = self._process_base_config(base_config_path, base_yaml_data)
 
         # Apply experiment overrides
-        print(f"Experiment config overrides from: {experiment_config_path}")
+        if self.verbose:
+            print(f"Experiment config overrides from: {experiment_config_path}")
 
         for section, section_overrides in yaml_data.items():
             # Skip base_config reference
@@ -290,10 +300,12 @@ class ConfigManagerV3:
 
             # Apply overrides to existing config instance if it exists
             if section in configs:
-                print(f"\t{section}")
+                if self.verbose:
+                    print(f"\t{section}")
                 self._apply_yaml_overrides(configs[section], section_overrides, indent_level=2)
             else:
-                print(f"\t{section}: creating new config instance for experiment override")
+                if self.verbose:
+                    print(f"\t{section}: creating new config instance for experiment override")
                 config_class = self.section_mapping[section]
                 config_instance = config_class()
                 self._apply_yaml_overrides(config_instance, section_overrides, indent_level=2)
@@ -327,25 +339,30 @@ class ConfigManagerV3:
 
                 # Check for additive behavior (tags field)
                 if self._apply_additive_override(config_instance, key, value, current_attr):
-                    print(f"{indent}{key}: combining tags - {current_attr} + {value} → {getattr(config_instance, key)}")
+                    if self.verbose:
+                        print(f"{indent}{key}: combining tags - {current_attr} + {value} → {getattr(config_instance, key)}")
                 # If the current attribute is a dict and the override is a dict, merge them
                 elif isinstance(current_attr, dict) and isinstance(value, dict):
-                    print(f"{indent}{key}: merging dict with {len(value)} new entries")
+                    if self.verbose:
+                        print(f"{indent}{key}: merging dict with {len(value)} new entries")
                     current_attr.update(value)
                 # If the current attribute is an object and the override is a dict, apply recursively
                 elif hasattr(current_attr, '__dict__') and isinstance(value, dict):
-                    print(f"{indent}{key}: applying overrides to nested object")
+                    if self.verbose:
+                        print(f"{indent}{key}: applying overrides to nested object")
                     self._apply_yaml_overrides(current_attr, value, indent_level + 1)
                 # If current attribute is None and override is dict, check if we should instantiate a nested object
                 elif current_attr is None and isinstance(value, dict) and key in self.section_mapping:
                     nested_class = self.section_mapping[key]
                     nested_instance = nested_class()
-                    print(f"{indent}{key}: instantiating nested {nested_class.__name__} object")
+                    if self.verbose:
+                        print(f"{indent}{key}: instantiating nested {nested_class.__name__} object")
                     self._apply_yaml_overrides(nested_instance, value, indent_level + 1)
                     setattr(config_instance, key, nested_instance)
                 # Otherwise, directly set the value
                 else:
-                    print(f"{indent}{key}: {current_attr} → {value}")
+                    if self.verbose:
+                        print(f"{indent}{key}: {current_attr} → {value}")
                     setattr(config_instance, key, value)
             else:
                 # Attribute doesn't exist, create it
@@ -353,11 +370,13 @@ class ConfigManagerV3:
                 if isinstance(value, dict) and key in self.section_mapping:
                     nested_class = self.section_mapping[key]
                     nested_instance = nested_class()
-                    print(f"{indent}{key}: instantiating nested {nested_class.__name__} object")
+                    if self.verbose:
+                        print(f"{indent}{key}: instantiating nested {nested_class.__name__} object")
                     self._apply_yaml_overrides(nested_instance, value, indent_level + 1)
                     setattr(config_instance, key, nested_instance)
                 else:
-                    print(f"{indent}{key}: <new> → {value}")
+                    if self.verbose:
+                        print(f"{indent}{key}: <new> → {value}")
                     setattr(config_instance, key, value)
 
     # =============================================================================
@@ -408,7 +427,8 @@ class ConfigManagerV3:
         for section, section_overrides in cli_overrides.items():
             # Only apply to sections that exist in configs
             if section in configs and section in self.section_mapping:
-                print(f"\tCLI overrides for {section}")
+                if self.verbose:
+                    print(f"\tCLI overrides for {section}")
                 self._apply_yaml_overrides(configs[section], section_overrides, indent_level=2)
 
     def _infer_type(self, value_str: str) -> Any:
@@ -583,7 +603,8 @@ class ConfigManagerV3:
             return
 
         primary_cfg = configs['primary']
-        print("Applying primary config to dependent configs")
+        if self.verbose:
+            print("Applying primary config to dependent configs")
 
         # Apply primary config to configs that have apply_primary_cfg method
         for section_name, config_instance in configs.items():
@@ -593,5 +614,6 @@ class ConfigManagerV3:
 
             # Apply primary config if method exists
             if hasattr(config_instance, 'apply_primary_cfg'):
-                print(f"\tApplying to {section_name}")
+                if self.verbose:
+                    print(f"\tApplying to {section_name}")
                 config_instance.apply_primary_cfg(primary_cfg)
