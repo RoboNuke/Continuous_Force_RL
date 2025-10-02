@@ -34,7 +34,7 @@ def parse_arguments():
     parser.add_argument("--enable_video", action="store_true", default=False, help="Toggle video generation")
     parser.add_argument("--num_envs_per_agent", type=int, default=None, help="Number of environments per agent (overrides config)")
     parser.add_argument("--max_rollout_steps", type=int, default=None, help="Maximum rollout steps (overrides config calculation)")
-    parser.add_argument("--batch_mode", type=str, default="wait_full", choices=["wait_full", "max_throughput"],
+    parser.add_argument("--batch_mode", type=str, default="max_throughput", choices=["wait_full", "max_throughput"],
                         help="Checkpoint batching strategy")
     parser.add_argument("--sensitivity_mask_freq", type=int, default=10, help="Frequency for sensitivity masking (0 to disable)")
     parser.add_argument("--show_progress", action="store_true", default=False, help="Show progress bar during evaluation rollout")
@@ -137,7 +137,6 @@ class Img2InfoWrapper(gym.Wrapper):
         observations, rewards, terminateds, truncateds, infos = self.env.step(action)
 
         # Capture camera images if available
-        print(self.unwrapped.scene.keys())
         if hasattr(self.unwrapped.scene, 'sensors') and self.cam_key in self.unwrapped.scene.sensors:
             infos['img'] = self.unwrapped.scene.sensors[self.cam_key].data.output['rgb']
 
