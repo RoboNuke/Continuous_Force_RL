@@ -1394,9 +1394,9 @@ def log_to_wandb(checkpoint_dicts: List[Dict[str, str]], metrics_list: List[Dict
         ckpt_path = ckpt_dict['ckpt_path']
 
         # Extract step number from checkpoint filename
-        match = re.search(r'agent_(\d+)\.pt$', ckpt_path)
+        match = re.search(r'agent_\d+_(\d+)\.pt$', ckpt_path)
         if not match:
-            raise RuntimeError(f"Failed to parse step number from checkpoint path: {ckpt_path}")
+            raise RuntimeError(f"Failed to parse step number from checkpoint path (expected format: agent_{{agent_idx}}_{{step}}.pt): {ckpt_path}")
 
         step_num = int(match.group(1))
         exp_step = step_num // 256
