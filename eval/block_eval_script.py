@@ -235,12 +235,15 @@ def setup_environment_once(config_path: str, args: argparse.Namespace) -> Tuple[
     # Setup camera configuration for video recording if enabled
     if args.enable_video:
         print("  Setting up camera configuration for video recording...")
-        env_cfg.scene.tiled_camera = CameraCfg( #TiledCameraCfg(
+        env_cfg.scene.tiled_camera = TiledCameraCfg(
             prim_path="/World/envs/env_.*/Camera",
             offset=TiledCameraCfg.OffsetCfg(
                 pos=(1.0, 0.0, 0.35),
-                rot=(0.6123724, 0.3535534, 0.3535534, 0.6123724),
-                convention="opengl"
+                #rot=(0.6123724, 0.3535534, 0.3535534, 0.6123724),
+                #convention="opengl"
+                rot=(-0.3535534, 0.6123724, 0.6123724, -0.3535534),
+                convention="ros"
+
             ),
             data_types=["rgb"],
             spawn=sim_utils.PinholeCameraCfg(
@@ -263,13 +266,13 @@ def setup_environment_once(config_path: str, args: argparse.Namespace) -> Tuple[
 
     # Reduce scene lighting intensity for better video visibility (after env creation)
     # print("  Reducing scene lighting intensity...")
-    # import isaacsim.core.utils.prims as prim_utils
-    # light_prim = prim_utils.get_prim_at_path("/World/Light")
-    # if light_prim.IsValid():
-    #     light_prim.GetAttribute("inputs:intensity").Set(800.0)
-    #     print("    Dome light intensity reduced to 800.0")
-    # else:
-    #     print("    Warning: Light prim not found at /World/Light")
+    #import isaacsim.core.utils.prims as prim_utils
+    #light_prim = prim_utils.get_prim_at_path("/World/Light")
+    #if light_prim.IsValid():
+    #    light_prim.GetAttribute("inputs:intensity").Set(800.0)
+    #    print("    Dome light intensity reduced to 800.0")
+    #else:
+    #    print("    Warning: Light prim not found at /World/Light")
 
     # Disable wrappers not needed for evaluation
     print("  Configuring wrappers for evaluation...")
@@ -1182,6 +1185,7 @@ def _create_checkpoint_gif(images: torch.Tensor, values: torch.Tensor, success_s
 
         # Convert canvas to PIL Image
         canvas_np = (canvas.cpu().numpy() * 255).astype(np.uint8)
+        #canvas_np = (canvas.cpu().numpy()).astype(np.uint8)
         pil_img = Image.fromarray(canvas_np)
         draw = ImageDraw.Draw(pil_img)
 

@@ -76,7 +76,8 @@ def apply_wrappers(env, configs):
             ctrl_torque=configs['primary'].ctrl_torque,
             reward_type=wrappers_config.hybrid_control.reward_type,
             ctrl_cfg=configs['environment'].ctrl,
-            task_cfg=configs['environment'].hybrid_task
+            task_cfg=configs['environment'].hybrid_task,
+            num_agents=configs['primary'].total_agents
         )
 
     # Apply WandbWrapper BEFORE FactoryMetricsWrapper so factory metrics can send data to wandb

@@ -41,12 +41,13 @@ class HybridForcePositionWrapper(gym.Wrapper):
     """
 
     def __init__(
-            self, 
-            env, 
-            ctrl_torque=False, 
-            reward_type="simp", 
-            ctrl_cfg=None, 
-            task_cfg=None
+            self,
+            env,
+            ctrl_torque=False,
+            reward_type="simp",
+            ctrl_cfg=None,
+            task_cfg=None,
+            num_agents=1
         ):
         """
         Initialize hybrid force-position control wrapper.
@@ -63,11 +64,22 @@ class HybridForcePositionWrapper(gym.Wrapper):
                 - "wrench_norm": Low wrench magnitude reward
             ctrl_cfg: HybridCtrlCfg instance. Must be provided - no defaults.
             task_cfg: HybridTaskCfg instance. Must be provided - no defaults.
+            num_agents: Number of agents for static environment assignment.
         """
         # Store original action space size before modification
         self._original_action_size = getattr(env.unwrapped.cfg, 'action_space', 6)
 
         super().__init__(env)
+
+        # Store and validate num_agents
+        self.num_agents = num_agents
+        self.num_envs = env.unwrapped.num_envs
+        self.device = env.unwrapped.device
+
+        if self.num_envs % self.num_agents != 0:
+            raise ValueError(f"Number of environments ({self.num_envs}) must be divisible by number of agents ({self.num_agents})")
+
+        self.envs_per_agent = self.num_envs // self.num_agents
 
         # Store control configuration for action space calculation
         self.ctrl_torque = ctrl_torque
@@ -141,10 +153,6 @@ class HybridForcePositionWrapper(gym.Wrapper):
         if cfg_size != gym_size:
             raise ValueError(f"Action space mismatch: cfg.action_space={cfg_size} != gym.action_space.shape[0]={gym_size}")
 
-        # Initialize state variables
-        self.num_envs = env.unwrapped.num_envs
-        self.device = env.unwrapped.device
-
         # Current goals from actions (computed each step)
         self.sel_goal = torch.zeros((self.num_envs, 6), device=self.device)
         self.pose_goal = torch.zeros((self.num_envs, 7), device=self.device)  # pos(3) + quat(4)
@@ -157,6 +165,9 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         # Selection matrix for control (derived from target_selection)
         self.sel_matrix = torch.zeros((self.num_envs, 6), device=self.device)
+
+        # Active force detection (whether robot is in contact on each axis)
+        self.active_force = torch.zeros((self.num_envs, 6), device=self.device, dtype=torch.bool)
 
         # Force gains (must be explicitly configured)
         if self.ctrl_cfg.default_task_force_gains is None:
@@ -176,6 +187,9 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Initialize targets to zeros initially (will be properly set after first action)
         if self.target_init_mode == "zero":
             self._targets_initialized = True
+
+        # Flag to control wrench logging once per step
+        self._should_log_wrenches = False
 
         # Store original methods
         self._original_pre_physics_step = None
@@ -318,11 +332,21 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Step 3: Set control targets from filtered targets
         self._set_control_targets_from_targets()
 
-        # Log selection matrix for debugging
+        # Calculate active force (contact detection)
+        self.active_force[:, :self.force_size] = torch.abs(self.robot_force_torque[:, :self.force_size]) > self.task_cfg.force_active_threshold
+        if self.force_size > 3:
+            self.active_force[:, 3:] = torch.abs(self.robot_force_torque[:, 3:]) > self.task_cfg.torque_active_threshold
+
+        # Log selection matrix and contact state
         if hasattr(self.unwrapped, 'extras'):
             self.unwrapped.extras['to_log']['Hybrid Controller / Force Control X'] = self.target_selection[:, 0]
             self.unwrapped.extras['to_log']['Hybrid Controller / Force Control Y'] = self.target_selection[:, 1]
             self.unwrapped.extras['to_log']['Hybrid Controller / Force Control Z'] = self.target_selection[:, 2]
+
+            # Log contact state (convert bool to float)
+            self.unwrapped.extras['to_log']['Hybrid Controller / In-Contact X'] = self.active_force[:, 0].float()
+            self.unwrapped.extras['to_log']['Hybrid Controller / In-Contact Y'] = self.active_force[:, 1].float()
+            self.unwrapped.extras['to_log']['Hybrid Controller / In-Contact Z'] = self.active_force[:, 2].float()
 
             if self.force_size > 3:
                 self.unwrapped.extras['to_log']['Hybrid Controller / Force Control RX'] = self.target_selection[:, 3]
@@ -332,6 +356,9 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Update intermediate values
         if hasattr(self.unwrapped, '_compute_intermediate_values'):
             self.unwrapped._compute_intermediate_values(dt=self.unwrapped.physics_dt)
+
+        # Enable wrench logging for the first apply_action call this step
+        self._should_log_wrenches = True
 
     def _reset_targets(self, env_ids):
         """Reset targets for given environment IDs."""
@@ -408,6 +435,11 @@ class HybridForcePositionWrapper(gym.Wrapper):
             roll=target_euler_xyz[:, 0], pitch=target_euler_xyz[:, 1], yaw=target_euler_xyz[:, 2]
         )
 
+        # Log L2 norm of position goal
+        if hasattr(self.unwrapped, 'extras'):
+            pos_goal_norm = torch.norm(self.pose_goal[:, :3], p=2, dim=-1)
+            self.unwrapped.extras['to_log']['Hybrid Controller / Pos Goal Norm'] = pos_goal_norm
+
     def _calc_force_goal(self):
         """Calculate force goal from action."""
         min_idx = self.force_size + 6
@@ -467,6 +499,11 @@ class HybridForcePositionWrapper(gym.Wrapper):
                 torque_delta + self.robot_force_torque[:, 3:],
                 -torque_bounds[0], torque_bounds[0]
             )
+
+        # Log L2 norm of force goal
+        if hasattr(self.unwrapped, 'extras'):
+            force_goal_norm = torch.norm(self.force_goal[:, :3], p=2, dim=-1)
+            self.unwrapped.extras['to_log']['Hybrid Controller / Force Goal Norm'] = force_goal_norm
 
     def _update_targets_with_ema(self):
         """Update targets using EMA filtering of goals."""
@@ -562,6 +599,47 @@ class HybridForcePositionWrapper(gym.Wrapper):
             device=self.unwrapped.device
         )
 
+        # Log active wrench magnitudes based on control mode, aggregated per agent
+        # Only log once per step (first apply_action call)
+        if self._should_log_wrenches and hasattr(self.unwrapped, 'extras'):
+            axis_names = ['X', 'Y', 'Z']
+            for i in range(3):  # Position axes
+                # Create per-agent tensors initialized with NaN
+                force_wrench_per_agent = torch.full((self.num_agents,), float('nan'), device=self.device)
+                pose_wrench_per_agent = torch.full((self.num_agents,), float('nan'), device=self.device)
+
+                # Aggregate by agent
+                for agent_id in range(self.num_agents):
+                    # Get this agent's environment slice
+                    start_idx = agent_id * self.envs_per_agent
+                    end_idx = (agent_id + 1) * self.envs_per_agent
+
+                    # Force control aggregation
+                    force_control_mask = self.sel_matrix[start_idx:end_idx, i] == 1.0
+                    if torch.any(force_control_mask):
+                        force_wrench_per_agent[agent_id] = force_wrench[start_idx:end_idx, i][force_control_mask].abs().mean()
+
+                    # Position control aggregation
+                    pos_control_mask = self.sel_matrix[start_idx:end_idx, i] == 0.0
+                    if torch.any(pos_control_mask):
+                        pose_wrench_per_agent[agent_id] = pose_wrench[start_idx:end_idx, i][pos_control_mask].abs().mean()
+
+                # Only log if at least one agent has a non-NaN value
+                if not torch.all(torch.isnan(force_wrench_per_agent)):
+                    self.unwrapped.extras['to_log'][f'Hybrid Controller / Active Force Wrench {axis_names[i]}'] = force_wrench_per_agent
+                if not torch.all(torch.isnan(pose_wrench_per_agent)):
+                    self.unwrapped.extras['to_log'][f'Hybrid Controller / Active Pos Wrench {axis_names[i]}'] = pose_wrench_per_agent
+
+            # Future: Add logging for torque/rotation wrenches when ctrl_torque is enabled
+            if self.force_size > 3:
+                # TODO: Add logging for rotational axes (RX, RY, RZ)
+                # - Active Torque Wrench RX/RY/RZ (when sel_matrix[:, 3:] == 1.0)
+                # - Active Rotation Wrench RX/RY/RZ (when sel_matrix[:, 3:] == 0.0)
+                pass
+
+            # Disable wrench logging for subsequent apply_action calls this step
+            self._should_log_wrenches = False
+
         # Combine wrenches using filtered selection matrix
         task_wrench = (1 - self.sel_matrix) * pose_wrench + self.sel_matrix * force_wrench
 
@@ -625,14 +703,10 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
     def _simple_force_reward(self):
         """Simple force activity reward."""
-        active_force = torch.abs(self.robot_force_torque[:, :self.force_size]) > self.task_cfg.force_active_threshold
-        if self.force_size > 3:
-            active_force[:, 3:] = torch.abs(self.robot_force_torque[:, 3:]) > self.task_cfg.torque_active_threshold
-
         force_ctrl = self.sel_matrix[:, :self.force_size].bool()
 
-        good_force_cmd = torch.logical_and(torch.any(active_force, dim=1), torch.any(force_ctrl, dim=1))
-        bad_force_cmd = torch.logical_and(torch.all(~active_force, dim=1), torch.any(force_ctrl, dim=1))
+        good_force_cmd = torch.logical_and(torch.any(self.active_force[:, :self.force_size], dim=1), torch.any(force_ctrl, dim=1))
+        bad_force_cmd = torch.logical_and(torch.all(~self.active_force[:, :self.force_size], dim=1), torch.any(force_ctrl, dim=1))
 
         sel_rew = self.task_cfg.good_force_cmd_rew * good_force_cmd + self.task_cfg.bad_force_cmd_rew * bad_force_cmd
 
@@ -643,14 +717,10 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
     def _directional_force_reward(self):
         """Direction-specific force reward."""
-        active_force = torch.abs(self.robot_force_torque[:, :self.force_size]) > self.task_cfg.force_active_threshold
-        if self.force_size > 3:
-            active_force[:, 3:] = torch.abs(self.robot_force_torque[:, 3:]) > self.task_cfg.torque_active_threshold
-
         force_ctrl = self.sel_matrix[:, :self.force_size].bool()
 
-        good_dims = torch.logical_and(force_ctrl, active_force) | torch.logical_and(~force_ctrl, ~active_force)
-        bad_dims = torch.logical_and(force_ctrl, ~active_force) | torch.logical_and(~force_ctrl, active_force)
+        good_dims = torch.logical_and(force_ctrl, self.active_force[:, :self.force_size]) | torch.logical_and(~force_ctrl, ~self.active_force[:, :self.force_size])
+        bad_dims = torch.logical_and(force_ctrl, ~self.active_force[:, :self.force_size]) | torch.logical_and(~force_ctrl, self.active_force[:, :self.force_size])
 
         good_rew = self.task_cfg.good_force_cmd_rew * torch.sum(good_dims, dim=1)
         bad_rew = self.task_cfg.bad_force_cmd_rew * torch.sum(bad_dims, dim=1)
@@ -672,13 +742,9 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
     def _position_simple_reward(self):
         """Position-focused simple force reward."""
-        active_force = torch.abs(self.robot_force_torque[:, :self.force_size]) > self.task_cfg.force_active_threshold
-        if self.force_size > 3:
-            active_force[:, 3:] = torch.abs(self.robot_force_torque[:, 3:]) > self.task_cfg.torque_active_threshold
-
         force_ctrl = self.sel_matrix[:, :self.force_size].bool()
 
-        good_force_cmd = torch.logical_and(torch.any(active_force, dim=1), torch.any(force_ctrl, dim=1))
+        good_force_cmd = torch.logical_and(torch.any(self.active_force[:, :self.force_size], dim=1), torch.any(force_ctrl, dim=1))
         sel_rew = self.task_cfg.good_force_cmd_rew * good_force_cmd
 
         if hasattr(self.unwrapped, 'extras'):

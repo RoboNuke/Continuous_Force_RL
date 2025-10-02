@@ -179,7 +179,7 @@ agent:
   disable_progressbar: true
 
   # Checkpoint and experiment tracking
-  track_ckpts: false
+  track_ckpts: true
   # ckpt_tracker_path comes from primary config automatically
 
   # SKRL PPO PARAMETERS (these override SKRL defaults)
@@ -194,7 +194,7 @@ agent:
   mixed_precision: false
 
   # CUSTOM LEARNING PARAMETERS (extensions to SKRL)
-  policy_learning_rate: 3.0e-6
+  policy_learning_rate: 1.0e-5
   critic_learning_rate: 1.0e-5
   value_update_ratio: 2
 

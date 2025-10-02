@@ -13,7 +13,7 @@ primary:
   ckpt_tracker_path: "/nfs/stak/users/brownhun/hybrid_action_test_tracker.txt"
   agents_per_break_force: 3
   break_forces: [20]
-  max_steps: 2000000
+  max_steps: 3000000
   seed: 42
 
 # Enable hybrid control wrapper and related systems
@@ -35,8 +35,8 @@ environment:
     default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
 
   hybrid_task:
-    force_active_threshold: 0.1
-    torque_active_threshold: 0.01
+    force_active_threshold: 1.5
+    torque_active_threshold: 0.1
     good_force_cmd_rew: 0.1
     bad_force_cmd_rew: -0.1
     wrench_norm_scale: 0.1
