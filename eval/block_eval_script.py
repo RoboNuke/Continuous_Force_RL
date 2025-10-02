@@ -1591,7 +1591,10 @@ def main(args):
                 print(f"  Generated {len(video_paths)} videos")
             else:
                 print("\n[4i] Video generation disabled, skipping...")
-            
+
+            # Free GPU memory
+            del rollout_data
+
             # 4j. Log to WandB
             print("\n[4j] Logging to WandB...")
             log_to_wandb(checkpoint_dicts, metrics_list, video_paths, args)
