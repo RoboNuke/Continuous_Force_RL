@@ -22,8 +22,8 @@ AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli, hydra_args = parser.parse_known_args()
 
-args_cli.video = True #False
-args_cli.enable_cameras = True #False
+args_cli.video = False
+args_cli.enable_cameras = False
 args_cli.headless = True
 
 # clear out sys.argv for Hydra
