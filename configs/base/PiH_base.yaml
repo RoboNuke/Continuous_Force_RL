@@ -6,15 +6,15 @@
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
-  agents_per_break_force: 2  # Number of agents per break force condition
+  agents_per_break_force: 5  # Number of agents per break force condition
   num_envs_per_agent: 256    # Environments per individual agent
-  break_forces: [10,20]  # Break force conditions (-1 = unbreakable)
+  break_forces: [5,10]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
   max_steps: 25000192
   debug_mode: false
   seed: -1
-  ckpt_tracker_path: "/home/hunter/ckpt_tracker.txt" #"/nfs/stak/users/brownhun/ckpt_tracker2.txt"
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/voltron_baseline_tracker.txt" #"/home/hunter/ckpt_tracker.txt" #
   ctrl_torque: false
 
 # ENVIRONMENT OVERRIDES (Direct Isaac Lab FactoryEnvCfg parameters)
@@ -22,7 +22,22 @@ environment:
   # episode_length_s comes from Isaac Lab defaults (10.0s for peg insert)
   # decimation comes from primary config applied automatically
   scene:
-    filter_collisions: true
+    filter_collisions: false
+
+  # These parameters will be applied to the ExtendedCtrlCfg
+  ctrl:
+    force_action_bounds: [50.0, 50.0, 50.0]
+    torque_action_bounds: [0.5, 0.5, 0.5]
+    force_action_threshold: [10.0, 10.0, 10.0]
+    torque_action_threshold: [0.1, 0.1, 0.1]
+    default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
+
+  hybrid_task:
+    force_active_threshold: 1.5
+    torque_active_threshold: 100.0 # don't want torque activation
+    good_force_cmd_rew: 0.1
+    bad_force_cmd_rew: -0.1
+    wrench_norm_scale: 0.1
 
   # Observation attribute mapping for Isaac Lab integration
   component_attr_map:
@@ -46,7 +61,7 @@ model:
   force_encoding: null
   last_layer_scale: 1.0
   act_init_std: 1.0
-  critic_output_init_mean: 50
+  critic_output_init_mean: 30
 
   # Actor architecture (SimBa policy network)
   actor:
@@ -60,6 +75,37 @@ model:
 
   # Hybrid agent configuration
   use_hybrid_agent: false
+
+  # Hybrid agent specific parameters
+  hybrid_agent:
+    ctrl_torque: false  # Match primary.ctrl_torque
+    unit_std_init: true
+    pos_init_std: 1.0
+    rot_init_std: 1.0
+    force_init_std: 1.0
+
+    # Output scaling
+    pos_scale: 1.0
+    rot_scale: 1.0
+    force_scale: 1.0
+    torque_scale: 1.0
+
+    # Selection network adjustments
+    selection_adjustment_types: ['init_bias']
+
+    # scale on selection parameters only
+    init_scale_weights_factor: 0.1
+
+    # bias on selection parameters
+    init_bias: -2.5
+
+    # adds scale layer if adj has scale_zin
+    pre_layer_scale_factor: 0.1
+
+    # scale the weight layer at the end
+    init_scale_last_layer: false
+    init_layer_scale: 1.0
+    uniform_sampling_rate: 0.0
 
 # WRAPPERS CONFIGURATION (Direct wrapper parameters)
 wrappers:
@@ -169,7 +215,7 @@ experiment:
   name: "fPiH_base"
   tags: ["factory", 'FPiH']
   group: "fPiH_experiments"
-  wandb_project: "Sept_29_Exps"
+  wandb_project: "Voltron_Baseline"
   wandb_entity: "hur"
   task_name: "Isaac-Factory-PegInsert-Direct-v0"
 

@@ -1,0 +1,23 @@
+# Hybrid Agent Control Experiment Configuration 
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+
+primary:
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/voltron_CLoP_tracker.txt"
+
+# Model configuration for hybrid agent
+model:
+  use_hybrid_agent: true
+
+# Enable hybrid control wrapper and related systems
+wrappers:
+  # Enable hybrid control wrapper
+  hybrid_control:
+    enabled: true
+
+# Experiment metadata
+experiment:
+  name: "hybrid_agent_exp"
+  tags: []
+  group: "hybrid_agent_exps"
