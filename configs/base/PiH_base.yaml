@@ -16,7 +16,7 @@ experiment:
 primary:
   agents_per_break_force: 1  # Number of agents per break force condition
   num_envs_per_agent: 256    # Environments per individual agent
-  break_forces: [20]  # Break force conditions (-1 = unbreakable)
+  break_forces: [10]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
   max_steps: 25000192
@@ -65,7 +65,7 @@ environment:
 model:
   # Standard model parameters
   force_encoding: null
-  last_layer_scale: 1.0
+  last_layer_scale: 0.1
   act_init_std: 1.0
   critic_output_init_mean: 30
 
@@ -86,6 +86,7 @@ model:
   hybrid_agent:
     ctrl_torque: false  # Match primary.ctrl_torque
     unit_std_init: true
+    unit_factor_std_init: 1.0
     pos_init_std: 1.0
     rot_init_std: 1.0
     force_init_std: 1.0
@@ -100,17 +101,17 @@ model:
     selection_adjustment_types: ['init_bias']
 
     # scale on selection parameters only
-    init_scale_weights_factor: 0.1
+    init_scale_weights_factor: 1.0
 
     # bias on selection parameters
-    init_bias: -2.5
+    init_bias: -1.1 #-2.5
 
     # adds scale layer if adj has scale_zin
     pre_layer_scale_factor: 0.1
 
     # scale the weight layer at the end
-    init_scale_last_layer: false
-    init_layer_scale: 1.0
+    init_scale_last_layer: true
+    init_layer_scale: 0.1
     uniform_sampling_rate: 0.0
 
 # WRAPPERS CONFIGURATION (Direct wrapper parameters)
@@ -173,6 +174,10 @@ wrappers:
     track_torque: true
     force_size: 3
     logging_frequency: 150
+
+  # Pose contact logging
+  pose_contact_logging:
+    enabled: true
 
   # Force reward system with 8 reward functions
   force_reward:

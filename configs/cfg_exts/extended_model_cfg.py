@@ -82,6 +82,9 @@ class ExtendedHybridAgentConfig:
     unit_std_init: bool = True
     """Use unit standard deviation initialization"""
 
+    unit_factor_std_init: float = 1.0
+    """The scale after using inverse control gains for initial std devs"""
+    
     pos_init_std: float = 1.0
     """Initial standard deviation for position outputs"""
 

@@ -11,8 +11,9 @@ from dataclasses import dataclass, field
 from .version_compat import get_isaac_lab_ctrl_imports
 from .wrapper_sub_configs import (
     ForceTorqueSensorConfig, HybridControlConfig, ObservationNoiseConfig,
-    WandbLoggingConfig, ActionLoggingConfig, ForceRewardConfig, 
-    FragileObjectConfig, ObsManagerConfig, FactoryMetricsConfig
+    WandbLoggingConfig, ActionLoggingConfig, ForceRewardConfig,
+    FragileObjectConfig, ObsManagerConfig, FactoryMetricsConfig,
+    PoseContactLoggingConfig
 )
 
 # Get configclass decorator with version compatibility
@@ -59,6 +60,9 @@ class ExtendedWrapperConfig:
 
     factory_metrics: FactoryMetricsConfig = field(default_factory=FactoryMetricsConfig)
     """Enable factory-specific metrics tracking"""
+
+    pose_contact_logging: PoseContactLoggingConfig = field(default_factory=PoseContactLoggingConfig)
+    """Pose contact logging wrapper configuration"""
 
     def apply_primary_cfg(self, primary_cfg) -> None:
         """

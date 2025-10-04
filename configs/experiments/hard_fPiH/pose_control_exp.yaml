@@ -4,8 +4,9 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/voltron_pose_tracker.txt"
-  break_forces: [5,10]
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/oct4_pose_tracker.txt"
+  #break_forces: [5,10]
+  
 # Model configuration for hybrid agent
 model:
   use_hybrid_agent: false

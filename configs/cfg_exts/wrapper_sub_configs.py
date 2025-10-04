@@ -118,3 +118,9 @@ class ForceRewardConfig:
     # Force Ratio (contact only)
     enable_force_ratio: bool = False
     force_ratio_reward_weight: float = 1.0
+
+
+@dataclass
+class PoseContactLoggingConfig:
+    """Pose contact logging wrapper configuration."""
+    enabled: bool = False

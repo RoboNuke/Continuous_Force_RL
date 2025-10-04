@@ -200,12 +200,11 @@ class HybridForcePositionWrapper(gym.Wrapper):
         if reward_type == "delta":
             self._old_sel_matrix = torch.zeros_like(self.sel_matrix)
 
-        # Mode change tracking for cumulative metrics
-        self._prev_sel_matrix = torch.zeros((self.num_envs, 3), device=self.device)
-        self._mode_start_pos = torch.zeros((self.num_envs, 3), device=self.device)
-        self._mode_start_vel = torch.zeros((self.num_envs, 3), device=self.device)
-        self._mode_start_force = torch.zeros((self.num_envs, 3), device=self.device)
-        self._first_selection_set = False
+        # Per-step tracking for action effect metrics
+        self._prev_step_pos = torch.zeros((self.num_envs, 3), device=self.device)
+        self._prev_step_vel = torch.zeros((self.num_envs, 3), device=self.device)
+        self._prev_step_force = torch.zeros((self.num_envs, 3), device=self.device)
+        self._first_step_set = False
 
         # Calculate new action space size based on control configuration
         # Action space: 6 (pose) + 6 (force) + 0/6 (torque selection if ctrl_torque)
@@ -345,8 +344,8 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Step 3: Set control targets from filtered targets
         self._set_control_targets_from_targets()
 
-        # Log mode change metrics when selection matrix changes
-        self._log_mode_change_metrics()
+        # Log action effect metrics every step
+        self._log_action_effect_metrics()
 
         # Note: Contact detection now happens in ForceTorqueWrapper
         # Access contact state via self.unwrapped.in_contact
@@ -380,13 +379,12 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         self._targets_initialized = True
 
-        # Reset mode change tracking states
-        if self._first_selection_set:
+        # Reset per-step tracking states
+        if self._first_step_set:
             # Reset to current state values for reset environments
-            self._mode_start_pos[env_ids] = self.unwrapped.fingertip_midpoint_pos[env_ids]
-            self._mode_start_vel[env_ids] = self.unwrapped.ee_linvel_fd[env_ids]
-            self._mode_start_force[env_ids] = self.robot_force_torque[env_ids, :3]
-            self._prev_sel_matrix[env_ids] = self.sel_matrix[env_ids, :3]
+            self._prev_step_pos[env_ids] = self.unwrapped.fingertip_midpoint_pos[env_ids]
+            self._prev_step_vel[env_ids] = self.unwrapped.ee_linvel_fd[env_ids]
+            self._prev_step_force[env_ids] = self.robot_force_torque[env_ids, :3]
 
     def _extract_goals_from_action(self, action):
         """Extract pose, force, and selection goals from action."""
@@ -581,8 +579,8 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Store force target for use in apply_action
         self.target_force_for_control = self.target_force.clone()
 
-    def _log_mode_change_metrics(self):
-        """Log cumulative changes in position, velocity, and force when control mode switches."""
+    def _log_action_effect_metrics(self):
+        """Log per-step changes in position, velocity, and force attributed to current control mode."""
         if not hasattr(self.unwrapped, 'extras'):
             return
 
@@ -592,34 +590,24 @@ class HybridForcePositionWrapper(gym.Wrapper):
         current_force = self.robot_force_torque[:, :3]
 
         # First time initialization
-        if not self._first_selection_set:
-            self._mode_start_pos.copy_(current_pos)
-            self._mode_start_vel.copy_(current_vel)
-            self._mode_start_force.copy_(current_force)
-            self._prev_sel_matrix.copy_(self.sel_matrix[:, :3])
-            self._first_selection_set = True
+        if not self._first_step_set:
+            self._prev_step_pos.copy_(current_pos)
+            self._prev_step_vel.copy_(current_vel)
+            self._prev_step_force.copy_(current_force)
+            self._first_step_set = True
             return
 
-        # Detect selection changes per axis (only check position axes)
-        sel_changed = (self.sel_matrix[:, :3] != self._prev_sel_matrix)
+        # Calculate per-step deltas
+        pos_delta = current_pos - self._prev_step_pos
+        vel_delta = current_vel - self._prev_step_vel
+        force_delta = current_force - self._prev_step_force
 
-        # Calculate deltas
-        pos_delta = current_pos - self._mode_start_pos
-        vel_delta = current_vel - self._mode_start_vel
-        force_delta = current_force - self._mode_start_force
-
-        # Log metrics aggregated by agent and by previous control mode
+        # Log metrics aggregated by agent and by current control mode (per axis)
         axis_names = ['X', 'Y', 'Z']
         for i in range(3):
-            # Get environments where this axis changed
-            changed_envs = sel_changed[:, i]
-
-            if not torch.any(changed_envs):
-                continue
-
-            # Determine previous mode for changed environments (before the change)
-            was_force_control = self._prev_sel_matrix[changed_envs, i] == 1.0
-            was_pos_control = self._prev_sel_matrix[changed_envs, i] == 0.0
+            # Get current control mode for this axis
+            is_force_control = self.sel_matrix[:, i] == 1.0
+            is_pos_control = self.sel_matrix[:, i] == 0.0
 
             # Create per-agent tensors for force control mode
             force_pos_change = torch.full((self.num_agents,), float('nan'), device=self.device)
@@ -636,38 +624,21 @@ class HybridForcePositionWrapper(gym.Wrapper):
                 start_idx = agent_id * self.envs_per_agent
                 end_idx = (agent_id + 1) * self.envs_per_agent
 
-                # Get changed envs for this agent
-                agent_changed = changed_envs[start_idx:end_idx]
-
-                if not torch.any(agent_changed):
-                    continue
-
-                # Get the actual changed indices in the full tensor
-                agent_changed_indices = agent_changed.nonzero(as_tuple=False).squeeze(-1)
-                changed_indices = start_idx + agent_changed_indices
-
-                # Get corresponding indices in the was_force/was_pos tensors
-                # These tensors only contain entries for changed environments
-                changed_env_indices = changed_envs.nonzero(as_tuple=False).squeeze(-1)
-                mask_in_changed = torch.isin(changed_env_indices, changed_indices)
-
-                # Separate by previous mode within this agent's environments
-                agent_was_force = was_force_control[mask_in_changed]
-                agent_was_pos = was_pos_control[mask_in_changed]
+                # Get control modes for this agent
+                agent_force_control = is_force_control[start_idx:end_idx]
+                agent_pos_control = is_pos_control[start_idx:end_idx]
 
                 # Force control mode metrics
-                force_ctrl_indices = changed_indices[agent_was_force]
-                if len(force_ctrl_indices) > 0:
-                    force_pos_change[agent_id] = pos_delta[force_ctrl_indices, i].mean()
-                    force_vel_change[agent_id] = vel_delta[force_ctrl_indices, i].mean()
-                    force_force_change[agent_id] = force_delta[force_ctrl_indices, i].mean()
+                if torch.any(agent_force_control):
+                    force_pos_change[agent_id] = pos_delta[start_idx:end_idx, i][agent_force_control].abs().mean()
+                    force_vel_change[agent_id] = vel_delta[start_idx:end_idx, i][agent_force_control].abs().mean()
+                    force_force_change[agent_id] = force_delta[start_idx:end_idx, i][agent_force_control].abs().mean()
 
                 # Position control mode metrics
-                pos_ctrl_indices = changed_indices[agent_was_pos]
-                if len(pos_ctrl_indices) > 0:
-                    pos_pos_change[agent_id] = pos_delta[pos_ctrl_indices, i].mean()
-                    pos_vel_change[agent_id] = vel_delta[pos_ctrl_indices, i].mean()
-                    pos_force_change[agent_id] = force_delta[pos_ctrl_indices, i].mean()
+                if torch.any(agent_pos_control):
+                    pos_pos_change[agent_id] = pos_delta[start_idx:end_idx, i][agent_pos_control].abs().mean()
+                    pos_vel_change[agent_id] = vel_delta[start_idx:end_idx, i][agent_pos_control].abs().mean()
+                    pos_force_change[agent_id] = force_delta[start_idx:end_idx, i][agent_pos_control].abs().mean()
 
             # Log force control mode changes
             if not torch.all(torch.isnan(force_pos_change)):
@@ -685,17 +656,10 @@ class HybridForcePositionWrapper(gym.Wrapper):
             if not torch.all(torch.isnan(pos_force_change)):
                 self.unwrapped.extras['to_log'][f'Action Effect / Position Control Force Change {axis_names[i]}'] = pos_force_change
 
-        # Update starting states for all changed environments
-        if torch.any(sel_changed):
-            for i in range(3):
-                changed_mask = sel_changed[:, i]
-                if torch.any(changed_mask):
-                    self._mode_start_pos[changed_mask, i] = current_pos[changed_mask, i]
-                    self._mode_start_vel[changed_mask, i] = current_vel[changed_mask, i]
-                    self._mode_start_force[changed_mask, i] = current_force[changed_mask, i]
-
-        # Update previous selection matrix
-        self._prev_sel_matrix.copy_(self.sel_matrix[:, :3])
+        # Update previous step state for next iteration
+        self._prev_step_pos.copy_(current_pos)
+        self._prev_step_vel.copy_(current_vel)
+        self._prev_step_force.copy_(current_force)
 
     def _get_target_out_of_bounds(self):
         """Check if fingertip target is out of position bounds."""

@@ -8,6 +8,7 @@ from wrappers.observations.observation_manager_wrapper import ObservationManager
 from wrappers.logging.factory_metrics_wrapper import FactoryMetricsWrapper
 from wrappers.logging.wandb_wrapper import GenericWandbLoggingWrapper
 from wrappers.logging.enhanced_action_logging_wrapper import EnhancedActionLoggingWrapper
+from wrappers.logging.pose_contact_logging_wrapper import PoseContactLoggingWrapper
 from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
 
 from models.SimBa_hybrid_control import HybridControlBlockSimBaActor
@@ -99,6 +100,13 @@ def apply_wrappers(env, configs):
             env,
             num_agents=configs['primary'].total_agents,
             publish_to_wandb=wrappers_config.factory_metrics.publish_to_wandb
+        )
+
+    if wrappers_config.pose_contact_logging.enabled:
+        print("  - Applying Pose Contact Logging Wrapper")
+        env = PoseContactLoggingWrapper(
+            env,
+            num_agents=configs['primary'].total_agents
         )
 
     if wrappers_config.action_logging.enabled:
@@ -229,10 +237,11 @@ def _configure_hybrid_agent_parameters(configs):
 
     # Check if unit_std_init is enabled
     unit_std_init = configs['model'].hybrid_agent.unit_std_init
+    unit_factor_std_init = configs['model'].hybrid_agent.unit_factor_std_init
     if unit_std_init:
-        configs['model'].hybrid_agent.pos_init_std = (1 / (env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0])) ** 2
-        configs['model'].hybrid_agent.rot_init_std = (1 / (env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]))**2
-        configs['model'].hybrid_agent.force_init_std = (1 / (env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]))**2
+        configs['model'].hybrid_agent.pos_init_std = (unit_factor_std_init / (env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0])) ** 2
+        configs['model'].hybrid_agent.rot_init_std = (unit_factor_std_init / (env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]))**2
+        configs['model'].hybrid_agent.force_init_std = (unit_factor_std_init / (env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]))**2
 
     configs['model'].hybrid_agent.pos_scale = env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0]
     configs['model'].hybrid_agent.rot_scale = env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]
