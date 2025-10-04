@@ -27,7 +27,15 @@ def parse_arguments():
 
     # Required arguments
     parser.add_argument("--config", type=str, required=True, help="Path to YAML configuration file")
-    parser.add_argument("--ckpt_tracker_path", type=str, required=True, help="Path to checkpoint tracker file")
+
+    # Checkpoint loading modes (mutually exclusive)
+    checkpoint_group = parser.add_mutually_exclusive_group()
+    checkpoint_group.add_argument("--ckpt_tracker_path", type=str, help="Path to checkpoint tracker file (Mode 1: Tracker)")
+    checkpoint_group.add_argument("--wandb_checkpoint", type=str, help="WandB checkpoint: project/run_id/step_number (Mode 2: WandB Download)")
+    checkpoint_group.add_argument("--local_checkpoint", type=str, help="Path to local checkpoint file (Mode 3: Local)")
+
+    # Mode 3 required argument
+    parser.add_argument("--wandb_run", type=str, help="WandB run: project/run_id (required for --local_checkpoint)")
 
     # Optional arguments
     parser.add_argument("--eval_seed", type=int, default=42, help="Fixed seed for consistent evaluation")
@@ -39,6 +47,7 @@ def parse_arguments():
     parser.add_argument("--sensitivity_mask_freq", type=int, default=10, help="Frequency for sensitivity masking (0 to disable)")
     parser.add_argument("--show_progress", action="store_true", default=False, help="Show progress bar during evaluation rollout")
     parser.add_argument("--override", action="append", help="Override config values: key=value")
+    parser.add_argument("--upload_checkpoint", action="store_true", default=False, help="Upload checkpoint to WandB after evaluation (Modes 1 & 3 only)")
 
     # Append AppLauncher args
     AppLauncher.add_app_launcher_args(parser)
@@ -342,6 +351,201 @@ def create_models_and_agent(env: Any, configs: Dict[str, Any], args: argparse.Na
     return models, agent
 
 
+def load_checkpoint_from_wandb(wandb_checkpoint: str) -> List[Dict[str, str]]:
+    """
+    Download checkpoint from WandB and construct checkpoint dict.
+
+    Args:
+        wandb_checkpoint: String in format "project/run_id/step_number"
+
+    Returns:
+        List containing single checkpoint dict
+
+    Raises:
+        RuntimeError: If download fails or config is missing required fields
+    """
+    # Parse wandb_checkpoint string
+    parts = wandb_checkpoint.split('/')
+    if len(parts) != 3:
+        raise RuntimeError(
+            f"Invalid wandb_checkpoint format: '{wandb_checkpoint}'. "
+            f"Expected format: 'project/run_id/step_number'"
+        )
+
+    project, run_id, step_str = parts
+
+    try:
+        step_number = int(step_str)
+    except ValueError:
+        raise RuntimeError(f"Invalid step number: '{step_str}'. Must be an integer.")
+
+    print(f"  Downloading checkpoint from WandB: {project}/{run_id} at step {step_number}")
+
+    # Fetch run from WandB
+    api = wandb.Api()
+    try:
+        run = api.run(f"{project}/{run_id}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to fetch WandB run {project}/{run_id}: {e}")
+
+    # Extract required config fields
+    required_fields = ['agent_idx', 'break_force', 'directory', 'experiment_name']
+    config = {}
+    missing_fields = []
+
+    for field in required_fields:
+        value = run.config.get(field)
+        if value is None:
+            missing_fields.append(field)
+        else:
+            config[field] = value
+
+    if missing_fields:
+        raise RuntimeError(
+            f"Missing required config fields in WandB run {project}/{run_id}: {missing_fields}. "
+            f"Available config keys: {list(run.config.keys())}"
+        )
+
+    agent_idx = config['agent_idx']
+    task_name = run.config.get('task_name', 'Isaac-Factory-PegInsert-Direct-v0')
+
+    # Download checkpoint files from WandB
+    policy_filename = f"agent_{agent_idx}_{step_number}.pt"
+    critic_filename = f"critic_{agent_idx}_{step_number}.pt"
+
+    # Create temporary download directory
+    import tempfile
+    download_dir = tempfile.mkdtemp(prefix="wandb_ckpt_")
+
+    try:
+        # Download policy checkpoint
+        policy_file = run.file(f"ckpts/policies/{policy_filename}")
+        policy_path = policy_file.download(root=download_dir, replace=True)
+        print(f"    Downloaded policy: {policy_path}")
+
+        # Download critic checkpoint
+        critic_file = run.file(f"ckpts/critics/{critic_filename}")
+        critic_path = critic_file.download(root=download_dir, replace=True)
+        print(f"    Downloaded critic: {critic_path}")
+
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to download checkpoint files from WandB run {project}/{run_id}: {e}"
+        )
+
+    # Construct video path
+    vid_path = os.path.join(
+        config['directory'],
+        config['experiment_name'],
+        "eval_videos",
+        f"agent_{agent_idx}_{step_number}.gif"
+    )
+
+    # Construct checkpoint dict
+    checkpoint_dict = {
+        'ckpt_path': str(policy_path),
+        'task': task_name,
+        'vid_path': vid_path,
+        'project': project,
+        'run_id': run_id
+    }
+
+    print(f"  Successfully loaded checkpoint from WandB")
+    return [checkpoint_dict]
+
+
+def load_local_checkpoint(checkpoint_path: str, wandb_run: str) -> List[Dict[str, str]]:
+    """
+    Load local checkpoint and fetch config from WandB.
+
+    Args:
+        checkpoint_path: Path to local checkpoint file
+        wandb_run: String in format "project/run_id"
+
+    Returns:
+        List containing single checkpoint dict
+
+    Raises:
+        RuntimeError: If checkpoint doesn't exist or WandB config is missing required fields
+    """
+    # Validate checkpoint exists
+    if not os.path.exists(checkpoint_path):
+        raise RuntimeError(f"Local checkpoint not found: {checkpoint_path}")
+
+    # Parse wandb_run string
+    parts = wandb_run.split('/')
+    if len(parts) != 2:
+        raise RuntimeError(
+            f"Invalid wandb_run format: '{wandb_run}'. "
+            f"Expected format: 'project/run_id'"
+        )
+
+    project, run_id = parts
+
+    print(f"  Loading local checkpoint: {checkpoint_path}")
+    print(f"  Fetching config from WandB: {project}/{run_id}")
+
+    # Fetch run from WandB
+    api = wandb.Api()
+    try:
+        run = api.run(f"{project}/{run_id}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to fetch WandB run {project}/{run_id}: {e}")
+
+    # Extract required config fields
+    required_fields = ['agent_idx', 'break_force', 'directory', 'experiment_name']
+    config = {}
+    missing_fields = []
+
+    for field in required_fields:
+        value = run.config.get(field)
+        if value is None:
+            missing_fields.append(field)
+        else:
+            config[field] = value
+
+    if missing_fields:
+        raise RuntimeError(
+            f"Missing required config fields in WandB run {project}/{run_id}: {missing_fields}. "
+            f"Available config keys: {list(run.config.keys())}"
+        )
+
+    agent_idx = config['agent_idx']
+    task_name = run.config.get('task_name', 'Isaac-Factory-PegInsert-Direct-v0')
+
+    # Extract step number from checkpoint filename
+    # Expected format: agent_{agent_idx}_{step}.pt
+    import re
+    match = re.search(r'agent_\d+_(\d+)\.pt$', checkpoint_path)
+    if not match:
+        raise RuntimeError(
+            f"Could not extract step number from checkpoint path: {checkpoint_path}. "
+            f"Expected format: agent_{{agent_idx}}_{{step}}.pt"
+        )
+
+    step_number = int(match.group(1))
+
+    # Construct video path
+    vid_path = os.path.join(
+        config['directory'],
+        config['experiment_name'],
+        "eval_videos",
+        f"agent_{agent_idx}_{step_number}.gif"
+    )
+
+    # Construct checkpoint dict
+    checkpoint_dict = {
+        'ckpt_path': checkpoint_path,
+        'task': task_name,
+        'vid_path': vid_path,
+        'project': project,
+        'run_id': run_id
+    }
+
+    print(f"  Successfully loaded local checkpoint")
+    return [checkpoint_dict]
+
+
 def read_and_remove_tracker_batch(tracker_path: str, num_agents: int, batch_mode: str) -> Optional[List[Dict[str, str]]]:
     """
     Atomically read and remove batch of checkpoints from tracker file.
@@ -433,6 +637,68 @@ def write_checkpoints_back_to_tracker(tracker_path: str, checkpoint_dicts: List[
             for ckpt_dict in checkpoint_dicts:
                 line = f"{ckpt_dict['ckpt_path']} {ckpt_dict['task']} {ckpt_dict['vid_path']} {ckpt_dict['project']} {ckpt_dict['run_id']}\n"
                 f.write(line)
+
+
+def upload_checkpoints_to_wandb(checkpoint_dicts: List[Dict[str, str]]) -> None:
+    """
+    Upload checkpoint files to WandB run.
+
+    Uploads both policy and critic checkpoints to organized directories:
+    - ckpts/policies/agent_{agent_idx}_{step}.pt
+    - ckpts/critics/critic_{agent_idx}_{step}.pt
+
+    Args:
+        checkpoint_dicts: List of checkpoint dicts with project, run_id, ckpt_path
+
+    Raises:
+        RuntimeError: If upload fails
+    """
+    import re
+
+    for i, ckpt_dict in enumerate(checkpoint_dicts):
+        project = ckpt_dict['project']
+        run_id = ckpt_dict['run_id']
+        ckpt_path = ckpt_dict['ckpt_path']
+
+        # Extract step number and agent_idx from checkpoint filename
+        match = re.search(r'agent_(\d+)_(\d+)\.pt$', ckpt_path)
+        if not match:
+            raise RuntimeError(
+                f"Could not extract agent_idx and step from checkpoint path: {ckpt_path}. "
+                f"Expected format: agent_{{agent_idx}}_{{step}}.pt"
+            )
+
+        agent_idx = int(match.group(1))
+        step_number = int(match.group(2))
+
+        # Construct critic path
+        critic_path = ckpt_path.replace(f"agent_{agent_idx}_", f"critic_{agent_idx}_")
+
+        if not os.path.exists(critic_path):
+            raise RuntimeError(f"Critic checkpoint not found: {critic_path}")
+
+        print(f"  Uploading checkpoints for {project}/{run_id} at step {step_number}")
+
+        try:
+            # Resume WandB run
+            run = wandb.init(project=project, id=run_id, resume="must")
+
+            # Upload policy checkpoint
+            run.save(ckpt_path, base_path="ckpts/policies", policy="now")
+            print(f"    Uploaded policy: {ckpt_path}")
+
+            # Upload critic checkpoint
+            run.save(critic_path, base_path="ckpts/critics", policy="now")
+            print(f"    Uploaded critic: {critic_path}")
+
+            wandb.finish()
+            print(f"  Successfully uploaded checkpoints to WandB")
+
+        except Exception as e:
+            wandb.finish()
+            raise RuntimeError(
+                f"Failed to upload checkpoints to WandB for {project}/{run_id}: {e}"
+            )
 
 
 def fetch_break_forces_from_wandb(checkpoint_dicts: List[Dict[str, str]]) -> List[float]:
@@ -922,6 +1188,70 @@ def run_evaluation_rollout(env: Any, agent: Any, max_rollout_steps: int, args: a
     return rollout_data
 
 
+def extract_to_log_metrics(infos: List[Dict[str, Any]], num_agents: int, num_envs_per_agent: int) -> List[Dict[str, float]]:
+    """
+    Extract and aggregate metrics from info['to_log'] across timesteps.
+
+    Args:
+        infos: List of info dicts from rollout (one per timestep)
+        num_agents: Number of agents
+        num_envs_per_agent: Number of environments per agent
+
+    Returns:
+        List of metric dicts (one per agent) with keys prefixed by "Eval/"
+    """
+    if len(infos) == 0:
+        return [{} for _ in range(num_agents)]
+
+    # Collect all to_log metrics across timesteps
+    metric_accumulator = defaultdict(lambda: defaultdict(list))  # {agent_idx: {metric_name: [values]}}
+
+    for info_dict in infos:
+        if 'to_log' not in info_dict:
+            continue
+
+        to_log = info_dict['to_log']
+
+        for metric_name, metric_value in to_log.items():
+            if isinstance(metric_value, torch.Tensor):
+                # Check tensor size to determine aggregation strategy
+                if metric_value.shape[0] == num_agents:
+                    # Already aggregated per agent (e.g., Active Wrench, Action Effect metrics)
+                    for agent_idx in range(num_agents):
+                        agent_value = metric_value[agent_idx].item()
+                        # Skip NaN values (they indicate no data for this agent at this timestep)
+                        if not torch.isnan(torch.tensor(agent_value)):
+                            metric_accumulator[agent_idx][metric_name].append(agent_value)
+                else:
+                    # Per-environment tensor - need to slice and average per agent
+                    num_envs = num_agents * num_envs_per_agent
+                    if metric_value.shape[0] == num_envs:
+                        for agent_idx in range(num_agents):
+                            start_env = agent_idx * num_envs_per_agent
+                            end_env = (agent_idx + 1) * num_envs_per_agent
+                            agent_value = metric_value[start_env:end_env].mean().item()
+                            metric_accumulator[agent_idx][metric_name].append(agent_value)
+                    else:
+                        # Unexpected tensor size - skip with warning
+                        print(f"        Warning: Unexpected tensor size for {metric_name}: {metric_value.shape[0]} (expected {num_agents} or {num_envs})")
+            else:
+                # Scalar value - same for all agents
+                for agent_idx in range(num_agents):
+                    agent_value = float(metric_value)
+                    metric_accumulator[agent_idx][metric_name].append(agent_value)
+
+    # Compute averages across timesteps and format with "Eval/" prefix
+    metrics_list = []
+    for agent_idx in range(num_agents):
+        agent_metrics = {}
+        for metric_name, values in metric_accumulator[agent_idx].items():
+            avg_value = sum(values) / len(values) if len(values) > 0 else 0.0
+            agent_metrics[f"Eval {metric_name}"] = avg_value
+        metrics_list.append(agent_metrics)
+
+    return metrics_list
+
+
 def calculate_metrics(rollout_data: Dict[str, Any], env: Any, agent: Any, args: argparse.Namespace) -> List[Dict[str, float]]:
     """
     Calculate evaluation metrics from rollout data.
@@ -1119,6 +1449,17 @@ def calculate_metrics(rollout_data: Dict[str, Any], env: Any, agent: Any, args: 
             print(f"        Computed sensitivity metrics for {len(rollout_data['sensitivity']['policy'])} policy + {len(rollout_data['sensitivity']['critic'])} critic groups")
 
         metrics_list.append(metrics)
+
+    # Extract and merge to_log metrics
+    print("  Extracting to_log metrics from infos...")
+    to_log_metrics_list = extract_to_log_metrics(rollout_data["infos"], num_agents, num_envs_per_agent)
+
+    # Merge to_log metrics into metrics_list
+    for agent_idx in range(num_agents):
+        metrics_list[agent_idx].update(to_log_metrics_list[agent_idx])
+
+    if len(to_log_metrics_list[0]) > 0:
+        print(f"    Found {len(to_log_metrics_list[0])} to_log metrics per agent")
 
     print(f"  Calculated metrics for {num_agents} agents")
 
@@ -1487,23 +1828,44 @@ def main(args):
     global _current_batch, _tracker_path
 
     print("=" * 80)
-    print("Block SimBa Evaluation Script - Daemon Mode")
+    print("Block SimBa Evaluation Script")
     print("=" * 80)
 
-    # Display parsed arguments
+    # Determine checkpoint loading mode
+    if args.wandb_checkpoint:
+        mode = "wandb"
+        print("\n[MODE] WandB Download")
+        print(f"  Checkpoint: {args.wandb_checkpoint}")
+    elif args.local_checkpoint:
+        mode = "local"
+        print("\n[MODE] Local Checkpoint")
+        print(f"  Checkpoint: {args.local_checkpoint}")
+        print(f"  WandB run: {args.wandb_run}")
+        # Validate required argument
+        if not args.wandb_run:
+            raise ValueError("--wandb_run is required when using --local_checkpoint")
+    else:
+        mode = "tracker"
+        print("\n[MODE] Tracker Daemon")
+        print(f"  Tracker: {args.ckpt_tracker_path}")
+        # Validate required argument
+        if not args.ckpt_tracker_path:
+            raise ValueError("--ckpt_tracker_path is required when using tracker mode (default)")
+
+    # Display common arguments
     print("\n[INFO] Configuration:")
     print(f"  Config: {args.config}")
-    print(f"  Tracker: {args.ckpt_tracker_path}")
-    print(f"  Batch mode: {args.batch_mode}")
     print(f"  Eval seed: {args.eval_seed}")
     print(f"  Video enabled: {args.enable_video}")
+    print(f"  Upload checkpoint: {args.upload_checkpoint}")
 
-    # Step 1: Setup signal handlers for graceful shutdown
-    print("\n[STEP 1] Setting up signal handlers...")
-    _tracker_path = args.ckpt_tracker_path
-    signal.signal(signal.SIGINT, _shutdown_handler)
-    signal.signal(signal.SIGTERM, _shutdown_handler)
-    print("  Signal handlers registered (SIGINT, SIGTERM)")
+    # Step 1: Setup signal handlers for graceful shutdown (tracker mode only)
+    if mode == "tracker":
+        print("\n[STEP 1] Setting up signal handlers...")
+        _tracker_path = args.ckpt_tracker_path
+        signal.signal(signal.SIGINT, _shutdown_handler)
+        signal.signal(signal.SIGTERM, _shutdown_handler)
+        print("  Signal handlers registered (SIGINT, SIGTERM)")
 
     # Step 2: Setup environment once
     print("\n[STEP 2] Setting up environment (one-time)...")
@@ -1531,26 +1893,42 @@ def main(args):
         )
     print(f"  Environments per agent: {num_envs_per_agent}")
 
-    # Step 4: Main daemon loop
-    print("\n[STEP 4] Starting daemon loop...")
-    print("=" * 80)
+    # Step 4: Main evaluation loop (daemon for tracker mode, single-shot for others)
+    if mode == "tracker":
+        print("\n[STEP 4] Starting daemon loop...")
+        print("=" * 80)
+        run_once = False
+    else:
+        print("\n[STEP 4] Loading checkpoint for single evaluation...")
+        print("=" * 80)
+        run_once = True
 
     while True:
-        # 4a. Atomically read and remove tracker batch
-        print("\n[4a] Reading and removing checkpoint batch from tracker...")
-        checkpoint_dicts = read_and_remove_tracker_batch(args.ckpt_tracker_path, num_agents, args.batch_mode)
+        # 4a. Load checkpoints based on mode
+        if mode == "tracker":
+            print("\n[4a] Reading and removing checkpoint batch from tracker...")
+            checkpoint_dicts = read_and_remove_tracker_batch(args.ckpt_tracker_path, num_agents, args.batch_mode)
 
-        # 4b. If no checkpoints: wait 2 min, continue
-        if checkpoint_dicts is None or len(checkpoint_dicts) == 0:
-            print("  No checkpoints available. Waiting 2 minutes...")
-            for _ in tqdm.tqdm(range(120), desc="Waiting", file=sys.stdout):
-                time.sleep(1)
-            continue
+            # 4b. If no checkpoints: wait 2 min, continue
+            if checkpoint_dicts is None or len(checkpoint_dicts) == 0:
+                print("  No checkpoints available. Waiting 2 minutes...")
+                for _ in tqdm.tqdm(range(120), desc="Waiting", file=sys.stdout):
+                    time.sleep(1)
+                continue
+
+        elif mode == "wandb":
+            print("\n[4a] Downloading checkpoint from WandB...")
+            checkpoint_dicts = load_checkpoint_from_wandb(args.wandb_checkpoint)
+
+        elif mode == "local":
+            print("\n[4a] Loading local checkpoint...")
+            checkpoint_dicts = load_local_checkpoint(args.local_checkpoint, args.wandb_run)
 
         print(f"  Found {len(checkpoint_dicts)} checkpoint(s) to evaluate")
 
-        # Track current batch for rollback on failure
-        _current_batch = checkpoint_dicts
+        # Track current batch for rollback on failure (tracker mode only)
+        if mode == "tracker":
+            _current_batch = checkpoint_dicts
 
         try:
             # 4c. Fetch break forces from WandB
@@ -1600,23 +1978,43 @@ def main(args):
             log_to_wandb(checkpoint_dicts, metrics_list, video_paths, args)
             print("  Logged to WandB successfully")
 
-            # 4k. Clear current batch (evaluation succeeded, no rollback needed)
-            print("\n[4k] Evaluation successful, clearing current batch...")
-            _current_batch = None
-            print("  Batch cleared")
+            # 4k. Upload checkpoints to WandB (if enabled, modes 1 & 3 only)
+            if args.upload_checkpoint and mode != "wandb":
+                print("\n[4k] Uploading checkpoints to WandB...")
+                upload_checkpoints_to_wandb(checkpoint_dicts)
+                print("  Checkpoints uploaded successfully")
+            elif args.upload_checkpoint and mode == "wandb":
+                print("\n[4k] Skipping checkpoint upload (already in WandB)")
+            else:
+                print("\n[4k] Checkpoint upload disabled")
+
+            # 4l. Clear current batch (evaluation succeeded, no rollback needed)
+            if mode == "tracker":
+                print("\n[4l] Evaluation successful, clearing current batch...")
+                _current_batch = None
+                print("  Batch cleared")
 
             print("\n" + "=" * 80)
-            print("Batch evaluation complete. Continuing to next batch...")
-            print("=" * 80)
+            if run_once:
+                print("Evaluation complete. Exiting...")
+                print("=" * 80)
+                break  # Exit loop for single-shot modes
+            else:
+                print("Batch evaluation complete. Continuing to next batch...")
+                print("=" * 80)
 
         except Exception as e:
             print(f"\n[ERROR] Evaluation failed: {e}")
             import traceback
             traceback.print_exc()
-            print(f"[ERROR] Writing {len(checkpoint_dicts)} checkpoint(s) back to tracker...")
-            write_checkpoints_back_to_tracker(args.ckpt_tracker_path, checkpoint_dicts)
-            print("[ERROR] Rollback complete")
-            print("[ERROR] Stopping daemon...")
+
+            # Rollback only for tracker mode
+            if mode == "tracker":
+                print(f"[ERROR] Writing {len(checkpoint_dicts)} checkpoint(s) back to tracker...")
+                write_checkpoints_back_to_tracker(args.ckpt_tracker_path, checkpoint_dicts)
+                print("[ERROR] Rollback complete")
+
+            print("[ERROR] Stopping...")
             raise
 
 
