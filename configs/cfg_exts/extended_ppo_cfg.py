@@ -299,15 +299,8 @@ class ExtendedPPOConfig:
             'random_value_timesteps': self.random_value_timesteps,
 
             # Experiment tracking
-            #'experiment': {
-            #    'directory': self.,
-            #    'experiment_name': self.experiment_name,
-            #    'write_interval': self.write_interval,
-            #    'checkpoint_interval': self.checkpoint_interval,
-            #    'project': self.wandb_project,
-            #    'tags': self.wandb_tags,
-            #    'group': self.wandb_group
-            #}
+            'write_interval': self.write_interval,
+            'checkpoint_interval': self.checkpoint_interval,
         }
 
     def __repr__(self) -> str:
