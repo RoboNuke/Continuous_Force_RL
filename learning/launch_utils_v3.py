@@ -46,12 +46,15 @@ def apply_wrappers(env, configs):
 
     if wrappers_config.force_torque_sensor.enabled:
         print("  - Applying Force Torque Wrapper")
-        
+
         env = ForceTorqueWrapper(
             env,
             use_tanh_scaling=wrappers_config.force_torque_sensor.use_tanh_scaling,
             tanh_scale=wrappers_config.force_torque_sensor.tanh_scale,
-            add_force_obs=wrappers_config.force_torque_sensor.add_force_obs
+            add_force_obs=wrappers_config.force_torque_sensor.add_force_obs,
+            contact_force_threshold=wrappers_config.force_torque_sensor.contact_force_threshold,
+            contact_torque_threshold=wrappers_config.force_torque_sensor.contact_torque_threshold,
+            log_contact_state=wrappers_config.force_torque_sensor.log_contact_state
         )
 
     if wrappers_config.force_reward.enabled:
@@ -143,6 +146,9 @@ def add_wandb_tracking_tags(configs):
 def define_agent_configs(configs):
     configs['agent'].write_interval = configs['primary'].rollout_steps(configs['environment'].episode_length_s) #max rollouts
     configs['agent'].checkpoint_interval = 10 * configs['agent'].write_interval
+
+    print(f"  -Write Interval:{configs['agent'].write_interval}")
+    print(f"  -Checkpoint Interval:{configs['agent'].checkpoint_interval}")
 
     agent_idx = 0
     configs['agent'].agent_exp_cfgs = []

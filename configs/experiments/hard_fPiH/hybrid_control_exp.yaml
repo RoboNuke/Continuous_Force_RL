@@ -5,6 +5,7 @@ base_config: "configs/base/PiH_base.yaml"
 
 primary:
   ckpt_tracker_path: "/nfs/stak/users/brownhun/voltron_hybrid_tracker.txt"
+  break_forces: [5,10]
   
 # Enable hybrid control wrapper and related systems
 wrappers:

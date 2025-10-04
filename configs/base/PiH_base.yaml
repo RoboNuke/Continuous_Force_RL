@@ -3,12 +3,20 @@
 
 # Task name (required for new config system)
 
+# EXPERIMENT CONFIGURATION
+experiment:
+  name: "fPiH_base"
+  tags: ["factory", 'FPiH']
+  group: "force_vel_test"
+  wandb_project: "debug"
+  wandb_entity: "hur"
+  task_name: "Isaac-Factory-PegInsert-Direct-v0"
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
-  agents_per_break_force: 5  # Number of agents per break force condition
+  agents_per_break_force: 1  # Number of agents per break force condition
   num_envs_per_agent: 256    # Environments per individual agent
-  break_forces: [5,10]  # Break force conditions (-1 = unbreakable)
+  break_forces: [20]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
   max_steps: 25000192
@@ -33,8 +41,6 @@ environment:
     default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
 
   hybrid_task:
-    force_active_threshold: 1.5
-    torque_active_threshold: 100.0 # don't want torque activation
     good_force_cmd_rew: 0.1
     bad_force_cmd_rew: -0.1
     wrench_norm_scale: 0.1
@@ -125,6 +131,9 @@ wrappers:
     use_tanh_scaling: false
     tanh_scale: 0.03
     add_force_obs: true
+    contact_force_threshold: 1.5
+    contact_torque_threshold: 100.0 # don't want torque activation
+    log_contact_state: true
 
   # Observation format conversion (Isaac Lab dict -> single tensor)
   observation_manager:
@@ -210,22 +219,14 @@ wrappers:
     enable_force_ratio: false
     force_ratio_reward_weight: 1.0
 
-# EXPERIMENT CONFIGURATION
-experiment:
-  name: "fPiH_base"
-  tags: ["factory", 'FPiH']
-  group: "fPiH_experiments"
-  wandb_project: "Voltron_Baseline"
-  wandb_entity: "hur"
-  task_name: "Isaac-Factory-PegInsert-Direct-v0"
 
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
 agent:
   # Core identification
-  disable_progressbar: true
+  disable_progressbar: false
 
   # Checkpoint and experiment tracking
-  track_ckpts: true
+  track_ckpts: false
   # ckpt_tracker_path comes from primary config automatically
 
   # SKRL PPO PARAMETERS (these override SKRL defaults)
@@ -259,6 +260,7 @@ agent:
   value_loss_scale: 1.0
   kl_threshold: 0.05
   time_limit_bootstrap: true
+  #checkpoint_interval: 1500
 
   # Reward shaping
   reward_shaper_type: 'const_scale'

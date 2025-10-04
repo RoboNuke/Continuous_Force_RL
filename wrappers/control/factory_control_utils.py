@@ -74,12 +74,18 @@ def compute_force_task_wrench(
     cfg,
     dof_pos,
     eef_force,
+    fingertip_midpoint_linvel,
+    fingertip_midpoint_angvel,
     ctrl_target_force,
     task_gains,
+    task_deriv_gains,
     device
 ):
     """Compute task-space wrench for force control."""
-    return task_gains * (ctrl_target_force - eef_force)
+    force_wrench = task_gains * (ctrl_target_force - eef_force)
+    force_wrench[ :, 0:3 ] += task_deriv_gains[:, 0:3] * (0.0 - fingertip_midpoint_linvel)
+    force_wrench[ :, 3:6 ] += task_deriv_gains[:, 3:6] * (0.0 - fingertip_midpoint_angvel)
+    return force_wrench
 
 
 def compute_dof_torque_from_wrench(

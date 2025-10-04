@@ -26,6 +26,11 @@ class ForceTorqueSensorConfig:
     tanh_scale: float = 0.03
     add_force_obs: bool = False
 
+    # Contact detection parameters (moved from HybridTaskCfg)
+    contact_force_threshold: float = 0.1
+    contact_torque_threshold: float = 0.01
+    log_contact_state: bool = True
+
 
 @dataclass
 class HybridControlConfig:

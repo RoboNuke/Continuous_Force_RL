@@ -31,14 +31,10 @@ class HybridTaskCfg:
 
     These parameters control the reward structure and behavior specific
     to hybrid force-position control tasks.
+
+    Note: Contact detection thresholds (force_active_threshold, torque_active_threshold)
+    have been moved to ForceTorqueSensorConfig as they are sensor-level concerns.
     """
-
-    # Force activity thresholds
-    force_active_threshold: float = 0.1
-    """Minimum force magnitude to consider a direction as having active force"""
-
-    torque_active_threshold: float = 0.01
-    """Minimum torque magnitude to consider a direction as having active torque"""
 
     # Reward parameters
     good_force_cmd_rew: float = 0.1

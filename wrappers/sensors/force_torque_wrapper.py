@@ -30,7 +30,8 @@ class ForceTorqueWrapper(gym.Wrapper):
     - Supports tanh scaling for force readings
     """
 
-    def __init__(self, env, use_tanh_scaling=False, tanh_scale=0.03, add_force_obs=False):
+    def __init__(self, env, use_tanh_scaling=False, tanh_scale=0.03, add_force_obs=False,
+                 contact_force_threshold=0.1, contact_torque_threshold=0.01, log_contact_state=True):
         """
         Initialize the force-torque sensor wrapper.
 
@@ -38,12 +39,19 @@ class ForceTorqueWrapper(gym.Wrapper):
             env: Base environment to wrap
             use_tanh_scaling: Whether to apply tanh scaling to force-torque readings
             tanh_scale: Scale factor for tanh transformation
+            add_force_obs: Whether to add force-torque to observations
+            contact_force_threshold: Force threshold for contact detection (N)
+            contact_torque_threshold: Torque threshold for contact detection (Nm)
+            log_contact_state: Whether to log contact state to extras['to_log']
         """
         super().__init__(env)
 
         # Store configuration
         self.use_tanh_scaling = use_tanh_scaling
         self.tanh_scale = tanh_scale
+        self.contact_force_threshold = contact_force_threshold
+        self.contact_torque_threshold = contact_torque_threshold
+        self.log_contact_state = log_contact_state
 
         # Update observation and state dimensions using Isaac Lab's native approach
         if hasattr(self.unwrapped, 'cfg'):
@@ -63,9 +71,36 @@ class ForceTorqueWrapper(gym.Wrapper):
         self._original_get_factory_obs_state_dict = None
         self._original_get_observations = None
         self.unwrapped.has_force_torque_sensor = True
+
+        # Initialize in_contact tensor immediately for wrapper compatibility
+        # num_envs is already set and won't change through wrappers
+        num_envs = self.unwrapped.num_envs
+        device = self.unwrapped.device
+        self.unwrapped.in_contact = torch.zeros(
+            (num_envs, 6), dtype=torch.bool, device=device
+        )
+
         # Initialize after the base environment is ready
         if hasattr(self.unwrapped, '_robot'):
             self._initialize_wrapper()
+
+    def reset(self, **kwargs):
+        """
+        Override reset to ensure wrapper is initialized before first use.
+
+        The wrapper may not be fully initialized during __init__ because the
+        environment's _robot attribute might not exist yet. This method ensures
+        initialization happens on the first reset call when _robot is available.
+
+        Args:
+            **kwargs: Arguments passed to the base environment's reset method
+
+        Returns:
+            Observation and info from base environment's reset
+        """
+        if not self._sensor_initialized and hasattr(self.unwrapped, '_robot'):
+            self._initialize_wrapper()
+        return super().reset(**kwargs)
 
     def _update_observation_config(self):
         """
@@ -321,6 +356,8 @@ class ForceTorqueWrapper(gym.Wrapper):
         # This is what the factory environment will access when creating obs_dict
         self.unwrapped.force_torque = self.unwrapped.robot_force_torque
 
+        # Note: in_contact tensor is now initialized in __init__ for wrapper compatibility
+
 
     def _wrapped_compute_intermediate_values(self, dt):
         """
@@ -363,6 +400,10 @@ class ForceTorqueWrapper(gym.Wrapper):
             #    self.unwrapped.robot_force_torque.fill_(0.0)
             #    self.unwrapped.force_torque = self.unwrapped.robot_force_torque
 
+            # Compute contact state based on force-torque readings
+            self.unwrapped.in_contact[:, :3] = torch.abs(self.unwrapped.robot_force_torque[:, :3]) > self.contact_force_threshold
+            self.unwrapped.in_contact[:, 3:] = torch.abs(self.unwrapped.robot_force_torque[:, 3:]) > self.contact_torque_threshold
+
     def _wrapped_reset_buffers(self, env_ids):
         """
         Reset force-torque buffers for specified environments.
@@ -390,6 +431,15 @@ class ForceTorqueWrapper(gym.Wrapper):
         # Call original pre-physics step
         if self._original_pre_physics_step:
             self._original_pre_physics_step(action)
+
+        # Log contact state if enabled
+        if self.log_contact_state and hasattr(self.unwrapped, 'extras'):
+            if 'to_log' not in self.unwrapped.extras:
+                self.unwrapped.extras['to_log'] = {}
+
+            self.unwrapped.extras['to_log']['Contact / In-Contact X'] = self.unwrapped.in_contact[:, 0].float()
+            self.unwrapped.extras['to_log']['Contact / In-Contact Y'] = self.unwrapped.in_contact[:, 1].float()
+            self.unwrapped.extras['to_log']['Contact / In-Contact Z'] = self.unwrapped.in_contact[:, 2].float()
 
     def _wrapped_get_factory_obs_state_dict(self):
         """

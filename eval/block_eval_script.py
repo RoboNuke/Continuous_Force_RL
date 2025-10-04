@@ -47,7 +47,7 @@ def parse_arguments():
     parser.add_argument("--sensitivity_mask_freq", type=int, default=10, help="Frequency for sensitivity masking (0 to disable)")
     parser.add_argument("--show_progress", action="store_true", default=False, help="Show progress bar during evaluation rollout")
     parser.add_argument("--override", action="append", help="Override config values: key=value")
-    parser.add_argument("--upload_checkpoint", action="store_true", default=False, help="Upload checkpoint to WandB after evaluation (Modes 1 & 3 only)")
+    parser.add_argument("--upload_ckpt", action="store_true", default=False, help="Upload checkpoint to WandB after evaluation (Modes 1 & 3 only)")
 
     # Append AppLauncher args
     AppLauncher.add_app_launcher_args(parser)
