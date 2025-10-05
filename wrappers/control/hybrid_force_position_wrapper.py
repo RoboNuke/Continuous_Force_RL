@@ -704,8 +704,8 @@ class HybridForcePositionWrapper(gym.Wrapper):
             dof_pos=self.unwrapped.joint_pos,
             fingertip_midpoint_pos=self.unwrapped.fingertip_midpoint_pos,
             fingertip_midpoint_quat=self.unwrapped.fingertip_midpoint_quat,
-            fingertip_midpoint_linvel=self.unwrapped.ee_linvel_fd,
-            fingertip_midpoint_angvel=self.unwrapped.ee_angvel_fd,
+            fingertip_midpoint_linvel=self.unwrapped.fingertip_midpoint_linvel, #self.unwrapped.ee_linvel_fd, # TODO FD HERE TOO!
+            fingertip_midpoint_angvel=self.unwrapped.fingertip_midpoint_angvel, #self.unwrapped.ee_angvel_fd,
             ctrl_target_fingertip_midpoint_pos=self.unwrapped.ctrl_target_fingertip_midpoint_pos,
             ctrl_target_fingertip_midpoint_quat=self.unwrapped.ctrl_target_fingertip_midpoint_quat,
             task_prop_gains=self.unwrapped.task_prop_gains,
@@ -718,8 +718,8 @@ class HybridForcePositionWrapper(gym.Wrapper):
             cfg=self.unwrapped.cfg,
             dof_pos=self.unwrapped.joint_pos,
             eef_force=self.robot_force_torque,
-            fingertip_midpoint_linvel=self.unwrapped.ee_linvel_fd,
-            fingertip_midpoint_angvel=self.unwrapped.ee_angvel_fd,
+            fingertip_midpoint_linvel=self.unwrapped.fingertip_midpoint_linvel, #self.unwrapped.ee_linvel_fd,
+            fingertip_midpoint_angvel=self.unwrapped.fingertip_midpoint_angvel, #self.unwrapped.ee_angvel_fd,
             ctrl_target_force=self.target_force_for_control,
             task_gains=self.kp,
             task_deriv_gains=self.unwrapped.task_deriv_gains,
@@ -805,7 +805,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
         self.unwrapped.joint_torque, task_wrench = compute_dof_torque_from_wrench(
             cfg=self.unwrapped.cfg,
             dof_pos=self.unwrapped.joint_pos,
-            dof_vel=self.unwrapped.joint_vel_fd,
+            dof_vel=self.unwrapped.joint_vel, #self.unwrapped.joint_vel_fd, #TODO DIFF JOINT VELS!
             task_wrench=task_wrench,
             jacobian=self.unwrapped.fingertip_midpoint_jacobian,
             arm_mass_matrix=self.unwrapped.arm_mass_matrix,
