@@ -132,6 +132,7 @@ class BlockSimBaActor(GaussianMixin, Model):
             actor_latent=512,
             action_gain=1.0,
             last_layer_scale=1.0,
+            init_sel_bias=0.0,
 
             clip_actions=False,
             clip_log_std=True, 
@@ -177,7 +178,7 @@ class BlockSimBaActor(GaussianMixin, Model):
             print(f"[INFO]: \t\tScaled model last layer by {last_layer_scale}")
             if sigma_idx > 0:
                 print(f"[INFO]: \t\tSigma Idx={sigma_idx} so last layer bias[:{sigma_idx}] set to -1.1")
-                self.actor_mean.fc_out.bias[:sigma_idx] = -1.1
+                self.actor_mean.fc_out.bias[:, :sigma_idx] -= init_sel_bias
 
     def act(self, inputs, role):
         return GaussianMixin.act(self, inputs, role)

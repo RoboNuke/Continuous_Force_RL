@@ -142,9 +142,9 @@ class PoseContactLoggingWrapper(gym.Wrapper):
         # Log network outputs (raw actions before scaling)
         if hasattr(self.unwrapped, 'extras'):
             raw_pos_actions = action[:, :3]
-            self.unwrapped.extras['to_log']['Network Output / Raw Pos Action X'] = raw_pos_actions[:, 0]
-            self.unwrapped.extras['to_log']['Network Output / Raw Pos Action Y'] = raw_pos_actions[:, 1]
-            self.unwrapped.extras['to_log']['Network Output / Raw Pos Action Z'] = raw_pos_actions[:, 2]
+            self.unwrapped.extras['to_log']['Network Output / Raw Pos Action X'] = raw_pos_actions[:, 0].abs()
+            self.unwrapped.extras['to_log']['Network Output / Raw Pos Action Y'] = raw_pos_actions[:, 1].abs()
+            self.unwrapped.extras['to_log']['Network Output / Raw Pos Action Z'] = raw_pos_actions[:, 2].abs()
 
         # Log control targets (after EMA and bounds, if applicable)
         self._log_control_targets()

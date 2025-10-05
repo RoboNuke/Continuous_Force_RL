@@ -268,6 +268,7 @@ def _create_standard_policy_model(env, configs):
         actor_n=configs['model'].actor.n,
         actor_latent=configs['model'].actor.latent_size,
         sigma_idx=sigma_idx,
+        init_sel_bias = configs['model'].hybrid_agent.init_bias,
         num_agents=configs['primary'].total_agents,
         last_layer_scale=configs['model'].last_layer_scale
     )

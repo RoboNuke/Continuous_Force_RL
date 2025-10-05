@@ -470,6 +470,9 @@ class BlockPPO(PPO):
 
             return returns, advantages
 
+        # log std:
+        self._log_policy_std()
+
         # compute returns and advantages
         with torch.no_grad(), torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
             self.value.train(False)
@@ -515,9 +518,6 @@ class BlockPPO(PPO):
                 sampled_returns,
                 sampled_advantages,
             ) in sampled_batches:
-                #print(f"Mini Batch:{mini_batch}")
-                #if mini_batch > 5:
-                #    continue
                 with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
                     sampled_states = self._state_preprocessor(sampled_states, train=not epoch)
                     _, next_log_prob, _ = self.policy.act(
@@ -1069,6 +1069,68 @@ class BlockPPO(PPO):
 
         result = sum(step_sizes) / max(len(step_sizes), 1) if step_sizes else 0.0
         return result
+
+    def _log_policy_std(self):
+        """Log per-agent standard deviations for all action components by direction.
+
+        Std structure depends on policy type:
+        - BlockSimBaActor with sigma_idx > 0 (hybrid control with selection):
+          - Indices 0:sigma_idx: Selection std (logged by direction)
+          - Indices sigma_idx:sigma_idx+3: Position std X, Y, Z
+          - Indices sigma_idx+3:sigma_idx+6: Rotation std (skipped)
+          - Indices sigma_idx+6:sigma_idx+9: Force std X, Y, Z (if available)
+        - Standard BlockSimBaActor or HybridControlBlockSimBaActor:
+          - Indices 0-2: Position std X, Y, Z
+          - Indices 3-5: Rotation std (skipped)
+          - Indices 6-8: Force std X, Y, Z (if available)
+          - Indices 9-11: Torque std X, Y, Z (if available)
+        """
+        wrapper = self._get_logging_wrapper()
+        if not wrapper:
+            return
+
+        std_metrics = {}
+
+        # Detect if using BlockSimBaActor with hybrid control (has sigma_idx)
+        sigma_offset = 0
+        if hasattr(self.policy, 'sigma_idx') and self.policy.sigma_idx > 0:
+            sigma_offset = self.policy.sigma_idx
+
+        for i, log_std in enumerate(self.policy.actor_logstd):
+            # log_std shape: (1, std_dim) where std_dim depends on action space
+            std = log_std.exp()[0]  # Shape: (std_dim,)
+
+            # Selection std by direction (if sigma_offset > 0, meaning hybrid control)
+            if sigma_offset >= 3:
+                std_metrics['Network Output / Selection Std X'] = std[0]
+                std_metrics['Network Output / Selection Std Y'] = std[1]
+                std_metrics['Network Output / Selection Std Z'] = std[2]
+            if sigma_offset >= 6:
+                std_metrics['Network Output / Selection Std RX'] = std[3]
+                std_metrics['Network Output / Selection Std RY'] = std[4]
+                std_metrics['Network Output / Selection Std RZ'] = std[5]
+
+            # Position std by direction (always present after sigma_offset)
+            std_metrics['Network Output / Pos Std X'] = std[sigma_offset + 0]
+            std_metrics['Network Output / Pos Std Y'] = std[sigma_offset + 1]
+            std_metrics['Network Output / Pos Std Z'] = std[sigma_offset + 2]
+
+            # Force std by direction (if std has enough elements)
+            force_start_idx = sigma_offset + 6
+            if std.shape[0] >= force_start_idx + 3:
+                std_metrics['Network Output / Force Std X'] = std[force_start_idx + 0]
+                std_metrics['Network Output / Force Std Y'] = std[force_start_idx + 1]
+                std_metrics['Network Output / Force Std Z'] = std[force_start_idx + 2]
+
+            # Torque std by direction (if std has enough elements)
+            torque_start_idx = sigma_offset + 9
+            if std.shape[0] >= torque_start_idx + 3:
+                std_metrics['Network Output / Torque Std X'] = std[torque_start_idx + 0]
+                std_metrics['Network Output / Torque Std Y'] = std[torque_start_idx + 1]
+                std_metrics['Network Output / Torque Std Z'] = std[torque_start_idx + 2]
+
+        # All metrics are already per-agent tensors (shape: num_agents)
+        wrapper.add_metrics(std_metrics)
 
     def _log_minibatch_update(
             self,

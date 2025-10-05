@@ -335,6 +335,15 @@ class HybridForcePositionWrapper(gym.Wrapper):
         if hasattr(self.unwrapped, 'actions'):
             self.unwrapped.prev_action = self.unwrapped.actions.clone()
 
+        # Call original pre_physics_step to maintain wrapper chain
+        # (allows ForceTorqueWrapper and other wrappers to execute)
+        # Base env will apply EMA, but we override it below for hybrid control
+        if self._original_pre_physics_step:
+            self._original_pre_physics_step(action)
+
+        # Override base env's EMA - hybrid control does its own EMA on goals
+        self.unwrapped.actions = action.clone().to(self.device)
+
         # Step 1: Extract goals from current action
         self._extract_goals_from_action(action)
 
@@ -391,22 +400,27 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Extract selection goal (raw values before threshold)
         self.sel_goal[:, :self.force_size] = action[:, :self.force_size]
 
-        # Store actions for goal calculation
-        self.unwrapped.actions = action.clone().to(self.device)
+        # Note: actions are already stored in _wrapped_pre_physics_step
 
         # Log raw network actions
         if hasattr(self.unwrapped, 'extras'):
             # Raw position actions (before scaling)
+            raw_sel_actions = action[:, 0:self.force_size]
+            self.unwrapped.extras['to_log']['Network Output / Raw Sel Action X'] = raw_sel_actions[:, 0]#.abs()
+            self.unwrapped.extras['to_log']['Network Output / Raw Sel Action Y'] = raw_sel_actions[:, 1]#.abs()
+            self.unwrapped.extras['to_log']['Network Output / Raw Sel Action Z'] = raw_sel_actions[:, 2]#.abs()
+
+            # Raw position actions (before scaling)
             raw_pos_actions = action[:, self.force_size:self.force_size+3]
-            self.unwrapped.extras['to_log']['Network Output / Raw Pos Action X'] = raw_pos_actions[:, 0]
-            self.unwrapped.extras['to_log']['Network Output / Raw Pos Action Y'] = raw_pos_actions[:, 1]
-            self.unwrapped.extras['to_log']['Network Output / Raw Pos Action Z'] = raw_pos_actions[:, 2]
+            self.unwrapped.extras['to_log']['Network Output / Raw Pos Action X'] = raw_pos_actions[:, 0].abs()
+            self.unwrapped.extras['to_log']['Network Output / Raw Pos Action Y'] = raw_pos_actions[:, 1].abs()
+            self.unwrapped.extras['to_log']['Network Output / Raw Pos Action Z'] = raw_pos_actions[:, 2].abs()
 
             # Raw force actions (before scaling)
             raw_force_actions = action[:, self.force_size+6:2*self.force_size+6]
-            self.unwrapped.extras['to_log']['Network Output / Raw Force Action X'] = raw_force_actions[:, 0]
-            self.unwrapped.extras['to_log']['Network Output / Raw Force Action Y'] = raw_force_actions[:, 1]
-            self.unwrapped.extras['to_log']['Network Output / Raw Force Action Z'] = raw_force_actions[:, 2]
+            self.unwrapped.extras['to_log']['Network Output / Raw Force Action X'] = raw_force_actions[:, 0].abs()
+            self.unwrapped.extras['to_log']['Network Output / Raw Force Action Y'] = raw_force_actions[:, 1].abs()
+            self.unwrapped.extras['to_log']['Network Output / Raw Force Action Z'] = raw_force_actions[:, 2].abs()
 
         # Extract pose goal using existing calculation methods
         self._calc_pose_goal()
