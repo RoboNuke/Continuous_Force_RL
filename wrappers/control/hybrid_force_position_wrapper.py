@@ -392,7 +392,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
         if self._first_step_set:
             # Reset to current state values for reset environments
             self._prev_step_pos[env_ids] = self.unwrapped.fingertip_midpoint_pos[env_ids]
-            self._prev_step_vel[env_ids] = self.unwrapped.fingertip_midpoint_linvel #self.unwrapped.ee_linvel_fd[env_ids]
+            self._prev_step_vel[env_ids] = self.unwrapped.fingertip_midpoint_linvel[env_ids] #self.unwrapped.ee_linvel_fd[env_ids]
             self._prev_step_force[env_ids] = self.robot_force_torque[env_ids, :3]
 
     def _extract_goals_from_action(self, action):
