@@ -230,10 +230,10 @@ wrappers:
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
 agent:
   # Core identification
-  disable_progressbar: false
+  disable_progressbar: true
 
   # Checkpoint and experiment tracking
-  track_ckpts: false
+  track_ckpts: true
   # ckpt_tracker_path comes from primary config automatically
 
   # SKRL PPO PARAMETERS (these override SKRL defaults)
