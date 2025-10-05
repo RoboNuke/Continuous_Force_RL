@@ -4,7 +4,7 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/oct4_hybrid_agent_tracker.txt"
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/noFD_hybrid_ctrl_tracker.txt"
   #break_forces: [5,10]
   
 # Enable hybrid control wrapper and related systems
@@ -18,6 +18,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: "hybrid_control_exp"
+  name: "noFD_hybrid_control_exp"
   tags: []
-  group: "hybrid_exp"
+  group: "noFD_hybrid_ctrl"
