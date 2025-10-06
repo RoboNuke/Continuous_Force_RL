@@ -38,10 +38,10 @@ environment:
     torque_action_bounds: [0.5, 0.5, 0.5]
     force_action_threshold: [10.0, 10.0, 10.0]
     torque_action_threshold: [0.1, 0.1, 0.1]
-    #default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
-    default_task_force_gains: [0.05, 0.05, 0.05, 0.001, 0.001, 0.001]
+    default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
+    #default_task_force_gains: [0.05, 0.05, 0.05, 0.001, 0.001, 0.001]
 
-    default_task_prop_gains: [50, 50, 50, 30, 30, 30]
+    #default_task_prop_gains: [50, 50, 50, 30, 30, 30]
 
   hybrid_task:
     good_force_cmd_rew: 0.1
@@ -116,7 +116,7 @@ model:
 
     # scale the weight layer at the end
     init_scale_last_layer: true
-    init_layer_scale: 0.1
+    init_layer_scale: 0.01
     uniform_sampling_rate: 0.0
 
 # WRAPPERS CONFIGURATION (Direct wrapper parameters)
