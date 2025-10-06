@@ -15,7 +15,7 @@ experiment:
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
   agents_per_break_force: 5  # Number of agents per break force condition
-  num_envs_per_agent: 512    # Environments per individual agent
+  num_envs_per_agent: 256    # Environments per individual agent
   break_forces: [10]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
@@ -38,7 +38,10 @@ environment:
     torque_action_bounds: [0.5, 0.5, 0.5]
     force_action_threshold: [10.0, 10.0, 10.0]
     torque_action_threshold: [0.1, 0.1, 0.1]
-    default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
+    #default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
+    default_task_force_gains: [0.05, 0.05, 0.05, 0.001, 0.001, 0.001]
+
+    default_task_prop_gains: [50, 50, 50, 30, 30, 30]
 
   hybrid_task:
     good_force_cmd_rew: 0.1
