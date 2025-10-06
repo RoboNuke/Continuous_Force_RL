@@ -89,7 +89,7 @@ model:
   hybrid_agent:
     ctrl_torque: false  # Match primary.ctrl_torque
     unit_std_init: true
-    unit_factor_std_init: 0.25
+    unit_factor_std_init: 0.5
     pos_init_std: 1.0
     rot_init_std: 1.0
     force_init_std: 1.0
