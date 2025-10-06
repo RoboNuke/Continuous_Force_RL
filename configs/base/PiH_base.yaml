@@ -116,7 +116,7 @@ model:
 
     # scale the weight layer at the end
     init_scale_last_layer: true
-    init_layer_scale: 0.01
+    init_layer_scale: 0.1
     uniform_sampling_rate: 0.0
 
 # WRAPPERS CONFIGURATION (Direct wrapper parameters)
@@ -124,7 +124,7 @@ wrappers:
   # Fragile object behavior
   fragile_objects:
     enabled: true
-    peg_break_rew: -0.4 #-1.0
+    peg_break_rew: -0.1 #-1.0
     # break_force and num_agents are computed from primary config automatically
 
   # Efficient environment resetting3
