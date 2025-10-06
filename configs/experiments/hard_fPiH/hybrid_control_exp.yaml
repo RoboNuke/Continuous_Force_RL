@@ -4,7 +4,7 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/lowBreakRew_hybrid_ctrl_tracker.txt"
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/noRew_hybrid_ctrl_tracker.txt"
   #break_forces: [5,10]
   
 # Enable hybrid control wrapper and related systems
@@ -18,6 +18,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: "lowBreakRew_hybrid_control_exp"
+  name: "noRew_hybrid_control_exp"
   tags: []
-  group: "lowBreakRew_hybrid_ctrl"
+  group: "noRew_hybrid_ctrl"
