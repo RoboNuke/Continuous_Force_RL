@@ -4,7 +4,7 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/lowBreakRew_hybrid_agent_tracker.txt"
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/lowCtrl_HighStd_hybrid_agent_tracker.txt"
   #break_forces: [5,10]
 
 # Model configuration for hybrid agent
@@ -22,6 +22,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: "lowBreakRew_hybrid_agent_exp"
+  name: "lowCtrl_HighStd_hybrid_agent_exp"
   tags: []
-  group: "lowBreakRew_hybrid_agnt"
+  group: "lowCtrl_HighStd_hybrid_agnt"

@@ -38,10 +38,10 @@ environment:
     torque_action_bounds: [0.5, 0.5, 0.5]
     force_action_threshold: [10.0, 10.0, 10.0]
     torque_action_threshold: [0.1, 0.1, 0.1]
-    default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
-    #default_task_force_gains: [0.05, 0.05, 0.05, 0.001, 0.001, 0.001]
+    #default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
+    default_task_force_gains: [0.05, 0.05, 0.05, 0.001, 0.001, 0.001]
 
-    #default_task_prop_gains: [50, 50, 50, 30, 30, 30]
+    default_task_prop_gains: [50, 50, 50, 30, 30, 30]
 
   hybrid_task:
     good_force_cmd_rew: 0.1
@@ -89,7 +89,7 @@ model:
   hybrid_agent:
     ctrl_torque: false  # Match primary.ctrl_torque
     unit_std_init: true
-    unit_factor_std_init: 1.0
+    unit_factor_std_init: 0.25
     pos_init_std: 1.0
     rot_init_std: 1.0
     force_init_std: 1.0
@@ -124,7 +124,7 @@ wrappers:
   # Fragile object behavior
   fragile_objects:
     enabled: true
-    peg_break_rew: -0.1 #-1.0
+    peg_break_rew: -0.4 #-1.0
     # break_force and num_agents are computed from primary config automatically
 
   # Efficient environment resetting3
