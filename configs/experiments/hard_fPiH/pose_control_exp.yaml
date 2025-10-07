@@ -4,7 +4,7 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/oct4_pose_tracker.txt"
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/oct6_pose_tracker.txt"
   #break_forces: [5,10]
   
 # Model configuration for hybrid agent
@@ -13,6 +13,6 @@ model:
 
 # Experiment metadata
 experiment:
-  name: "pose_control_exp"
+  name: "pose_oct6_control_exp"
   tags: []
-  group: "pose_exps"
+  group: "pose_oct6_exps"

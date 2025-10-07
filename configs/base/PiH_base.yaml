@@ -16,7 +16,7 @@ experiment:
 primary:
   agents_per_break_force: 5  # Number of agents per break force condition
   num_envs_per_agent: 256    # Environments per individual agent
-  break_forces: [10]  # Break force conditions (-1 = unbreakable)
+  break_forces: [5]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
   max_steps: 10000128 #25000192
@@ -158,7 +158,7 @@ wrappers:
   hybrid_control:
     enabled: false
     # ctrl_torque is computed from primary config automatically
-    reward_type: "simp"
+    reward_type: "none" #"simp"
 
   # Factory-specific metrics tracking
   factory_metrics:
