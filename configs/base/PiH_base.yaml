@@ -14,7 +14,7 @@ experiment:
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
-  agents_per_break_force: 5  # Number of agents per break force condition
+  agents_per_break_force: 1  # Number of agents per break force condition
   num_envs_per_agent: 256    # Environments per individual agent
   break_forces: [10]  # Break force conditions (-1 = unbreakable)
   decimation: 8
@@ -42,6 +42,7 @@ environment:
     #default_task_force_gains: [0.05, 0.05, 0.05, 0.001, 0.001, 0.001]
 
     #default_task_prop_gains: [50, 50, 50, 30, 30, 30]
+    no_sel_ema: true
 
   hybrid_task:
     good_force_cmd_rew: 0.1
@@ -233,10 +234,10 @@ wrappers:
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
 agent:
   # Core identification
-  disable_progressbar: true
+  disable_progressbar: false #TODO true
 
   # Checkpoint and experiment tracking
-  track_ckpts: true
+  track_ckpts: false #TODO true
   # ckpt_tracker_path comes from primary config automatically
 
   # SKRL PPO PARAMETERS (these override SKRL defaults)
