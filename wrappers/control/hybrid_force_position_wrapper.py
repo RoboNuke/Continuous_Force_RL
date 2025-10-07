@@ -429,13 +429,14 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         # Log selection matrix
         if hasattr(self.unwrapped, 'extras'):
-            self.unwrapped.extras['to_log']['Control Mode / Force Control X'] = self.sel_matrix[:, 0]
-            self.unwrapped.extras['to_log']['Control Mode / Force Control Y'] = self.sel_matrix[:, 1]
-            self.unwrapped.extras['to_log']['Control Mode / Force Control Z'] = self.sel_matrix[:, 2]
+            sel_mat = self.sel_matrix[:,:self.force_size].clone()
+            self.unwrapped.extras['to_log']['Control Mode / Force Control X'] = sel_mat[:, 0]
+            self.unwrapped.extras['to_log']['Control Mode / Force Control Y'] = sel_mat[:, 1]
+            self.unwrapped.extras['to_log']['Control Mode / Force Control Z'] = sel_mat[:, 2]
             if self.force_size > 3:
-                self.unwrapped.extras['to_log']['Control Mode / Force Control RX'] = self.sel_matrix[:, 3]
-                self.unwrapped.extras['to_log']['Control Mode / Force Control RY'] = self.sel_matrix[:, 4]
-                self.unwrapped.extras['to_log']['Control Mode / Force Control RZ'] = self.sel_matrix[:, 5]
+                self.unwrapped.extras['to_log']['Control Mode / Force Control RX'] = sel_mat[:, 3]
+                self.unwrapped.extras['to_log']['Control Mode / Force Control RY'] = sel_mat[:, 4]
+                self.unwrapped.extras['to_log']['Control Mode / Force Control RZ'] = sel_mat[:, 5]
 
         # 2. Position target (Isaac Lab style: current_pos + scaled_action)
         pos_actions = self.ema_actions[:, self.force_size:self.force_size+3] * self.unwrapped.pos_threshold
