@@ -158,7 +158,7 @@ wrappers:
   hybrid_control:
     enabled: false
     # ctrl_torque is computed from primary config automatically
-    reward_type: "base" #"simp"
+    reward_type: "simp"
 
   # Factory-specific metrics tracking
   factory_metrics:
