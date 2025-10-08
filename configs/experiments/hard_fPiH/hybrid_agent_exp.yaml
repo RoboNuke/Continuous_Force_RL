@@ -4,7 +4,7 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/same_hybrid_agent_tracker.txt"
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/noLogSig_hybrid_agent_tracker.txt"
   #break_forces: [5,10]
 
 # Model configuration for hybrid agent
@@ -22,6 +22,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: "same_hybrid_agent_exp"
+  name: "noLogSig_hybrid_agent_exp"
   tags: []
-  group: "same_hybrid_agnt"
+  group: "noLogSig_hybrid_agnt"
