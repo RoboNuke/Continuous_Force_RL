@@ -12,13 +12,13 @@ model:
   use_hybrid_agent: true
   hybrid_agent:
     #init_bias: 2.5 
-    reward_type: "simp"
 
 # Enable hybrid control wrapper and related systems
 wrappers:
   # Enable hybrid control wrapper
   hybrid_control:
     enabled: true
+    reward_type: "simp"
     
   pose_contact_logging:
     enabled: false
