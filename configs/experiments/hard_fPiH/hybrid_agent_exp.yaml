@@ -10,8 +10,8 @@ primary:
 # Model configuration for hybrid agent
 model:
   use_hybrid_agent: true
-  hybrid_agent:
-    #init_bias: 2.5 
+  #hybrid_agent:
+  #  #init_bias: 2.5 
 
 # Enable hybrid control wrapper and related systems
 wrappers:
