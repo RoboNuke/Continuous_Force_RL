@@ -4,7 +4,7 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/smallBias_hybrid_agent_tracker.txt"
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/noLastScale_hybrid_agent_tracker.txt"
   #break_forces: [5,10]
 
 # Model configuration for hybrid agent
@@ -12,19 +12,20 @@ model:
   use_hybrid_agent: true
   hybrid_agent:
     init_bias: 1.1 
+    init_scale_last_layer: false
 
 # Enable hybrid control wrapper and related systems
 wrappers:
   # Enable hybrid control wrapper
   hybrid_control:
     enabled: true
-    reward_type: "simp"
+    reward_type: "none" #"simp"
     
   pose_contact_logging:
     enabled: false
 
 # Experiment metadata
 experiment:
-  name: "smallBias_hybrid_agent_exp"
+  name: "noLastScale_hybrid_agent_exp"
   tags: []
-  group: "smallBias_hybrid_agnt"
+  group: "noLastScale_hybrid_agnt"
