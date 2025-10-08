@@ -365,6 +365,13 @@ class HybridForcePositionWrapper(gym.Wrapper):
         """Apply EMA to actions, with special handling for selection terms."""
         # Selection actions (handle no_sel_ema flag)
         sel_actions = action[:, :self.force_size]
+
+        # DEBUG: Log action statistics
+        if not hasattr(self, '_debug_logged_actions'):
+            print(f"[DEBUG WRAPPER] Received action shape: {action.shape}")
+            print(f"[DEBUG WRAPPER] Selection actions [0]: {sel_actions[0].detach().cpu().numpy()}")
+            print(f"[DEBUG WRAPPER] Selection actions stats: min={sel_actions.min().item():.4f}, max={sel_actions.max().item():.4f}, mean={sel_actions.mean().item():.4f}")
+            self._debug_logged_actions = True
         if self.no_sel_ema:
             self.ema_actions[:, :self.force_size] = sel_actions
         else:
