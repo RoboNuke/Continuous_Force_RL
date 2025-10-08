@@ -149,6 +149,7 @@ class BlockSimBaActor(GaussianMixin, Model):
         self.num_agents = num_agents
 
         self.sigma_idx = sigma_idx
+        print(f"[DEBUG] BlockSimBaActor.__init__: Received sigma_idx={sigma_idx}")
         
         self.actor_logstd = nn.ParameterList(
             [
@@ -173,6 +174,7 @@ class BlockSimBaActor(GaussianMixin, Model):
             num_blocks = actor_n,
             tanh = (self.sigma_idx == 0)
         ).to(device)
+        print(f"[DEBUG] BlockSimBaActor.__init__: Created BlockSimBa with tanh={self.sigma_idx == 0} (sigma_idx={self.sigma_idx})")
 
         #self.selection_activation = nn.Sigmoid().to(device)
         self.component_activation = nn.Tanh().to(device)
@@ -187,6 +189,8 @@ class BlockSimBaActor(GaussianMixin, Model):
                 self.actor_mean.fc_out.bias[:, 0:2*sigma_idx:2] -= init_sel_bias  # first of each pair
                 self.actor_mean.fc_out.bias[:, 1:2*sigma_idx:2] += init_sel_bias  # second of each pair
 
+        # Debug flag to log compute path once
+        self._debug_logged_compute = False
 
     def act(self, inputs, role):
         return GaussianMixin.act(self, inputs, role)
@@ -195,17 +199,39 @@ class BlockSimBaActor(GaussianMixin, Model):
         num_envs = inputs['states'].size()[0] // self.num_agents
         #print("Num envs:", num_envs)
         action_mean = self.actor_mean(inputs['states'][:,:self.num_observations], num_envs)
+
+        # Debug logging (only once)
+        if not self._debug_logged_compute:
+            print(f"[DEBUG] BlockSimBaActor.compute: sigma_idx={self.sigma_idx}")
+            print(f"[DEBUG] Raw network output shape: {action_mean.shape}")
+            print(f"[DEBUG] Raw network output sample [0, :6]: {action_mean[0, :6].detach().cpu().numpy()}")
+            self._debug_logged_compute = True
+
         if self.sigma_idx > 0:
             #action_mean[...,:self.sigma_idx] = (action_mean[:,:self.sigma_idx] + 1) / 2.0
-            selection_logits  = action_mean[..., :2*self.sigma_idx] 
-            
+            selection_logits  = action_mean[..., :2*self.sigma_idx]
+
+            if not hasattr(self, '_debug_logged_selection_path'):
+                print(f"[DEBUG] Taking sigma_idx > 0 path: Processing selection logits")
+                print(f"[DEBUG] Selection logits shape: {selection_logits.shape}")
+                print(f"[DEBUG] Selection logits sample [0]: {selection_logits[0].detach().cpu().numpy()}")
+                self._debug_logged_selection_path = True
+
             # Process selection logits: reshape to pairs, softmax, extract first prob
             selection_logits = selection_logits.view(-1, self.sigma_idx, 2)  # [batch*agents, sigma_idx, 2]
-            selection_probs = F.softmax(selection_logits, dim=-1)[..., 0]  # [batch*agents, sigma_idx]            
-            
+            selection_probs = F.softmax(selection_logits, dim=-1)[..., 0]  # [batch*agents, sigma_idx]
+
+            if not hasattr(self, '_debug_logged_softmax'):
+                print(f"[DEBUG] Selection probs after softmax [0]: {selection_probs[0].detach().cpu().numpy()}")
+                self._debug_logged_softmax = True
+
             components = self.component_activation(action_mean[..., 2*self.sigma_idx:])
-            
+
             action_mean = torch.cat([selection_probs, components], dim=-1)
+        else:
+            if not hasattr(self, '_debug_logged_tanh_path'):
+                print(f"[DEBUG] Taking sigma_idx == 0 path: Using tanh output directly (no selection processing)")
+                self._debug_logged_tanh_path = True
         
         logstds = []
         batch_size = int(action_mean.size()[0] // self.num_agents)
