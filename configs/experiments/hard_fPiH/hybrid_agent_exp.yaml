@@ -4,14 +4,14 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/simpNoBias_hybrid_agent_tracker.txt"
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/simp_hybrid_agent_tracker.txt"
   #break_forces: [5,10]
 
 # Model configuration for hybrid agent
 model:
   use_hybrid_agent: true
   hybrid_agent:
-    init_bias: 0.0 
+    #init_bias: 2.5 
 
 # Enable hybrid control wrapper and related systems
 wrappers:
@@ -25,6 +25,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: "simpNoBias_hybrid_agent_exp"
+  name: "simp_hybrid_agent_exp"
   tags: []
-  group: "simpNoBias_hybrid_agnt"
+  group: "simp_hybrid_agnt"
