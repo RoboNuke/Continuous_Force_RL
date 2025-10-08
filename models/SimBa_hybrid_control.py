@@ -301,7 +301,10 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
                 for net in self.actor_mean.pride_nets:
                     net.output[-1].weight *= hybrid_agent_parameters['init_layer_scale']
         
-        self.selection_activation = nn.LogSigmoid().to(device) #torch.nn.Sigmoid().to(device)
+        def empty_return(input):
+            return input
+        
+        self.selection_activation = empty_return
         self.component_activation = nn.Tanh().to(device)
 
     def apply_selection_adjustments(self, hybrid_agent_parameters):
@@ -419,8 +422,10 @@ class HybridControlBlockSimBaActor(HybridControlSimBaActor):
             with torch.no_grad():
                 # we have logits of size 2*force size 
                 # were each is the chance of selecting force or not selecting force
-                self.actor_mean.fc_out.bias[:, [0,2,4]] -= hybrid_agent_parameters['init_bias']  #-1.1 
-                self.actor_mean.fc_out.bias[:, [1,3,5]] += hybrid_agent_parameters['init_bias']  #-1.1 
+                self.actor_mean.fc_out.bias[:, 0:2*self.force_size:2] -= hybrid_agent_parameters['init_bias']  # first of each pair
+                self.actor_mean.fc_out.bias[:, 1:2*self.force_size:2] += hybrid_agent_parameters['init_bias']  # second of each pair
+                #self.actor_mean.fc_out.bias[:, [0,2,4]] -= hybrid_agent_parameters['init_bias']  #-1.1 
+                #self.actor_mean.fc_out.bias[:, [1,3,5]] += hybrid_agent_parameters['init_bias']  #-1.1 
 
         if self.scale_z:
             raise NotImplementedError("[ERROR]: Last layer input scaling not implemented for block SimBa networks")

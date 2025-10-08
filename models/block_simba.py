@@ -4,6 +4,7 @@ from models.SimBa import SimBaNet
 from typing import Any, Mapping, Tuple, Union
 from skrl.models.torch import DeterministicMixin, GaussianMixin, Model
 import math
+import torch.nn.functional as F
 
 # -----------------------------
 #  Block Linear Layer
@@ -152,7 +153,7 @@ class BlockSimBaActor(GaussianMixin, Model):
         self.actor_logstd = nn.ParameterList(
             [
                 nn.Parameter(
-                    torch.ones(1, self.num_actions+self.sigma_idx) * math.log(act_init_std), requires_grad=True
+                    torch.ones(1, self.num_actions) * math.log(act_init_std), requires_grad=True
                 )
                 for _ in range(num_agents)
             ]
@@ -170,16 +171,22 @@ class BlockSimBaActor(GaussianMixin, Model):
             act_dim = self.num_actions + self.sigma_idx,
             device=device,
             num_blocks = actor_n,
-            tanh = True
+            tanh = (self.sigma_idx == 0)
         ).to(device)
 
+        #self.selection_activation = nn.Sigmoid().to(device)
+        self.component_activation = nn.Tanh().to(device)
 
         with torch.no_grad():
             self.actor_mean.fc_out.weight *= last_layer_scale
             print(f"[INFO]: \t\tScaled model last layer by {last_layer_scale}")
             if sigma_idx > 0:
                 print(f"[INFO]: \t\tSigma Idx={sigma_idx} so last layer bias[:{sigma_idx}] set to -1.1")
-                self.actor_mean.fc_out.bias[:, :sigma_idx] -= init_sel_bias
+                #self.actor_mean.fc_out.bias[:, :sigma_idx] -= init_sel_bias      
+                # This biases network toward selecting "not force" initially
+                self.actor_mean.fc_out.bias[:, 0:2*sigma_idx:2] -= init_sel_bias  # first of each pair
+                self.actor_mean.fc_out.bias[:, 1:2*sigma_idx:2] += init_sel_bias  # second of each pair
+
 
     def act(self, inputs, role):
         return GaussianMixin.act(self, inputs, role)
@@ -190,9 +197,15 @@ class BlockSimBaActor(GaussianMixin, Model):
         action_mean = self.actor_mean(inputs['states'][:,:self.num_observations], num_envs)
         if self.sigma_idx > 0:
             #action_mean[...,:self.sigma_idx] = (action_mean[:,:self.sigma_idx] + 1) / 2.0
-            left  = (action_mean[..., :self.sigma_idx] + 1.0) * 0.5
-            right = action_mean[..., self.sigma_idx:]
-            action_mean = torch.cat([left, right], dim=-1)
+            selection_logits  = action_mean[..., :2*self.sigma_idx] 
+            
+            # Process selection logits: reshape to pairs, softmax, extract first prob
+            selection_logits = selection_logits.view(-1, self.sigma_idx, 2)  # [batch*agents, sigma_idx, 2]
+            selection_probs = F.softmax(selection_logits, dim=-1)[..., 0]  # [batch*agents, sigma_idx]            
+            
+            components = self.component_activation(action_mean[..., 2*self.sigma_idx:])
+            
+            action_mean = torch.cat([selection_probs, components], dim=-1)
         
         logstds = []
         batch_size = int(action_mean.size()[0] // self.num_agents)
