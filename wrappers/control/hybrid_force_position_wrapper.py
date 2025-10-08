@@ -438,6 +438,20 @@ class HybridForcePositionWrapper(gym.Wrapper):
                 self.unwrapped.extras['to_log']['Control Mode / Force Control RY'] = sel_mat[:, 4]
                 self.unwrapped.extras['to_log']['Control Mode / Force Control RZ'] = sel_mat[:, 5]
 
+            # Log mode match: 1.0 if control mode matches contact state, 0.0 otherwise
+            mode_match = torch.logical_or(
+                torch.logical_and(self.unwrapped.in_contact[:, :self.force_size], self.sel_matrix[:, :self.force_size] == 1.0),
+                torch.logical_and(~self.unwrapped.in_contact[:, :self.force_size], self.sel_matrix[:, :self.force_size] == 0.0)
+            ).float()
+
+            self.unwrapped.extras['to_log']['Control Mode / Mode Match X'] = mode_match[:, 0]
+            self.unwrapped.extras['to_log']['Control Mode / Mode Match Y'] = mode_match[:, 1]
+            self.unwrapped.extras['to_log']['Control Mode / Mode Match Z'] = mode_match[:, 2]
+            if self.force_size > 3:
+                self.unwrapped.extras['to_log']['Control Mode / Mode Match RX'] = mode_match[:, 3]
+                self.unwrapped.extras['to_log']['Control Mode / Mode Match RY'] = mode_match[:, 4]
+                self.unwrapped.extras['to_log']['Control Mode / Mode Match RZ'] = mode_match[:, 5]
+
         # 2. Position target (Isaac Lab style: current_pos + scaled_action)
         pos_actions = self.ema_actions[:, self.force_size:self.force_size+3] * self.unwrapped.pos_threshold
         pos_target = self.unwrapped.fingertip_midpoint_pos + pos_actions
