@@ -140,7 +140,7 @@ class HybridGMMMixin(GaussianMixin):
             mix_logits[:, self.force_size:, 0] = -100.0 #0.0
             mix_logits[:, self.force_size:, 1] = 0.0 #1.0
             
-        mix_dist = Categorical(probs=mix_logits)
+        mix_dist = Categorical(logits=mix_logits)
 
         
         #print("mix dist:", mix_dist.probs)
