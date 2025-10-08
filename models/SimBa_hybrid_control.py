@@ -396,7 +396,10 @@ class HybridControlBlockSimBaActor(HybridControlSimBaActor):
             with torch.no_grad():
                 self.actor_mean.fc_out.weight *= hybrid_agent_parameters['init_layer_scale']
         
-        self.selection_activation = nn.LogSigmoid().to(device) #torch.nn.Sigmoid().to(device)
+        def empty_return(input):
+            return input
+        
+        self.selection_activation = empty_return #nn.LogSigmoid().to(device) #torch.nn.Sigmoid().to(device)
         self.component_activation = nn.Tanh().to(device)
 
 

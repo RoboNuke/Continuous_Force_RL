@@ -146,11 +146,13 @@ class BlockSimBaActor(GaussianMixin, Model):
         GaussianMixin.__init__(self, clip_actions, clip_log_std, min_log_std, max_log_std, reduction)
 
         self.num_agents = num_agents
+
+        self.sigma_idx = sigma_idx
         
         self.actor_logstd = nn.ParameterList(
             [
                 nn.Parameter(
-                    torch.ones(1, self.num_actions) * math.log(act_init_std), requires_grad=True
+                    torch.ones(1, self.num_actions+self.sigma_idx) * math.log(act_init_std), requires_grad=True
                 )
                 for _ in range(num_agents)
             ]
@@ -165,13 +167,12 @@ class BlockSimBaActor(GaussianMixin, Model):
             num_agents = self.num_agents,
             obs_dim = self.num_observations,
             hidden_dim = actor_latent,
-            act_dim = self.num_actions,
+            act_dim = self.num_actions + self.sigma_idx,
             device=device,
             num_blocks = actor_n,
             tanh = True
         ).to(device)
 
-        self.sigma_idx = sigma_idx
 
         with torch.no_grad():
             self.actor_mean.fc_out.weight *= last_layer_scale
