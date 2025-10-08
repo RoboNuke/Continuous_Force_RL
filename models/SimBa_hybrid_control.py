@@ -415,7 +415,7 @@ class HybridControlBlockSimBaActor(HybridControlSimBaActor):
             with torch.no_grad():
                 scale_factor = hybrid_agent_parameters['init_scale_weights_factor']
                 self.actor_mean.fc_out.weight[:,:self.force_size,:] *= scale_factor
-                self.actor_mean.fc_out.bias[:, :self.force_size] *= scale_factor
+                #self.actor_mean.fc_out.bias[:, :self.force_size] *= scale_factor
         
         if self.init_bias:
             print("[INFO]:\tSetting initial Selection Bias")

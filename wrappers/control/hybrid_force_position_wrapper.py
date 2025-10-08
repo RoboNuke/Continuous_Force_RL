@@ -438,19 +438,52 @@ class HybridForcePositionWrapper(gym.Wrapper):
                 self.unwrapped.extras['to_log']['Control Mode / Force Control RY'] = sel_mat[:, 4]
                 self.unwrapped.extras['to_log']['Control Mode / Force Control RZ'] = sel_mat[:, 5]
 
-            # Log mode match: 1.0 if control mode matches contact state, 0.0 otherwise
-            mode_match = torch.logical_or(
-                torch.logical_and(self.unwrapped.in_contact[:, :self.force_size], self.sel_matrix[:, :self.force_size] == 1.0),
-                torch.logical_and(~self.unwrapped.in_contact[:, :self.force_size], self.sel_matrix[:, :self.force_size] == 0.0)
-            ).float()
+            # Log 4-case control mode statistics for precision/recall analysis
+            in_contact = self.unwrapped.in_contact[:, :self.force_size]
+            force_control = self.sel_matrix[:, :self.force_size] > 0.5
+            pos_control = self.sel_matrix[:, :self.force_size] < 0.5
 
-            self.unwrapped.extras['to_log']['Control Mode / Mode Match X'] = mode_match[:, 0]
-            self.unwrapped.extras['to_log']['Control Mode / Mode Match Y'] = mode_match[:, 1]
-            self.unwrapped.extras['to_log']['Control Mode / Mode Match Z'] = mode_match[:, 2]
+            # Case 1: In contact + Force control
+            case_contact_force = torch.logical_and(in_contact, force_control).float()
+            # Case 2: In contact + Position control
+            case_contact_pos = torch.logical_and(in_contact, pos_control).float()
+            # Case 3: No contact + Force control
+            case_no_contact_force = torch.logical_and(~in_contact, force_control).float()
+            # Case 4: No contact + Position control
+            case_no_contact_pos = torch.logical_and(~in_contact, pos_control).float()
+
+            # Log translational axes
+            self.unwrapped.extras['to_log']['Control Mode / Contact+Force X'] = case_contact_force[:, 0]
+            self.unwrapped.extras['to_log']['Control Mode / Contact+Pos X'] = case_contact_pos[:, 0]
+            self.unwrapped.extras['to_log']['Control Mode / NoContact+Force X'] = case_no_contact_force[:, 0]
+            self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos X'] = case_no_contact_pos[:, 0]
+
+            self.unwrapped.extras['to_log']['Control Mode / Contact+Force Y'] = case_contact_force[:, 1]
+            self.unwrapped.extras['to_log']['Control Mode / Contact+Pos Y'] = case_contact_pos[:, 1]
+            self.unwrapped.extras['to_log']['Control Mode / NoContact+Force Y'] = case_no_contact_force[:, 1]
+            self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos Y'] = case_no_contact_pos[:, 1]
+
+            self.unwrapped.extras['to_log']['Control Mode / Contact+Force Z'] = case_contact_force[:, 2]
+            self.unwrapped.extras['to_log']['Control Mode / Contact+Pos Z'] = case_contact_pos[:, 2]
+            self.unwrapped.extras['to_log']['Control Mode / NoContact+Force Z'] = case_no_contact_force[:, 2]
+            self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos Z'] = case_no_contact_pos[:, 2]
+
+            # Log rotational axes if controlling torques
             if self.force_size > 3:
-                self.unwrapped.extras['to_log']['Control Mode / Mode Match RX'] = mode_match[:, 3]
-                self.unwrapped.extras['to_log']['Control Mode / Mode Match RY'] = mode_match[:, 4]
-                self.unwrapped.extras['to_log']['Control Mode / Mode Match RZ'] = mode_match[:, 5]
+                self.unwrapped.extras['to_log']['Control Mode / Contact+Force RX'] = case_contact_force[:, 3]
+                self.unwrapped.extras['to_log']['Control Mode / Contact+Pos RX'] = case_contact_pos[:, 3]
+                self.unwrapped.extras['to_log']['Control Mode / NoContact+Force RX'] = case_no_contact_force[:, 3]
+                self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos RX'] = case_no_contact_pos[:, 3]
+
+                self.unwrapped.extras['to_log']['Control Mode / Contact+Force RY'] = case_contact_force[:, 4]
+                self.unwrapped.extras['to_log']['Control Mode / Contact+Pos RY'] = case_contact_pos[:, 4]
+                self.unwrapped.extras['to_log']['Control Mode / NoContact+Force RY'] = case_no_contact_force[:, 4]
+                self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos RY'] = case_no_contact_pos[:, 4]
+
+                self.unwrapped.extras['to_log']['Control Mode / Contact+Force RZ'] = case_contact_force[:, 5]
+                self.unwrapped.extras['to_log']['Control Mode / Contact+Pos RZ'] = case_contact_pos[:, 5]
+                self.unwrapped.extras['to_log']['Control Mode / NoContact+Force RZ'] = case_no_contact_force[:, 5]
+                self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos RZ'] = case_no_contact_pos[:, 5]
 
         # 2. Position target (Isaac Lab style: current_pos + scaled_action)
         pos_actions = self.ema_actions[:, self.force_size:self.force_size+3] * self.unwrapped.pos_threshold
