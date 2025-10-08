@@ -422,8 +422,8 @@ class HybridControlBlockSimBaActor(HybridControlSimBaActor):
             with torch.no_grad():
                 # we have logits of size 2*force size 
                 # were each is the chance of selecting force or not selecting force
-                self.actor_mean.fc_out.bias[:, 0:2*self.force_size:2] -= hybrid_agent_parameters['init_bias']  # first of each pair
-                self.actor_mean.fc_out.bias[:, 1:2*self.force_size:2] += hybrid_agent_parameters['init_bias']  # second of each pair
+                self.actor_mean.fc_out.bias[:, 0:2*self.force_size:2] += hybrid_agent_parameters['init_bias']  # first of each pair
+                self.actor_mean.fc_out.bias[:, 1:2*self.force_size:2] -= hybrid_agent_parameters['init_bias']  # second of each pair
                 #self.actor_mean.fc_out.bias[:, [0,2,4]] -= hybrid_agent_parameters['init_bias']  #-1.1 
                 #self.actor_mean.fc_out.bias[:, [1,3,5]] += hybrid_agent_parameters['init_bias']  #-1.1 
 

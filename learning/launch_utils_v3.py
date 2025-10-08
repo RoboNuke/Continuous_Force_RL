@@ -256,15 +256,10 @@ def _configure_hybrid_agent_parameters(configs):
 def _create_standard_policy_model(env, configs):
     """Create standard SimBa policy model."""
     sigma_idx = 0
-    print(f"[DEBUG] Hybrid control enabled: {configs['wrappers'].hybrid_control.enabled}")
     if configs['wrappers'].hybrid_control.enabled:
         ctrl_torque = configs['primary'].ctrl_torque
         sigma_idx = 6 if ctrl_torque else 3
-        print(f"[DEBUG] Hybrid control IS enabled: sigma_idx={sigma_idx}, ctrl_torque={ctrl_torque}")
-    else:
-        print(f"[DEBUG] Hybrid control NOT enabled: sigma_idx={sigma_idx}")
 
-    print(f"[DEBUG] Creating BlockSimBaActor with sigma_idx={sigma_idx}, init_sel_bias={configs['model'].hybrid_agent.init_bias}, last_layer_scale={configs['model'].last_layer_scale}")
     return BlockSimBaActor(
         observation_space=env.cfg.observation_space,
         action_space=env.cfg.action_space,
