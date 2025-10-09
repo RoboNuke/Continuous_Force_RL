@@ -103,6 +103,7 @@ class HybridActionGMM(MixtureSameFamily):
         return log_prob
     
     def entropy(self):
+        return 0.0
         samples = self.sample(sample_shape=(10000,))
         log_prob = self.log_prob(samples)
         return -(log_prob.exp() * log_prob).mean(dim=0)
