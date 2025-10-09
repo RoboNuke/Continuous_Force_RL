@@ -244,7 +244,7 @@ agent:
   disable_progressbar: true
 
   # Checkpoint and experiment tracking
-  track_ckpts: true
+  track_ckpts: false
   # ckpt_tracker_path comes from primary config automatically
 
   # SKRL PPO PARAMETERS (these override SKRL defaults)

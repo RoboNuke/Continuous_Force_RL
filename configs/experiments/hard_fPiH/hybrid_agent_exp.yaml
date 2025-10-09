@@ -27,8 +27,12 @@ wrappers:
   pose_contact_logging:
     enabled: false
 
+agent:
+  policy_learning_rate: 1.0e-6
+  critic_learning_rate: 1.0e-5
+
 # Experiment metadata
 experiment:
-  name: "logFix_hybrid_agent_exp"
+  name: "policyLR(1-6)"
   tags: []
-  group: "logFix_hybrid_agnt"
+  group: "policyLR(1-6)_agnt"
