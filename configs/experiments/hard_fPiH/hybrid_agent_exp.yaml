@@ -4,7 +4,7 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/dirsLowBias_hybrid_agent_tracker.txt"
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/wrench_normLowBias_hybrid_agent_tracker.txt"
   #break_forces: [5,10]
 
 # Model configuration for hybrid agent
@@ -19,13 +19,13 @@ wrappers:
   # Enable hybrid control wrapper
   hybrid_control:
     enabled: true
-    reward_type: "dirs"
+    reward_type: "wrench_norm"
     
   pose_contact_logging:
     enabled: false
 
 # Experiment metadata
 experiment:
-  name: "dirsLowBias_hybrid_agent_exp"
+  name: "wrench_normLowBias_hybrid_agent_exp"
   tags: []
-  group: "dirsLowBias_hybrid_agnt"
+  group: "wrench_normLowBias_hybrid_agnt"
