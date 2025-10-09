@@ -55,14 +55,14 @@ class ExtendedWrapperConfig:
 
     observation_manager: ObsManagerConfig = field(default_factory=ObsManagerConfig)
 
-    efficient_reset_enabled: bool = True
-    """Enable efficient environment resetting"""
-
     factory_metrics: FactoryMetricsConfig = field(default_factory=FactoryMetricsConfig)
     """Enable factory-specific metrics tracking"""
 
     pose_contact_logging: PoseContactLoggingConfig = field(default_factory=PoseContactLoggingConfig)
     """Pose contact logging wrapper configuration"""
+
+    efficient_reset_enabled: bool = field(default=True)
+    """Enable efficient environment resetting"""
 
     def apply_primary_cfg(self, primary_cfg) -> None:
         """

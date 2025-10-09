@@ -88,10 +88,9 @@ def apply_wrappers(env, configs):
     if wrappers_config.wandb_logging.enabled:
         print("  - Applying Generic Wandb Logging Wrapper")
         env = GenericWandbLoggingWrapper(
-            env, 
-            num_agents=configs['primary'].total_agents, 
-            env_cfg=configs['agent'], 
-            config_path=configs['config_paths']
+            env,
+            num_agents=configs['primary'].total_agents,
+            all_configs=configs
         )
 
     if wrappers_config.factory_metrics.enabled:

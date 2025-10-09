@@ -31,5 +31,8 @@ class ExtendedFactoryTaskPegInsertCfg(FactoryTaskPegInsertCfg):
         """Apply primary configuration values to this task config."""
         self.decimation = primary_cfg.decimation
         if hasattr(self, 'scene') and self.scene is not None:
-            self.scene.num_envs = primary_cfg.total_num_envs
+            if isinstance(self.scene, dict):
+                self.scene['num_envs'] = primary_cfg.total_num_envs
+            else:
+                self.scene.num_envs = primary_cfg.total_num_envs
         self._primary_cfg = primary_cfg

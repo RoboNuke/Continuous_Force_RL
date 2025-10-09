@@ -8,35 +8,35 @@ Other wrappers call its functions to add metrics, and it handles all the complex
 import torch
 import gymnasium as gym
 import wandb
-import copy
-import yaml
-import os
-from typing import Dict, Any, Optional, List, Union
-
-
-# Global tracking to ensure artifacts are uploaded only once per config path
-
-
+from typing import Dict, Any
 
 
 class SimpleEpisodeTracker:
     """Simple episode tracker that accumulates metrics and publishes to wandb."""
 
     def __init__(
-            self, 
-            num_envs: int, 
-            device: torch.device, 
-            agent_config: Dict[str, Any], 
-            env_config: Any, 
-            config_path: dict = None
+            self,
+            num_envs: int,
+            device: torch.device,
+            agent_config: Dict[str, Any],
+            all_configs: Dict[str, Any]
         ):
         """Initialize simple episode tracker."""
         self.num_envs = num_envs
         self.device = device
 
-        # Combine env_config with agent-specific config for wandb
-        combined_config = copy.deepcopy(env_config)
-        combined_config.__dict__.update(agent_config)
+        # Build complete config dict from all sections
+        complete_config = {}
+        for key in ['primary', 'environment', 'model', 'wrappers', 'experiment', 'agent']:
+            if key in all_configs:
+                complete_config[key] = self._convert_to_dict(all_configs[key])
+
+        # Remove agent_exp_cfgs from agent dict to avoid uploading all agents' configs
+        if 'agent' in complete_config and 'agent_exp_cfgs' in complete_config['agent']:
+            del complete_config['agent']['agent_exp_cfgs']
+
+        # Add agent-specific config
+        complete_config['agent_specific'] = self._convert_to_dict(agent_config)
 
         wandb_kwargs = agent_config['experiment']['wandb_kwargs']
         self.run = wandb.init(
@@ -44,7 +44,7 @@ class SimpleEpisodeTracker:
             project=wandb_kwargs.get('project'),
             name=wandb_kwargs.get('run_name'),
             reinit="create_new",
-            config=combined_config,
+            config=complete_config,
             group=wandb_kwargs.get('group'),
             tags=wandb_kwargs.get('tags'),
             #settings=wandb.Settings(
@@ -55,10 +55,6 @@ class SimpleEpisodeTracker:
             #)
 
         )
-        self._uploaded_artifacts = set()
-        # Upload YAML configuration artifacts
-        #self._upload_config_artifacts(config_path)
-        self._upload_files(config_path)
 
         # Metric storage
         self.accumulated_metrics = {}
@@ -68,65 +64,62 @@ class SimpleEpisodeTracker:
         self.env_steps = 0  # Number of environment steps taken
         self.total_steps = 0  # env_steps * num_envs
 
-    def _upload_files(self, config_path: dict):
-        if config_path is None:
-            return
-        for k, v in config_path.items():
-            self.run.save(v)
-
-    def _upload_config_artifacts(self, config_path: dict) -> None:
+    def _convert_to_dict(self, obj, max_depth=10, _current_depth=0):
         """
-        Upload YAML configuration files as wandb artifacts.
-        Only uploads once per unique config path to avoid duplicates.
+        Recursively convert Python objects to plain dictionaries for wandb.
 
         Args:
-            config_path: Path to the experiment configuration file
+            obj: Object to convert
+            max_depth: Maximum recursion depth to prevent infinite loops
+            _current_depth: Internal parameter for tracking recursion depth
+
+        Returns:
+            Plain dictionary, list, or primitive type suitable for wandb
         """
-        if not config_path or not os.path.exists(config_path['base']) or not os.path.exists(config_path['exp']):
-            print(f"Warning: Config path not provided or doesn't exist: {config_path}")
-            return
+        # Prevent infinite recursion
+        if _current_depth > max_depth:
+            return str(obj)
 
-        # Check if artifacts for this config path have already been uploaded
-        config_key = os.path.abspath(config_path['exp'])
-        if config_key in self._uploaded_artifacts:
-            print(f"Config artifacts already uploaded for: {config_path}")
-            return
+        # Handle None
+        if obj is None:
+            return None
 
-        try:
-            # Create configuration artifact
-            config_artifact = wandb.Artifact(
-                name="configuration",
-                type="config",
-                description="Experiment configuration files"
-            )
+        # Handle primitive types
+        if isinstance(obj, (int, float, str, bool)):
+            return obj
 
-            # Upload experiment configuration
-            exp_path = config_path['exp']
-            
-            config_artifact.add_file(
-                local_path = exp_path,
-                name="experiment_config.yaml"
-            )
-            print(f"Added experiment config: {config_path['exp']}")
+        # Handle lists and tuples
+        if isinstance(obj, (list, tuple)):
+            return [self._convert_to_dict(item, max_depth, _current_depth + 1) for item in obj]
 
-            # Upload base configuration if it exists
-            base_config_path = config_path['base']
-            
-            config_artifact.add_file(
-                local_path=base_config_path,
-                name="base_config.yaml"
-            )
-            print(f"Added base config: {base_config_path}")
+        # Handle dictionaries
+        if isinstance(obj, dict):
+            return {
+                key: self._convert_to_dict(value, max_depth, _current_depth + 1)
+                for key, value in obj.items()
+            }
 
-            # Log the artifact to wandb
-            self.run.log_artifact(config_artifact)
-            print("Successfully uploaded configuration artifacts to wandb")
+        # Handle special types that need string conversion
+        # torch.device, torch.dtype, pathlib.Path, etc.
+        if type(obj).__name__ in ['device', 'dtype', 'PosixPath', 'WindowsPath', 'Path']:
+            return str(obj)
 
-            # Mark this config path as uploaded to prevent duplicates
-            self._uploaded_artifacts.add(config_key)
+        # Handle objects with __dict__ (dataclasses, custom classes, etc.)
+        if hasattr(obj, '__dict__'):
+            result = {}
+            for key, value in obj.__dict__.items():
+                # Skip callables (methods, functions, classes)
+                if callable(value):
+                    continue
+                # Skip class types
+                if isinstance(value, type):
+                    continue
+                # Convert the value recursively
+                result[key] = self._convert_to_dict(value, max_depth, _current_depth + 1)
+            return result
 
-        except Exception as e:
-            print(f"Warning: Failed to upload configuration artifacts: {e}")
+        # Fallback: convert to string representation
+        return str(obj)
 
     def increment_steps(self):
         """Increment step counters for this agent."""
@@ -201,30 +194,29 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
     Other wrappers call these functions to add their metrics.
     """
 
-    def __init__(self, env: gym.Env, num_agents: int = 1, env_cfg: Any = None, config_path: dict = None):
+    def __init__(self, env: gym.Env, num_agents: int = 1, all_configs: Dict[str, Any] = None):
         """
         Initialize simple Wandb logging wrapper.
 
         Args:
             env: Base environment to wrap
             num_agents: Number of agents for static assignment
-            env_cfg: Environment configuration - REQUIRED, contains agent_configs
-            config_path: Path to the experiment configuration file (for artifact upload)
+            all_configs: Complete configuration dict - REQUIRED, contains all config sections
         """
         super().__init__(env)
 
-        if env_cfg is None:
-            raise ValueError("env_cfg is required and cannot be None")
+        if all_configs is None:
+            raise ValueError("all_configs is required and cannot be None")
 
-        # Extract agent configs from env_cfg and remove them
-        agent_configs = env_cfg.agent_exp_cfgs
-        clean_env_cfg = copy.deepcopy(env_cfg)
-        delattr(clean_env_cfg, 'agent_exp_cfgs')
+        # Extract agent configs from all_configs
+        if 'agent' not in all_configs or not hasattr(all_configs['agent'], 'agent_exp_cfgs'):
+            raise ValueError("all_configs must contain 'agent' section with agent_exp_cfgs")
+
+        agent_configs = all_configs['agent'].agent_exp_cfgs
 
         self.num_agents = num_agents
         self.num_envs = env.unwrapped.num_envs
         self.device = env.unwrapped.device
-        self.clean_env_cfg = clean_env_cfg
 
         # Validate agent assignment
         if self.num_envs % self.num_agents != 0:
@@ -236,7 +228,7 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         self.trackers = []
         for i in range(self.num_agents):
             agent_config = agent_configs[i]
-            tracker = SimpleEpisodeTracker(self.envs_per_agent, self.device, agent_config, self.clean_env_cfg, config_path)
+            tracker = SimpleEpisodeTracker(self.envs_per_agent, self.device, agent_config, all_configs)
             self.trackers.append(tracker)
 
         # Episode tracking for basic metrics
