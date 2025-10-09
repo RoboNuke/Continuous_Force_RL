@@ -540,8 +540,8 @@ class BlockPPO(PPO):
                         minibatch_count += keep_mask.long()
 
                     # compute entropy loss
-                    entropys = self.policy.get_entropy(role="policy")
-                    entropys = entropys.view(sample_size, self.num_agents, self.envs_per_agent,-1)
+                    entropys = None #self.policy.get_entropy(role="policy")
+                    #entropys = entropys.view(sample_size, self.num_agents, self.envs_per_agent,-1)
                     #print(self._entropy_loss_scale)
                     if self._entropy_loss_scale > 0.0:
                         entropy_loss = -self._entropy_loss_scale * entropys[:,keep_mask,:].mean()
