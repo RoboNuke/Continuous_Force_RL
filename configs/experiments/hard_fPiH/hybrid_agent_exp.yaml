@@ -33,6 +33,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "policyLR(1-6)"
+  name: "big_policyLR(1-6)"
   tags: []
-  group: "policyLR(1-6)_agnt"
+  group: "big_policyLR(1-6)_agnt"
