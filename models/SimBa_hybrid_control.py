@@ -59,6 +59,12 @@ class HybridActionGMM(MixtureSameFamily):
             return out_samples
 
     def log_prob(self, action):
+        # Handle both (batch, action_dim) and (sample, batch, action_dim)
+        original_shape = action.shape
+        if action.ndim > 2:
+            # Flatten sample dimensions with batch
+            action = action.reshape(-1, action.shape[-1])
+
         # extract samples
         batch_size = action.shape[0]
         taken_action = torch.zeros((batch_size, 6, 2), dtype=torch.float32, device=action.device)
@@ -89,6 +95,11 @@ class HybridActionGMM(MixtureSameFamily):
             log_z = self.mixture_distribution.logits #(self.mixture_distribution.probs).log()
         
         log_prob = torch.logsumexp(log_z + comp_log_prob, dim=-1)
+
+        # Reshape back to original sample shape if needed
+        if len(original_shape) > 2:
+            log_prob = log_prob.reshape(original_shape[:-1])
+
         return log_prob
     
     def entropy(self):
