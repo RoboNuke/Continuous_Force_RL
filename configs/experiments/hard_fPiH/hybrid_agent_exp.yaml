@@ -4,29 +4,31 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/gut_hybrid_agent_tracker.txt"
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/stdFac2_hybrid_agent_tracker.txt"
   #break_forces: [5,10]
 
 # Model configuration for hybrid agent
 model:
   use_hybrid_agent: true
   hybrid_agent:
-    init_bias: 0.9 
+    init_bias: 1.1 
     init_scale_last_layer: true
-    init_layer_scale: 0.5
+    init_layer_scale: 0.1
+
+    unit_factor_std_init: 2.0
 
 # Enable hybrid control wrapper and related systems
 wrappers:
   # Enable hybrid control wrapper
   hybrid_control:
     enabled: true
-    reward_type: "wrench_norm"
+    reward_type: "none"
     
   pose_contact_logging:
     enabled: false
 
 # Experiment metadata
 experiment:
-  name: "gut_hybrid_agent_exp"
+  name: "stdFac2_hybrid_agent_exp"
   tags: []
-  group: "gut_hybrid_agnt"
+  group: "stdFac2_hybrid_agnt"
