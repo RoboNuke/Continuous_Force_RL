@@ -71,7 +71,7 @@ model:
   force_encoding: null
   last_layer_scale: 0.1
   act_init_std: 1.0
-  critic_output_init_mean: 30
+  critic_output_init_mean: 50
 
   # Actor architecture (SimBa policy network)
   actor:
