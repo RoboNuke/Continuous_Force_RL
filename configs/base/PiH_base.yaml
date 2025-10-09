@@ -122,6 +122,13 @@ model:
 
 # WRAPPERS CONFIGURATION (Direct wrapper parameters)
 wrappers:
+  # Historical observation tracking
+  history_observation:
+    enabled: true
+    history_components: ['force_torque']  # Only track force-torque history
+    history_length: null  # Uses decimation (8) from primary config
+    history_samples: null  # Uses all samples from history_length
+
   # Fragile object behavior
   fragile_objects:
     enabled: true
