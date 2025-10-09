@@ -62,10 +62,23 @@ class HybridActionGMM(MixtureSameFamily):
         # extract samples
         batch_size = action.shape[0]
         taken_action = torch.zeros((batch_size, 6, 2), dtype=torch.float32, device=action.device)
-        use_force = torch.where(action[:,:self.force_size] > 0.5, True, False)
+        use_force = torch.where(action[:,:self.force_size] > 0.5, True, False)      
+        
+        # Extract position/rotation and force/torque values
+        pos_rot_values = action[:, self.force_size:self.force_size+6]  # (batch, 6)
+        force_torque_values = action[:, self.force_size+6:2*self.force_size+6]  # (batch, force_size)
 
-        taken_action[:,~use_force, 0] = action[:, self.force_size:self.force_size+6][:,~use_force]
-        taken_action[:,use_force, 0] = action[:, self.force_size + 6:2*self.force_size+6][:,use_force]
+        # For the first force_size dimensions, choose based on use_force mask
+        taken_action[:, :self.force_size, 0] = torch.where(
+            use_force,
+            force_torque_values,
+            pos_rot_values[:, :self.force_size]
+        )
+
+        # For remaining dimensions (if force_size < 6), always use pos_rot_values
+        if self.force_size < 6:
+            taken_action[:, self.force_size:, 0] = pos_rot_values[:, self.force_size:]
+
         taken_action[:,:,1] = taken_action[:,:,0]
         
         comp_log_prob = self.component_distribution.log_prob(taken_action)
