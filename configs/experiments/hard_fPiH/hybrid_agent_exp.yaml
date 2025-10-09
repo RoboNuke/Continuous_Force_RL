@@ -28,11 +28,11 @@ wrappers:
     enabled: false
 
 agent:
-  policy_learning_rate: 1.0e-7
+  policy_learning_rate: 1.0e-6
   critic_learning_rate: 1.0e-5
 
 # Experiment metadata
 experiment:
-  name: "policyLR(1-7)"
+  name: "policyLR(1-6)"
   tags: []
-  group: "policyLR(1-7)_agnt"
+  group: "policyLR(1-6)_agnt"
