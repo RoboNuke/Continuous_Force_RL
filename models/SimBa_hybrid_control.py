@@ -60,20 +60,15 @@ class HybridActionGMM(MixtureSameFamily):
 
     def log_prob(self, action):
         # extract samples
-        mean1 = action[...,self.force_size:self.force_size+6]
-        mean1[...,:3] *= self.p_w
-        mean1[...,3:6] *= self.r_w
-        
-        mean2 = torch.zeros_like(mean1)
-        mean2[...,:self.force_size] = action[...,self.force_size+6:6+2*self.force_size]
-        mean2[...,:3] *= self.f_w
-        if self.force_size > 3:
-            mean2[...,3:] *= self.t_w
-        else:
-            mean2[...,3:] = mean1[...,3:]    
+        batch_size = action.shape[0]
+        taken_action = torch.zeros((batch_size, 6, 2), dtype=torch.float32, device=action.device)
+        use_force = torch.where(action[:,:self.force_size] > 0.5, True, False)
 
-        means = torch.stack((mean1,mean2),dim=-1)
-        comp_log_prob = self.component_distribution.log_prob(means)
+        taken_action[:,~use_force, 0] = action[:, self.force_size:self.force_size+6][:,~use_force]
+        taken_action[:,use_force, 0] = action[:, self.force_size + 6:2*self.force_size+6][:,use_force]
+        taken_action[:,:,1] = taken_action[:,:,0]
+        
+        comp_log_prob = self.component_distribution.log_prob(taken_action)
 
         if self.sample_uniform:
             log_z = (self.mixture_distribution.probs * (1 - self.uniform_rate) + self.uniform_rate/2.0).log()
@@ -136,9 +131,9 @@ class HybridGMMMixin(GaussianMixin):
         mix_logits[:,:self.force_size, :] = logits.view((batch_size, self.force_size, 2))
         #mix_logits[:, :self.force_size, 0] = (1.0 - logits.exp()).log()
         #mix_logits[:, :self.force_size, 1] = logits
-        if self.force_size < 6:
-            mix_logits[:, self.force_size:, 0] = -100.0 #0.0
-            mix_logits[:, self.force_size:, 1] = 0.0 #1.0
+        #if self.force_size < 6:
+        #    mix_logits[:, self.force_size:, 0] = -100.0 #0.0
+        #    mix_logits[:, self.force_size:, 1] = 0.0 #1.0
             
         mix_dist = Categorical(logits=mix_logits)
 
@@ -415,7 +410,7 @@ class HybridControlBlockSimBaActor(HybridControlSimBaActor):
             with torch.no_grad():
                 scale_factor = hybrid_agent_parameters['init_scale_weights_factor']
                 self.actor_mean.fc_out.weight[:,:self.force_size,:] *= scale_factor
-                #self.actor_mean.fc_out.bias[:, :self.force_size] *= scale_factor
+                self.actor_mean.fc_out.bias[:, :self.force_size] *= scale_factor
         
         if self.init_bias:
             print("[INFO]:\tSetting initial Selection Bias")
