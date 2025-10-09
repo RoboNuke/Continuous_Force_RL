@@ -238,9 +238,9 @@ def _configure_hybrid_agent_parameters(configs):
     unit_std_init = configs['model'].hybrid_agent.unit_std_init
     unit_factor_std_init = configs['model'].hybrid_agent.unit_factor_std_init
     if unit_std_init:
-        configs['model'].hybrid_agent.pos_init_std = (unit_factor_std_init / (env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0])) ** 2
-        configs['model'].hybrid_agent.rot_init_std = (unit_factor_std_init / (env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]))**2
-        configs['model'].hybrid_agent.force_init_std = (unit_factor_std_init / (env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]))**2
+        configs['model'].hybrid_agent.pos_init_std = (unit_factor_std_init / (env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0])) 
+        configs['model'].hybrid_agent.rot_init_std = (unit_factor_std_init / (env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]))
+        configs['model'].hybrid_agent.force_init_std = (unit_factor_std_init / (env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]))
 
     configs['model'].hybrid_agent.pos_scale = env_cfg.ctrl.default_task_prop_gains[0] * env_cfg.ctrl.pos_action_threshold[0]
     configs['model'].hybrid_agent.rot_scale = env_cfg.ctrl.default_task_prop_gains[-1] * env_cfg.ctrl.rot_action_threshold[0]
