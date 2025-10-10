@@ -22,7 +22,7 @@ wrappers:
   # Enable hybrid control wrapper
   hybrid_control:
     enabled: true
-    reward_type: "dirs"
+    reward_type: "simp"
     
   pose_contact_logging:
     enabled: false
@@ -38,6 +38,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "dir_noBia_policyLR(5-6)"
+  name: "simp_noBia_policyLR(5-6)"
   tags: []
-  group: "dir_noBia_policyLR(5-6)_agnt"
+  group: "simp_noBia_policyLR(5-6)_agnt"
