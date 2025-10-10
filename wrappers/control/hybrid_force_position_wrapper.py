@@ -846,7 +846,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
     def _directional_force_reward(self):
         """Direction-specific force reward."""
-        force_ctrl = self.sel_matrix[:, :self.force_size].bool()
+        force_ctrl = (self.sel_matrix[:, :self.force_size] > 0.5) #.bool()
 
         good_dims = torch.logical_and(
             force_ctrl, 
