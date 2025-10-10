@@ -11,7 +11,7 @@ primary:
 model:
   use_hybrid_agent: true
   hybrid_agent:
-    init_bias: 1.1 
+    init_bias: 0.0 #1.1 
     init_scale_last_layer: true
     init_layer_scale: 0.1
 
@@ -33,6 +33,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "big_policyLR(5-6)"
+  name: "noBias_policyLR(5-6)"
   tags: []
-  group: "big_policyLR(5-6)_agnt"
+  group: "noBias_policyLR(5-6)_agnt"
