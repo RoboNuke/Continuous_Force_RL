@@ -827,8 +827,15 @@ class HybridForcePositionWrapper(gym.Wrapper):
         """Simple force activity reward."""
         force_ctrl = self.sel_matrix[:, :self.force_size].bool()
 
-        good_force_cmd = torch.logical_and(torch.any(self.unwrapped.in_contact[:, :self.force_size], dim=1), torch.any(force_ctrl, dim=1))
-        bad_force_cmd = torch.logical_and(torch.all(~self.unwrapped.in_contact[:, :self.force_size], dim=1), torch.any(force_ctrl, dim=1))
+        good_force_cmd = torch.logical_and(
+            torch.any(self.unwrapped.in_contact[:, :self.force_size], dim=1), 
+            torch.any(force_ctrl, dim=1)
+        )
+
+        bad_force_cmd = torch.logical_and(
+            torch.all(~self.unwrapped.in_contact[:, :self.force_size], dim=1), 
+            torch.any(force_ctrl, dim=1)
+        )
 
         sel_rew = self.task_cfg.good_force_cmd_rew * good_force_cmd + self.task_cfg.bad_force_cmd_rew * bad_force_cmd
 
@@ -841,8 +848,12 @@ class HybridForcePositionWrapper(gym.Wrapper):
         """Direction-specific force reward."""
         force_ctrl = self.sel_matrix[:, :self.force_size].bool()
 
-        good_dims = torch.logical_and(force_ctrl, self.unwrapped.in_contact[:, :self.force_size]) | torch.logical_and(~force_ctrl, ~self.unwrapped.in_contact[:, :self.force_size])
-        bad_dims = torch.logical_and(force_ctrl, ~self.unwrapped.in_contact[:, :self.force_size]) | torch.logical_and(~force_ctrl, self.unwrapped.in_contact[:, :self.force_size])
+        good_dims = torch.logical_and(
+            force_ctrl, 
+            self.unwrapped.in_contact[:, :self.force_size]) | torch.logical_and(~force_ctrl, ~self.unwrapped.in_contact[:, :self.force_size])
+        bad_dims = torch.logical_and(
+            force_ctrl, 
+            ~self.unwrapped.in_contact[:, :self.force_size]) | torch.logical_and(~force_ctrl, self.unwrapped.in_contact[:, :self.force_size])
 
         good_rew = self.task_cfg.good_force_cmd_rew * torch.sum(good_dims, dim=1)
         bad_rew = self.task_cfg.bad_force_cmd_rew * torch.sum(bad_dims, dim=1)
@@ -866,7 +877,10 @@ class HybridForcePositionWrapper(gym.Wrapper):
         """Position-focused simple force reward."""
         force_ctrl = self.sel_matrix[:, :self.force_size].bool()
 
-        good_force_cmd = torch.logical_and(torch.any(self.unwrapped.in_contact[:, :self.force_size], dim=1), torch.any(force_ctrl, dim=1))
+        good_force_cmd = torch.logical_and(
+            torch.any(self.unwrapped.in_contact[:, :self.force_size], dim=1), 
+            torch.any(force_ctrl, dim=1)
+        )
         sel_rew = self.task_cfg.good_force_cmd_rew * good_force_cmd
 
         if hasattr(self.unwrapped, 'extras'):

@@ -5,7 +5,7 @@ base_config: "configs/base/PiH_base.yaml"
 
 primary:
   ckpt_tracker_path: "/nfs/stak/users/brownhun/logFix_hybrid_agent_tracker.txt"
-  #break_forces: [5,10]
+  break_forces: [-1]
 
 # Model configuration for hybrid agent
 model:
@@ -22,10 +22,15 @@ wrappers:
   # Enable hybrid control wrapper
   hybrid_control:
     enabled: true
-    reward_type: "pos_simp"
+    reward_type: "dirs"
     
   pose_contact_logging:
     enabled: false
+
+environment:
+  hybrid_task:
+    good_force_cmd_rew: 0.4
+    bad_force_cmd_rew: -0.4
 
 agent:
   policy_learning_rate: 5.0e-6
@@ -33,6 +38,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "pos_simp_noBias_policyLR(5-6)"
+  name: "dir_noBia_policyLR(5-6)"
   tags: []
-  group: "pos_simp_noBias_policyLR(5-6)_agnt"
+  group: "dir_noBia_policyLR(5-6)_agnt"
