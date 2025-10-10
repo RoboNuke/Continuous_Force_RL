@@ -22,7 +22,7 @@ wrappers:
   # Enable hybrid control wrapper
   hybrid_control:
     enabled: true
-    reward_type: "wrench_norm"
+    reward_type: "pos_simp"
     
   pose_contact_logging:
     enabled: false
@@ -33,6 +33,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "wrench_norm_noBias_policyLR(5-6)"
+  name: "pos_simp_noBias_policyLR(5-6)"
   tags: []
-  group: "wrench_norm_noBias_policyLR(5-6)_agnt"
+  group: "pos_simp_noBias_policyLR(5-6)_agnt"
