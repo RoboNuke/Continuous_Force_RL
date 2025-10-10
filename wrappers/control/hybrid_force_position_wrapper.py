@@ -825,7 +825,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
     def _simple_force_reward(self):
         """Simple force activity reward."""
-        force_ctrl = self.sel_matrix[:, :self.force_size].bool()
+        force_ctrl = (self.sel_matrix[:, :self.force_size] > 0.5) #.bool()
 
         good_force_cmd = torch.logical_and(
             torch.any(self.unwrapped.in_contact[:, :self.force_size], dim=1), 
