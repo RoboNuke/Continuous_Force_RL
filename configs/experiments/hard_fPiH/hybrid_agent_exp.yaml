@@ -23,7 +23,7 @@ wrappers:
   # Enable hybrid control wrapper
   hybrid_control:
     enabled: true
-    reward_type: "dirs"
+    reward_type: "simp"
     
   pose_contact_logging:
     enabled: false
@@ -41,4 +41,4 @@ agent:
 experiment:
   name: "1std_dirs_policyLR(5-6)"
   tags: []
-  group: "1std_dirs_noBia_policyLR(5-6)_agnt"
+  group: "1std_simp_noBia_policyLR(5-6)_agnt"
