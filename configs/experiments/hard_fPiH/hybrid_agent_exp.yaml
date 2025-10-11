@@ -5,7 +5,7 @@ base_config: "configs/base/PiH_base.yaml"
 
 primary:
   ckpt_tracker_path: "/nfs/stak/users/brownhun/logFix_hybrid_agent_tracker.txt"
-  break_forces: [-1]
+  break_forces: [25]
 
 # Model configuration for hybrid agent
 model:
