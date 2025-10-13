@@ -591,8 +591,8 @@ class BlockPPO(PPO):
                 )
 
                 self.optimizer.zero_grad()
-                self.timestep = timestep
-                self.log_policy_loss_components(self.policy, sampled_states, sampled_actions, sampled_advantages, sampled_log_prob, self.timestep)
+                #self.timestep = timestep
+                #self.log_policy_loss_components(self.policy, sampled_states, sampled_actions, sampled_advantages, sampled_log_prob, self.timestep)
                 
                 if timestep < self._random_value_timesteps:
                     self.update_nets(value_loss, update_policy=False, update_critic=True)  # Value-only training
@@ -675,7 +675,7 @@ class BlockPPO(PPO):
         self.optimizer.zero_grad()
         self.scaler.scale(loss).backward()
 
-        self.log_selection_gradients(self.policy, self.timestep)
+        #self.log_selection_gradients(self.policy, self.timestep)
         # Collect gradients immediately after backward pass while they exist
         if update_policy or update_critic:
             self._collect_and_store_gradients(
