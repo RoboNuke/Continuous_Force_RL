@@ -12,11 +12,13 @@ primary:
 # Model configuration for hybrid agent
 model:
   use_hybrid_agent: true
+  last_layer_scale: 1.0
   hybrid_agent:
     unit_std_init: false
     init_bias: 0.0 #2.5 #1.1
-    init_scale_last_layer: true
-    init_layer_scale: 0.1
+    init_scale_last_layer: false
+    init_layer_scale: 1.0
+    pre_layer_scale_factor: 1.0
 
     unit_factor_std_init: 1.0
 
