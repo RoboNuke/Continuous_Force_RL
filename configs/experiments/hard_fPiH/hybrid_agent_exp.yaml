@@ -31,7 +31,7 @@ wrappers:
   # Enable hybrid control wrapper
   hybrid_control:
     enabled: true
-    reward_type: "none"
+    reward_type: "simp"
     
   pose_contact_logging:
     enabled: false
@@ -48,6 +48,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "sepHeads_noBias_pLR5-6_noRew"
+  name: "sepHeads_noBias_pLR5-6_simp"
   tags: []
-  group: "sepHeads_noBias_pLR5-6_noRew"
+  group: "sepHeads_noBias_pLR5-6_simp"
