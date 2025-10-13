@@ -152,11 +152,15 @@ class HybridGMMMixin(GaussianMixin):
 
         # Create categorical distribution from sigmoid probabilities
         # probs[:, i] is P(force), so 1-probs[:, i] is P(position)
-        mix_logits = torch.zeros((batch_size, 6, 2), dtype=torch.float32, device=mean_actions.device)
+        mix_probs = torch.zeros((batch_size, 6, 2), dtype=torch.float32, device=mean_actions.device)
         # Stack [P(position), P(force)] for each dimension
-        mix_logits[:, :self.force_size, 0] = 1.0 - probs  # P(position/rotation)
-        mix_logits[:, :self.force_size, 1] = probs  # P(force)
-        mix_dist = Categorical(probs=mix_logits)
+        mix_probs[:, :self.force_size, 0] = 1.0 - probs  # P(position/rotation)
+        mix_probs[:, :self.force_size, 1] = probs  # P(force)
+        # For dimensions beyond force_size, set to always select position (index 0)
+        if self.force_size < 6:
+            mix_probs[:, self.force_size:, 0] = 1.0
+            mix_probs[:, self.force_size:, 1] = 0.0
+        mix_dist = Categorical(probs=mix_probs)
         mean1 = mean_actions[:, self.force_size:self.force_size+6]
         mean1[:,:3] *= self.pos_scale            # (batch, 6)
         mean1[:,3:6] *= self.rot_scale
