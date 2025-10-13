@@ -14,8 +14,8 @@ experiment:
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
-  agents_per_break_force: 5  # Number of agents per break force condition
-  num_envs_per_agent: 256    # Environments per individual agent
+  agents_per_break_force: 1  # Number of agents per break force condition
+  num_envs_per_agent: 16    # Environments per individual agent
   break_forces: [50]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
@@ -72,6 +72,9 @@ model:
   last_layer_scale: 0.1
   act_init_std: 1.0
   critic_output_init_mean: 50
+  use_separate_heads: true
+  selection_head_hidden_dim: 256
+  component_head_hidden_dim: 256
 
   # Actor architecture (SimBa policy network)
   actor:

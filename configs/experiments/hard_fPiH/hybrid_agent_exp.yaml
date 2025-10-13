@@ -13,9 +13,12 @@ primary:
 model:
   use_hybrid_agent: true
   last_layer_scale: 1.0
+  use_separate_heads: true
+  selection_head_hidden_dim: 64
+  component_head_hidden_dim: 128
   hybrid_agent:
     unit_std_init: false
-    init_bias: 2.5 #1.1
+    init_bias: 0.0 #2.5 #1.1
     init_scale_last_layer: false
     init_layer_scale: 1.0
     pre_layer_scale_factor: 1.0
@@ -27,7 +30,7 @@ wrappers:
   # Enable hybrid control wrapper
   hybrid_control:
     enabled: true
-    reward_type: "simp"
+    reward_type: "none"
     
   pose_contact_logging:
     enabled: false
