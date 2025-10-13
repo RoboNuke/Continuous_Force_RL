@@ -15,13 +15,13 @@ model:
   last_layer_scale: 1.0
   hybrid_agent:
     unit_std_init: false
-    init_bias: 2.5 #1.1
+    init_bias: 0.0 #2.5 #1.1
     init_scale_last_layer: false
     init_layer_scale: 1.0
     pre_layer_scale_factor: 1.0
 
     unit_factor_std_init: 1.0
-    
+
   use_separate_heads: true
   selection_head_hidden_dim: 64
   component_head_hidden_dim: 128
@@ -31,7 +31,7 @@ wrappers:
   # Enable hybrid control wrapper
   hybrid_control:
     enabled: true
-    reward_type: "simp"
+    reward_type: "none"
     
   pose_contact_logging:
     enabled: false
@@ -42,12 +42,12 @@ environment:
     bad_force_cmd_rew: -0.134 #-0.4
 
 agent:
-  policy_learning_rate: 1.0e-5
+  policy_learning_rate: 5.0e-6
   critic_learning_rate: 1.0e-5
   #learning_epochs: 1
 
 # Experiment metadata
 experiment:
-  name: "noScale_bias_simp"
+  name: "sepHeads_noBias_pLR5-6_noRew"
   tags: []
-  group: "noScale_bias_simp"
+  group: "sepHeads_noBias_pLR5-6_noRew"
