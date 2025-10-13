@@ -73,6 +73,9 @@ model:
   act_init_std: 1.0
   critic_output_init_mean: 50
 
+  use_separate_heads: false
+  selection_head_hidden_dim: 64
+  component_head_hidden_dim: 128
   # Actor architecture (SimBa policy network)
   actor:
     n: 1  # Number of SimBa layers

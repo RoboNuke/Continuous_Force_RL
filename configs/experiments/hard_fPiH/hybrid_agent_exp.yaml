@@ -21,6 +21,10 @@ model:
     pre_layer_scale_factor: 1.0
 
     unit_factor_std_init: 1.0
+    
+  use_separate_heads: true
+  selection_head_hidden_dim: 64
+  component_head_hidden_dim: 128
 
 # Enable hybrid control wrapper and related systems
 wrappers:
