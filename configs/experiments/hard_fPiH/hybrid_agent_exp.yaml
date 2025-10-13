@@ -44,6 +44,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "big_force_z"
+  name: "big_z_noScale"
   tags: []
-  group: "big_force_z"
+  group: "big_z_noScale"
