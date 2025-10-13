@@ -468,19 +468,22 @@ class BlockPPO(PPO):
             returns = advantages + values
             
             # normalize advantages
-            #advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-            advantages_reshaped = advantages.view(memory_size, num_agents, envs_per_agent)
-    
-            # Compute mean and std per agent in one vectorized operation
-            # mean/std over dims 0 and 2 gives shape (num_agents,)
-            agent_means = advantages_reshaped.mean(dim=(0, 2), keepdim=True)  # (1, num_agents, 1)
-            agent_stds = advantages_reshaped.std(dim=(0, 2), keepdim=True)    # (1, num_agents, 1)
+            total_entries = memory_size
+            rollout_steps = total_entries // (num_agents * envs_per_agent)
+            
+            # Reshape to (rollout_steps, num_agents, envs_per_agent, 1)
+            advantages_reshaped = advantages.view(rollout_steps, num_agents, envs_per_agent, -1)
+            
+            # Compute mean and std per agent (over rollout_steps and envs_per_agent dimensions)
+            # Result shape: (1, num_agents, 1, 1)
+            agent_means = advantages_reshaped.mean(dim=(0, 2), keepdim=True)
+            agent_stds = advantages_reshaped.std(dim=(0, 2), keepdim=True)
             
             # Normalize (broadcasting handles per-agent normalization automatically)
             advantages_normalized = (advantages_reshaped - agent_means) / (agent_stds + 1e-8)
             
-            # Flatten back to original shape
-            advantages = advantages_normalized.view(-1, 1)
+            # Flatten back to original shape (memory_size, 1)
+            advantages = advantages_normalized.view(memory_size, -1)
 
             return returns, advantages
 
