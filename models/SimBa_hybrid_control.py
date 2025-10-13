@@ -92,8 +92,7 @@ class HybridActionGMM(MixtureSameFamily):
         if self.sample_uniform:
             log_z = (self.mixture_distribution.probs * (1 - self.uniform_rate) + self.uniform_rate/2.0).log()
         else:
-            #log_z = self.mixture_distribution.logits #
-            log_z = (self.mixture_distribution.probs).log()
+            log_z = self.mixture_distribution.logits #(self.mixture_distribution.probs).log()
         
         log_prob = torch.logsumexp(log_z + comp_log_prob, dim=-1)
 
