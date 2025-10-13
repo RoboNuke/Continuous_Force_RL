@@ -31,15 +31,15 @@ wrappers:
   # Enable hybrid control wrapper
   hybrid_control:
     enabled: true
-    reward_type: "none"
+    reward_type: "dirs"
     
   pose_contact_logging:
     enabled: false
 
 environment:
   hybrid_task:
-    good_force_cmd_rew: 0.4 #0.134
-    bad_force_cmd_rew: 0.4 #-0.134 #-0.4
+    good_force_cmd_rew: 0.134
+    bad_force_cmd_rew: -0.134 #-0.4
 
 agent:
   policy_learning_rate: 5.0e-6
@@ -48,6 +48,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "clopLight_Bias_pLR5-6_01InitScale"
+  name: "clopLight_Bias_pLR5-6_01InitScale_dirs"
   tags: []
-  group: "clopLight_Bias_pLR5-6_01InitScale"
+  group: "clopLight_Bias_pLR5-6_01InitScale_dirs"
