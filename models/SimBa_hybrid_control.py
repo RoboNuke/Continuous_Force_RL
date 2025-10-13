@@ -47,7 +47,7 @@ class HybridActionGMM(MixtureSameFamily):
                 (
                     mix_sample[...,:self.force_size],
                     comp_samples[...,:,0],
-                    comp_samples[...,:self.force_size,1] 
+                    comp_samples[...,:self.force_size,1]
                 ), dim=-1
             )
             # scale everything
@@ -143,27 +143,17 @@ class HybridGMMMixin(GaussianMixin):
         # map from states/observations to mean actions and log standard deviations
         mean_actions, log_std, outputs = self.compute(inputs, role)
         #print("Pos Actions:", torch.max(action[:,3:6]).item(), torch.min(action[:,3:6]).item(), torch.median(action[:,3:6]).item())
-        
         # clamp log standard deviations
         if self._g_clip_log_std:
             log_std = torch.clamp(log_std, self._g_log_std_min, self._g_log_std_max)
             
         batch_size = mean_actions.shape[0]
         logits = mean_actions[:,:2*self.force_size].float()
-        
+
         # Categorical logits need to be expanded to match components
         mix_logits = torch.zeros((batch_size, 6, 2), dtype=torch.float32, device=mean_actions.device)
         mix_logits[:,:self.force_size, :] = logits.view((batch_size, self.force_size, 2))
-        #mix_logits[:, :self.force_size, 0] = (1.0 - logits.exp()).log()
-        #mix_logits[:, :self.force_size, 1] = logits
-        #if self.force_size < 6:
-        #    mix_logits[:, self.force_size:, 0] = -100.0 #0.0
-        #    mix_logits[:, self.force_size:, 1] = 0.0 #1.0
-            
         mix_dist = Categorical(logits=mix_logits)
-
-        
-        #print("mix dist:", mix_dist.probs)
         mean1 = mean_actions[:, 2*self.force_size:2*self.force_size+6]
         mean1[:,:3] *= self.pos_scale            # (batch, 6)
         mean1[:,3:6] *= self.rot_scale
@@ -188,7 +178,7 @@ class HybridGMMMixin(GaussianMixin):
             std[:, 3:, 1] = log_std[:, 9:].exp() * (self.torque_scale ** 2) #0.25
         else:
             std[:, 3:, 1] = std[:, 3:, 0]
-            
+
         # Create component Gaussians: Normal(loc, scale)
         components = Normal(loc=means, scale=std)  # (batch, 6, 2)
         
@@ -217,10 +207,74 @@ class HybridGMMMixin(GaussianMixin):
             log_prob = self._g_reduction(log_prob, dim=-1)
         if log_prob.dim() != actions.dim():
             log_prob = log_prob.unsqueeze(-1)
-        
+
         outputs["mean_actions"] = mean_actions
-        
+
         return actions, log_prob, outputs
+    
+
+    def log_selection_probabilities(self, mix_logits, step):
+        """
+        Log the actual selection probabilities (after softmax)
+        """
+        if not (step % 15 == 0):
+            return
+        force_size = 3
+        # mix_logits shape: (batch, 6, 2)
+        probs = torch.softmax(mix_logits[:, :force_size, :], dim=-1)
+        
+        # Probability of selecting force (index 1)
+        force_probs = probs[:, :, 1]  # (batch, 3)
+        
+        print(f"\n=== Step {step} Selection Probabilities ===")
+        print(f"X force prob - mean: {force_probs[:, 0].mean().item():.4f}, std: {force_probs[:, 0].std().item():.4f}")
+        print(f"Y force prob - mean: {force_probs[:, 1].mean().item():.4f}, std: {force_probs[:, 1].std().item():.4f}")
+        print(f"Z force prob - mean: {force_probs[:, 2].mean().item():.4f}, std: {force_probs[:, 2].std().item():.4f}")
+        
+        # Check if they're actually different
+        diff_xy = (force_probs[:, 0] - force_probs[:, 1]).abs().mean().item()
+        diff_xz = (force_probs[:, 0] - force_probs[:, 2]).abs().mean().item()
+        diff_yz = (force_probs[:, 1] - force_probs[:, 2]).abs().mean().item()
+        
+        print(f"Mean absolute differences: X-Y: {diff_xy:.4f}, X-Z: {diff_xz:.4f}, Y-Z: {diff_yz:.4f}")
+
+    def log_selection_logits(self, mean_actions, step):
+        """
+        Log the actual selection logits to see if they're identical
+        """
+        if not (step % 15 == 0):
+            return
+        force_size = self.force_size
+        logits = mean_actions[:, :2*force_size].float()  # (batch, 6)
+        
+        # Reshape to (batch, 3, 2) for easier analysis
+        logits_reshaped = logits.view(-1, force_size, 2)
+        
+        print(f"\n=== Step {step} Selection Logits ===")
+        # Look at first environment's logits
+        print(f"X dimension logits: {logits_reshaped[0, 0, :].tolist()}")
+        print(f"Y dimension logits: {logits_reshaped[0, 1, :].tolist()}")
+        print(f"Z dimension logits: {logits_reshaped[0, 2, :].tolist()}")
+        
+        # Check if they're identical across batch
+        for dim_name, dim_idx in [('X', 0), ('Y', 1), ('Z', 2)]:
+            dim_logits = logits_reshaped[:, dim_idx, :]
+            print(f"\n{dim_name} dimension stats across batch:")
+            print(f"  Mean: {dim_logits.mean(dim=0).tolist()}")
+            print(f"  Std: {dim_logits.std(dim=0).tolist()}")
+        
+        # Check correlation between dimensions
+        x_logits = logits_reshaped[:, 0, 1].flatten()  # Force selection logit for X
+        y_logits = logits_reshaped[:, 1, 1].flatten()  # Force selection logit for Y
+        z_logits = logits_reshaped[:, 2, 1].flatten()  # Force selection logit for Z
+        
+        corr_xy = torch.corrcoef(torch.stack([x_logits, y_logits]))[0, 1].item()
+        corr_xz = torch.corrcoef(torch.stack([x_logits, z_logits]))[0, 1].item()
+        corr_yz = torch.corrcoef(torch.stack([y_logits, z_logits]))[0, 1].item()
+        
+        print(f"\nLogit correlations:")
+        print(f"  X-Y: {corr_xy:.6f}, X-Z: {corr_xz:.6f}, Y-Z: {corr_yz:.6f}")
+
 
 
 
@@ -366,7 +420,7 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
         # first force_size are sigma, remaining is tanh
         sels = zout[:,:2*self.force_size]
         not_sels = zout[:,2*self.force_size:]
-        
+
         new_sel_def = False
         if self.force_add:
             # add force to sel
@@ -381,9 +435,9 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
             final_sels = self.selection_activation(new_sels)
         else:
             final_sels = self.selection_activation(sels)
-        #final_sels = (final_sels + 1) * 2.0
-        
+
         final_not_sels = self.component_activation(not_sels)
+
         action_mean = torch.cat([final_sels, final_not_sels], dim=-1)
         
         return action_mean, self.get_logstds(action_mean), {}
@@ -454,3 +508,4 @@ class HybridControlBlockSimBaActor(HybridControlSimBaActor):
         num_envs = inputs['states'].size()[0] // self.num_agents
         #print("Num envs:", num_envs)
         return self.actor_mean(inputs['states'][:,:self.num_observations], num_envs)
+    

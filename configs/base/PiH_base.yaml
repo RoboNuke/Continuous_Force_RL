@@ -14,9 +14,9 @@ experiment:
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
-  agents_per_break_force: 5  # Number of agents per break force condition
-  num_envs_per_agent: 256    # Environments per individual agent
-  break_forces: [5]  # Break force conditions (-1 = unbreakable)
+  agents_per_break_force: 1  # Number of agents per break force condition
+  num_envs_per_agent: 16    # Environments per individual agent
+  break_forces: [50]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
   max_steps: 10000128 #25000192
@@ -89,7 +89,7 @@ model:
   # Hybrid agent specific parameters
   hybrid_agent:
     ctrl_torque: false  # Match primary.ctrl_torque
-    unit_std_init: true
+    unit_std_init: false
     unit_factor_std_init: 1.0
     pos_init_std: 1.0
     rot_init_std: 1.0

@@ -518,6 +518,8 @@ class BlockPPO(PPO):
                 sampled_returns,
                 sampled_advantages,
             ) in sampled_batches:
+                if mini_batch > 5:
+                    break
                 with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
                     sampled_states = self._state_preprocessor(sampled_states, train=not epoch)
                     _, next_log_prob, _ = self.policy.act(
@@ -589,10 +591,14 @@ class BlockPPO(PPO):
                 )
 
                 self.optimizer.zero_grad()
+                self.timestep = timestep
+                self.log_policy_loss_components(self.policy, sampled_states, sampled_actions, sampled_advantages, sampled_log_prob, self.timestep)
+                
                 if timestep < self._random_value_timesteps:
                     self.update_nets(value_loss, update_policy=False, update_critic=True)  # Value-only training
                 else:
                     self.update_nets(policy_loss + entropy_loss + value_loss, update_policy=True, update_critic=True)  # Both networks
+
 
                 if self.value_update_ratio > 1:
                     for i in range(self.value_update_ratio-1): #minus one because we already updated critic once
@@ -638,6 +644,25 @@ class BlockPPO(PPO):
             }
             wrapper.publish(onetime_metrics=onetime_metrics)
 
+    def log_policy_loss_components(self, policy, states, actions, advantages, old_log_probs, step):
+        """
+        Log individual components of the PPO loss
+        """
+        with torch.no_grad():
+            # Get current policy output
+            _, new_log_probs, _ = policy.act(
+                        {"states": states, "taken_actions": actions}, role="policy"
+                    )
+            
+            # Compute ratio
+            ratio = (new_log_probs - old_log_probs).exp()
+            
+            print(f"\n=== Step {step} Policy Loss Components ===")
+            print(f"Ratio - mean: {ratio.mean().item():.4f}, std: {ratio.std().item():.4f}, min: {ratio.min().item():.4f}, max: {ratio.max().item():.4f}")
+            print(f"Advantages - mean: {advantages.mean().item():.4f}, std: {advantages.std().item():.4f}")
+            print(f"Old log probs - mean: {old_log_probs.mean().item():.4f}, std: {old_log_probs.std().item():.4f}")
+            print(f"New log probs - mean: {new_log_probs.mean().item():.4f}, std: {new_log_probs.std().item():.4f}")
+
     def update_nets(self, loss, update_policy=True, update_critic=True):
         """
         Update networks and collect gradients for logging.
@@ -650,6 +675,7 @@ class BlockPPO(PPO):
         self.optimizer.zero_grad()
         self.scaler.scale(loss).backward()
 
+        self.log_selection_gradients(self.policy, self.timestep)
         # Collect gradients immediately after backward pass while they exist
         if update_policy or update_critic:
             self._collect_and_store_gradients(
@@ -1409,7 +1435,67 @@ class BlockPPO(PPO):
             f"Searched through {search_depth} wrapper layers without finding add_metrics method."
         )
 
+    def log_selection_gradients(self, model, step):
+        """
+        Log gradients of selection parameters to see if they're coupled
+        """
+        
+        # Access the final output layer that produces selection logits
+        fc_out = model.actor_mean.fc_out
+        
+        # Get gradients for selection parameters (first 2*force_size outputs)
+        if fc_out.weight.grad is not None:
+            # Shape: (num_agents, act_dim, hidden_dim)
+            # Selection weights are first 2*force_size rows
+            sel_weight_grad = fc_out.weight.grad[:, :6, :]  # (num_agents, 6, hidden_dim)
+            
+            # Check if gradients for different dimensions are identical
+            print(f"\n=== Step {step} Selection Weight Gradients ===")
+            for agent_idx in range(model.num_agents):
+                # Get gradients for this agent
+                grad_x = sel_weight_grad[agent_idx, 0:2, :]  # X dimension (pos & force logits)
+                grad_y = sel_weight_grad[agent_idx, 2:4, :]  # Y dimension
+                grad_z = sel_weight_grad[agent_idx, 4:6, :]  # Z dimension
+                
+                # Compute norms
+                norm_x = grad_x.norm().item()
+                norm_y = grad_y.norm().item()
+                norm_z = grad_z.norm().item()
+                
+                # Check similarity (cosine similarity between flattened gradients)
+                grad_x_flat = grad_x.flatten()
+                grad_y_flat = grad_y.flatten()
+                grad_z_flat = grad_z.flatten()
+                
+                cos_xy = torch.nn.functional.cosine_similarity(
+                    grad_x_flat.unsqueeze(0), grad_y_flat.unsqueeze(0)
+                ).item()
+                cos_xz = torch.nn.functional.cosine_similarity(
+                    grad_x_flat.unsqueeze(0), grad_z_flat.unsqueeze(0)
+                ).item()
+                cos_yz = torch.nn.functional.cosine_similarity(
+                    grad_y_flat.unsqueeze(0), grad_z_flat.unsqueeze(0)
+                ).item()
+                
+                print(f"Agent {agent_idx}:")
+                print(f"  Gradient norms - X: {norm_x:.6f}, Y: {norm_y:.6f}, Z: {norm_z:.6f}")
+                print(f"  Cosine similarity - X-Y: {cos_xy:.6f}, X-Z: {cos_xz:.6f}, Y-Z: {cos_yz:.6f}")
+                
+                # Check if they're nearly identical (similarity > 0.99)
+                if cos_xy > 0.99 and cos_xz > 0.99 and cos_yz > 0.99:
+                    print(f"  ⚠️  WARNING: Gradients are nearly IDENTICAL across dimensions!")
+                
+        # Also check bias gradients
+        if fc_out.bias.grad is not None:
+            sel_bias_grad = fc_out.bias.grad[:, :6]  # (num_agents, 6)
+            print(f"\nSelection Bias Gradients:")
+            for agent_idx in range(model.num_agents):
+                bias_grads = sel_bias_grad[agent_idx]
+                print(f"Agent {agent_idx}: {bias_grads.tolist()}")
+
+
     def _get_logging_wrapper(self):
+
         """Get the logging wrapper for metrics reporting.
 
         Returns the wrapper object if found, None otherwise.

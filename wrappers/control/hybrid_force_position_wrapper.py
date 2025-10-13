@@ -120,35 +120,22 @@ class HybridForcePositionWrapper(gym.Wrapper):
         original_action_space = 6  # Original position + rotation actions
         self.action_space_size = 2*self.force_size + original_action_space
 
-        print(f"[HYBRID DEBUG] Action space calculation:")
-        print(f"  force_size: {self.force_size}")
-        print(f"  original_action_space: {original_action_space}")
-        print(f"  calculated action_space_size: {self.action_space_size}")
-
         # Update environment action space - ensure both integer and gym.Space are consistent
         if hasattr(self.unwrapped, 'cfg'):
-            old_cfg_action_space = getattr(self.unwrapped.cfg, 'action_space', None)
             self.unwrapped.cfg.action_space = self.action_space_size
-            print(f"[HYBRID DEBUG] Updated cfg.action_space: {old_cfg_action_space} -> {self.action_space_size}")
 
             if hasattr(self.unwrapped, '_configure_gym_env_spaces'):
                 self.unwrapped._configure_gym_env_spaces()
 
         # Update the gym.Space action_space to match the integer config
-        old_gym_action_space = getattr(self.unwrapped, 'action_space', None)
-        old_gym_shape = old_gym_action_space.shape if hasattr(old_gym_action_space, 'shape') else None
-
         self.action_space = gym.spaces.Box(
             low=-1.0, high=1.0, shape=(self.action_space_size,), dtype=np.float32
         )
         self.unwrapped.action_space = self.action_space
 
-        print(f"[HYBRID DEBUG] Updated gym action_space: {old_gym_shape} -> {self.action_space.shape}")
-
         # Validation: ensure both sources match
         cfg_size = getattr(self.unwrapped.cfg, 'action_space', None)
         gym_size = self.unwrapped.action_space.shape[0] if hasattr(self.unwrapped.action_space, 'shape') else None
-        print(f"[HYBRID DEBUG] Action space validation: cfg={cfg_size}, gym={gym_size}")
 
         if cfg_size != gym_size:
             raise ValueError(f"Action space mismatch: cfg.action_space={cfg_size} != gym.action_space.shape[0]={gym_size}")
@@ -212,19 +199,13 @@ class HybridForcePositionWrapper(gym.Wrapper):
         action_diff = self._new_action_size - self._original_action_size
 
         if hasattr(self.unwrapped.cfg, 'observation_space'):
-            old_obs_space = self.unwrapped.cfg.observation_space
             self.unwrapped.cfg.observation_space += action_diff
-            print(f"[HYBRID]: Updated observation_space by {action_diff}: {old_obs_space} -> {self.unwrapped.cfg.observation_space}")
 
         if hasattr(self.unwrapped.cfg, 'state_space'):
-            old_state_space = self.unwrapped.cfg.state_space
             self.unwrapped.cfg.state_space += action_diff
-            print(f"[HYBRID]: Updated state_space by {action_diff}: {old_state_space} -> {self.unwrapped.cfg.state_space}")
 
         if hasattr(self.unwrapped.cfg, 'action_space'):
-            old_action_space = self.unwrapped.cfg.action_space
             self.unwrapped.cfg.action_space = self._new_action_size
-            print(f"[HYBRID]: Updated action_space: {old_action_space} -> {self._new_action_size} (ctrl_torque={self.ctrl_torque})")
 
         self._update_gym_spaces()
 
@@ -325,7 +306,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # (allows ForceTorqueWrapper and other wrappers to execute)
         # Base env will apply EMA, but we override it below for hybrid control
         if self._original_pre_physics_step:
-            self._original_pre_physics_step(action)
+            self._original_pre_physics_step(action.clone())
 
         # Override base env's EMA - hybrid control does its own EMA on actions
         self.unwrapped.actions = action.clone().to(self.device)
@@ -604,8 +585,8 @@ class HybridForcePositionWrapper(gym.Wrapper):
         axis_names = ['X', 'Y', 'Z']
         for i in range(3):
             # Get current control mode for this axis
-            is_force_control = self.sel_matrix[:, i] == 1.0
-            is_pos_control = self.sel_matrix[:, i] == 0.0
+            is_force_control = self.sel_matrix[:, i] > 0.5
+            is_pos_control = self.sel_matrix[:, i] <= 0.5
 
             # Create per-agent tensors for force control mode
             force_pos_change = torch.full((self.num_agents,), float('nan'), device=self.device)
@@ -875,7 +856,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
     def _position_simple_reward(self):
         """Position-focused simple force reward."""
-        force_ctrl = self.sel_matrix[:, :self.force_size].bool()
+        force_ctrl = self.sel_matrix[:, :self.force_size] > 0.5 #.bool()
 
         good_force_cmd = torch.logical_and(
             torch.any(self.unwrapped.in_contact[:, :self.force_size], dim=1), 
