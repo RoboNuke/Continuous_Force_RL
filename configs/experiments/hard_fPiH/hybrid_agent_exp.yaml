@@ -4,8 +4,8 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  agents_per_break_force: 1  # Number of agents per break force condition
-  num_envs_per_agent: 16    # Environments per individual agent
+  #agents_per_break_force: 1  # Number of agents per break force condition
+  #num_envs_per_agent: 16    # Environments per individual agent
   ckpt_tracker_path: "/nfs/stak/users/brownhun/logFix_hybrid_agent_tracker.txt"
   break_forces: [25]
 
@@ -14,7 +14,7 @@ model:
   use_hybrid_agent: true
   hybrid_agent:
     unit_std_init: false
-    init_bias: 0.0 #1.1 
+    init_bias: 2.5 #1.1
     init_scale_last_layer: true
     init_layer_scale: 0.1
 
@@ -38,10 +38,10 @@ environment:
 agent:
   policy_learning_rate: 5.0e-6
   critic_learning_rate: 1.0e-5
-  learning_epochs: 1
+  #learning_epochs: 1
 
 # Experiment metadata
 experiment:
-  name: "1std_lowerdirs_policyLR(5-6)"
+  name: "sigmoid_1std_policyLR(5-6)"
   tags: []
-  group: "1std_lowerdirs_noBia_policyLR(5-6)_agnt"
+  group: "sigmoid_1std_policyLR(5-6)_agnt"
