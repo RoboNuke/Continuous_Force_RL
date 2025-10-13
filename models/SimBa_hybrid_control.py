@@ -454,6 +454,7 @@ class HybridControlBlockSimBaActor(HybridControlSimBaActor):
         super().__init__(**kwargs)
 
     def create_net(self, actor_n, actor_latent, hybrid_agent_parameters, device):
+        use_separate_heads = hybrid_agent_parameters['use_separate_heads']
         self.actor_mean = BlockSimBa(
             num_agents=self.num_agents,
             obs_dim=self.num_observations,
@@ -461,32 +462,58 @@ class HybridControlBlockSimBaActor(HybridControlSimBaActor):
             act_dim=self.num_actions,
             device=device,
             num_blocks=actor_n,
-            tanh=False
+            tanh=False,
+            use_separate_heads=use_separate_heads,
+            selection_head_hidden_dim=hybrid_agent_parameters['selection_head_hidden_dim'],
+            component_head_hidden_dim=hybrid_agent_parameters['component_head_hidden_dim'],
+            force_size=self.force_size
         )
 
         if hybrid_agent_parameters['init_scale_last_layer']:
             with torch.no_grad():
-                self.actor_mean.fc_out.weight *= hybrid_agent_parameters['init_layer_scale']
+                scale_factor = hybrid_agent_parameters['init_layer_scale']
+                if use_separate_heads:
+                    # Scale fc2 weights of all heads
+                    for head in self.actor_mean.selection_heads:
+                        head.fc2.weight *= scale_factor
+                    self.actor_mean.pos_rot_head.fc2.weight *= scale_factor
+                    self.actor_mean.force_torque_head.fc2.weight *= scale_factor
+                else:
+                    self.actor_mean.fc_out.weight *= scale_factor
 
         self.selection_activation = nn.Sigmoid().to(device)
         self.component_activation = nn.Tanh().to(device)
 
 
     def apply_selection_adjustments(self, hybrid_agent_parameters):
+        use_separate_heads = hybrid_agent_parameters['use_separate_heads']
+
         if self.force_add:
             raise NotImplementedError("[ERROR]: Force add not updated for block SimBa networks")
-        
+
         if self.init_scale_weights:
             print("[INFO]:\tDownscaling Initial Selection Weights")
             with torch.no_grad():
                 scale_factor = hybrid_agent_parameters['init_scale_weights_factor']
-                self.actor_mean.fc_out.weight[:,:self.force_size,:] *= scale_factor
-                self.actor_mean.fc_out.bias[:, :self.force_size] *= scale_factor
-        
+                if use_separate_heads:
+                    # Scale selection head weights and biases only
+                    for head in self.actor_mean.selection_heads:
+                        head.fc2.weight *= scale_factor
+                        head.fc2.bias *= scale_factor
+                else:
+                    self.actor_mean.fc_out.weight[:,:self.force_size,:] *= scale_factor
+                    self.actor_mean.fc_out.bias[:, :self.force_size] *= scale_factor
+
         if self.init_bias:
             print("[INFO]:\tSetting initial Selection Bias")
             with torch.no_grad():
-                self.actor_mean.fc_out.bias[:, :self.force_size] -= hybrid_agent_parameters['init_bias'] 
+                bias_value = hybrid_agent_parameters['init_bias']
+                if use_separate_heads:
+                    # Adjust selection head biases only
+                    for head in self.actor_mean.selection_heads:
+                        head.fc2.bias -= bias_value
+                else:
+                    self.actor_mean.fc_out.bias[:, :self.force_size] -= bias_value
 
         if self.scale_z:
             raise NotImplementedError("[ERROR]: Last layer input scaling not implemented for block SimBa networks")

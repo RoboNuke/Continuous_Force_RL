@@ -56,6 +56,29 @@ class BlockLayerNorm(nn.Module):
 
 
 # -----------------------------
+#  Block MLP (2-layer with activation)
+# -----------------------------
+class BlockMLP(nn.Module):
+    """2-layer MLP using block-parallel linear layers."""
+    def __init__(self, num_blocks, in_dim, hidden_dim, out_dim, activation=None, name="block_mlp"):
+        super().__init__()
+        self.fc1 = BlockLinear(num_blocks, in_dim, hidden_dim, name=f"{name}.fc1")
+        self.relu = nn.ReLU()
+        self.fc2 = BlockLinear(num_blocks, hidden_dim, out_dim, name=f"{name}.fc2")
+        self.activation = activation  # 'sigmoid', 'tanh', or None
+
+    def forward(self, x):
+        # x: (num_blocks, batch, in_dim)
+        out = self.relu(self.fc1(x))
+        out = self.fc2(out)
+        if self.activation == 'sigmoid':
+            out = torch.sigmoid(out)
+        elif self.activation == 'tanh':
+            out = torch.tanh(out)
+        return out
+
+
+# -----------------------------
 #  Block Residual Block
 # -----------------------------
 class BlockResidualBlock(nn.Module):
@@ -79,14 +102,18 @@ class BlockResidualBlock(nn.Module):
 # -----------------------------
 class BlockSimBa(nn.Module):
     def __init__(
-            self, 
-            num_agents, 
-            obs_dim, 
-            hidden_dim, 
-            act_dim, 
-            device, 
-            num_blocks=2, 
-            tanh=False
+            self,
+            num_agents,
+            obs_dim,
+            hidden_dim,
+            act_dim,
+            device,
+            num_blocks=2,
+            tanh=False,
+            use_separate_heads=False,
+            selection_head_hidden_dim=64,
+            component_head_hidden_dim=128,
+            force_size=3
         ):
         super().__init__()
         self.device=device
@@ -96,13 +123,30 @@ class BlockSimBa(nn.Module):
         self.act_dim = act_dim
         self.num_blocks = num_blocks
         self.use_tanh = tanh
-        
+        self.use_separate_heads = use_separate_heads
+        self.force_size = force_size
+
         self.fc_in = BlockLinear(num_agents, obs_dim, hidden_dim, name="fc_in")
         self.resblocks = nn.ModuleList(
             [BlockResidualBlock(num_agents, hidden_dim, name=f"resblock_{i}") for i in range(num_blocks)]
         )
         self.ln_out = BlockLayerNorm(num_agents, hidden_dim, name="ln_out")
-        self.fc_out = BlockLinear(num_agents, hidden_dim, act_dim, name="fc_out")
+
+        if use_separate_heads:
+            # Create separate heads for each selection variable
+            self.selection_heads = nn.ModuleList([
+                BlockMLP(num_agents, hidden_dim, selection_head_hidden_dim, 1,
+                        activation='sigmoid', name=f"sel_head_{i}")
+                for i in range(force_size)
+            ])
+            # Position/rotation component head
+            self.pos_rot_head = BlockMLP(num_agents, hidden_dim, component_head_hidden_dim, 6,
+                                        activation='tanh', name="pos_rot_head")
+            # Force/torque component head
+            self.force_torque_head = BlockMLP(num_agents, hidden_dim, component_head_hidden_dim, force_size,
+                                             activation='tanh', name="force_torque_head")
+        else:
+            self.fc_out = BlockLinear(num_agents, hidden_dim, act_dim, name="fc_out")
         #self.tanh = tanh
         #self.th = nn.Tanh()
     def forward(self, obs, num_envs):
@@ -115,9 +159,26 @@ class BlockSimBa(nn.Module):
         x = self.fc_in(obs)
         for block in self.resblocks:
             x = block(x)
-        actions = self.fc_out( self.ln_out(x) )
-        if self.use_tanh:
-            actions = torch.tanh(actions)
+
+        ln_out = self.ln_out(x)
+
+        if self.use_separate_heads:
+            # Apply each selection head and concatenate
+            sel_outputs = [head(ln_out) for head in self.selection_heads]
+            selections = torch.cat(sel_outputs, dim=-1)  # (num_agents, num_envs, force_size)
+
+            # Apply component heads
+            pos_rot_out = self.pos_rot_head(ln_out)  # (num_agents, num_envs, 6)
+            force_torque_out = self.force_torque_head(ln_out)  # (num_agents, num_envs, force_size)
+
+            # Concatenate all outputs: [selections, pos_rot, force_torque]
+            actions = torch.cat([selections, pos_rot_out, force_torque_out], dim=-1)
+            # Shape: (num_agents, num_envs, 2*force_size + 6)
+        else:
+            actions = self.fc_out(ln_out)
+            if self.use_tanh:
+                actions = torch.tanh(actions)
+
         return actions.view(-1, actions.shape[-1])  # flatten back
 
 

@@ -124,3 +124,12 @@ class ExtendedHybridAgentConfig:
 
     uniform_sampling_rate: float = 0.0
     """Rate for uniform sampling (0.0 = no uniform sampling)"""
+
+    use_separate_heads: bool = False
+    """Use separate 2-layer MLP heads for each selection variable and component groups"""
+
+    selection_head_hidden_dim: int = 64
+    """Hidden dimension for separate selection head MLPs"""
+
+    component_head_hidden_dim: int = 128
+    """Hidden dimension for separate component head MLPs (pos/rot and force/torque)"""
