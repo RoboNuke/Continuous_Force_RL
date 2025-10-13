@@ -32,7 +32,7 @@ wrappers:
 
 environment:
   hybrid_task:
-    good_force_cmd_rew: 0.4 #0.134
+    good_force_cmd_rew: 2.0 #0.134
     bad_force_cmd_rew: -0.134 #-0.4
 
 agent:
@@ -42,6 +42,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "force_z"
+  name: "big_force_z"
   tags: []
-  group: "force_z"
+  group: "big_force_z"
