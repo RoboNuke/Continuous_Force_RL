@@ -47,7 +47,7 @@ class HybridActionGMM(MixtureSameFamily):
                 (
                     mix_sample[...,:self.force_size],
                     comp_samples[...,:,0],
-                    comp_samples[...,:self.force_size,1] 
+                    comp_samples[...,:self.force_size,1]
                 ), dim=-1
             )
             # scale everything
@@ -59,21 +59,35 @@ class HybridActionGMM(MixtureSameFamily):
             return out_samples
 
     def log_prob(self, action):
-        # extract samples
-        mean1 = action[...,self.force_size:self.force_size+6]
-        mean1[...,:3] *= self.p_w
-        mean1[...,3:6] *= self.r_w
-        
-        mean2 = torch.zeros_like(mean1)
-        mean2[...,:self.force_size] = action[...,self.force_size+6:6+2*self.force_size]
-        mean2[...,:3] *= self.f_w
-        if self.force_size > 3:
-            mean2[...,3:] *= self.t_w
-        else:
-            mean2[...,3:] = mean1[...,3:]    
+        # Handle both (batch, action_dim) and (sample, batch, action_dim)
+        original_shape = action.shape
+        if action.ndim > 2:
+            # Flatten sample dimensions with batch
+            action = action.reshape(-1, action.shape[-1])
 
-        means = torch.stack((mean1,mean2),dim=-1)
-        comp_log_prob = self.component_distribution.log_prob(means)
+        # extract samples
+        batch_size = action.shape[0]
+        taken_action = torch.zeros((batch_size, 6, 2), dtype=torch.float32, device=action.device)
+        use_force = torch.where(action[:,:self.force_size] > 0.5, True, False)      
+        
+        # Extract position/rotation and force/torque values
+        pos_rot_values = action[:, self.force_size:self.force_size+6]  # (batch, 6)
+        force_torque_values = action[:, self.force_size+6:2*self.force_size+6]  # (batch, force_size)
+
+        # For the first force_size dimensions, choose based on use_force mask
+        taken_action[:, :self.force_size, 0] = torch.where(
+            use_force,
+            force_torque_values,
+            pos_rot_values[:, :self.force_size]
+        )
+
+        # For remaining dimensions (if force_size < 6), always use pos_rot_values
+        if self.force_size < 6:
+            taken_action[:, self.force_size:, 0] = pos_rot_values[:, self.force_size:]
+
+        taken_action[:,:,1] = taken_action[:,:,0]
+        
+        comp_log_prob = self.component_distribution.log_prob(taken_action)
 
         if self.sample_uniform:
             log_z = (self.mixture_distribution.probs * (1 - self.uniform_rate) + self.uniform_rate/2.0).log()
@@ -81,12 +95,18 @@ class HybridActionGMM(MixtureSameFamily):
             log_z = self.mixture_distribution.logits #(self.mixture_distribution.probs).log()
         
         log_prob = torch.logsumexp(log_z + comp_log_prob, dim=-1)
+
+        # Reshape back to original sample shape if needed
+        if len(original_shape) > 2:
+            log_prob = log_prob.reshape(original_shape[:-1])
+
         return log_prob
     
-    def entropy(self):
-        samples = self.sample(sample_shape=(10000,))
-        log_prob = self.log_prob(samples)
-        return -(log_prob.exp() * log_prob).mean(dim=0)
+    #def entropy(self):
+    #    return 0.0
+    #    samples = self.sample(sample_shape=(10000,))
+    #    log_prob = self.log_prob(samples)
+    #    return -(log_prob.exp() * log_prob).mean(dim=0)
 
 
 class HybridGMMMixin(GaussianMixin):
@@ -123,33 +143,30 @@ class HybridGMMMixin(GaussianMixin):
         # map from states/observations to mean actions and log standard deviations
         mean_actions, log_std, outputs = self.compute(inputs, role)
         #print("Pos Actions:", torch.max(action[:,3:6]).item(), torch.min(action[:,3:6]).item(), torch.median(action[:,3:6]).item())
-        
         # clamp log standard deviations
         if self._g_clip_log_std:
             log_std = torch.clamp(log_std, self._g_log_std_min, self._g_log_std_max)
             
         batch_size = mean_actions.shape[0]
-        logits = mean_actions[:,:2*self.force_size].float()
-        
-        # Categorical logits need to be expanded to match components
-        mix_logits = torch.zeros((batch_size, 6, 2), dtype=torch.float32, device=mean_actions.device)
-        mix_logits[:,:self.force_size, :] = logits.view((batch_size, self.force_size, 2))
-        #mix_logits[:, :self.force_size, 0] = (1.0 - logits.exp()).log()
-        #mix_logits[:, :self.force_size, 1] = logits
-        if self.force_size < 6:
-            mix_logits[:, self.force_size:, 0] = -100.0 #0.0
-            mix_logits[:, self.force_size:, 1] = 0.0 #1.0
-            
-        mix_dist = Categorical(probs=mix_logits)
+        probs = mean_actions[:,:self.force_size].float()
 
-        
-        #print("mix dist:", mix_dist.probs)
-        mean1 = mean_actions[:, 2*self.force_size:2*self.force_size+6]
+        # Create categorical distribution from sigmoid probabilities
+        # probs[:, i] is P(force), so 1-probs[:, i] is P(position)
+        mix_probs = torch.zeros((batch_size, 6, 2), dtype=torch.float32, device=mean_actions.device)
+        # Stack [P(position), P(force)] for each dimension
+        mix_probs[:, :self.force_size, 0] = 1.0 - probs  # P(position/rotation)
+        mix_probs[:, :self.force_size, 1] = probs  # P(force)
+        # For dimensions beyond force_size, set to always select position (index 0)
+        if self.force_size < 6:
+            mix_probs[:, self.force_size:, 0] = 1.0
+            mix_probs[:, self.force_size:, 1] = 0.0
+        mix_dist = Categorical(probs=mix_probs)
+        mean1 = mean_actions[:, self.force_size:self.force_size+6]
         mean1[:,:3] *= self.pos_scale            # (batch, 6)
         mean1[:,3:6] *= self.rot_scale
-        
+
         mean2 = torch.zeros_like(mean1)
-        mean2[:,:self.force_size] = mean_actions[:, 6+2*self.force_size:6+3*self.force_size]
+        mean2[:,:self.force_size] = mean_actions[:, 6+self.force_size:6+2*self.force_size]
         mean2[:,:3] *= self.force_scale    # (batch, 6)
         if self.force_size > 3:
             mean2[:,3:6] *= self.torque_scale
@@ -168,7 +185,7 @@ class HybridGMMMixin(GaussianMixin):
             std[:, 3:, 1] = log_std[:, 9:].exp() * (self.torque_scale ** 2) #0.25
         else:
             std[:, 3:, 1] = std[:, 3:, 0]
-            
+
         # Create component Gaussians: Normal(loc, scale)
         components = Normal(loc=means, scale=std)  # (batch, 6, 2)
         
@@ -181,8 +198,6 @@ class HybridGMMMixin(GaussianMixin):
             ctrl_torque = self.force_size > 3,
             uniform_rate = self.uniform_rate
         )
-        cols_to_keep = [0,2,4,5,6,7,8,9,10,11,12,13]
-        mean_actions = mean_actions[:,cols_to_keep]
         actions = self._g_distribution.sample()
     
         # clip actions
@@ -197,10 +212,74 @@ class HybridGMMMixin(GaussianMixin):
             log_prob = self._g_reduction(log_prob, dim=-1)
         if log_prob.dim() != actions.dim():
             log_prob = log_prob.unsqueeze(-1)
-        
+
         outputs["mean_actions"] = mean_actions
-        
+
         return actions, log_prob, outputs
+    
+
+    def log_selection_probabilities(self, mix_logits, step):
+        """
+        Log the actual selection probabilities (after softmax)
+        """
+        if not (step % 15 == 0):
+            return
+        force_size = 3
+        # mix_logits shape: (batch, 6, 2)
+        probs = torch.softmax(mix_logits[:, :force_size, :], dim=-1)
+        
+        # Probability of selecting force (index 1)
+        force_probs = probs[:, :, 1]  # (batch, 3)
+        
+        print(f"\n=== Step {step} Selection Probabilities ===")
+        print(f"X force prob - mean: {force_probs[:, 0].mean().item():.4f}, std: {force_probs[:, 0].std().item():.4f}")
+        print(f"Y force prob - mean: {force_probs[:, 1].mean().item():.4f}, std: {force_probs[:, 1].std().item():.4f}")
+        print(f"Z force prob - mean: {force_probs[:, 2].mean().item():.4f}, std: {force_probs[:, 2].std().item():.4f}")
+        
+        # Check if they're actually different
+        diff_xy = (force_probs[:, 0] - force_probs[:, 1]).abs().mean().item()
+        diff_xz = (force_probs[:, 0] - force_probs[:, 2]).abs().mean().item()
+        diff_yz = (force_probs[:, 1] - force_probs[:, 2]).abs().mean().item()
+        
+        print(f"Mean absolute differences: X-Y: {diff_xy:.4f}, X-Z: {diff_xz:.4f}, Y-Z: {diff_yz:.4f}")
+
+    def log_selection_logits(self, mean_actions, step):
+        """
+        Log the actual selection logits to see if they're identical
+        """
+        if not (step % 15 == 0):
+            return
+        force_size = self.force_size
+        logits = mean_actions[:, :2*force_size].float()  # (batch, 6)
+        
+        # Reshape to (batch, 3, 2) for easier analysis
+        logits_reshaped = logits.view(-1, force_size, 2)
+        
+        print(f"\n=== Step {step} Selection Logits ===")
+        # Look at first environment's logits
+        print(f"X dimension logits: {logits_reshaped[0, 0, :].tolist()}")
+        print(f"Y dimension logits: {logits_reshaped[0, 1, :].tolist()}")
+        print(f"Z dimension logits: {logits_reshaped[0, 2, :].tolist()}")
+        
+        # Check if they're identical across batch
+        for dim_name, dim_idx in [('X', 0), ('Y', 1), ('Z', 2)]:
+            dim_logits = logits_reshaped[:, dim_idx, :]
+            print(f"\n{dim_name} dimension stats across batch:")
+            print(f"  Mean: {dim_logits.mean(dim=0).tolist()}")
+            print(f"  Std: {dim_logits.std(dim=0).tolist()}")
+        
+        # Check correlation between dimensions
+        x_logits = logits_reshaped[:, 0, 1].flatten()  # Force selection logit for X
+        y_logits = logits_reshaped[:, 1, 1].flatten()  # Force selection logit for Y
+        z_logits = logits_reshaped[:, 2, 1].flatten()  # Force selection logit for Z
+        
+        corr_xy = torch.corrcoef(torch.stack([x_logits, y_logits]))[0, 1].item()
+        corr_xz = torch.corrcoef(torch.stack([x_logits, z_logits]))[0, 1].item()
+        corr_yz = torch.corrcoef(torch.stack([y_logits, z_logits]))[0, 1].item()
+        
+        print(f"\nLogit correlations:")
+        print(f"  X-Y: {corr_xy:.6f}, X-Z: {corr_xz:.6f}, Y-Z: {corr_yz:.6f}")
+
 
 
 
@@ -287,21 +366,21 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
     
     def create_net(self, actor_n, actor_latent, hybrid_agent_parameters, device):
         self.actor_mean = MultiSimBaNet(
-            n=actor_n, 
-            in_size=self.num_observations, 
-            out_size=self.num_actions + self.force_size, 
-            latent_size=actor_latent, 
+            n=actor_n,
+            in_size=self.num_observations,
+            out_size=self.num_actions,
+            latent_size=actor_latent,
             device=device,
             tan_out=False,
             num_nets=self.num_agents
         )
-        
+
         if hybrid_agent_parameters['init_scale_last_layer']:
             with torch.no_grad():
                 for net in self.actor_mean.pride_nets:
                     net.output[-1].weight *= hybrid_agent_parameters['init_layer_scale']
-        
-        self.selection_activation = nn.LogSigmoid().to(device) #torch.nn.Sigmoid().to(device)
+
+        self.selection_activation = nn.Sigmoid().to(device)
         self.component_activation = nn.Tanh().to(device)
 
     def apply_selection_adjustments(self, hybrid_agent_parameters):
@@ -322,10 +401,8 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
         if self.init_bias:
             print("[INFO]:\tSetting initial Selection Bias")
             with torch.no_grad():
-                idxs = [0, 2, 4]
                 for net in self.actor_mean.pride_nets:
-                    net.output[-1].bias[idxs] = hybrid_agent_parameters['init_bias']  #-1.1 
-                    net.output[-1].bias[idxs+1] = 0
+                    net.output[-1].bias[:self.force_size] -= hybrid_agent_parameters['init_bias']
         if self.scale_z:
             scale_factor = hybrid_agent_parameters['pre_layer_scale_factor']
             print(f"[INFO]:\tAdding Scale Layer before final linear layer (scale_factor={scale_factor}")
@@ -340,29 +417,24 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
     
     def compute(self, inputs, role):
         zout = self.get_zout(inputs)
-        # first force_size are sigma, remaining is tanh
-        sels = zout[:,:2*self.force_size]
-        not_sels = zout[:,2*self.force_size:]
-        
+        # first force_size are logits, remaining is tanh
+        sels = zout[:,:self.force_size]
+        not_sels = zout[:,self.force_size:]
+
         new_sel_def = False
         if self.force_add:
-            # add force to sel
-            #f = torch.abs(inputs['states'][:, (self.num_observations - 6):self.num_observations - 6 + self.force_size])
-            #f_bias_s = F.softplus(self.force_bias_param.expand(zout.size()[0],-1)) * f 
-            #new_sels = sels + f_bias_s
-            #new_sel_def = True
             raise NotImplementedError("[ERROR]: Force add not updated for multi-net case")
-            
-        # tan sigma of sels
+
+        # apply sigmoid to selection logits
         if new_sel_def:
             final_sels = self.selection_activation(new_sels)
         else:
             final_sels = self.selection_activation(sels)
-        #final_sels = (final_sels + 1) * 2.0
-        
+
         final_not_sels = self.component_activation(not_sels)
+
         action_mean = torch.cat([final_sels, final_not_sels], dim=-1)
-        
+
         return action_mean, self.get_logstds(action_mean), {}
 
     def get_logstds(self, action_mean):
@@ -382,42 +454,66 @@ class HybridControlBlockSimBaActor(HybridControlSimBaActor):
         super().__init__(**kwargs)
 
     def create_net(self, actor_n, actor_latent, hybrid_agent_parameters, device):
+        use_separate_heads = hybrid_agent_parameters['use_separate_heads']
         self.actor_mean = BlockSimBa(
             num_agents=self.num_agents,
             obs_dim=self.num_observations,
             hidden_dim=actor_latent,
-            act_dim=self.num_actions + self.force_size,
+            act_dim=self.num_actions,
             device=device,
             num_blocks=actor_n,
-            tanh=False
+            tanh=False,
+            use_separate_heads=use_separate_heads,
+            selection_head_hidden_dim=hybrid_agent_parameters['selection_head_hidden_dim'],
+            component_head_hidden_dim=hybrid_agent_parameters['component_head_hidden_dim'],
+            force_size=self.force_size
         )
 
         if hybrid_agent_parameters['init_scale_last_layer']:
             with torch.no_grad():
-                self.actor_mean.fc_out.weight *= hybrid_agent_parameters['init_layer_scale']
-        
-        self.selection_activation = nn.LogSigmoid().to(device) #torch.nn.Sigmoid().to(device)
+                scale_factor = hybrid_agent_parameters['init_layer_scale']
+                if use_separate_heads:
+                    # Scale fc2 weights of all heads
+                    for head in self.actor_mean.selection_heads:
+                        head.fc2.weight *= scale_factor
+                    self.actor_mean.pos_rot_head.fc2.weight *= scale_factor
+                    self.actor_mean.force_torque_head.fc2.weight *= scale_factor
+                else:
+                    self.actor_mean.fc_out.weight *= scale_factor
+
+        self.selection_activation = nn.Sigmoid().to(device)
         self.component_activation = nn.Tanh().to(device)
 
 
     def apply_selection_adjustments(self, hybrid_agent_parameters):
+        use_separate_heads = hybrid_agent_parameters['use_separate_heads']
+
         if self.force_add:
             raise NotImplementedError("[ERROR]: Force add not updated for block SimBa networks")
-        
+
         if self.init_scale_weights:
             print("[INFO]:\tDownscaling Initial Selection Weights")
             with torch.no_grad():
                 scale_factor = hybrid_agent_parameters['init_scale_weights_factor']
-                self.actor_mean.fc_out.weight[:,:self.force_size,:] *= scale_factor
-                self.actor_mean.fc_out.bias[:, :self.force_size] *= scale_factor
-        
+                if use_separate_heads:
+                    # Scale selection head weights and biases only
+                    for head in self.actor_mean.selection_heads:
+                        head.fc2.weight *= scale_factor
+                        head.fc2.bias *= scale_factor
+                else:
+                    self.actor_mean.fc_out.weight[:,:self.force_size,:] *= scale_factor
+                    self.actor_mean.fc_out.bias[:, :self.force_size] *= scale_factor
+
         if self.init_bias:
             print("[INFO]:\tSetting initial Selection Bias")
             with torch.no_grad():
-                # we have logits of size 2*force size 
-                # were each is the chance of selecting force or not selecting force
-                self.actor_mean.fc_out.bias[:, [0,2,4]] = hybrid_agent_parameters['init_bias']  #-1.1 
-                self.actor_mean.fc_out.bias[:, [1,3,5]] = 0.0
+                bias_value = hybrid_agent_parameters['init_bias']
+                if use_separate_heads:
+                    # Adjust selection head biases only
+                    for head in self.actor_mean.selection_heads:
+                        head.fc2.bias -= bias_value
+                else:
+                    self.actor_mean.fc_out.bias[:, :self.force_size] -= bias_value
 
         if self.scale_z:
             raise NotImplementedError("[ERROR]: Last layer input scaling not implemented for block SimBa networks")
@@ -426,3 +522,4 @@ class HybridControlBlockSimBaActor(HybridControlSimBaActor):
         num_envs = inputs['states'].size()[0] // self.num_agents
         #print("Num envs:", num_envs)
         return self.actor_mean(inputs['states'][:,:self.num_observations], num_envs)
+    

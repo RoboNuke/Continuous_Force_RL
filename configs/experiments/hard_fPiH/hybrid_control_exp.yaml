@@ -1,0 +1,23 @@
+# Hybrid Control Experiment Configuration 
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+
+primary:
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/same_hybrid_ctrl_tracker.txt"
+  #break_forces: [5,10]
+  
+# Enable hybrid control wrapper and related systems
+wrappers:
+  # Enable hybrid control wrapper
+  hybrid_control:
+    enabled: true
+    
+  pose_contact_logging:
+    enabled: false
+
+# Experiment metadata
+experiment:
+  name: "same_hybrid_control_exp"
+  tags: []
+  group: "same_hybrid_ctrl"

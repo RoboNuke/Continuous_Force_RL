@@ -1,12 +1,10 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import os
 from models.SimBa import SimBaNet
 from typing import Any, Mapping, Tuple, Union
 from skrl.models.torch import DeterministicMixin, GaussianMixin, Model
 import math
-from models.feature_net import NatureCNN, layer_init, he_layer_init
+import torch.nn.functional as F
 
 # -----------------------------
 #  Block Linear Layer
@@ -17,14 +15,9 @@ class BlockLinear(nn.Module):
         self.weight = nn.Parameter(torch.zeros(num_blocks, out_features, in_features), requires_grad=True)
         self.bias = nn.Parameter(torch.zeros(num_blocks, out_features), requires_grad=True)
         # init each block separately
-        #print(name, in_features, out_features)
         for i in range(num_blocks):
             nn.init.kaiming_normal_(self.weight[i])
             nn.init.zeros_(self.bias[i])
-            self.weight[i]._agent_id = i
-            self.bias[i]._agent_id = i
-            self.weight[i]._name=f"{name}({in_features}x{out_features}).weight"
-            self.bias[i]._name=f"{name}({in_features}x{out_features}).bias"
 
     def forward(self, x):
         # x: (num_blocks, batch, in_features)
@@ -46,11 +39,6 @@ class BlockLayerNorm(nn.Module):
         if affine:
             self.weight = nn.Parameter(torch.ones(*shape), requires_grad=True)
             self.bias = nn.Parameter(torch.zeros(*shape), requires_grad=True)
-            for i in range(num_blocks):
-                self.weight[i]._agent_id = i
-                self.bias[i]._agent_id = i
-                self.weight[i]._name=f"{name}.weight"
-                self.bias[i]._name=f"{name}.bias"
         else:
             self.register_parameter("weight", None)
             self.register_parameter("bias", None)
@@ -64,6 +52,29 @@ class BlockLayerNorm(nn.Module):
         out = (x - mean) * inv_std
         if self.affine:
             out = out * self.weight[:, None, :] + self.bias[:, None, :]
+        return out
+
+
+# -----------------------------
+#  Block MLP (2-layer with activation)
+# -----------------------------
+class BlockMLP(nn.Module):
+    """2-layer MLP using block-parallel linear layers."""
+    def __init__(self, num_blocks, in_dim, hidden_dim, out_dim, activation=None, name="block_mlp"):
+        super().__init__()
+        self.fc1 = BlockLinear(num_blocks, in_dim, hidden_dim, name=f"{name}.fc1")
+        self.relu = nn.ReLU()
+        self.fc2 = BlockLinear(num_blocks, hidden_dim, out_dim, name=f"{name}.fc2")
+        self.activation = activation  # 'sigmoid', 'tanh', or None
+
+    def forward(self, x):
+        # x: (num_blocks, batch, in_dim)
+        out = self.relu(self.fc1(x))
+        out = self.fc2(out)
+        if self.activation == 'sigmoid':
+            out = torch.sigmoid(out)
+        elif self.activation == 'tanh':
+            out = torch.tanh(out)
         return out
 
 
@@ -91,14 +102,18 @@ class BlockResidualBlock(nn.Module):
 # -----------------------------
 class BlockSimBa(nn.Module):
     def __init__(
-            self, 
-            num_agents, 
-            obs_dim, 
-            hidden_dim, 
-            act_dim, 
-            device, 
-            num_blocks=2, 
-            tanh=False
+            self,
+            num_agents,
+            obs_dim,
+            hidden_dim,
+            act_dim,
+            device,
+            num_blocks=2,
+            tanh=False,
+            use_separate_heads=False,
+            selection_head_hidden_dim=64,
+            component_head_hidden_dim=128,
+            force_size=3
         ):
         super().__init__()
         self.device=device
@@ -108,13 +123,30 @@ class BlockSimBa(nn.Module):
         self.act_dim = act_dim
         self.num_blocks = num_blocks
         self.use_tanh = tanh
-        
+        self.use_separate_heads = use_separate_heads
+        self.force_size = force_size
+
         self.fc_in = BlockLinear(num_agents, obs_dim, hidden_dim, name="fc_in")
         self.resblocks = nn.ModuleList(
             [BlockResidualBlock(num_agents, hidden_dim, name=f"resblock_{i}") for i in range(num_blocks)]
         )
         self.ln_out = BlockLayerNorm(num_agents, hidden_dim, name="ln_out")
-        self.fc_out = BlockLinear(num_agents, hidden_dim, act_dim, name="fc_out")
+
+        if use_separate_heads:
+            # Create separate heads for each selection variable
+            self.selection_heads = nn.ModuleList([
+                BlockMLP(num_agents, hidden_dim, selection_head_hidden_dim, 1,
+                        activation='sigmoid', name=f"sel_head_{i}")
+                for i in range(force_size)
+            ])
+            # Position/rotation component head
+            self.pos_rot_head = BlockMLP(num_agents, hidden_dim, component_head_hidden_dim, 6,
+                                        activation='tanh', name="pos_rot_head")
+            # Force/torque component head
+            self.force_torque_head = BlockMLP(num_agents, hidden_dim, component_head_hidden_dim, force_size,
+                                             activation='tanh', name="force_torque_head")
+        else:
+            self.fc_out = BlockLinear(num_agents, hidden_dim, act_dim, name="fc_out")
         #self.tanh = tanh
         #self.th = nn.Tanh()
     def forward(self, obs, num_envs):
@@ -127,9 +159,26 @@ class BlockSimBa(nn.Module):
         x = self.fc_in(obs)
         for block in self.resblocks:
             x = block(x)
-        actions = self.fc_out( self.ln_out(x) )
-        if self.use_tanh:
-            actions = torch.tanh(actions)
+
+        ln_out = self.ln_out(x)
+
+        if self.use_separate_heads:
+            # Apply each selection head and concatenate
+            sel_outputs = [head(ln_out) for head in self.selection_heads]
+            selections = torch.cat(sel_outputs, dim=-1)  # (num_agents, num_envs, force_size)
+
+            # Apply component heads
+            pos_rot_out = self.pos_rot_head(ln_out)  # (num_agents, num_envs, 6)
+            force_torque_out = self.force_torque_head(ln_out)  # (num_agents, num_envs, force_size)
+
+            # Concatenate all outputs: [selections, pos_rot, force_torque]
+            actions = torch.cat([selections, pos_rot_out, force_torque_out], dim=-1)
+            # Shape: (num_agents, num_envs, 2*force_size + 6)
+        else:
+            actions = self.fc_out(ln_out)
+            if self.use_tanh:
+                actions = torch.tanh(actions)
+
         return actions.view(-1, actions.shape[-1])  # flatten back
 
 
@@ -145,6 +194,7 @@ class BlockSimBaActor(GaussianMixin, Model):
             actor_latent=512,
             action_gain=1.0,
             last_layer_scale=1.0,
+            init_sel_bias=0.0,
 
             clip_actions=False,
             clip_log_std=True, 
@@ -153,10 +203,13 @@ class BlockSimBaActor(GaussianMixin, Model):
             reduction="sum",
             sigma_idx=0
         ):
+        print("[INFO]: \t\tInstantiating Block SimBa Actor")
         Model.__init__(self, observation_space, action_space, device)
         GaussianMixin.__init__(self, clip_actions, clip_log_std, min_log_std, max_log_std, reduction)
 
         self.num_agents = num_agents
+
+        self.sigma_idx = sigma_idx
         
         self.actor_logstd = nn.ParameterList(
             [
@@ -166,6 +219,8 @@ class BlockSimBaActor(GaussianMixin, Model):
                 for _ in range(num_agents)
             ]
         ).to(device)
+
+        print(f"[INFO]: \t\tInit Std Dev:{act_init_std}")
         for i in range(num_agents):
             self.actor_logstd[i]._agent_id = i
             self.actor_logstd[i]._name=f"logstd_{i}"
@@ -174,18 +229,25 @@ class BlockSimBaActor(GaussianMixin, Model):
             num_agents = self.num_agents,
             obs_dim = self.num_observations,
             hidden_dim = actor_latent,
-            act_dim = self.num_actions,
+            act_dim = self.num_actions + self.sigma_idx,
             device=device,
             num_blocks = actor_n,
-            tanh = True
+            tanh = (self.sigma_idx == 0)
         ).to(device)
 
-        self.sigma_idx = sigma_idx
+        #self.selection_activation = nn.Sigmoid().to(device)
+        self.component_activation = nn.Tanh().to(device)
 
         with torch.no_grad():
             self.actor_mean.fc_out.weight *= last_layer_scale
+            print(f"[INFO]: \t\tScaled model last layer by {last_layer_scale}")
             if sigma_idx > 0:
-                self.actor_mean.fc_out.bias[:sigma_idx] = -1.1
+                print(f"[INFO]: \t\tSigma Idx={sigma_idx} so last layer bias[:{sigma_idx}] set to -1.1")
+                #self.actor_mean.fc_out.bias[:, :sigma_idx] -= init_sel_bias      
+                # This biases network toward selecting "not force" initially
+                self.actor_mean.fc_out.bias[:, 0:2*sigma_idx:2] -= init_sel_bias  # first of each pair
+                self.actor_mean.fc_out.bias[:, 1:2*sigma_idx:2] += init_sel_bias  # second of each pair
+
 
     def act(self, inputs, role):
         return GaussianMixin.act(self, inputs, role)
@@ -196,9 +258,15 @@ class BlockSimBaActor(GaussianMixin, Model):
         action_mean = self.actor_mean(inputs['states'][:,:self.num_observations], num_envs)
         if self.sigma_idx > 0:
             #action_mean[...,:self.sigma_idx] = (action_mean[:,:self.sigma_idx] + 1) / 2.0
-            left  = (action_mean[..., :self.sigma_idx] + 1.0) * 0.5
-            right = action_mean[..., self.sigma_idx:]
-            action_mean = torch.cat([left, right], dim=-1)
+            selection_logits  = action_mean[..., :2*self.sigma_idx]
+
+            # Process selection logits: reshape to pairs, softmax, extract first prob
+            selection_logits = selection_logits.view(-1, self.sigma_idx, 2)  # [batch*agents, sigma_idx, 2]
+            selection_probs = F.softmax(selection_logits, dim=-1)[..., 0]  # [batch*agents, sigma_idx]
+
+            components = self.component_activation(action_mean[..., 2*self.sigma_idx:])
+
+            action_mean = torch.cat([selection_probs, components], dim=-1)
         
         logstds = []
         batch_size = int(action_mean.size()[0] // self.num_agents)
@@ -409,53 +477,4 @@ def make_agent_optimizer(
         
     return torch.optim.Adam(param_groups, betas=betas, eps=eps, weight_decay=weight_decay)
 
-"""
-    num_agents = policy_block.num_agents
-    assert critic_block.num_agents == num_agents, "Policy and critic must have same number of agents"
-    
-    param_groups = []
-
-    for i in range(num_agents):
-        # Policy group
-        policy_params = [
-            p for p in policy_block.parameters()
-            if hasattr(p, "_agent_id") and p._agent_id == i
-        ]
-        for name, p in policy_block.named_parameters():
-            print(name) #p._agent_id, p._name)
-
-        for p in policy_params:
-            print(p._name)
-        #policy_params.append( policy_std[i] )
-        param_groups.append({
-            "params": policy_params,
-            "lr": policy_lr,
-            "agent_id": i,
-            "role": "policy"
-        })
-        assert len(policy_params) > 0, f"Policy Param {i} not added to param group"
-        print(f"[INFO]: Created policy param group for agent {policy_params[0]._agent_id}, with lr={policy_lr} and size={len(policy_params)}")
-        if debug:
-            attach_grad_debug_hooks(policy_params, i, "policy")
-        
-
-        # Critic group
-        critic_params = [
-            p for p in critic_block.parameters()
-            if hasattr(p, "_agent_id") and p._agent_id == i
-        ]
-        param_groups.append({
-            "params": critic_params,
-            "lr": critic_lr,
-            "agent_id": i,
-            "role": "critic"
-        })
-        assert len(critic_params) > 0, f"Critic Param {i} not added to param group"
-        print(f"[INFO]: Created critic param group for agent {critic_params[0]._agent_id}, with lr={critic_lr} and size={len(critic_params)}")
-        if debug:
-            attach_grad_debug_hooks(critic_params, i, "critic")
-
-    optimizer = torch.optim.Adam(param_groups, betas=betas, eps=eps, weight_decay=weight_decay)
-    return optimizer
-    """
     

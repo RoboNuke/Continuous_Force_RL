@@ -1,0 +1,22 @@
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+# Experiment metadata
+experiment:
+  name: "pose"
+  tags: []
+  group: "pose"
+  wandb_project: "hybrid_action_tests"
+
+primary:
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/pose_baseline.txt"
+  agents_per_break_force: 3
+  break_forces: [20]
+  max_steps: 4000000
+  seed: 42
+
+
+# Model configuration for hybrid agent
+model:
+  critic_output_init_mean: 50  # Higher initial value estimate for complex task
+

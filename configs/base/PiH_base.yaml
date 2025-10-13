@@ -1,0 +1,295 @@
+# Base Factory Configuration V2
+# Updated for ConfigManagerV2 - No reference syntax, direct values only
+
+# Task name (required for new config system)
+
+# EXPERIMENT CONFIGURATION
+experiment:
+  name: "fPiH_base"
+  tags: ["factory", 'FPiH', 'scaled_tests']
+  group: "force_vel_test"
+  wandb_project: "debug"
+  wandb_entity: "hur"
+  task_name: "Isaac-Factory-PegInsert-Direct-v0"
+
+# PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
+primary:
+  agents_per_break_force: 5  # Number of agents per break force condition
+  num_envs_per_agent: 256    # Environments per individual agent
+  break_forces: [50]  # Break force conditions (-1 = unbreakable)
+  decimation: 8
+  policy_hz: 15
+  max_steps: 10000128 #25000192
+  debug_mode: false
+  seed: -1
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/voltron_baseline_tracker.txt" #"/home/hunter/ckpt_tracker.txt" #
+  ctrl_torque: false
+
+# ENVIRONMENT OVERRIDES (Direct Isaac Lab FactoryEnvCfg parameters)
+environment:
+  # episode_length_s comes from Isaac Lab defaults (10.0s for peg insert)
+  # decimation comes from primary config applied automatically
+  scene:
+    filter_collisions: false
+
+  # These parameters will be applied to the ExtendedCtrlCfg
+  ctrl:
+    force_action_bounds: [50.0, 50.0, 50.0]
+    torque_action_bounds: [0.5, 0.5, 0.5]
+    force_action_threshold: [10.0, 10.0, 10.0]
+    torque_action_threshold: [0.1, 0.1, 0.1]
+    default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
+    #default_task_force_gains: [0.05, 0.05, 0.05, 0.001, 0.001, 0.001]
+
+    #default_task_prop_gains: [50, 50, 50, 30, 30, 30]
+    no_sel_ema: true
+
+  hybrid_task:
+    good_force_cmd_rew: 0.1
+    bad_force_cmd_rew: -0.1
+    wrench_norm_scale: 0.1
+
+  # Observation attribute mapping for Isaac Lab integration
+  component_attr_map:
+    fingertip_pos: "fingertip_midpoint_pos"
+    fingertip_pos_rel_fixed: "fingertip_pos_rel_fixed"
+    fingertip_quat: "fingertip_midpoint_quat"
+    ee_linvel: "ee_linvel_fd"
+    ee_angvel: "ee_angvel_fd"
+    joint_pos: "joint_pos"
+    prev_actions: "prev_actions"
+    force_torque: "robot_force_torque"
+    held_pos: "held_pos"
+    held_pos_rel_fixed: "held_pos_rel_fixed"
+    held_quat: "held_quat"
+    fixed_pos: "fixed_pos"
+    fixed_quat: "fixed_quat"
+
+# MODEL CONFIGURATION (SimBa architecture parameters)
+model:
+  # Standard model parameters
+  force_encoding: null
+  last_layer_scale: 0.1
+  act_init_std: 1.0
+  critic_output_init_mean: 50
+
+  # Actor architecture (SimBa policy network)
+  actor:
+    n: 1  # Number of SimBa layers
+    latent_size: 256  # Hidden dimension
+
+  # Critic architecture (SimBa value network)
+  critic:
+    n: 3  # Number of SimBa layers
+    latent_size: 1024  # Hidden dimension
+
+  # Hybrid agent configuration
+  use_hybrid_agent: false
+
+  # Hybrid agent specific parameters
+  hybrid_agent:
+    ctrl_torque: false  # Match primary.ctrl_torque
+    unit_std_init: false
+    unit_factor_std_init: 1.0
+    pos_init_std: 1.0
+    rot_init_std: 1.0
+    force_init_std: 1.0
+
+    # Output scaling
+    pos_scale: 1.0
+    rot_scale: 1.0
+    force_scale: 1.0
+    torque_scale: 1.0
+
+    # Selection network adjustments
+    selection_adjustment_types: ['init_bias']
+
+    # scale on selection parameters only
+    init_scale_weights_factor: 1.0
+
+    # bias on selection parameters
+    # positive increases pos selection, negative force
+    # 2.5 - >97% 
+    init_bias: 2.5 
+
+    # adds scale layer if adj has scale_zin
+    pre_layer_scale_factor: 0.1
+
+    # scale the weight layer at the end
+    init_scale_last_layer: true
+    init_layer_scale: 0.1
+    uniform_sampling_rate: 0.0
+
+# WRAPPERS CONFIGURATION (Direct wrapper parameters)
+wrappers:
+  # Historical observation tracking
+  history_observation:
+    enabled: false
+    history_components: ['force_torque']  # Only track force-torque history
+    history_length: null  # Uses decimation (8) from primary config
+    history_samples: null  # Uses all samples from history_length
+
+  # Fragile object behavior
+  fragile_objects:
+    enabled: true
+    peg_break_rew: -0.4 #-1.0
+    # break_force and num_agents are computed from primary config automatically
+
+  # Efficient environment resetting3
+  efficient_reset:
+    enabled: true
+
+  # Force-torque sensor
+  force_torque_sensor:
+    enabled: true
+    use_tanh_scaling: false
+    tanh_scale: 0.03
+    add_force_obs: true
+    contact_force_threshold: 1.5
+    contact_torque_threshold: 100.0 # don't want torque activation
+    log_contact_state: true
+
+  # Observation format conversion (Isaac Lab dict -> single tensor)
+  observation_manager:
+    enabled: true
+    merge_strategy: "concatenate"
+
+  # Domain randomization noise
+  observation_noise:
+    enabled: false
+    global_scale: 1.0
+    apply_to_critic: true
+    seed: null
+
+  # Hybrid force-position control
+  hybrid_control:
+    enabled: false
+    # ctrl_torque is computed from primary config automatically
+    reward_type: "none" #"simp"
+
+  # Factory-specific metrics tracking
+  factory_metrics:
+    enabled: true
+    publish_to_wandb: true
+    # num_agents is computed from primary config automatically
+
+  # Wandb logging with factory metrics
+  wandb_logging:
+    enabled: true
+
+  # Enhanced action logging
+  action_logging:
+    enabled: false
+    track_selection: true
+    track_pos: true
+    track_rot: true
+    track_force: true
+    track_torque: true
+    force_size: 3
+    logging_frequency: 150
+
+  # Pose contact logging
+  pose_contact_logging:
+    enabled: true
+
+  # Force reward system with 8 reward functions
+  force_reward:
+    enabled: false
+    contact_force_threshold: 1.0
+    contact_window_size: 10
+
+    # Force Magnitude Reward
+    enable_force_magnitude_reward: false
+    force_magnitude_reward_weight: 1.0
+    force_magnitude_base_force: 5.0
+    force_magnitude_keep_sign: true
+
+    # Alignment Award (contact only)
+    enable_alignment_award: false
+    alignment_award_reward_weight: 1.0
+    alignment_goal_orientation: [0.0, 0.0, -1.0]
+
+    # Force Action Error
+    enable_force_action_error: false
+    force_action_error_reward_weight: 1.0
+
+    # Contact Consistency (contact only)
+    enable_contact_consistency: false
+    contact_consistency_reward_weight: 1.0
+    contact_consistency_beta: 1.0
+    contact_consistency_use_ema: true
+    contact_consistency_ema_alpha: 0.1
+
+    # Oscillation Penalty
+    enable_oscillation_penalty: false
+    oscillation_penalty_reward_weight: 1.0
+    oscillation_penalty_window_size: 5
+
+    # Contact Transition Reward
+    enable_contact_transition_reward: false
+    contact_transition_reward_weight: 1.0
+
+    # Efficiency
+    enable_efficiency: false
+    efficiency_reward_weight: 1.0
+
+    # Force Ratio (contact only)
+    enable_force_ratio: false
+    force_ratio_reward_weight: 1.0
+
+
+# AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
+agent:
+  # Core identification
+  disable_progressbar: true
+
+  # Checkpoint and experiment tracking
+  track_ckpts: false
+  # ckpt_tracker_path comes from primary config automatically
+
+  # SKRL PPO PARAMETERS (these override SKRL defaults)
+  # rollouts and mini_batches are auto-calculated from episode timing
+  learning_epochs: 4
+  mini_batches: 150
+  discount_factor: 0.99
+  lambda_: 0.95  # Note: underscore for Python compatibility
+  random_timesteps: 0
+  learning_starts: 0
+  random_value_timesteps: 0
+  mixed_precision: false
+
+  # CUSTOM LEARNING PARAMETERS (extensions to SKRL)
+  policy_learning_rate: 1.0e-5
+  critic_learning_rate: 1.0e-5
+  value_update_ratio: 2
+
+  # Optimizer parameters
+  optimizer_betas: [0.999, 0.999]
+  optimizer_eps: 1.0e-8
+  optimizer_weight_decay: 0
+
+  # Loss and clipping
+  use_huber_value_loss: true
+  grad_norm_clip: 0.5
+  ratio_clip: 0.2
+  clip_predicted_values: false
+  value_clip: 0.2
+  entropy_loss_scale: 0.0
+  value_loss_scale: 1.0
+  kl_threshold: 0.05
+  time_limit_bootstrap: true
+  #checkpoint_interval: 1500
+
+  # Reward shaping
+  reward_shaper_type: 'const_scale'
+  rewards_shaper_scale: 0.25 #0.1
+
+  # Preprocessors
+  state_preprocessor: true
+  value_preprocessor: true
+
+  # Learning rate scheduler
+  learning_rate_scheduler: "KLAdaptiveLR"
+  learning_rate_scheduler_kwargs:
+    kl_threshold: 0.01
+    min_lr: 1.0e-9
