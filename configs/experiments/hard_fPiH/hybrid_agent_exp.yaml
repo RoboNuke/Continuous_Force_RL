@@ -14,7 +14,7 @@ model:
   use_hybrid_agent: true
   hybrid_agent:
     unit_std_init: false
-    init_bias: 0.0 #2.5 #1.1
+    init_bias: 2.5 #1.1
     init_scale_last_layer: true
     init_layer_scale: 0.1
 
@@ -42,6 +42,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "sigmoidProb_nobias_1std_policyLR(5-6)"
+  name: "sigmoidProb_1std_policyLR(5-6)"
   tags: []
-  group: "sigmoidProb_noBias_1std_policyLR(5-6)_agnt"
+  group: "sigmoidProb_1std_policyLR(5-6)_agnt"
