@@ -27,7 +27,7 @@ wrappers:
   # Enable hybrid control wrapper
   hybrid_control:
     enabled: true
-    reward_type: "dirs"
+    reward_type: "simp"
     
   pose_contact_logging:
     enabled: false
@@ -44,6 +44,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "noScale_noBias_dirs"
+  name: "noScale_noBias_simp"
   tags: []
-  group: "noScale_noBias_dirs"
+  group: "noScale_noBias_simp"
