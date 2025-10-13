@@ -11,10 +11,10 @@ from torch.distributions.distribution import Distribution
 import torch.nn.functional as F
 from models.block_simba import BlockSimBa
 
-class HybridActionGMM(MixtureSameFamily):
+class HybridActionGMM(Distribution): #MixtureSameFamily):
     def __init__(
             self,
-            mixture_distribution: Categorical,
+            mixture_distribution: Distribution,
             component_distribution: Distribution,
             validate_args: Optional[bool] = None,
             pos_weight: float = 1.0,
@@ -24,7 +24,9 @@ class HybridActionGMM(MixtureSameFamily):
             uniform_rate: float = 0.01,
             ctrl_torque: bool = False
     ) -> None:
-        super().__init__(mixture_distribution, component_distribution, validate_args)
+        self.mixture_distribution = mixture_distribution
+        self.component_distribution = component_distribution
+        #super().__init__(mixture_distribution, component_distribution, validate_args)
         self.f_w = force_weight
         self.p_w = pos_weight
         self.r_w = rot_weight
@@ -57,50 +59,56 @@ class HybridActionGMM(MixtureSameFamily):
             if self.force_size > 3:
                 out_samples[...,self.force_size+9:] /= self.t_w
             return out_samples
-
+        
     def log_prob(self, action):
-        # Handle both (batch, action_dim) and (sample, batch, action_dim)
-        original_shape = action.shape
-        if action.ndim > 2:
-            # Flatten sample dimensions with batch
-            action = action.reshape(-1, action.shape[-1])
-
-        # extract samples
+        #print(f"log_prob called with action shape: {action.shape}")
+        # Extract components from action
         batch_size = action.shape[0]
-        taken_action = torch.zeros((batch_size, 6, 2), dtype=torch.float32, device=action.device)
-        use_force = torch.where(action[:,:self.force_size] > 0.5, True, False)      
+        selections = action[:, :self.force_size]  # (batch, 3) - values are 0 or 1
+        pos_rot = action[:, self.force_size:self.force_size+6]  # (batch, 6)
+        force_torque = action[:, self.force_size+6:2*self.force_size+6]  # (batch, force_size)
         
-        # Extract position/rotation and force/torque values
-        pos_rot_values = action[:, self.force_size:self.force_size+6]  # (batch, 6)
-        force_torque_values = action[:, self.force_size+6:2*self.force_size+6]  # (batch, force_size)
-
-        # For the first force_size dimensions, choose based on use_force mask
-        taken_action[:, :self.force_size, 0] = torch.where(
-            use_force,
-            force_torque_values,
-            pos_rot_values[:, :self.force_size]
-        )
-
-        # For remaining dimensions (if force_size < 6), always use pos_rot_values
-        if self.force_size < 6:
-            taken_action[:, self.force_size:, 0] = pos_rot_values[:, self.force_size:]
-
-        taken_action[:,:,1] = taken_action[:,:,0]
+        # === SELECTION LOG PROBS (Independent Bernoulli) ===
+        sel_log_prob = self.mixture_distribution.log_prob(selections)  # (batch,)
         
-        comp_log_prob = self.component_distribution.log_prob(taken_action)
-
-        if self.sample_uniform:
-            log_z = (self.mixture_distribution.probs * (1 - self.uniform_rate) + self.uniform_rate/2.0).log()
+        # === CONTINUOUS COMPONENT LOG PROBS ===
+        # Scale the values to match what the component distributions expect
+        # Position component expects scaled pos/rot values
+        pos_scaled = torch.zeros(batch_size, 6, device=action.device)
+        pos_scaled[:, :3] = pos_rot[:, :3] * self.p_w
+        pos_scaled[:, 3:6] = pos_rot[:, 3:6] * self.r_w
+        
+        # Force component expects scaled force/torque values  
+        force_scaled = torch.zeros(batch_size, 6, device=action.device)
+        force_scaled[:, :self.force_size] = force_torque * self.f_w
+        if self.force_size > 3:
+            force_scaled[:, 3:6] *= self.t_w
         else:
-            log_z = self.mixture_distribution.logits #(self.mixture_distribution.probs).log()
+            force_scaled[:, 3:6] = pos_scaled[:, 3:6]  # Use pos for rotation
         
-        log_prob = torch.logsumexp(log_z + comp_log_prob, dim=-1)
+        # Stack position and force into shape (batch, 6, 2) to match component_distribution
+        values = torch.stack([pos_scaled, force_scaled], dim=-1)  # (batch, 6, 2)
+        
+        # Evaluate component distribution at these values
+        comp_log_prob = self.component_distribution.log_prob(values)  # (batch, 6, 2)
+        
+        # For each dimension, select the log prob corresponding to what was selected
+        use_force = selections > 0.5  # (batch, force_size)
+        
+        # Expand to (batch, 6) for all dimensions
+        use_force_expanded = torch.zeros(batch_size, 6, dtype=torch.bool, device=action.device)
+        use_force_expanded[:, :self.force_size] = use_force
+        
+        # Select position (index 0) or force (index 1) component log prob
+        # comp_log_prob[:, :, 0] is position, comp_log_prob[:, :, 1] is force
+        continuous_log_prob = torch.where(
+            use_force_expanded,
+            comp_log_prob[:, :, 1],  # Force component
+            comp_log_prob[:, :, 0]   # Position component
+        ).sum(dim=-1)  # Sum over all 6 dimensions -> (batch,)
+        #print(f"sel_log_prob shape: {sel_log_prob.shape}, continuous_log_prob shape: {continuous_log_prob.shape}")
 
-        # Reshape back to original sample shape if needed
-        if len(original_shape) > 2:
-            log_prob = log_prob.reshape(original_shape[:-1])
-
-        return log_prob
+        return sel_log_prob + continuous_log_prob
     
     #def entropy(self):
     #    return 0.0
@@ -148,19 +156,23 @@ class HybridGMMMixin(GaussianMixin):
             log_std = torch.clamp(log_std, self._g_log_std_min, self._g_log_std_max)
             
         batch_size = mean_actions.shape[0]
-        probs = mean_actions[:,:self.force_size].float()
-
-        # Create categorical distribution from sigmoid probabilities
-        # probs[:, i] is P(force), so 1-probs[:, i] is P(position)
-        mix_probs = torch.zeros((batch_size, 6, 2), dtype=torch.float32, device=mean_actions.device)
-        # Stack [P(position), P(force)] for each dimension
-        mix_probs[:, :self.force_size, 0] = 1.0 - probs  # P(position/rotation)
-        mix_probs[:, :self.force_size, 1] = probs  # P(force)
-        # For dimensions beyond force_size, set to always select position (index 0)
+        selection_probs = mean_actions[:,:self.force_size].float()
+        
+        # Create independent Bernoulli for selections
+        selection_dist = Independent(Bernoulli(probs=selection_probs), 1) #Bernoulli(probs=selection_probs) #
+        # For GMM compatibility, still create categorical-style probs
+        mix_probs = torch.zeros((batch_size, 6, 2), device=mean_actions.device)
+        mix_probs[:, :self.force_size, 0] = 1.0 - selection_probs
+        mix_probs[:, :self.force_size, 1] = selection_probs
         if self.force_size < 6:
             mix_probs[:, self.force_size:, 0] = 1.0
             mix_probs[:, self.force_size:, 1] = 0.0
-        mix_dist = Categorical(probs=mix_probs)
+        
+        # But pass the Bernoulli distribution to GMM instead of Categorical
+        mix_dist = selection_dist  # Store the actual Bernoulli
+        self._selection_probs = selection_probs  # Store for log_prob use
+
+
         mean1 = mean_actions[:, self.force_size:self.force_size+6]
         mean1[:,:3] *= self.pos_scale            # (batch, 6)
         mean1[:,3:6] *= self.rot_scale
@@ -208,8 +220,8 @@ class HybridGMMMixin(GaussianMixin):
         # log of the probability density function
         log_prob = self._g_distribution.log_prob(inputs.get("taken_actions", actions).clone())
         
-        if self._g_reduction is not None:
-            log_prob = self._g_reduction(log_prob, dim=-1)
+        #if self._g_reduction is not None:
+        #    log_prob = self._g_reduction(log_prob, dim=-1)
         if log_prob.dim() != actions.dim():
             log_prob = log_prob.unsqueeze(-1)
 

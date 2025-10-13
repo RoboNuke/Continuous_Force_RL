@@ -22,7 +22,7 @@ model:
 
     unit_factor_std_init: 1.0
 
-  use_separate_heads: true
+  use_separate_heads: false
   selection_head_hidden_dim: 64
   component_head_hidden_dim: 128
 
@@ -48,6 +48,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "sepHeads_noBias_pLR5-6_dirs"
+  name: "clopLight_noBias_pLR5-6_dirs"
   tags: []
-  group: "sepHeads_noBias_pLR5-6_dirs"
+  group: "clopLight_sepHeads_noBias_pLR5-6_dirs"
