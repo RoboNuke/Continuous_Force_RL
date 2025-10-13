@@ -429,6 +429,8 @@ class BlockPPO(PPO):
             next_values: torch.Tensor,
             discount_factor: float = 0.99,
             lambda_coefficient: float = 0.95,
+            num_agents: int = 1,
+            envs_per_agent: int = 16
         ) -> torch.Tensor:
             """Compute the Generalized Advantage Estimator (GAE)
 
@@ -466,7 +468,19 @@ class BlockPPO(PPO):
             returns = advantages + values
             
             # normalize advantages
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            #advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            advantages_reshaped = advantages.view(memory_size, num_agents, envs_per_agent)
+    
+            # Compute mean and std per agent in one vectorized operation
+            # mean/std over dims 0 and 2 gives shape (num_agents,)
+            agent_means = advantages_reshaped.mean(dim=(0, 2), keepdim=True)  # (1, num_agents, 1)
+            agent_stds = advantages_reshaped.std(dim=(0, 2), keepdim=True)    # (1, num_agents, 1)
+            
+            # Normalize (broadcasting handles per-agent normalization automatically)
+            advantages_normalized = (advantages_reshaped - agent_means) / (agent_stds + 1e-8)
+            
+            # Flatten back to original shape
+            advantages = advantages_normalized.view(-1, 1)
 
             return returns, advantages
 
@@ -491,7 +505,10 @@ class BlockPPO(PPO):
             next_values=last_values,
             discount_factor=self._discount_factor,
             lambda_coefficient=self._lambda,
+            num_agents=self.num_agents,
+            envs_per_agent=self.envs_per_agent
         )
+
 
         self.memory.set_tensor_by_name("values", self._value_preprocessor(values, train=True))
         self.memory.set_tensor_by_name("returns", self._value_preprocessor(returns, train=True))

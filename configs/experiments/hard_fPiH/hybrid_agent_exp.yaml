@@ -31,7 +31,7 @@ wrappers:
   # Enable hybrid control wrapper
   hybrid_control:
     enabled: true
-    reward_type: "dirs"
+    reward_type: "none"
     
   pose_contact_logging:
     enabled: false
@@ -48,6 +48,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "clopLight_Bias_pLR5-6_01InitScale_dirs"
+  name: "advFix_clopLight_Bias_pLR5-6_01InitScale"
   tags: []
-  group: "clopLight_Bias_pLR5-6_01InitScale_dirs"
+  group: "advFix_clopLight_Bias_pLR5-6_01InitScale"
