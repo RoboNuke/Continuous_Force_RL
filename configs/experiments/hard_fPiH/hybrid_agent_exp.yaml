@@ -15,7 +15,7 @@ model:
   last_layer_scale: 1.0
   hybrid_agent:
     unit_std_init: false
-    init_bias: 0.0 #2.5 #1.1
+    init_bias: 2.5 #1.1
     init_scale_last_layer: false
     init_layer_scale: 1.0
     pre_layer_scale_factor: 1.0
@@ -44,6 +44,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "noScale_noBias_simp"
+  name: "noScale_bias_simp"
   tags: []
-  group: "noScale_noBias_simp"
+  group: "noScale_bias_simp"
