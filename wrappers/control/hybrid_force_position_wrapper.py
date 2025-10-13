@@ -801,6 +801,8 @@ class HybridForcePositionWrapper(gym.Wrapper):
             rew_buf += self._position_simple_reward()
         elif self.reward_type == "wrench_norm":
             rew_buf += self._low_wrench_reward()
+        elif self.reward_type == "force_z":
+            rew_buf += self._force_z_reward()
 
         return rew_buf
 
@@ -876,6 +878,18 @@ class HybridForcePositionWrapper(gym.Wrapper):
             self.unwrapped.extras['log_rew_Wrench_Norm'] = wrench_norm
         return -wrench_norm * self.task_cfg.wrench_norm_scale
 
+    def _force_z_reward(self):
+        """A reward for debugging which punishes not using force in z, and not using pos in xy"""
+        x_error = 1.0-self.ema_actions[:, 2]
+        y_error = 1.0-self.ema_actions[:, 2]
+        z_error = self.ema_actions[:, 2]
+        sel_rew = self.task_cfg.good_force_cmd_rew * (x_error + y_error + z_error)/3.0
+
+        if hasattr(self.unwrapped, 'extras'):
+            self.unwrapped.extras['logs_rew_Selection Matrix'] = sel_rew
+
+        return sel_rew
+    
     def step(self, action):
         """Step environment and ensure wrapper is initialized."""
         if not self._wrapper_initialized and hasattr(self.unwrapped, '_robot'):

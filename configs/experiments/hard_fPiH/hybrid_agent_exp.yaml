@@ -25,14 +25,14 @@ wrappers:
   # Enable hybrid control wrapper
   hybrid_control:
     enabled: true
-    reward_type: "none"
+    reward_type: "force_z"
     
   pose_contact_logging:
     enabled: false
 
 environment:
   hybrid_task:
-    good_force_cmd_rew: 0.134
+    good_force_cmd_rew: 0.4 #0.134
     bad_force_cmd_rew: -0.134 #-0.4
 
 agent:
@@ -42,6 +42,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "sigmoidProb_nobias_1std_policyLR(1-5)"
+  name: "force_z"
   tags: []
-  group: "sigmoidProb_noBias_1std_policyLR(1-5)_agnt"
+  group: "force_z"
