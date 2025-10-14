@@ -306,13 +306,24 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             # Add termination tracking - 1.0 if termination, 0.0 if timeout
             self.agent_episode_data[agent_id]['terminations'].append(1.0 if is_termination else 0.0)
 
-            # Store component reward episode sums
+            # ============================================================================
+            # TODO: TEMPORARY PER-STEP AVERAGE FOR COMPONENT REWARDS
+            # ============================================================================
+            # Currently storing PER-STEP AVERAGES to maintain compatibility with existing
+            # historical data. Consider changing to PER-EPISODE SUMS in the future for
+            # more meaningful episode-level metrics.
+            #
+            # To switch: Remove division by episode_length below and store accumulated sum directly
+            # ============================================================================
+
+            # Store component reward per-step averages
             for component_name, accumulated_values in self.current_component_rewards.items():
                 if component_name not in self.agent_episode_data[agent_id]['component_rewards']:
                     self.agent_episode_data[agent_id]['component_rewards'][component_name] = []
 
-                # Store the accumulated sum for this completed episode
-                self.agent_episode_data[agent_id]['component_rewards'][component_name].append(accumulated_values[env_idx].item())
+                # Store the per-step average for this completed episode (for historical data compatibility)
+                per_step_avg = accumulated_values[env_idx].item() / episode_length if episode_length > 0 else 0.0
+                self.agent_episode_data[agent_id]['component_rewards'][component_name].append(per_step_avg)
 
     def _send_aggregated_episode_metrics(self):
         """Send aggregated episode metrics for all agents."""
