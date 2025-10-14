@@ -49,6 +49,6 @@ environment:
 
 # Experiment metadata
 experiment:
-  name: "hybrid_pLR5-3"
+  name: "hybrid_pLR1-3"
   tags: []
-  group: "hybrid_pLR5-3"
+  group: "hybrid_pLR1-3"
