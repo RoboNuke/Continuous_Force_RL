@@ -43,11 +43,12 @@ environment:
 
 agent:
   policy_learning_rate: 5.0e-4
-  critic_learning_rate: 1.0e-3
+  critic_learning_rate: 1.0e-4
+  value_update_ratio: 3
   #learning_epochs: 1
 
 # Experiment metadata
 experiment:
-  name: "lCLoP_cLR1-3_pLR5-4"
+  name: "lCLoP_vr3_cLR1-4_pLR5-4"
   tags: []
-  group: "lCLoP_cLR1-3_pLR5-4"
+  group: "lCLoP_vr3_cLR1-4_pLR5-4"
