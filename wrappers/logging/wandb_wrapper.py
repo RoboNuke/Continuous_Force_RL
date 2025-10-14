@@ -265,6 +265,17 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         # Initialize to_log dictionary for wrappers to publish arbitrary metrics
         self.unwrapped.extras['to_log'] = {}
 
+        # Component reward tracking - accumulate per environment during episode
+        self.current_component_rewards = {}  # Will be populated dynamically: {component_name: torch.zeros(num_envs)}
+
+    def _calculate_std(self, values_list):
+        """Calculate sample standard deviation from list."""
+        if len(values_list) <= 1:
+            return 0.0
+        mean = sum(values_list) / len(values_list)
+        variance = sum((x - mean) ** 2 for x in values_list) / (len(values_list) - 1)
+        return variance ** 0.5
+
     def _store_completed_episodes(self, completed_mask, is_termination=False):
         """Store completed episode data in agent lists."""
         if not torch.any(completed_mask):
@@ -295,6 +306,14 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             # Add termination tracking - 1.0 if termination, 0.0 if timeout
             self.agent_episode_data[agent_id]['terminations'].append(1.0 if is_termination else 0.0)
 
+            # Store component reward episode sums
+            for component_name, accumulated_values in self.current_component_rewards.items():
+                if component_name not in self.agent_episode_data[agent_id]['component_rewards']:
+                    self.agent_episode_data[agent_id]['component_rewards'][component_name] = []
+
+                # Store the accumulated sum for this completed episode
+                self.agent_episode_data[agent_id]['component_rewards'][component_name].append(accumulated_values[env_idx].item())
+
     def _send_aggregated_episode_metrics(self):
         """Send aggregated episode metrics for all agents."""
         # Create agent-level aggregated metrics
@@ -307,6 +326,7 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             # Calculate means across completed episodes for this agent
             mean_length = sum(agent_data['episode_lengths']) / len(agent_data['episode_lengths'])
             mean_reward = sum(agent_data['episode_rewards']) / len(agent_data['episode_rewards'])
+            std_reward = self._calculate_std(agent_data['episode_rewards'])
             mean_avg_reward = sum(agent_data['episode_avg_rewards']) / len(agent_data['episode_avg_rewards'])
             total_completed = sum(agent_data['completed_count'])
             terms = sum(agent_data['terminations'])
@@ -315,10 +335,20 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             agent_metrics = {
                 'Episode/length': torch.tensor([mean_length], dtype=torch.float32),
                 'Episode/total_reward': torch.tensor([mean_reward], dtype=torch.float32),
+                'Episode/total_reward_std': torch.tensor([std_reward], dtype=torch.float32),
                 'Episode/avg_reward_per_step': torch.tensor([mean_avg_reward], dtype=torch.float32),
                 'Episode/completed_episodes': torch.tensor([total_completed], dtype=torch.float32),
                 'Episode/terminations': torch.tensor([terms],dtype=torch.float32)
             }
+
+            # Add component reward statistics
+            for component_name, component_values in agent_data['component_rewards'].items():
+                if component_values:  # Only if we have data
+                    mean_component = sum(component_values) / len(component_values)
+                    std_component = self._calculate_std(component_values)
+
+                    agent_metrics[f'Rewards/{component_name}'] = torch.tensor([mean_component], dtype=torch.float32)
+                    agent_metrics[f'Rewards/{component_name}_std'] = torch.tensor([std_component], dtype=torch.float32)
 
             # Send directly to the specific agent's tracker
             self.trackers[agent_id].add_metrics(agent_metrics)
@@ -492,11 +522,20 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             # Clear the pending metrics to avoid double-processing
             delattr(self.env, '_pending_factory_metrics')
 
-        # Extract and collect component rewards
+        # Extract and accumulate component rewards per environment
         component_rewards = self._extract_component_rewards()
         if component_rewards:
-            # Send component rewards to trackers immediately
-            self.add_metrics(component_rewards)
+            # Accumulate per environment instead of sending immediately
+            for key, value in component_rewards.items():
+                # Extract clean component name (remove 'Rewards/' prefix)
+                component_name = key.replace('Rewards/', '')
+
+                # Initialize accumulator if first time seeing this component
+                if component_name not in self.current_component_rewards:
+                    self.current_component_rewards[component_name] = torch.zeros(self.num_envs, device=self.device)
+
+                # Accumulate step reward
+                self.current_component_rewards[component_name] += value
 
         # Extract and collect to_log metrics
         to_log_metrics = self._extract_to_log_metrics()
@@ -551,6 +590,10 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
                 # Reset env-specific tracking only for completed environments
                 self.current_episode_rewards[env_ids] = 0
 
+                # Reset component reward accumulators for completed environments
+                for component_name in self.current_component_rewards:
+                    self.current_component_rewards[component_name][env_ids] = 0
+
         # Call original _reset_idx to maintain wrapper chain
         if self._original_reset_idx is not None:
             self._original_reset_idx(env_ids)
@@ -566,6 +609,10 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         """Reset all tracking variables to initial state."""
         # Reset current episode tracking
         self.current_episode_rewards.fill_(0)
+
+        # Reset component reward accumulators
+        for component_name in self.current_component_rewards:
+            self.current_component_rewards[component_name].fill_(0)
 
         # Clear all agent episode data
         for agent_id in range(self.num_agents):

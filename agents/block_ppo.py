@@ -1269,6 +1269,18 @@ class BlockPPO(PPO):
                     stats["Critic/Predicted_Values_Avg"] = inverse_values.mean(dim=(0, 2))  # Shape: (num_agents,)
                     stats["Critic/Predicted_Values_Std"] = inverse_values.std(dim=(0, 2))  # Shape: (num_agents,)
 
+                    # Inverse transform returns to original scale
+                    inverse_returns = self._value_preprocessor(returns.view(batch_total, 1), inverse=True).view(sample_size, self.num_agents, self.envs_per_agent)
+
+                    # Returns statistics
+                    stats["Critic/Returns_Avg"] = inverse_returns.mean(dim=(0, 2))  # Shape: (num_agents,)
+                    stats["Critic/Returns_Std"] = inverse_returns.std(dim=(0, 2))  # Shape: (num_agents,)
+
+                    # Value error statistics (returns - predicted_values)
+                    value_error = inverse_returns - inverse_values  # Both in original scale
+                    stats["Critic/Value_Error_Mean"] = value_error.mean(dim=(0, 2))  # Shape: (num_agents,)
+                    stats["Critic/Value_Error_Std"] = value_error.std(dim=(0, 2))  # Shape: (num_agents,)
+
                     # Vectorized quantiles - reshape to (sample_size * envs_per_agent, num_agents)
                     value_losses_per_agent = value_losses.permute(1, 0, 2).reshape(self.num_agents, -1).T
                     stats["Critic/Loss_Median"] = value_losses_per_agent.median(dim=0).values  # Shape: (num_agents,)
