@@ -265,9 +265,9 @@ agent:
   #policy_learning_rate: 1.0e-5
   #critic_learning_rate: 1.0e-5
   #value_update_ratio: 2
-  policy_learning_rate: 5.0e-4
+  policy_learning_rate: 5.0e-3
   critic_learning_rate: 1.0e-4
-  value_update_ratio: 3
+  value_update_ratio: 2
 
   # Optimizer parameters
   optimizer_betas: [0.999, 0.999]

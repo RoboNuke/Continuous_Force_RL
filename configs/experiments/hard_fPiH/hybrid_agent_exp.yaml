@@ -49,6 +49,6 @@ environment:
 
 # Experiment metadata
 experiment:
-  name: "posOnly_hybrid_agent_exp"
+  name: "hybrid_pLR5-3"
   tags: []
-  group: "posOnly_hybrid_agent_exp"
+  group: "hybrid_pLR5-3"
