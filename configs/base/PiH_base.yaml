@@ -6,7 +6,7 @@
 # EXPERIMENT CONFIGURATION
 experiment:
   name: "fPiH_base"
-  tags: ["factory", 'FPiH', 'scaled_tests']
+  tags: ["factory", 'FPiH', 'updated_tests']
   group: "force_vel_test"
   wandb_project: "debug"
   wandb_entity: "hur"
@@ -16,7 +16,7 @@ experiment:
 primary:
   agents_per_break_force: 5  # Number of agents per break force condition
   num_envs_per_agent: 256    # Environments per individual agent
-  break_forces: [50]  # Break force conditions (-1 = unbreakable)
+  break_forces: [10,25]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
   max_steps: 10000128 #25000192
@@ -262,9 +262,12 @@ agent:
   mixed_precision: false
 
   # CUSTOM LEARNING PARAMETERS (extensions to SKRL)
-  policy_learning_rate: 1.0e-5
-  critic_learning_rate: 1.0e-5
-  value_update_ratio: 2
+  #policy_learning_rate: 1.0e-5
+  #critic_learning_rate: 1.0e-5
+  #value_update_ratio: 2
+  policy_learning_rate: 5.0e-4
+  critic_learning_rate: 1.0e-4
+  value_update_ratio: 3
 
   # Optimizer parameters
   optimizer_betas: [0.999, 0.999]

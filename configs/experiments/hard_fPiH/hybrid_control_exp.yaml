@@ -18,6 +18,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: "same_hybrid_control_exp"
+  name: "updated_hybrid_control_exp"
   tags: []
-  group: "same_hybrid_ctrl"
+  group: "updated_hybrid_ctrl"

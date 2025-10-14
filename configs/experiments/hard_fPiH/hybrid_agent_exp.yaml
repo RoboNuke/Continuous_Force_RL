@@ -7,7 +7,7 @@ primary:
   #agents_per_break_force: 1  # Number of agents per break force condition
   #num_envs_per_agent: 16    # Environments per individual agent
   ckpt_tracker_path: "/nfs/stak/users/brownhun/logFix_hybrid_agent_tracker.txt"
-  break_forces: [25]
+  #break_forces: [25]
 
 # Model configuration for hybrid agent
 model:
@@ -42,13 +42,13 @@ environment:
     bad_force_cmd_rew: -0.134 #-0.4
 
 agent:
-  policy_learning_rate: 5.0e-4
-  critic_learning_rate: 1.0e-4
-  value_update_ratio: 3
+  #policy_learning_rate: 5.0e-4
+  #critic_learning_rate: 1.0e-4
+  #value_update_ratio: 3
   #learning_epochs: 1
 
 # Experiment metadata
 experiment:
-  name: "lCLoP_vr3_cLR1-4_pLR5-4_shuffled"
+  name: "update_hybrid_agent_exp"
   tags: []
-  group: "lCLoP_vr3_cLR1-4_pLR5-4_shuffled"
+  group: "update_hybrid_agent_exp"
