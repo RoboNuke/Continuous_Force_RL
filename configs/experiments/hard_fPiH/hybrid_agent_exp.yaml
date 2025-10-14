@@ -49,6 +49,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "lCLoP_vr3_cLR1-4_pLR5-4_impLogging"
+  name: "lCLoP_vr3_cLR1-4_pLR5-4_shuffled"
   tags: []
-  group: "lCLoP_vr3_cLR1-4_pLR5-4_impLogging"
+  group: "lCLoP_vr3_cLR1-4_pLR5-4_shuffled"

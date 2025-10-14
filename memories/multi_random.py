@@ -25,7 +25,7 @@ class MultiRandomMemory(Memory):
 
 
     def sample_all(
-        self, names: Tuple[str], mini_batches: int = 1, sequence_length: int = 1
+        self, names: Tuple[str], mini_batches: int = 1, sequence_length: int = 1, shuffle: bool = True
     ) -> List[List[torch.Tensor]]:
         """Sample all data from memory
 
@@ -35,6 +35,8 @@ class MultiRandomMemory(Memory):
         :type mini_batches: int, optional
         :param sequence_length: Length of each sequence (default: ``1``) unused, only kept for inheritance reasons
         :type sequence_length: int, optional
+        :param shuffle: Whether to shuffle temporal order (default: ``True``)
+        :type shuffle: bool, optional
 
         :return: Sampled data from memory.
                  Data in each batch will be ordered based on number of agents
@@ -42,17 +44,46 @@ class MultiRandomMemory(Memory):
         :rtype: list of torch.Tensor list
         """
         agent_batch_size = self.memory_size * self.envs_per_agent // mini_batches
-        #print("Agent Batch Size:", agent_batch_size)
-        
-        # generate idxs
-        agent_data_idxs = [ [] for i in range(self.num_agents)]
+
+        # Generate shuffled or sequential timestep indices per environment
+        if shuffle:
+            # Each environment gets its own independent temporal shuffle
+            # Shape: (num_envs, memory_size)
+            timestep_indices = torch.stack([torch.randperm(self.memory_size, device=self.device)
+                                           for _ in range(self.num_envs)])
+        else:
+            # All environments use sequential order
+            # Shape: (num_envs, memory_size)
+            timestep_indices = torch.arange(self.memory_size, device=self.device).unsqueeze(0).expand(self.num_envs, -1)
+
+        # Generate indices for each agent with vectorized operations
+        agent_data_idxs = []
         for a_idx in range(self.num_agents):
-            a = a_idx * self.envs_per_agent
-            b = a + self.envs_per_agent
-            for m_idx in range(self.memory_size):
-                agent_data_idxs[a_idx].append(torch.arange(a + m_idx * self.num_envs, b + m_idx * self.num_envs))
-            agent_data_idxs[a_idx] = torch.cat(agent_data_idxs[a_idx], dim=0)
-        #print("Agent Idxs:", agent_data_idxs)
+            # Get shuffles for this agent's environments
+            # Shape: (envs_per_agent, memory_size)
+            agent_env_start = a_idx * self.envs_per_agent
+            agent_env_end = agent_env_start + self.envs_per_agent
+            agent_shuffles = timestep_indices[agent_env_start:agent_env_end, :]
+
+            # For each environment in this agent, compute indices
+            # env_indices[i, j] = index for env i at its shuffled timestep j
+            env_indices_list = []
+            for env_offset in range(self.envs_per_agent):
+                # Global environment index
+                global_env_idx = agent_env_start + env_offset
+                # Shuffled timesteps for this specific environment
+                env_timesteps = agent_shuffles[env_offset, :]  # Shape: (memory_size,)
+                # Compute memory indices: timestep * num_envs + global_env_idx
+                env_memory_indices = env_timesteps * self.num_envs + global_env_idx
+                env_indices_list.append(env_memory_indices)
+
+            # Stack and interleave: we want [env0_t0, env1_t0, ..., env0_t1, env1_t1, ...]
+            # Shape after stack: (envs_per_agent, memory_size)
+            stacked = torch.stack(env_indices_list, dim=0)
+            # Transpose to (memory_size, envs_per_agent) then flatten
+            indices = stacked.t().flatten()
+
+            agent_data_idxs.append(indices)
             
         idxs = [[] for  i in range(mini_batches)]
         for b_idx in range(mini_batches):
