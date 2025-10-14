@@ -49,6 +49,6 @@ environment:
 
 # Experiment metadata
 experiment:
-  name: "update_hybrid_agent_exp"
+  name: "posOnly_hybrid_agent_exp"
   tags: []
-  group: "update_hybrid_agent_exp"
+  group: "posOnly_hybrid_agent_exp"

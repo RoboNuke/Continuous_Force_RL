@@ -405,7 +405,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
         """Compute control targets from current state + EMA actions (Isaac Lab style)."""
         # 1. Selection matrix from EMA'd selection actions
         self.sel_matrix[:, :self.force_size] = torch.where(
-            self.ema_actions[:, :self.force_size] > 0.5, 1.0, 0.0
+            self.ema_actions[:, :self.force_size] < -10.5, 1.0, 0.0
         )
 
         # Log selection matrix
