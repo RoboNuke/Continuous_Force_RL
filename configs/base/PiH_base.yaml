@@ -16,7 +16,7 @@ experiment:
 primary:
   agents_per_break_force: 5  # Number of agents per break force condition
   num_envs_per_agent: 256    # Environments per individual agent
-  break_forces: [10,25]  # Break force conditions (-1 = unbreakable)
+  break_forces: [25]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
   max_steps: 10000128 #25000192
@@ -265,7 +265,7 @@ agent:
   #policy_learning_rate: 1.0e-5
   #critic_learning_rate: 1.0e-5
   #value_update_ratio: 2
-  policy_learning_rate: 1.0e-3
+  policy_learning_rate: 1.0e-6
   critic_learning_rate: 1.0e-4
   value_update_ratio: 2
 
