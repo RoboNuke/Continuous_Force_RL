@@ -49,6 +49,6 @@ environment:
 
 # Experiment metadata
 experiment:
-  name: "hybrid_fix_noShuf_pLR5-4"
+  name: "hybrid_fix_noShuf_noAdv_pLR5-4"
   tags: []
-  group: "hybrid_fix_noShuf_pLR5-4"
+  group: "hybrid_fix_noShuf_noAdv_pLR5-4"
