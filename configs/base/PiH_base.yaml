@@ -265,7 +265,7 @@ agent:
   #policy_learning_rate: 1.0e-5
   #critic_learning_rate: 1.0e-5
   #value_update_ratio: 2
-  policy_learning_rate: 1.0e-5
+  policy_learning_rate: 5.0e-4
   critic_learning_rate: 1.0e-5
   value_update_ratio: 2
 
