@@ -21,7 +21,7 @@ primary:
   policy_hz: 15
   max_steps: 10000128 #25000192
   debug_mode: false
-  seed: -1
+  seed: 42 #-1
   ckpt_tracker_path: "/nfs/stak/users/brownhun/voltron_baseline_tracker.txt" #"/home/hunter/ckpt_tracker.txt" #
   ctrl_torque: false
 
@@ -265,8 +265,8 @@ agent:
   #policy_learning_rate: 1.0e-5
   #critic_learning_rate: 1.0e-5
   #value_update_ratio: 2
-  policy_learning_rate: 1.0e-4
-  critic_learning_rate: 1.0e-4
+  policy_learning_rate: 5.0e-4
+  critic_learning_rate: 5.0e-4
   value_update_ratio: 2
 
   # Optimizer parameters

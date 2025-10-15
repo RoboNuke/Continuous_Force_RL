@@ -467,7 +467,7 @@ class BlockPPO(PPO):
             # returns computation
             returns = advantages + values
             
-            """
+            
             # normalize advantages
             num_envs = num_agents * envs_per_agent
             #print(memory_size, num_envs)
@@ -487,7 +487,7 @@ class BlockPPO(PPO):
             
             # Flatten back to original shape (memory_size, 1)
             advantages = advantages_normalized.view(memory_size, num_envs, -1)
-            """
+            
             return returns, advantages
 
         # log std:

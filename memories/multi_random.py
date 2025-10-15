@@ -25,7 +25,7 @@ class MultiRandomMemory(Memory):
 
 
     def sample_all(
-        self, names: Tuple[str], mini_batches: int = 1, sequence_length: int = 1, shuffle: bool = True
+        self, names: Tuple[str], mini_batches: int = 1, sequence_length: int = 1, shuffle: bool = False #True
     ) -> List[List[torch.Tensor]]:
         """Sample all data from memory
 
