@@ -13,6 +13,6 @@ model:
 
 # Experiment metadata
 experiment:
-  name: "pose_noShuffle_pLR1-5"
+  name: "pose_noShu_noAdvNorm_pLR1-5"
   tags: []
-  group: "pose_noShuffle_pLR1-5"
+  group: "pose_noShu_noAdvNorm_pLR1-5"
