@@ -13,6 +13,6 @@ model:
 
 # Experiment metadata
 experiment:
-  name: "pose_pLR1-5"
+  name: "pose_noAdvNorm_pLR1-5"
   tags: []
-  group: "pose_pLR1-5"
+  group: "pose_noAdvNorm_pLR1-5"
