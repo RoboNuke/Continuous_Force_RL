@@ -467,7 +467,7 @@ class BlockPPO(PPO):
             # returns computation
             returns = advantages + values
             
-            """
+            
             # normalize advantages
             num_envs = num_agents * envs_per_agent
             #print(memory_size, num_envs)
@@ -487,7 +487,7 @@ class BlockPPO(PPO):
             
             # Flatten back to original shape (memory_size, 1)
             advantages = advantages_normalized.view(memory_size, num_envs, -1)
-            """
+            
             return returns, advantages
 
         # log std:
@@ -541,8 +541,6 @@ class BlockPPO(PPO):
                 sampled_returns,
                 sampled_advantages,
             ) in sampled_batches:
-                if mini_batch > 5:
-                    break
                 with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
                     sampled_states = self._state_preprocessor(sampled_states, train=not epoch)
                     _, next_log_prob, _ = self.policy.act(
