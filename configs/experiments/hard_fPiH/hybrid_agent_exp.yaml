@@ -41,14 +41,15 @@ environment:
     good_force_cmd_rew: 0.134
     bad_force_cmd_rew: -0.134 #-0.4
 
-#agent:
-#policy_learning_rate: 5.0e-4
+agent:
+  policy_learning_rate: 5.0e-4
+  
 #critic_learning_rate: 1.0e-4
 #value_update_ratio: 3
 #learning_epochs: 1
 
 # Experiment metadata
 experiment:
-  name: "hybrid_fix_noShuf_noAdv_pLR1-5"
+  name: "hybrid_agent_exp"
   tags: []
-  group: "hybrid_fix_noShuf_noAdv_pLR1-5"
+  group: "hybrid_agent_exp"

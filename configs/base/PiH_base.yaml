@@ -6,7 +6,7 @@
 # EXPERIMENT CONFIGURATION
 experiment:
   name: "fPiH_base"
-  tags: ["factory", 'FPiH', 'updated_tests']
+  tags: ["factory", 'FPiH', 'fixed_baselines']
   group: "force_vel_test"
   wandb_project: "debug"
   wandb_entity: "hur"
@@ -16,12 +16,12 @@ experiment:
 primary:
   agents_per_break_force: 5  # Number of agents per break force condition
   num_envs_per_agent: 256    # Environments per individual agent
-  break_forces: [25]  # Break force conditions (-1 = unbreakable)
+  break_forces: [5 10 15]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
-  max_steps: 10000128 #25000192
+  max_steps: 4999936 #25000192
   debug_mode: false
-  seed: 42 #-1
+  seed: -1
   ckpt_tracker_path: "/nfs/stak/users/brownhun/voltron_baseline_tracker.txt" #"/home/hunter/ckpt_tracker.txt" #
   ctrl_torque: false
 

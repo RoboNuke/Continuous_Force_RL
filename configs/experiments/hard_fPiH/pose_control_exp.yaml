@@ -13,6 +13,6 @@ model:
 
 # Experiment metadata
 experiment:
-  name: "pose_fix_noShuf_noAdv_pLR1-5"
+  name: "pose_ctrl_exp"
   tags: []
-  group: "pose_fix_noShuf_noAdv_pLR1-5"
+  group: "pose_ctrl_exp"
