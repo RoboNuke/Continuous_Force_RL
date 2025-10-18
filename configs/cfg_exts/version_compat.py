@@ -75,51 +75,7 @@ def get_isaac_lab_ctrl_imports():
 
 
 def get_isaac_lab_factory_imports():
-    """Get Isaac Lab factory environment config imports with version compatibility."""
-    try:
-        # Isaac Lab v2+ (isaaclab_tasks)
-        from isaaclab.utils.configclass import configclass
-        from isaaclab_tasks.direct.factory.factory_env_cfg import FactoryEnvCfg
-        print("[CONFIG]: Using Isaac Lab v2+ factory imports")
-        return (configclass, FactoryEnvCfg)
-    except ImportError:
-        try:
-            # Isaac Lab v1.4.1 (omni.isaac.lab_tasks)
-            from omni.isaac.lab.utils.configclass import configclass
-            from omni.isaac.lab_tasks.direct.factory.factory_env_cfg import FactoryEnvCfg
-            print("[CONFIG]: Using Isaac Lab v1.4.1 factory imports")
-            return (configclass, FactoryEnvCfg)
-        except ImportError:
-            # Fallback for testing/development
-            from dataclasses import dataclass
-
-            # Mock FactoryEnvCfg for testing
-            @dataclass
-            class MockFactoryEnvCfg:
-                decimation: int = 8
-                episode_length_s: float = 10.0
-                action_space: int = 6
-                observation_space: int = 21
-                state_space: int = 72
-                ctrl: object = None
-                scene: object = None
-                task: object = None
-
-                def __post_init__(self):
-                    # Create a simple mock scene object
-                    if self.scene is None:
-                        @dataclass
-                        class MockScene:
-                            num_envs: int = 1
-                            replicate_physics: bool = True
-                        self.scene = MockScene()
-
-            print("[CONFIG]: Using fallback mock factory imports for testing")
-            return (dataclass, MockFactoryEnvCfg)
-
-
-def get_isaac_lab_task_imports():
-    """Get Isaac Lab task-specific config imports with version compatibility."""
+    """Get Isaac Lab factory environments config imports with version compatibility."""
     try:
         # Isaac Lab v2+ (isaaclab_tasks)
         from isaaclab.utils.configclass import configclass
@@ -131,48 +87,46 @@ def get_isaac_lab_task_imports():
         print("[CONFIG]: Using Isaac Lab v2+ task imports")
         return (configclass, FactoryTaskPegInsertCfg, FactoryTaskGearMeshCfg, FactoryTaskNutThreadCfg)
     except ImportError:
-        try:
-            # Isaac Lab v1.4.1 (omni.isaac.lab_tasks)
-            from omni.isaac.lab.utils.configclass import configclass
-            from omni.isaac.lab_tasks.direct.factory.factory_env_cfg import (
-                FactoryTaskPegInsertCfg,
-                FactoryTaskGearMeshCfg,
-                FactoryTaskNutThreadCfg
-            )
-            print("[CONFIG]: Using Isaac Lab v1.4.1 task imports")
-            return (configclass, FactoryTaskPegInsertCfg, FactoryTaskGearMeshCfg, FactoryTaskNutThreadCfg)
-        except ImportError:
-            # Fallback for testing/development
-            from dataclasses import dataclass
+        # Isaac Lab v1.4.1 (omni.isaac.lab_tasks)
+        from omni.isaac.lab.utils.configclass import configclass
+        from omni.isaac.lab_tasks.direct.factory.factory_env_cfg import (
+            FactoryTaskPegInsertCfg,
+            FactoryTaskGearMeshCfg,
+            FactoryTaskNutThreadCfg
+        )
+        print("[CONFIG]: Using Isaac Lab v1.4.1 task imports")
+        return (configclass, FactoryTaskPegInsertCfg, FactoryTaskGearMeshCfg, FactoryTaskNutThreadCfg)
 
-            # Mock base factory env for testing (simplified to avoid circular imports)
-            @dataclass
-            class MockBaseFactoryEnvCfg:
-                decimation: int = 8
-                episode_length_s: float = 10.0
-                action_space: int = 6
-                observation_space: int = 21
-                state_space: int = 72
-                ctrl: object = None
-                scene: object = None
-                task: object = None
-                task_name: str = ""
 
-            # Mock task configs that inherit from mock base
-            @dataclass
-            class MockFactoryTaskPegInsertCfg(MockBaseFactoryEnvCfg):
-                task_name: str = "peg_insert"
-                episode_length_s: float = 10.0
-
-            @dataclass
-            class MockFactoryTaskGearMeshCfg(MockBaseFactoryEnvCfg):
-                task_name: str = "gear_mesh"
-                episode_length_s: float = 20.0
-
-            @dataclass
-            class MockFactoryTaskNutThreadCfg(MockBaseFactoryEnvCfg):
-                task_name: str = "nut_thread"
-                episode_length_s: float = 30.0
-
-            print("[CONFIG]: Using fallback mock task imports for testing")
-            return (dataclass, MockFactoryTaskPegInsertCfg, MockFactoryTaskGearMeshCfg, MockFactoryTaskNutThreadCfg)
+def get_isaac_lab_task_imports():
+    try:
+        # Isaac Lab v2+ (isaaclab_tasks)
+        from isaaclab.utils.configclass import configclass
+        from isaaclab_tasks.direct.factory.factory_tasks_cfg import (
+            PegInsert,
+            GearMesh,
+            NutThread
+        )
+        print("[CONFIG]: Using Isaac Lab v2+ task imports")
+        return (
+            configclass, 
+            PegInsert,
+            GearMesh,
+            NutThread
+        )
+    except ImportError:
+        # Isaac Lab v1.4.1 (omni.isaac.lab_tasks)
+        from omni.isaac.lab.utils.configclass import configclass
+        from omni.isaac.lab_tasks.direct.factory.factory_env_cfg import (
+            PegInsert,
+            GearMesh,
+            NutThread
+        )
+        print("[CONFIG]: Using Isaac Lab v1.4.1 task imports")
+        return (
+            configclass, 
+            PegInsert,
+            GearMesh,
+            NutThread
+        )
+        

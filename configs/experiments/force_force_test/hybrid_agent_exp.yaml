@@ -1,0 +1,31 @@
+# Hybrid Agent Control Experiment Configuration 
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+
+# Model configuration for hybrid agent
+model:
+  use_hybrid_agent: true
+  hybrid_agent:
+    force_init_std: 0.1
+
+# Enable hybrid control wrapper and related systems
+wrappers:
+  # Enable hybrid control wrapper
+  hybrid_control:
+    enabled: true
+    reward_type: "none"
+    
+  pose_contact_logging:
+    enabled: false
+
+agent:
+  policy_learning_rate: 1.0e-5
+  critic_learning_rate: 1.0e-5
+  #learning_epochs: 1
+
+# Experiment metadata
+experiment:
+  name: "hybrid_force_force_test"
+  tags: []
+  group: "hybrid_force_force_test"

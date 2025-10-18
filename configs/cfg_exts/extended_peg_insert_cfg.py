@@ -8,11 +8,17 @@ FactoryTaskPegInsertCfg with our custom parameters.
 from .version_compat import get_isaac_lab_task_imports
 
 # Get Isaac Lab imports with version compatibility
-configclass, FactoryTaskPegInsertCfg, _, _ = get_isaac_lab_task_imports()
+configclass, PegInsert, _, _ = get_isaac_lab_task_imports()
 from configs.cfg_exts.ctrl_cfg import ExtendedCtrlCfg
 
+try:
+    from isaaclab.sensors import ContactSensorCfg
+except:
+    from omni.isaac.lab.sensors import ContactSensorCfg
+
+
 @configclass
-class ExtendedFactoryTaskPegInsertCfg(FactoryTaskPegInsertCfg):
+class ExtendedFactoryTaskPegInsertCfg(PegInsert):
     """
     Extended peg insert task configuration.
 
@@ -23,6 +29,14 @@ class ExtendedFactoryTaskPegInsertCfg(FactoryTaskPegInsertCfg):
     ctrl_type: str = ''
     agent_type: str = ''
     ctrl: ExtendedCtrlCfg = None
+
+    held_fixed_contact_sensor = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/HeldAsset",
+        update_period=0.0,
+        history_length=0,
+        debug_vis=True,
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/FixedAsset"],
+    )
 
     def __post_init__(self):
         self.ctrl = ExtendedCtrlCfg()

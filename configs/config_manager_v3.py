@@ -17,7 +17,7 @@ from typing import Dict, Any, Tuple, Type, List, Optional
 
 # Import required config classes
 from configs.cfg_exts.primary_cfg import PrimaryConfig
-from configs.cfg_exts.extended_factory_env_cfg import ExtendedFactoryEnvCfg
+from configs.cfg_exts.extended_factory_peg_env_cfg import ExtendedFactoryPegEnvCfg
 from configs.cfg_exts.extended_peg_insert_cfg import ExtendedFactoryTaskPegInsertCfg
 from configs.cfg_exts.extended_model_cfg import ExtendedModelConfig, ExtendedHybridAgentConfig
 from configs.cfg_exts.extended_wrapper_cfg import ExtendedWrapperConfig
@@ -33,7 +33,8 @@ from configs.cfg_exts.wrapper_sub_configs import HybridControlConfig, PoseContac
 # Default section-to-class mapping - single source of truth
 SECTION_MAPPING = {
     'primary': PrimaryConfig,
-    'environment': ExtendedFactoryTaskPegInsertCfg,
+    'environment': ExtendedFactoryPegEnvCfg,
+    'task': ExtendedFactoryTaskPegInsertCfg,
     'model': ExtendedModelConfig,
     'wrappers': ExtendedWrapperConfig,
     'experiment': ExperimentConfig,
@@ -235,15 +236,16 @@ class ConfigManagerV3:
             if section not in self.section_mapping:
                 raise KeyError(f"Unknown section '{section}' in config file '{base_config_path}'. "
                              f"Available sections: {list(self.section_mapping.keys())}")
-
+            if section is 'task':
+                print('found task')
             config_class = self.section_mapping[section]
 
             # Create instance with defaults
             config_instance = config_class()
 
             # Apply YAML overrides
-            if self.verbose:
-                print(f"\t{section}")
+            #if self.verbose:
+            print(f"\t{section}")
             self._apply_yaml_overrides(config_instance, yaml_data[section], indent_level=2)
 
             configs[section] = config_instance
@@ -356,8 +358,8 @@ class ConfigManagerV3:
                 elif current_attr is None and isinstance(value, dict) and key in self.section_mapping:
                     nested_class = self.section_mapping[key]
                     nested_instance = nested_class()
-                    if self.verbose:
-                        print(f"{indent}{key}: instantiating nested {nested_class.__name__} object")
+                    #if self.verbose:
+                    print(f"{indent}{key}: instantiating nested {nested_class.__name__} object")
                     self._apply_yaml_overrides(nested_instance, value, indent_level + 1)
                     setattr(config_instance, key, nested_instance)
                 # Otherwise, directly set the value

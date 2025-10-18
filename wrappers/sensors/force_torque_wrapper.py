@@ -12,9 +12,11 @@ import gymnasium as gym
 
 try:
     from isaacsim.core.api.robots import RobotView
+    from isaaclab.sensors import ContactSensor
 except ImportError:
     try:
         from omni.isaac.core.articulations import ArticulationView as RobotView
+        from omni.issac.lab.sensors import ContactSensor
     except ImportError:
         RobotView = None
 
@@ -71,6 +73,7 @@ class ForceTorqueWrapper(gym.Wrapper):
         self._original_get_factory_obs_state_dict = None
         self._original_get_observations = None
         self.unwrapped.has_force_torque_sensor = True
+        self._original_setup_scene = None 
 
         # Initialize in_contact tensor immediately for wrapper compatibility
         # num_envs is already set and won't change through wrappers
@@ -98,6 +101,7 @@ class ForceTorqueWrapper(gym.Wrapper):
         Returns:
             Observation and info from base environment's reset
         """
+        print("="*100, "\nCalling Reset")
         if not self._sensor_initialized and hasattr(self.unwrapped, '_robot'):
             self._initialize_wrapper()
         return super().reset(**kwargs)
@@ -286,7 +290,7 @@ class ForceTorqueWrapper(gym.Wrapper):
         if hasattr(self.unwrapped, '_pre_physics_step'):
             self._original_pre_physics_step = self.unwrapped._pre_physics_step
             self.unwrapped._pre_physics_step = self._wrapped_pre_physics_step
-
+            
         # Override the observation creation method to inject force-torque data
         if hasattr(self.unwrapped, '_get_factory_obs_state_dict'):
             # Newer Isaac Lab version - use clean dictionary approach
@@ -301,6 +305,18 @@ class ForceTorqueWrapper(gym.Wrapper):
 
         # Initialize force-torque sensor
         self._init_force_torque_sensor()
+
+        # Initialize contact sensor if configured
+        # Note: ContactSensor doesn't have initialize() method - it's initialized by the scene
+        # We create it here but it may not work until the scene updates
+        if hasattr(self.unwrapped.cfg_task, 'held_fixed_contact_sensor'):
+            print("\n\n", "="*100)
+            print("Creating contact sensor in _initialize_wrapper")
+            print("="*100, "\n\n")
+            self._held_fixed_contact_sensor = ContactSensor(self.unwrapped.cfg_task.held_fixed_contact_sensor)
+        else:
+            self._held_fixed_contact_sensor = None
+
         self._sensor_initialized = True
 
     def _init_force_torque_sensor(self):
@@ -403,6 +419,21 @@ class ForceTorqueWrapper(gym.Wrapper):
             # Compute contact state based on force-torque readings
             self.unwrapped.in_contact[:, :3] = torch.abs(self.unwrapped.robot_force_torque[:, :3]) > self.contact_force_threshold
             self.unwrapped.in_contact[:, 3:] = torch.abs(self.unwrapped.robot_force_torque[:, 3:]) > self.contact_torque_threshold
+            ###########################################################################
+            ### HERE FOR TESTING ONLY TODO REMOVE ME!! ################################
+            # Contact sensor cannot be initialized after scene setup - commented out for now
+            # self._contact_detected_in_range()
+
+    def _contact_detected_in_range(self):
+        # get true state from directly-held contact sensor (not from scene)
+        if self._held_fixed_contact_sensor is not None:
+            net_contact_force = self._held_fixed_contact_sensor.data.net_forces_w
+            real_contact = torch.where(torch.isclose(net_contact_force , 0.0), 0, 1).float()
+            self.unwrapped.extras['to_log']['Contact / Real Contact X'] = real_contact[...,0]
+            self.unwrapped.extras['to_log']['Contact / Real Contact Y'] = real_contact[...,1]
+            self.unwrapped.extras['to_log']['Contact / Real Contact Z'] = real_contact[...,2] 
+
+        #########################################################################
 
     def _wrapped_reset_buffers(self, env_ids):
         """

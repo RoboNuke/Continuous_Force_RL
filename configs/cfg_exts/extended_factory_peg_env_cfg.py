@@ -8,16 +8,19 @@ with our custom parameters.
 from .version_compat import get_isaac_lab_factory_imports
 
 # Get Isaac Lab imports with version compatibility
-configclass, FactoryEnvCfg = get_isaac_lab_factory_imports()
-
-
+configclass, PegFactoryEnv, _, _, = get_isaac_lab_factory_imports()
+from configs.cfg_exts.extended_peg_insert_cfg import ExtendedFactoryTaskPegInsertCfg
+from configs.cfg_exts.ctrl_cfg import ExtendedCtrlCfg
 @configclass
-class ExtendedFactoryEnvCfg(FactoryEnvCfg):
+class ExtendedFactoryPegEnvCfg(PegFactoryEnv):
     """
     Extended factory environment configuration.
 
     Inherits from Isaac Lab's FactoryEnvCfg and adds our custom parameters.
     """
+    task: ExtendedFactoryTaskPegInsertCfg = None
+    
+    ctrl: ExtendedCtrlCfg = None
 
     # Additional data fields can be added here if needed
     filter_collisions: bool = True
@@ -25,6 +28,7 @@ class ExtendedFactoryEnvCfg(FactoryEnvCfg):
 
     component_attr_map: dict = None
     """Component attribute mapping"""
+
 
     def apply_primary_cfg(self, primary_cfg) -> None:
         """

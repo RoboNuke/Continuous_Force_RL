@@ -15,7 +15,7 @@ from unittest.mock import patch, MagicMock
 
 # Import configuration classes to test
 from configs.cfg_exts.primary_cfg import PrimaryConfig
-from configs.cfg_exts.extended_factory_env_cfg import ExtendedFactoryEnvCfg
+from configs.cfg_exts.extended_factory_peg_env_cfg import ExtendedFactoryEnvCfg
 from configs.cfg_exts.extended_peg_insert_cfg import ExtendedFactoryTaskPegInsertCfg
 from configs.cfg_exts.extended_gear_mesh_cfg import ExtendedFactoryTaskGearMeshCfg
 from configs.cfg_exts.extended_nut_thread_cfg import ExtendedFactoryTaskNutThreadCfg

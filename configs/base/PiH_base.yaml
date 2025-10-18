@@ -6,20 +6,20 @@
 # EXPERIMENT CONFIGURATION
 experiment:
   name: "fPiH_base"
-  tags: ["factory", 'FPiH', 'scaled_tests']
-  group: "force_vel_test"
+  tags: ["factory", 'FPiH', 'Force-Force']
+  group: "force_force_tests"
   wandb_project: "debug"
   wandb_entity: "hur"
   task_name: "Isaac-Factory-PegInsert-Direct-v0"
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
-  agents_per_break_force: 1  # Number of agents per break force condition
+  agents_per_break_force: 2  # Number of agents per break force condition
   num_envs_per_agent: 16    # Environments per individual agent
-  break_forces: [50]  # Break force conditions (-1 = unbreakable)
+  break_forces: [10]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
-  max_steps: 10000128 #25000192
+  max_steps: 3000064 #25000192
   debug_mode: false
   seed: -1
   ckpt_tracker_path: "/nfs/stak/users/brownhun/voltron_baseline_tracker.txt" #"/home/hunter/ckpt_tracker.txt" #
@@ -27,6 +27,8 @@ primary:
 
 # ENVIRONMENT OVERRIDES (Direct Isaac Lab FactoryEnvCfg parameters)
 environment:
+  task:
+    name: 'peg_insert'
   # episode_length_s comes from Isaac Lab defaults (10.0s for peg insert)
   # decimation comes from primary config applied automatically
   scene:
