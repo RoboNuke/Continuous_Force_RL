@@ -162,6 +162,18 @@ class FactoryMetricsWrapper(gym.Wrapper):
             self.ep_max_force = torch.max(self.ep_max_force, force_magnitude)
             self.ep_max_torque = torch.max(self.ep_max_torque, torque_magnitude)
 
+            # Welford's algorithm for running variance
+            self.ep_force_count += 1
+            delta_force = force_magnitude - self.ep_mean_force
+            self.ep_mean_force += delta_force / self.ep_force_count
+            delta2_force = force_magnitude - self.ep_mean_force
+            self.ep_m2_force += delta_force * delta2_force
+
+            delta_torque = torque_magnitude - self.ep_mean_torque
+            self.ep_mean_torque += delta_torque / self.ep_force_count
+            delta2_torque = torque_magnitude - self.ep_mean_torque
+            self.ep_m2_torque += delta_torque * delta2_torque
+
         # Update success and engagement tracking
         self._update_success_engagement_tracking()
 
@@ -175,6 +187,11 @@ class FactoryMetricsWrapper(gym.Wrapper):
                 self.ep_max_torque = torch.zeros((self.num_envs,), device=self.device)
                 self.ep_sum_force = torch.zeros((self.num_envs,), device=self.device)
                 self.ep_sum_torque = torch.zeros((self.num_envs,), device=self.device)
+                self.ep_mean_force = torch.zeros((self.num_envs,), device=self.device)
+                self.ep_mean_torque = torch.zeros((self.num_envs,), device=self.device)
+                self.ep_m2_force = torch.zeros((self.num_envs,), device=self.device)
+                self.ep_m2_torque = torch.zeros((self.num_envs,), device=self.device)
+                self.ep_force_count = torch.zeros((self.num_envs,), device=self.device)
 
                 # Update agent episode data to include force metrics
                 for i in range(self.num_agents):
@@ -182,6 +199,8 @@ class FactoryMetricsWrapper(gym.Wrapper):
                     self.agent_episode_data[i]['max_torques'] = []
                     self.agent_episode_data[i]['avg_forces'] = []
                     self.agent_episode_data[i]['avg_torques'] = []
+                    self.agent_episode_data[i]['std_forces'] = []
+                    self.agent_episode_data[i]['std_torques'] = []
 
         else:
             self.has_force_data = False
@@ -303,11 +322,19 @@ class FactoryMetricsWrapper(gym.Wrapper):
             if self.has_force_data and hasattr(self, 'ep_max_force'):
                 max_force_val = float(self.ep_max_force[env_idx])
                 avg_force_val = float(self.ep_sum_force[env_idx] / norm_factor)
+                avg_torque_val = float(self.ep_sum_torque[env_idx] / norm_factor)
+
+                # Calculate std dev from Welford's M2 (sum of squared deviations)
+                count = float(self.ep_force_count[env_idx])
+                std_force_val = float(torch.sqrt(self.ep_m2_force[env_idx] / count)) if count > 0 else 0.0
+                std_torque_val = float(torch.sqrt(self.ep_m2_torque[env_idx] / count)) if count > 0 else 0.0
 
                 self.agent_episode_data[agent_id]['max_forces'].append(max_force_val)
                 self.agent_episode_data[agent_id]['max_torques'].append(float(self.ep_max_torque[env_idx]))
                 self.agent_episode_data[agent_id]['avg_forces'].append(avg_force_val)
-                self.agent_episode_data[agent_id]['avg_torques'].append(float(self.ep_sum_torque[env_idx] / norm_factor))
+                self.agent_episode_data[agent_id]['avg_torques'].append(avg_torque_val)
+                self.agent_episode_data[agent_id]['std_forces'].append(std_force_val)
+                self.agent_episode_data[agent_id]['std_torques'].append(std_torque_val)
 
 
     def _send_aggregated_factory_metrics(self):
@@ -329,7 +356,8 @@ class FactoryMetricsWrapper(gym.Wrapper):
         force_metrics_names = []
         if self.has_force_data:
             force_metrics_names = ['Smoothness/max_force', 'Smoothness/max_torque',
-                                  'Smoothness/avg_force', 'Smoothness/avg_torque']
+                                  'Smoothness/avg_force', 'Smoothness/avg_torque',
+                                  'Smoothness/std_force', 'Smoothness/std_torque']
             for metric_name in force_metrics_names:
                 all_agent_metrics[metric_name] = torch.zeros(self.num_agents, dtype=torch.float32)
 
@@ -364,11 +392,15 @@ class FactoryMetricsWrapper(gym.Wrapper):
                 max_max_torque = max(agent_data['max_torques'])
                 mean_avg_force = sum(agent_data['avg_forces']) / len(agent_data['avg_forces'])
                 mean_avg_torque = sum(agent_data['avg_torques']) / len(agent_data['avg_torques'])
+                mean_std_force = sum(agent_data['std_forces']) / len(agent_data['std_forces'])
+                mean_std_torque = sum(agent_data['std_torques']) / len(agent_data['std_torques'])
 
                 all_agent_metrics['Smoothness/max_force'][agent_id] = max_max_force
                 all_agent_metrics['Smoothness/max_torque'][agent_id] = max_max_torque
                 all_agent_metrics['Smoothness/avg_force'][agent_id] = mean_avg_force
                 all_agent_metrics['Smoothness/avg_torque'][agent_id] = mean_avg_torque
+                all_agent_metrics['Smoothness/std_force'][agent_id] = mean_std_force
+                all_agent_metrics['Smoothness/std_torque'][agent_id] = mean_std_torque
 
         # Send all metrics as num_agents-sized tensors to WandbWrapper (only if publishing enabled)
         # This will trigger the "Direct agent assignment" path in _split_by_agent
@@ -390,6 +422,8 @@ class FactoryMetricsWrapper(gym.Wrapper):
                 agent_data['max_torques'].clear()
                 agent_data['avg_forces'].clear()
                 agent_data['avg_torques'].clear()
+                agent_data['std_forces'].clear()
+                agent_data['std_torques'].clear()
 
     def _reset_completed_episodes(self, env_ids):
         """Reset tracking variables for completed episodes."""
@@ -406,6 +440,11 @@ class FactoryMetricsWrapper(gym.Wrapper):
             self.ep_max_torque[env_ids] = 0
             self.ep_sum_force[env_ids] = 0
             self.ep_sum_torque[env_ids] = 0
+            self.ep_mean_force[env_ids] = 0
+            self.ep_mean_torque[env_ids] = 0
+            self.ep_m2_force[env_ids] = 0
+            self.ep_m2_torque[env_ids] = 0
+            self.ep_force_count[env_ids] = 0
 
     def get_agent_assignment(self):
         """Get environment indices assigned to each agent."""
@@ -567,6 +606,11 @@ class FactoryMetricsWrapper(gym.Wrapper):
             self.ep_max_torque.fill_(0)
             self.ep_sum_force.fill_(0)
             self.ep_sum_torque.fill_(0)
+            self.ep_mean_force.fill_(0)
+            self.ep_mean_torque.fill_(0)
+            self.ep_m2_force.fill_(0)
+            self.ep_m2_torque.fill_(0)
+            self.ep_force_count.fill_(0)
 
         # Clear all agent episode data
         for agent_id in range(self.num_agents):
@@ -587,6 +631,10 @@ class FactoryMetricsWrapper(gym.Wrapper):
                     agent_data['avg_forces'].clear()
                 if agent_data['avg_torques'] is not None:
                     agent_data['avg_torques'].clear()
+                if agent_data['std_forces'] is not None:
+                    agent_data['std_forces'].clear()
+                if agent_data['std_torques'] is not None:
+                    agent_data['std_torques'].clear()
 
     def close(self):
         """Close wrapper."""
