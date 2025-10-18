@@ -31,11 +31,11 @@ class ExtendedFactoryTaskPegInsertCfg(PegInsert):
     ctrl: ExtendedCtrlCfg = None
 
     held_fixed_contact_sensor = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/HeldAsset",
+        prim_path="/World/envs/env_.*/HeldAsset/.*",
         update_period=0.0,
         history_length=0,
         debug_vis=True,
-        filter_prim_paths_expr=["{ENV_REGEX_NS}/FixedAsset"],
+        filter_prim_paths_expr=["/World/envs/env_.*/FixedAsset/.*"],
     )
 
     def __post_init__(self):

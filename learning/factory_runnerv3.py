@@ -76,6 +76,20 @@ from memories.multi_random import MultiRandomMemory
 import learning.launch_utils_v3 as lUtils
 from configs.config_manager_v3 import ConfigManagerV3
 from wrappers.skrl.async_critic_isaaclab_wrapper import AsyncCriticIsaacLabWrapper
+
+# Import factory environment class for direct instantiation
+try:
+    from isaaclab_tasks.direct.factory.factory_env import FactoryEnv
+except ImportError:
+    try:
+        from omni.isaac.lab_tasks.direct.factory.factory_env import FactoryEnv
+    except ImportError:
+        print("ERROR: Could not import FactoryEnv.")
+        print("Please ensure Isaac Lab tasks are properly installed.")
+        sys.exit(1)
+
+from wrappers.sensors.factory_env_with_sensors import create_sensor_enabled_factory_env
+
 print("\n\nImports complete\n\n")
 
 def print_configs(configs):
@@ -147,11 +161,17 @@ def main(
     # ===== STEP 2: CREATE ENVIRONMENT =====
     # Environment creation using fully configured objects from Step 1
     print("[INFO]: Step 2 - Creating environment")
-    env = gym.make(
-        id=configs['experiment'].task_name,
-        cfg=configs['environment'],
-        render_mode=None
-    )
+
+    # Wrap with sensor support if contact sensor config is present
+    if hasattr(configs['environment'].task, 'held_fixed_contact_sensor'):
+        EnvClass = create_sensor_enabled_factory_env(FactoryEnv)
+        print("[INFO]:   Using sensor-enabled factory environment")
+    else:
+        EnvClass = FactoryEnv
+        print("[INFO]:   Using standard factory environment")
+
+    # Create environment directly
+    env = EnvClass(cfg=configs['environment'], render_mode=None)
     print("[INFO]: Environment created successfully")
     
     # ===== STEP 3: APPLY WRAPPER STACK =====

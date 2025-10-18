@@ -6,7 +6,7 @@
 # EXPERIMENT CONFIGURATION
 experiment:
   name: "fPiH_base"
-  tags: ["factory", 'FPiH', 'Force-Force']
+  tags: ["factory", 'FPiH']
   group: "force_force_tests"
   wandb_project: "debug"
   wandb_entity: "hur"
@@ -14,8 +14,8 @@ experiment:
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
-  agents_per_break_force: 2  # Number of agents per break force condition
-  num_envs_per_agent: 16    # Environments per individual agent
+  agents_per_break_force: 5  # Number of agents per break force condition
+  num_envs_per_agent: 256    # Environments per individual agent
   break_forces: [10]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15

@@ -14,5 +14,5 @@ model:
 # Experiment metadata
 experiment:
   name: "pose_force_force_test"
-  tags: []
+  tags: ['Force-Force']
   group: "pose_force_force_test"

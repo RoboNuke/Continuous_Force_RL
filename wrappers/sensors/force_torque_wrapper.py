@@ -306,14 +306,12 @@ class ForceTorqueWrapper(gym.Wrapper):
         # Initialize force-torque sensor
         self._init_force_torque_sensor()
 
-        # Initialize contact sensor if configured
-        # Note: ContactSensor doesn't have initialize() method - it's initialized by the scene
-        # We create it here but it may not work until the scene updates
-        if hasattr(self.unwrapped.cfg_task, 'held_fixed_contact_sensor'):
-            print("\n\n", "="*100)
-            print("Creating contact sensor in _initialize_wrapper")
-            print("="*100, "\n\n")
-            self._held_fixed_contact_sensor = ContactSensor(self.unwrapped.cfg_task.held_fixed_contact_sensor)
+        # Reference the contact sensor from the scene if it exists
+        if hasattr(self.unwrapped.scene, 'sensors') and "held_fixed_contact_sensor" in self.unwrapped.scene.sensors:
+            self._held_fixed_contact_sensor = self.unwrapped.scene.sensors["held_fixed_contact_sensor"]
+            #print("\n\n", "="*100)
+            #print("Contact sensor found and referenced from scene")
+            #print("="*100, "\n\n")
         else:
             self._held_fixed_contact_sensor = None
 
@@ -416,19 +414,19 @@ class ForceTorqueWrapper(gym.Wrapper):
             #    self.unwrapped.robot_force_torque.fill_(0.0)
             #    self.unwrapped.force_torque = self.unwrapped.robot_force_torque
 
-            # Compute contact state based on force-torque readings
-            self.unwrapped.in_contact[:, :3] = torch.abs(self.unwrapped.robot_force_torque[:, :3]) > self.contact_force_threshold
-            self.unwrapped.in_contact[:, 3:] = torch.abs(self.unwrapped.robot_force_torque[:, 3:]) > self.contact_torque_threshold
-            ###########################################################################
-            ### HERE FOR TESTING ONLY TODO REMOVE ME!! ################################
-            # Contact sensor cannot be initialized after scene setup - commented out for now
-            # self._contact_detected_in_range()
-
+    ###########################################################################
+    ### HERE FOR TESTING ONLY TODO REMOVE ME!! ################################
     def _contact_detected_in_range(self):
         # get true state from directly-held contact sensor (not from scene)
         if self._held_fixed_contact_sensor is not None:
             net_contact_force = self._held_fixed_contact_sensor.data.net_forces_w
-            real_contact = torch.where(torch.isclose(net_contact_force , 0.0), 0, 1).float()
+            
+            real_contact = torch.where(
+                torch.isclose(net_contact_force , torch.zeros_like(net_contact_force), atol=1.0e-3, rtol=0.0), 
+                torch.zeros_like(net_contact_force), 
+                torch.ones_like(net_contact_force)
+            ).float()
+            
             self.unwrapped.extras['to_log']['Contact / Real Contact X'] = real_contact[...,0]
             self.unwrapped.extras['to_log']['Contact / Real Contact Y'] = real_contact[...,1]
             self.unwrapped.extras['to_log']['Contact / Real Contact Z'] = real_contact[...,2] 
@@ -463,11 +461,18 @@ class ForceTorqueWrapper(gym.Wrapper):
         if self._original_pre_physics_step:
             self._original_pre_physics_step(action)
 
+        # Compute contact state based on force-torque readings
+        self.unwrapped.in_contact[:, :3] = torch.abs(self.unwrapped.robot_force_torque[:, :3]) > self.contact_force_threshold
+        self.unwrapped.in_contact[:, 3:] = torch.abs(self.unwrapped.robot_force_torque[:, 3:]) > self.contact_torque_threshold
+        
+        #TODO REMOVE ONLY FOR TESTING
+        self._contact_detected_in_range()
+
         # Log contact state if enabled
         if self.log_contact_state and hasattr(self.unwrapped, 'extras'):
             if 'to_log' not in self.unwrapped.extras:
                 self.unwrapped.extras['to_log'] = {}
-
+            #print("in contact size:", self.unwrapped.in_contact.size())
             self.unwrapped.extras['to_log']['Contact / In-Contact X'] = self.unwrapped.in_contact[:, 0].float()
             self.unwrapped.extras['to_log']['Contact / In-Contact Y'] = self.unwrapped.in_contact[:, 1].float()
             self.unwrapped.extras['to_log']['Contact / In-Contact Z'] = self.unwrapped.in_contact[:, 2].float()
