@@ -108,7 +108,8 @@ class HybridActionGMM(Distribution): #MixtureSameFamily):
         ).sum(dim=-1)  # Sum over all 6 dimensions -> (batch,)
         #print(f"sel_log_prob shape: {sel_log_prob.shape}, continuous_log_prob shape: {continuous_log_prob.shape}")
 
-        return sel_log_prob + continuous_log_prob
+        #return sel_log_prob + continuous_log_prob
+        return continuous_log_prob
     
     #def entropy(self):
     #    return 0.0

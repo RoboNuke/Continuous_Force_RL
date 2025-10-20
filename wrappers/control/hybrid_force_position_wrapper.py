@@ -322,11 +322,18 @@ class HybridForcePositionWrapper(gym.Wrapper):
         if self._original_pre_physics_step:
             self._original_pre_physics_step(action.clone())
 
-        # Override base env's EMA - hybrid control does its own EMA on actions
-        self.unwrapped.actions = action.clone().to(self.device)
+        # TESTING MODE: Override selection actions with ground truth contact state
+        # Create a modified action tensor that replaces selection values
+        # Clone preserves gradients for position/force, detach prevents gradients for ground truth
+        modified_action = action.clone()
+        modified_action[:, :self.force_size] = self.unwrapped.in_contact[:, :self.force_size].float().detach()
 
-        # Step 1: Apply EMA to actions
-        self._apply_ema_to_actions(action)
+        # Override base env's EMA - hybrid control does its own EMA on actions
+        # Use modified action for storage
+        self.unwrapped.actions = modified_action.clone().to(self.device)
+
+        # Step 1: Apply EMA to modified actions
+        self._apply_ema_to_actions(modified_action)
 
         # Step 2: Compute control targets from current state + EMA actions
         self._compute_control_targets()
@@ -358,10 +365,6 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
     def _apply_ema_to_actions(self, action):
         """Apply EMA to actions, with special handling for selection terms."""
-        #######################################################
-        ## HERE FOR TESTING ONLY TODO REMOVE ME!!!!! ##########
-        action[:,:self.force_size] = self.unwrapped.in_contact[:, :self.force_size]
-        #######################################################
         # Selection actions (handle no_sel_ema flag)
         sel_actions = action[:, :self.force_size]
         if self.no_sel_ema:
