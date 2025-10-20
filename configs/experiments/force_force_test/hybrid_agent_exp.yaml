@@ -20,12 +20,12 @@ wrappers:
     enabled: false
 
 agent:
-  policy_learning_rate: 1.0e-5
+  policy_learning_rate: 5.0e-4
   critic_learning_rate: 1.0e-5
   #learning_epochs: 1
 
 # Experiment metadata
 experiment:
-  name: "hybrid_01fstd_1scale_real_force_force_test"
+  name: "hybrid_01fstd_pLR5-4_real_force_force_test"
   tags: ['Force-Force']
-  group: "hybrid_01fstd_1scale_real_force_force_test"
+  group: "hybrid_01fstd_pLR5-4_real_force_force_test"
