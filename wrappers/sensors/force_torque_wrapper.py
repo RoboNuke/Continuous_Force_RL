@@ -33,6 +33,7 @@ class ForceTorqueWrapper(gym.Wrapper):
     """
 
     def __init__(self, env, use_tanh_scaling=False, tanh_scale=0.03, add_force_obs=False,
+                 add_contact_obs=False, add_contact_state=True,
                  contact_force_threshold=0.1, contact_torque_threshold=0.01, log_contact_state=True):
         """
         Initialize the force-torque sensor wrapper.
@@ -60,6 +61,10 @@ class ForceTorqueWrapper(gym.Wrapper):
             if add_force_obs:
                 self.unwrapped.cfg.obs_order.append('force_torque')
                 self.unwrapped.cfg.state_order.append('force_torque')
+            if add_contact_state:
+                self.unwrapped.cfg.state_order.append('in_contact')
+            if add_contact_obs:
+                self.unwrapped.cfg.obs_order.append('in_contact')
             self._update_observation_config()
 
         # Flag to track if sensor is initialized
@@ -158,7 +163,8 @@ class ForceTorqueWrapper(gym.Wrapper):
                     "ee_linvel": 3,
                     "ee_angvel": 3,
                     "joint_pos": 7,
-                    "force_torque": 6
+                    "force_torque": 6,
+                    "in_contact": 3
                 }
                 STATE_DIM_CFG = {
                     "fingertip_pos": 3,
@@ -172,7 +178,8 @@ class ForceTorqueWrapper(gym.Wrapper):
                     "held_quat": 4,
                     "fixed_pos": 3,
                     "fixed_quat": 4,
-                    "force_torque": 6
+                    "force_torque": 6,
+                    "in_contact": 3
                 }
 
         # Add force_torque dimensions to the configs if not already present
@@ -180,6 +187,12 @@ class ForceTorqueWrapper(gym.Wrapper):
             OBS_DIM_CFG['force_torque'] = 6
         if 'force_torque' not in STATE_DIM_CFG:
             STATE_DIM_CFG['force_torque'] = 6
+
+        # Add in_contact dimensions to the configs if not already present
+        if 'in_contact' not in OBS_DIM_CFG:
+            OBS_DIM_CFG['in_contact'] = 3
+        if 'in_contact' not in STATE_DIM_CFG:
+            STATE_DIM_CFG['in_contact'] = 3
 
         # Verify required config attributes exist
         if not hasattr(env_cfg, 'obs_order'):
@@ -500,6 +513,13 @@ class ForceTorqueWrapper(gym.Wrapper):
         if hasattr(env_cfg, 'state_order') and 'force_torque' in env_cfg.state_order:
             state_dict['force_torque'] = self.get_force_torque_observation()
 
+        # Inject in-contact data if it's in the observation/state order
+        if hasattr(env_cfg, 'obs_order') and 'in_contact' in env_cfg.obs_order:
+            obs_dict['in_contact'] = self.get_in_contact_observation()
+
+        if hasattr(env_cfg, 'state_order') and 'in_contact' in env_cfg.state_order:
+            state_dict['in_contact'] = self.get_in_contact_observation()
+
         return obs_dict, state_dict
 
     def _wrapped_get_observations(self):
@@ -547,6 +567,17 @@ class ForceTorqueWrapper(gym.Wrapper):
         if hasattr(self.unwrapped.cfg, 'state_order') and 'force_torque' in self.unwrapped.cfg.state_order:
             state_dict['force_torque'] = force_torque_data
 
+        # Get in_contact data
+        in_contact_data = self.get_in_contact_observation()  # shape: [num_envs, 3]
+
+        # Inject into policy tensor if needed
+        if hasattr(self.unwrapped.cfg, 'obs_order') and 'in_contact' in self.unwrapped.cfg.obs_order:
+            obs_dict['in_contact'] = in_contact_data
+
+        # Inject into critic tensor if needed
+        if hasattr(self.unwrapped.cfg, 'state_order') and 'in_contact' in self.unwrapped.cfg.state_order:
+            state_dict['in_contact'] = in_contact_data
+
         obs_tensors = [obs_dict[obs_name] for obs_name in self.unwrapped.cfg.obs_order + ["prev_actions"]]
         obs_tensors = torch.cat(obs_tensors, dim=-1)
         state_tensors = [state_dict[state_name] for state_name in self.unwrapped.cfg.state_order + ["prev_actions"]]
@@ -592,6 +623,7 @@ class ForceTorqueWrapper(gym.Wrapper):
                 'fixed_pos': 3,
                 'fixed_quat': 4,
                 'force_torque': 6,
+                'in_contact': 3,
                 'prev_actions': 12  # Assuming 12-DOF action space
             }
             return default_dims.get(obs_name, 3)  # Default to 3 if unknown
@@ -671,3 +703,23 @@ class ForceTorqueWrapper(gym.Wrapper):
         else:
             # Return zeros if no data available
             return torch.zeros((self.unwrapped.num_envs, 6), device=self.unwrapped.device)
+
+    def get_in_contact_observation(self):
+        """
+        Get in-contact data formatted for observations.
+
+        Retrieves the current in-contact state (first 3 elements - force contact flags)
+        and converts from boolean to float for use in observation vectors.
+
+        Returns:
+            torch.Tensor: In-contact observation data with shape (num_envs, 3)
+                         Float values (0.0 or 1.0) representing contact state.
+                         Returns zeros if no contact data is available.
+        """
+        if hasattr(self.unwrapped, 'in_contact'):
+            # Take only first 3 elements (force contact flags) and convert to float
+            in_contact_obs = self.unwrapped.in_contact[:, :3].float()
+            return in_contact_obs
+        else:
+            # Return zeros if no data available
+            return torch.zeros((self.unwrapped.num_envs, 3), device=self.unwrapped.device)
