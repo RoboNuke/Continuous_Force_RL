@@ -191,9 +191,10 @@ class HybridGMMMixin(GaussianMixin):
 
         # std
         std = torch.ones_like(means)
-        std[:, :3, 0] = log_std[:, 0:3].exp() * (self.pos_scale ** 2) #    36
-        std[:, 3:, 0] = log_std[:, 3:6].exp() * (self.rot_scale ** 2) #   8.5
-        std[:, :3, 1] = log_std[:, 6:9].exp() * (self.force_scale ** 2) # 1
+        # when you scale a normal distribution by c, the std dev is scaled by c only!
+        std[:, :3, 0] = log_std[:, 0:3].exp() * (self.pos_scale) # ** 2) #    36
+        std[:, 3:, 0] = log_std[:, 3:6].exp() * (self.rot_scale) # ** 2) #   8.5
+        std[:, :3, 1] = log_std[:, 6:9].exp() * (self.force_scale) # ** 2) # 1
         if self.force_size > 3:
             std[:, 3:, 1] = log_std[:, 9:].exp() * (self.torque_scale ** 2) #0.25
         else:
