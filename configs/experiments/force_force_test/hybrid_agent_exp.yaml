@@ -20,7 +20,7 @@ wrappers:
     enabled: false
 
 agent:
-  policy_learning_rate: 5.0e-6
+  policy_learning_rate: 1.0e-6
   critic_learning_rate: 1.0e-5
   #learning_epochs: 1
 

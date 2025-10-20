@@ -667,7 +667,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # FIRST: Track early terminations (always, whether partial or full reset)
         if hasattr(self.unwrapped, 'episode_length_buf'):
             episode_lengths = self.unwrapped.episode_length_buf[env_ids]
-            max_length = getattr(self.unwrapped, 'max_episode_length', 1000)
+            max_length = self.unwrapped.max_episode_length - 1
 
             # Find environments that terminated early (not timeout)
             early_term_mask = episode_lengths < max_length
