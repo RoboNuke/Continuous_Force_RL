@@ -7,7 +7,7 @@ base_config: "configs/base/PiH_base.yaml"
 model:
   use_hybrid_agent: true
   hybrid_agent:
-    force_init_std: 0.1
+    force_init_std: 1.0
 
 # Enable hybrid control wrapper and related systems
 wrappers:
