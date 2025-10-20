@@ -7,7 +7,7 @@ base_config: "configs/base/PiH_base.yaml"
 model:
   use_hybrid_agent: true
   hybrid_agent:
-    force_init_std: 0.1 # implies a 96% range [-2.5, 2.5] 
+    force_init_std: 1.0 # implies a 96% range [-2.5, 2.5] 
 
 # Enable hybrid control wrapper and related systems
 wrappers:
@@ -26,6 +26,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "hybrid_real_force_force_test"
+  name: "hybrid_1fstd_real_force_force_test"
   tags: ['Force-Force']
-  group: "hybrid_real_force_force_test"
+  group: "hybrid_1fstd_real_force_force_test"
