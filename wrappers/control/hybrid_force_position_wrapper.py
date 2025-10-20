@@ -664,10 +664,33 @@ class HybridForcePositionWrapper(gym.Wrapper):
         if not isinstance(env_ids, torch.Tensor):
             env_ids = torch.tensor(env_ids, device=self.device, dtype=torch.long)
 
-        # Check if this is a full reset (all environments)
+        # FIRST: Track early terminations (always, whether partial or full reset)
+        if hasattr(self.unwrapped, 'episode_length_buf'):
+            episode_lengths = self.unwrapped.episode_length_buf[env_ids]
+            max_length = getattr(self.unwrapped, 'max_episode_length', 1000)
+
+            # Find environments that terminated early (not timeout)
+            early_term_mask = episode_lengths < max_length
+            early_term_env_ids = env_ids[early_term_mask]
+
+            # Track control mode at termination for each early-terminated environment
+            for env_id in early_term_env_ids:
+                env_idx = env_id.item()
+                agent_id = env_idx // self.envs_per_agent
+
+                # Check control mode for each axis (sel_matrix > 0.5 = force control)
+                for axis_idx, axis_name in enumerate(['x', 'y', 'z']):
+                    if self.sel_matrix[env_idx, axis_idx] > 0.5:
+                        # Force control was active on this axis
+                        self.termination_counts[f'force_{axis_name}'][agent_id] += 1
+                    else:
+                        # Position control was active on this axis
+                        self.termination_counts[f'pos_{axis_name}'][agent_id] += 1
+
+        # SECOND: If full reset, log and reset counts
         if len(env_ids) == self.num_envs:
             # Full reset - truncation period ended
-            # Log cumulative termination counts per agent before resetting
+            # Log cumulative termination counts per agent (including current reset)
             if hasattr(self.unwrapped, 'extras'):
                 for axis in ['x', 'y', 'z']:
                     axis_upper = axis.upper()
@@ -682,29 +705,6 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
             # Reset termination counts for the next truncation period
             self._reset_termination_counts()
-        else:
-            # Partial reset - track individual early terminations (not timeouts)
-            if hasattr(self.unwrapped, 'episode_length_buf'):
-                episode_lengths = self.unwrapped.episode_length_buf[env_ids]
-                max_length = getattr(self.unwrapped, 'max_episode_length', 1000)
-
-                # Find environments that terminated early (not timeout)
-                early_term_mask = episode_lengths < max_length
-                early_term_env_ids = env_ids[early_term_mask]
-
-                # Track control mode at termination for each early-terminated environment
-                for env_id in early_term_env_ids:
-                    env_idx = env_id.item()
-                    agent_id = env_idx // self.envs_per_agent
-
-                    # Check control mode for each axis (sel_matrix > 0.5 = force control)
-                    for axis_idx, axis_name in enumerate(['x', 'y', 'z']):
-                        if self.sel_matrix[env_idx, axis_idx] > 0.5:
-                            # Force control was active on this axis
-                            self.termination_counts[f'force_{axis_name}'][agent_id] += 1
-                        else:
-                            # Position control was active on this axis
-                            self.termination_counts[f'pos_{axis_name}'][agent_id] += 1
 
         # Call original _reset_idx to maintain wrapper chain
         if self._original_reset_idx is not None:
