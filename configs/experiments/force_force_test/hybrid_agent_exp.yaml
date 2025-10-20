@@ -26,6 +26,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "hybrid_force_force_test"
+  name: "hybrid_highStd_force_force_test"
   tags: []
-  group: "hybrid_force_force_test"
+  group: "hybrid_highStd_force_force_test"
