@@ -344,19 +344,6 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Enable wrench logging for the first apply_action call this step
         self._should_log_wrenches = True
 
-        # Log cumulative termination counts per agent
-        if hasattr(self.unwrapped, 'extras'):
-            for axis in ['x', 'y', 'z']:
-                axis_upper = axis.upper()
-                # Convert lists to tensors for logging
-                force_counts = torch.tensor(self.termination_counts[f'force_{axis}'],
-                                             dtype=torch.float32, device=self.device)
-                pos_counts = torch.tensor(self.termination_counts[f'pos_{axis}'],
-                                           dtype=torch.float32, device=self.device)
-
-                self.unwrapped.extras['to_log'][f'Termination / Force Control {axis_upper} Count'] = force_counts
-                self.unwrapped.extras['to_log'][f'Termination / Position Control {axis_upper} Count'] = pos_counts
-
     def _reset_ema_actions(self, env_ids):
         """Reset EMA actions for given environment IDs (Isaac Lab style)."""
         # Reset EMA actions to zeros (Isaac Lab approach)
@@ -677,32 +664,56 @@ class HybridForcePositionWrapper(gym.Wrapper):
         if not isinstance(env_ids, torch.Tensor):
             env_ids = torch.tensor(env_ids, device=self.device, dtype=torch.long)
 
-        # Only track early terminations (not timeouts)
-        if hasattr(self.unwrapped, 'episode_length_buf'):
-            episode_lengths = self.unwrapped.episode_length_buf[env_ids]
-            max_length = getattr(self.unwrapped, 'max_episode_length', 1000)
+        # Check if this is a full reset (all environments)
+        if len(env_ids) == self.num_envs:
+            # Full reset - truncation period ended
+            # Log cumulative termination counts per agent before resetting
+            if hasattr(self.unwrapped, 'extras'):
+                for axis in ['x', 'y', 'z']:
+                    axis_upper = axis.upper()
+                    # Convert lists to tensors for logging
+                    force_counts = torch.tensor(self.termination_counts[f'force_{axis}'],
+                                                 dtype=torch.float32, device=self.device)
+                    pos_counts = torch.tensor(self.termination_counts[f'pos_{axis}'],
+                                               dtype=torch.float32, device=self.device)
 
-            # Find environments that terminated early (not timeout)
-            early_term_mask = episode_lengths < max_length
-            early_term_env_ids = env_ids[early_term_mask]
+                    self.unwrapped.extras['to_log'][f'Termination / Force Control {axis_upper} Count'] = force_counts
+                    self.unwrapped.extras['to_log'][f'Termination / Position Control {axis_upper} Count'] = pos_counts
 
-            # Track control mode at termination for each early-terminated environment
-            for env_id in early_term_env_ids:
-                env_idx = env_id.item()
-                agent_id = env_idx // self.envs_per_agent
+            # Reset termination counts for the next truncation period
+            self._reset_termination_counts()
+        else:
+            # Partial reset - track individual early terminations (not timeouts)
+            if hasattr(self.unwrapped, 'episode_length_buf'):
+                episode_lengths = self.unwrapped.episode_length_buf[env_ids]
+                max_length = getattr(self.unwrapped, 'max_episode_length', 1000)
 
-                # Check control mode for each axis (sel_matrix > 0.5 = force control)
-                for axis_idx, axis_name in enumerate(['x', 'y', 'z']):
-                    if self.sel_matrix[env_idx, axis_idx] > 0.5:
-                        # Force control was active on this axis
-                        self.termination_counts[f'force_{axis_name}'][agent_id] += 1
-                    else:
-                        # Position control was active on this axis
-                        self.termination_counts[f'pos_{axis_name}'][agent_id] += 1
+                # Find environments that terminated early (not timeout)
+                early_term_mask = episode_lengths < max_length
+                early_term_env_ids = env_ids[early_term_mask]
+
+                # Track control mode at termination for each early-terminated environment
+                for env_id in early_term_env_ids:
+                    env_idx = env_id.item()
+                    agent_id = env_idx // self.envs_per_agent
+
+                    # Check control mode for each axis (sel_matrix > 0.5 = force control)
+                    for axis_idx, axis_name in enumerate(['x', 'y', 'z']):
+                        if self.sel_matrix[env_idx, axis_idx] > 0.5:
+                            # Force control was active on this axis
+                            self.termination_counts[f'force_{axis_name}'][agent_id] += 1
+                        else:
+                            # Position control was active on this axis
+                            self.termination_counts[f'pos_{axis_name}'][agent_id] += 1
 
         # Call original _reset_idx to maintain wrapper chain
         if self._original_reset_idx is not None:
             self._original_reset_idx(env_ids)
+
+    def _reset_termination_counts(self):
+        """Reset termination counts for new truncation period."""
+        for key in self.termination_counts:
+            self.termination_counts[key] = [0] * self.num_agents
 
     def _get_target_out_of_bounds(self):
         """Check if fingertip target is out of position bounds."""

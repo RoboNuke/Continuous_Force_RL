@@ -1192,6 +1192,148 @@ class TestHybridForcePositionWrapper:
 
         # Torque components should use position control regardless of selection
 
+    def test_termination_count_initialization(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test that termination counts are initialized to zero."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg,
+            num_agents=2
+        )
+
+        # Check initialization
+        assert wrapper.num_agents == 2
+        assert 'force_x' in wrapper.termination_counts
+        assert 'force_y' in wrapper.termination_counts
+        assert 'force_z' in wrapper.termination_counts
+        assert 'pos_x' in wrapper.termination_counts
+        assert 'pos_y' in wrapper.termination_counts
+        assert 'pos_z' in wrapper.termination_counts
+
+        # All counts should be zero
+        for key in wrapper.termination_counts:
+            assert wrapper.termination_counts[key] == [0, 0]
+
+    def test_termination_count_partial_reset(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test that termination counts are incremented during partial resets (early terminations)."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg,
+            num_agents=2
+        )
+
+        # Initialize wrapper
+        wrapper._initialize_wrapper()
+
+        # Add episode_length_buf to mock environment
+        mock_env.episode_length_buf = torch.tensor([50, 100, 75, 150], device=mock_env.device)
+        mock_env.max_episode_length = 200
+
+        # Set selection matrix for different control modes
+        # Env 0 (agent 0): Force control on X, Position on Y, Z
+        wrapper.sel_matrix[0] = torch.tensor([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        # Env 2 (agent 1): Position control on X, Force on Y, Z
+        wrapper.sel_matrix[2] = torch.tensor([0.0, 1.0, 1.0, 0.0, 0.0, 0.0])
+
+        # Trigger partial reset for environments 0 and 2 (early terminations)
+        env_ids = torch.tensor([0, 2], device=mock_env.device)
+        wrapper._wrapped_reset_idx(env_ids)
+
+        # Check that termination counts were incremented
+        # Agent 0, env 0: force_x=1, pos_y=1, pos_z=1
+        assert wrapper.termination_counts['force_x'][0] == 1
+        assert wrapper.termination_counts['pos_y'][0] == 1
+        assert wrapper.termination_counts['pos_z'][0] == 1
+
+        # Agent 1, env 2: pos_x=1, force_y=1, force_z=1
+        assert wrapper.termination_counts['pos_x'][1] == 1
+        assert wrapper.termination_counts['force_y'][1] == 1
+        assert wrapper.termination_counts['force_z'][1] == 1
+
+    def test_termination_count_timeout_not_tracked(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test that timeouts (max episode length) are not tracked in termination counts."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg,
+            num_agents=2
+        )
+
+        # Initialize wrapper
+        wrapper._initialize_wrapper()
+
+        # Add episode_length_buf to mock environment
+        # Environment 0 hits max_episode_length (timeout, not early termination)
+        mock_env.episode_length_buf = torch.tensor([200, 100, 150, 200], device=mock_env.device)
+        mock_env.max_episode_length = 200
+
+        # Set selection matrix
+        wrapper.sel_matrix[0] = torch.tensor([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+
+        # Trigger partial reset for environment 0 (timeout)
+        env_ids = torch.tensor([0], device=mock_env.device)
+        wrapper._wrapped_reset_idx(env_ids)
+
+        # Termination counts should NOT be incremented (timeout, not early termination)
+        assert wrapper.termination_counts['force_x'][0] == 0
+
+    def test_termination_count_full_reset(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test that termination counts are reset during full resets."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg,
+            num_agents=2
+        )
+
+        # Initialize wrapper
+        wrapper._initialize_wrapper()
+
+        # Add episode_length_buf to mock environment
+        mock_env.episode_length_buf = torch.tensor([50, 100, 75, 150], device=mock_env.device)
+        mock_env.max_episode_length = 200
+
+        # Set selection matrix
+        wrapper.sel_matrix[0] = torch.tensor([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        wrapper.sel_matrix[2] = torch.tensor([0.0, 1.0, 1.0, 0.0, 0.0, 0.0])
+
+        # First, do a partial reset to increment counts
+        env_ids = torch.tensor([0, 2], device=mock_env.device)
+        wrapper._wrapped_reset_idx(env_ids)
+
+        # Verify counts were incremented
+        assert wrapper.termination_counts['force_x'][0] == 1
+        assert wrapper.termination_counts['pos_x'][1] == 1
+
+        # Now trigger full reset (all environments)
+        all_env_ids = torch.tensor([0, 1, 2, 3], device=mock_env.device)
+        wrapper._wrapped_reset_idx(all_env_ids)
+
+        # Termination counts should be reset to zero
+        for key in wrapper.termination_counts:
+            assert wrapper.termination_counts[key] == [0, 0], f"Key {key} was not reset"
+
+    def test_reset_termination_counts_method(self, mock_env, hybrid_ctrl_cfg, hybrid_task_cfg):
+        """Test the _reset_termination_counts helper method."""
+        wrapper = HybridForcePositionWrapper(
+            mock_env,
+            ctrl_cfg=hybrid_ctrl_cfg,
+            task_cfg=hybrid_task_cfg,
+            num_agents=2
+        )
+
+        # Set some non-zero counts
+        wrapper.termination_counts['force_x'] = [5, 3]
+        wrapper.termination_counts['pos_y'] = [2, 7]
+
+        # Call reset method
+        wrapper._reset_termination_counts()
+
+        # All counts should be reset to zero
+        for key in wrapper.termination_counts:
+            assert wrapper.termination_counts[key] == [0, 0]
+
 
 if __name__ == "__main__":
     pytest.main([__file__])
