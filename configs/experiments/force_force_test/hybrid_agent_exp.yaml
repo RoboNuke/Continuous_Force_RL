@@ -7,7 +7,7 @@ base_config: "configs/base/PiH_base.yaml"
 model:
   use_hybrid_agent: true
   hybrid_agent:
-    force_init_std: 0.1 # implies a 96% range [-1.25, 1.25] 
+    force_init_std: 0.1 # implies a 96% range [-2.5, 2.5] 
 
 # Enable hybrid control wrapper and related systems
 wrappers:
@@ -20,7 +20,7 @@ wrappers:
     enabled: false
 
 agent:
-  policy_learning_rate: 1.0e-6
+  policy_learning_rate: 5.0e-4
   critic_learning_rate: 1.0e-5
   #learning_epochs: 1
 
