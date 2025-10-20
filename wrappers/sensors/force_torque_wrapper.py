@@ -421,15 +421,15 @@ class ForceTorqueWrapper(gym.Wrapper):
         if self._held_fixed_contact_sensor is not None:
             net_contact_force = self._held_fixed_contact_sensor.data.net_forces_w
             
-            real_contact = torch.where(
+            self.real_contact = torch.where(
                 torch.isclose(net_contact_force , torch.zeros_like(net_contact_force), atol=1.0e-3, rtol=0.0), 
                 torch.zeros_like(net_contact_force), 
                 torch.ones_like(net_contact_force)
-            ).float()
-            
-            self.unwrapped.extras['to_log']['Contact / Real Contact X'] = real_contact[...,0]
-            self.unwrapped.extras['to_log']['Contact / Real Contact Y'] = real_contact[...,1]
-            self.unwrapped.extras['to_log']['Contact / Real Contact Z'] = real_contact[...,2] 
+            ).bool()
+            self.real_contact = self.real_contact[:,0,:]
+            self.unwrapped.extras['to_log']['Contact / Real Contact X'] = self.real_contact[:,0].float()
+            self.unwrapped.extras['to_log']['Contact / Real Contact Y'] = self.real_contact[:,1].float()
+            self.unwrapped.extras['to_log']['Contact / Real Contact Z'] = self.real_contact[:,2].float()
 
         #########################################################################
 
@@ -462,12 +462,14 @@ class ForceTorqueWrapper(gym.Wrapper):
             self._original_pre_physics_step(action)
 
         # Compute contact state based on force-torque readings
-        self.unwrapped.in_contact[:, :3] = torch.abs(self.unwrapped.robot_force_torque[:, :3]) > self.contact_force_threshold
-        self.unwrapped.in_contact[:, 3:] = torch.abs(self.unwrapped.robot_force_torque[:, 3:]) > self.contact_torque_threshold
+        #self.unwrapped.in_contact[:, :3] = torch.abs(self.unwrapped.robot_force_torque[:, :3]) > self.contact_force_threshold
+        #self.unwrapped.in_contact[:, 3:] = torch.abs(self.unwrapped.robot_force_torque[:, 3:]) > self.contact_torque_threshold
         
         #TODO REMOVE ONLY FOR TESTING
         self._contact_detected_in_range()
-
+        self.unwrapped.in_contact[:, :3] = self.real_contact
+        self.unwrapped.in_contact[:, 3:] = False
+        
         # Log contact state if enabled
         if self.log_contact_state and hasattr(self.unwrapped, 'extras'):
             if 'to_log' not in self.unwrapped.extras:
