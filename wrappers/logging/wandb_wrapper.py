@@ -126,6 +126,24 @@ class SimpleEpisodeTracker:
         self.env_steps += 1
         self.total_steps = self.env_steps * self.num_envs
 
+    def upload_checkpoint(self, checkpoint_path: str, checkpoint_type: str) -> bool:
+        """Upload checkpoint file to WandB and return success status.
+
+        Args:
+            checkpoint_path: Full path to checkpoint file
+            checkpoint_type: Type identifier ('policy' or 'critic')
+
+        Returns:
+            bool: True if upload succeeded, False otherwise
+        """
+        import os
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+
+        # Upload to WandB with base_path to preserve directory structure
+        wandb.save(checkpoint_path, base_path=os.path.dirname(checkpoint_path))
+        return True
+
     def add_metrics(self, metrics: Dict[str, torch.Tensor]):
         """Add metrics for this agent's environments."""
         for name, values in metrics.items():
@@ -511,6 +529,21 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
                 )
 
         self._split_by_agent(onetime_metrics, 'publish')
+
+    def upload_checkpoint(self, agent_id: int, checkpoint_path: str, checkpoint_type: str) -> bool:
+        """Delegate checkpoint upload to specific agent's tracker.
+
+        Args:
+            agent_id: Index of agent (0 to num_agents-1)
+            checkpoint_path: Full path to checkpoint file
+            checkpoint_type: Type identifier ('policy' or 'critic')
+
+        Returns:
+            bool: True if upload succeeded, False otherwise
+        """
+        if agent_id < 0 or agent_id >= self.num_agents:
+            raise ValueError(f"Invalid agent_id {agent_id}, must be in range [0, {self.num_agents})")
+        return self.trackers[agent_id].upload_checkpoint(checkpoint_path, checkpoint_type)
 
     def step(self, action):
         """Step environment and track episode metrics."""

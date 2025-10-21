@@ -104,6 +104,7 @@ class BlockPPO(PPO):
         self.huber_value_loss = cfg['use_huber_value_loss']
         self.loggers = []
         self._random_value_timesteps = cfg['random_value_timesteps']
+        self.upload_ckpts_to_wandb = cfg.get('upload_ckpts_to_wandb', False)
 
         # Initialize agent experiment configs
         self.agent_exp_cfgs = cfg['agent_exp_cfgs']
@@ -224,7 +225,26 @@ class BlockPPO(PPO):
 
         export_policies(self.models['policy'].actor_mean, self.models['policy'].actor_logstd, ckpt_paths, all_preprocessor_states)
         export_policies(self.models['value'].critic, None, critic_paths, all_preprocessor_states)
-        
+
+        # Upload checkpoints to WandB if enabled
+        if self.upload_ckpts_to_wandb:
+            wrapper = self._get_logging_wrapper()
+            if wrapper is None:
+                raise RuntimeError("upload_ckpts_to_wandb is enabled but no logging wrapper found")
+
+            for i in range(self.num_agents):
+                # Upload policy checkpoint
+                policy_success = wrapper.upload_checkpoint(i, ckpt_paths[i], 'policy')
+                # Upload critic checkpoint
+                critic_success = wrapper.upload_checkpoint(i, critic_paths[i], 'critic')
+
+                # Only delete local files if both uploads succeeded
+                if policy_success and critic_success:
+                    os.remove(ckpt_paths[i])
+                    os.remove(critic_paths[i])
+                else:
+                    raise RuntimeError(f"Checkpoint upload failed for agent {i}")
+
         #self.track_data("ckpt_video", (timestep, vid_path) )
         if self.track_ckpt_paths:
             lock = FileLock(self.tracker_path + ".lock")

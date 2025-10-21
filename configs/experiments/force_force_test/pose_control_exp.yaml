@@ -13,6 +13,6 @@ model:
 
 # Experiment metadata
 experiment:
-  name: "pose_contactCritic_real_force_force_test"
+  name: "pose_ff_test"
   tags: ['Force-Force']
-  group: "pose_contactCritic_real_force_force_test"
+  group: "pose_ff_test"

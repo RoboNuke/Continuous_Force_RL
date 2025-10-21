@@ -153,6 +153,9 @@ wrappers:
     contact_force_threshold: 1.5
     contact_torque_threshold: 100.0 # don't want torque activation
     log_contact_state: true
+    add_contact_obs: false
+    add_contact_state: true
+    use_contact_sensor: true  # Use ContactSensor for contact detection
 
   # Observation format conversion (Isaac Lab dict -> single tensor)
   observation_manager:
@@ -250,6 +253,7 @@ agent:
 
   # Checkpoint and experiment tracking
   track_ckpts: false
+  upload_ckpts_to_wandb: True
   # ckpt_tracker_path comes from primary config automatically
 
   # SKRL PPO PARAMETERS (these override SKRL defaults)

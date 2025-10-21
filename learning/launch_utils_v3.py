@@ -53,9 +53,12 @@ def apply_wrappers(env, configs):
             use_tanh_scaling=wrappers_config.force_torque_sensor.use_tanh_scaling,
             tanh_scale=wrappers_config.force_torque_sensor.tanh_scale,
             add_force_obs=wrappers_config.force_torque_sensor.add_force_obs,
+            add_contact_obs=wrappers_config.force_torque_sensor.add_contact_obs,
+            add_contact_state=wrappers_config.force_torque_sensor.add_contact_state,
             contact_force_threshold=wrappers_config.force_torque_sensor.contact_force_threshold,
             contact_torque_threshold=wrappers_config.force_torque_sensor.contact_torque_threshold,
-            log_contact_state=wrappers_config.force_torque_sensor.log_contact_state
+            log_contact_state=wrappers_config.force_torque_sensor.log_contact_state,
+            use_contact_sensor=wrappers_config.force_torque_sensor.use_contact_sensor
         )
 
     if wrappers_config.force_reward.enabled:

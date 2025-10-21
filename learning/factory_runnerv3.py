@@ -162,8 +162,9 @@ def main(
     # Environment creation using fully configured objects from Step 1
     print("[INFO]: Step 2 - Creating environment")
 
-    # Wrap with sensor support if contact sensor config is present
-    if hasattr(configs['environment'].task, 'held_fixed_contact_sensor'):
+    # Wrap with sensor support if contact sensor config is present AND use_contact_sensor is enabled
+    if (hasattr(configs['environment'].task, 'held_fixed_contact_sensor') and
+        configs['wrappers'].force_torque_sensor.use_contact_sensor):
         EnvClass = create_sensor_enabled_factory_env(FactoryEnv)
         print("[INFO]:   Using sensor-enabled factory environment")
     else:

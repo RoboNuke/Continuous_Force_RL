@@ -77,6 +77,9 @@ class ExtendedPPOConfig:
     track_ckpts: bool = True
     """Enable checkpoint tracking"""
 
+    upload_ckpts_to_wandb: bool = False
+    """Upload checkpoints to WandB after saving and delete local files"""
+
     ckpt_tracker_path: str = "/nfs/stak/users/brownhun/ckpt_tracker2.txt"
     """Path to checkpoint tracker file"""
 
@@ -295,6 +298,7 @@ class ExtendedPPOConfig:
             'break_force': self.break_force,
             'easy_mode': self.easy_mode,
             'track_ckpts': self.track_ckpts,
+            'upload_ckpts_to_wandb': self.upload_ckpts_to_wandb,
             'ckpt_tracker_path': self.ckpt_tracker_path,
             'random_value_timesteps': self.random_value_timesteps,
 

@@ -26,6 +26,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "hybrid_contactCritic_real_force_force_test"
+  name: "hybrid_ff_test"
   tags: ['Force-Force']
-  group: "hybrid_contactCritic_real_force_force_test"
+  group: "hybrid_ff_test"

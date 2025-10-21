@@ -32,6 +32,7 @@ class ForceTorqueSensorConfig:
     contact_force_threshold: float = 0.1
     contact_torque_threshold: float = 0.01
     log_contact_state: bool = True
+    use_contact_sensor: bool = True  # True = use ContactSensor, False = use force-torque thresholds
 
 
 @dataclass
