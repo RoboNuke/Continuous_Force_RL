@@ -319,10 +319,16 @@ def create_block_ppo_agents(env, configs, models, memory):
 
     # Create BlockPPO agent
 
+    # DEBUG: Create cfg dict and verify values before passing to BlockPPO
+    agent_cfg = configs['agent'].to_skrl_dict(configs['environment'].episode_length_s)
+    print(f"  [DEBUG create_block_ppo_agents] After to_skrl_dict():")
+    print(f"    - agent_cfg['write_interval']: {agent_cfg['write_interval']}")
+    print(f"    - agent_cfg['checkpoint_interval']: {agent_cfg['checkpoint_interval']}")
+
     agent = BlockPPO(
         models=models,
         memory=memory,
-        cfg=configs['agent'].to_skrl_dict(configs['environment'].episode_length_s),
+        cfg=agent_cfg,
         observation_space=env.observation_space,
         action_space=env.unwrapped.cfg.action_space,
         num_envs=configs['environment'].scene.num_envs,
@@ -330,7 +336,7 @@ def create_block_ppo_agents(env, configs, models, memory):
         device=env.device,
         task=configs['environment'].task_name,
         num_agents=configs['primary'].total_agents,
-        env=env 
+        env=env
     )
 
     # Create optimizer
