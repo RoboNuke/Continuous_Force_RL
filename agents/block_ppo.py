@@ -151,8 +151,10 @@ class BlockPPO(PPO):
         #if self.write_interval > 0:
         #    self.writer = SummaryWriter(log_dir=self.experiment_dir)
 
+        print(f"[DEBUG INIT] Before auto-calc: checkpoint_interval={self.checkpoint_interval}, write_interval={self.write_interval}")
         if self.checkpoint_interval == "auto":
             self.checkpoint_interval = int(trainer_cfg.get("timesteps", 0) / 10)
+        print(f"[DEBUG INIT] After auto-calc: checkpoint_interval={self.checkpoint_interval}, write_interval={self.write_interval}")
         if self.checkpoint_interval > 0:
             for i in range(self.num_agents):
                 os.makedirs(os.path.join(
@@ -417,21 +419,25 @@ class BlockPPO(PPO):
         :type timestep: int
         :param timesteps: Number of timesteps
         :type timesteps: int
-        """   
+        """
         self._rollout += 1
         if not self._rollout % self._rollouts and timestep >= self._learning_starts:
             self.set_mode("train")
             #print("Return:", np.mean(np.array(self._track_rewards)))
             self._update(timestep, timesteps)
-            
+
             self.set_mode("eval")
 
         # Store original timestep for checkpoint/tracking checks
         original_timestep = timestep
+        if original_timestep in [0, 1, 149, 150, 151, 299, 300, 301]:  # Debug key timesteps
+            print(f"[DEBUG POST_INTERACTION] timestep={original_timestep}, checkpoint_interval={self.checkpoint_interval}, write_interval={self.write_interval}")
         timestep += 1
         self.global_step+= self.num_envs
 
         # update best models and write checkpoints
+        if original_timestep % 150 == 0:  # Debug every 150 timesteps
+            print(f"[DEBUG] Timestep {original_timestep}: checkpoint_interval={self.checkpoint_interval}, condition check: {original_timestep > 0 and self.checkpoint_interval > 0 and not original_timestep % self.checkpoint_interval}")
         if original_timestep > 0 and self.checkpoint_interval > 0 and not original_timestep % self.checkpoint_interval:
             # write checkpoints
             self.write_checkpoint(original_timestep, timesteps)
