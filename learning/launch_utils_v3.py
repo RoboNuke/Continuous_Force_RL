@@ -155,7 +155,7 @@ def add_wandb_tracking_tags(configs):
 
 def define_agent_configs(configs):
     configs['agent'].write_interval = configs['primary'].rollout_steps(configs['environment'].episode_length_s) #max rollouts
-    configs['agent'].checkpoint_interval = 10 * configs['agent'].write_interval
+    configs['agent'].checkpoint_interval = configs['agent'].checkpoint_interval_multiplier * configs['agent'].write_interval
 
     print(f"  -Write Interval:{configs['agent'].write_interval}")
     print(f"  -Checkpoint Interval:{configs['agent'].checkpoint_interval}")

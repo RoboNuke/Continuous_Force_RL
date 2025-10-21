@@ -90,6 +90,9 @@ class ExtendedPPOConfig:
     write_interval: int = 150
     """Logging write interval"""
 
+    checkpoint_interval_multiplier: int = 10
+    """Multiplier for checkpoint interval (checkpoint_interval = multiplier × write_interval)"""
+
     checkpoint_interval: int = 1500
     """Checkpoint save interval"""
 
