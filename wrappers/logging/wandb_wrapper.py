@@ -141,7 +141,7 @@ class SimpleEpisodeTracker:
             raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
 
         # Upload to WandB with base_path to preserve directory structure
-        wandb.save(checkpoint_path, base_path=os.path.dirname(checkpoint_path))
+        self.run.save(checkpoint_path, base_path=os.path.dirname(checkpoint_path))
         return True
 
     def add_metrics(self, metrics: Dict[str, torch.Tensor]):
