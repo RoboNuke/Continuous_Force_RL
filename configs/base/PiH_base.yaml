@@ -14,8 +14,8 @@ experiment:
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
-  agents_per_break_force: 3  # Number of agents per break force condition
-  num_envs_per_agent: 16    # Environments per individual agent
+  agents_per_break_force: 5  # Number of agents per break force condition
+  num_envs_per_agent: 256    # Environments per individual agent
   break_forces: [10]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
@@ -249,7 +249,7 @@ wrappers:
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
 agent:
   # Core identification
-  disable_progressbar: false
+  disable_progressbar: true
 
   # Checkpoint and experiment tracking
   track_ckpts: false
@@ -259,7 +259,7 @@ agent:
 
   # SKRL PPO PARAMETERS (these override SKRL defaults)
   # rollouts and mini_batches are auto-calculated from episode timing
-  learning_epochs: 1 #4
+  learning_epochs: 4
   mini_batches: 150
   discount_factor: 0.99
   lambda_: 0.95  # Note: underscore for Python compatibility
