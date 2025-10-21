@@ -93,6 +93,18 @@ class BlockPPO(PPO):
         print(f"  - self.write_interval: {self.write_interval}")
         print(f"  - self.checkpoint_interval: {self.checkpoint_interval}")
 
+        # FIX: Override parent's auto values with our explicit config values
+        # Parent Agent.__init__ expects these in cfg["experiment"]["key"] but we provide them at top level
+        # This is because we have per-agent experiment configs in agent_exp_cfgs instead
+        self.write_interval = cfg['write_interval']
+        self.checkpoint_interval = cfg['checkpoint_interval']
+        self.checkpoint_store_separately = False  # We handle per-agent checkpoints ourselves
+
+        print(f"[DEBUG BlockPPO.__init__] AFTER manual override:")
+        print(f"  - self.write_interval: {self.write_interval}")
+        print(f"  - self.checkpoint_interval: {self.checkpoint_interval}")
+        print(f"  - self.checkpoint_store_separately: {self.checkpoint_store_separately}")
+
         self.global_step = 0
         self.num_envs = num_envs
         self.num_agents = num_agents
