@@ -237,14 +237,14 @@ class BlockPPO(PPO):
                 policy_success = wrapper.upload_checkpoint(i, ckpt_paths[i], 'policy')
                 # Upload critic checkpoint
                 critic_success = wrapper.upload_checkpoint(i, critic_paths[i], 'critic')
-
+                print(f"Added agent {i} ckpt from path {ckpt_paths[i]}")
                 # Only delete local files if both uploads succeeded
-                if policy_success and critic_success:
+                """if policy_success and critic_success:
                     os.remove(ckpt_paths[i])
                     os.remove(critic_paths[i])
                 else:
                     raise RuntimeError(f"Checkpoint upload failed for agent {i}")
-
+                """
         #self.track_data("ckpt_video", (timestep, vid_path) )
         if self.track_ckpt_paths:
             lock = FileLock(self.tracker_path + ".lock")
