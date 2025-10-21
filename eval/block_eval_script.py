@@ -1857,7 +1857,7 @@ def main(args):
     print(f"  Config: {args.config}")
     print(f"  Eval seed: {args.eval_seed}")
     print(f"  Video enabled: {args.enable_video}")
-    print(f"  Upload checkpoint: {args.upload_checkpoint}")
+    print(f"  Upload checkpoint: {args.upload_ckpt}")
 
     # Step 1: Setup signal handlers for graceful shutdown (tracker mode only)
     if mode == "tracker":
@@ -1979,11 +1979,11 @@ def main(args):
             print("  Logged to WandB successfully")
 
             # 4k. Upload checkpoints to WandB (if enabled, modes 1 & 3 only)
-            if args.upload_checkpoint and mode != "wandb":
+            if args.upload_ckpt and mode != "wandb":
                 print("\n[4k] Uploading checkpoints to WandB...")
                 upload_checkpoints_to_wandb(checkpoint_dicts)
                 print("  Checkpoints uploaded successfully")
-            elif args.upload_checkpoint and mode == "wandb":
+            elif args.upload_ckpt and mode == "wandb":
                 print("\n[4k] Skipping checkpoint upload (already in WandB)")
             else:
                 print("\n[4k] Checkpoint upload disabled")
