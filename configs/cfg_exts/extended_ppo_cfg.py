@@ -244,17 +244,11 @@ class ExtendedPPOConfig:
         Returns:
             Dictionary compatible with SKRL PPO agent
         """
-        # DEBUG: Print instance variable values before creating dict
-        print(f"  [DEBUG to_skrl_dict] Instance variables before creating dict:")
-        print(f"    - self.write_interval: {self.write_interval}")
-        print(f"    - self.checkpoint_interval: {self.checkpoint_interval}")
-        print(f"    - self.checkpoint_interval_multiplier: {self.checkpoint_interval_multiplier}")
-
         # Use computed values for rollouts and mini_batches
         computed_rollouts = self.get_computed_rollouts(episode_length_s)
         computed_mini_batches = self.get_computed_mini_batches(episode_length_s)
 
-        result_dict = {
+        return {
             # Core PPO parameters with computed values
             'rollouts': computed_rollouts,
             'learning_epochs': self.learning_epochs,
@@ -315,13 +309,6 @@ class ExtendedPPOConfig:
             'write_interval': self.write_interval,
             'checkpoint_interval': self.checkpoint_interval,
         }
-
-        # DEBUG: Print what's actually in the dict before returning
-        print(f"  [DEBUG to_skrl_dict] Dict values before return:")
-        print(f"    - result_dict['write_interval']: {result_dict['write_interval']}")
-        print(f"    - result_dict['checkpoint_interval']: {result_dict['checkpoint_interval']}")
-
-        return result_dict
 
     def __repr__(self) -> str:
         """String representation for debugging."""

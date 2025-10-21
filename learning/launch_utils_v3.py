@@ -155,9 +155,6 @@ def add_wandb_tracking_tags(configs):
 
 def define_agent_configs(configs):
     configs['agent'].write_interval = configs['primary'].rollout_steps(configs['environment'].episode_length_s) #max rollouts
-    print(f"  [DEBUG] Before setting checkpoint_interval:")
-    print(f"    - checkpoint_interval_multiplier: {configs['agent'].checkpoint_interval_multiplier}")
-    print(f"    - write_interval: {configs['agent'].write_interval}")
     configs['agent'].checkpoint_interval = configs['agent'].checkpoint_interval_multiplier * configs['agent'].write_interval
 
     print(f"  -Write Interval:{configs['agent'].write_interval}")
@@ -319,16 +316,10 @@ def create_block_ppo_agents(env, configs, models, memory):
 
     # Create BlockPPO agent
 
-    # DEBUG: Create cfg dict and verify values before passing to BlockPPO
-    agent_cfg = configs['agent'].to_skrl_dict(configs['environment'].episode_length_s)
-    print(f"  [DEBUG create_block_ppo_agents] After to_skrl_dict():")
-    print(f"    - agent_cfg['write_interval']: {agent_cfg['write_interval']}")
-    print(f"    - agent_cfg['checkpoint_interval']: {agent_cfg['checkpoint_interval']}")
-
     agent = BlockPPO(
         models=models,
         memory=memory,
-        cfg=agent_cfg,
+        cfg=configs['agent'].to_skrl_dict(configs['environment'].episode_length_s),
         observation_space=env.observation_space,
         action_space=env.unwrapped.cfg.action_space,
         num_envs=configs['environment'].scene.num_envs,

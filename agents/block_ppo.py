@@ -74,11 +74,6 @@ class BlockPPO(PPO):
         self.env = env  ## STORE ENVIRONMENT FOR WRAPPER ACCESS ##
         print(cfg["state_preprocessor_kwargs"])
 
-        # DEBUG: Check cfg values BEFORE calling parent __init__
-        print(f"[DEBUG BlockPPO.__init__] BEFORE super().__init__():")
-        print(f"  - cfg['write_interval']: {cfg.get('write_interval', 'NOT IN CFG')}")
-        print(f"  - cfg['checkpoint_interval']: {cfg.get('checkpoint_interval', 'NOT IN CFG')}")
-
         super().__init__(
             models=models,
             memory=memory,
@@ -88,22 +83,12 @@ class BlockPPO(PPO):
             cfg=cfg
         )
 
-        # DEBUG: Check instance vars AFTER parent __init__
-        print(f"[DEBUG BlockPPO.__init__] AFTER super().__init__():")
-        print(f"  - self.write_interval: {self.write_interval}")
-        print(f"  - self.checkpoint_interval: {self.checkpoint_interval}")
-
         # FIX: Override parent's auto values with our explicit config values
         # Parent Agent.__init__ expects these in cfg["experiment"]["key"] but we provide them at top level
         # This is because we have per-agent experiment configs in agent_exp_cfgs instead
         self.write_interval = cfg['write_interval']
         self.checkpoint_interval = cfg['checkpoint_interval']
         self.checkpoint_store_separately = False  # We handle per-agent checkpoints ourselves
-
-        print(f"[DEBUG BlockPPO.__init__] AFTER manual override:")
-        print(f"  - self.write_interval: {self.write_interval}")
-        print(f"  - self.checkpoint_interval: {self.checkpoint_interval}")
-        print(f"  - self.checkpoint_store_separately: {self.checkpoint_store_separately}")
 
         self.global_step = 0
         self.num_envs = num_envs
@@ -174,10 +159,8 @@ class BlockPPO(PPO):
         #if self.write_interval > 0:
         #    self.writer = SummaryWriter(log_dir=self.experiment_dir)
 
-        print(f"[DEBUG INIT] Before auto-calc: checkpoint_interval={self.checkpoint_interval}, write_interval={self.write_interval}")
         if self.checkpoint_interval == "auto":
             self.checkpoint_interval = int(trainer_cfg.get("timesteps", 0) / 10)
-        print(f"[DEBUG INIT] After auto-calc: checkpoint_interval={self.checkpoint_interval}, write_interval={self.write_interval}")
         if self.checkpoint_interval > 0:
             for i in range(self.num_agents):
                 os.makedirs(os.path.join(
@@ -215,7 +198,6 @@ class BlockPPO(PPO):
         self._current_next_states = None
 
     def write_checkpoint(self, timestep: int, timesteps: int):
-        print(f"=== WRITE_CHECKPOINT CALLED at timestep {timestep} ===")
         ckpt_paths = []
         critic_paths = []
         vid_paths = []
@@ -249,15 +231,8 @@ class BlockPPO(PPO):
         if hasattr(self, '_value_preprocessor') and self._value_preprocessor is not None and hasattr(self._value_preprocessor, 'state_dict'):
             all_preprocessor_states['value_preprocessor'] = self._value_preprocessor.state_dict()
 
-        try:
-            export_policies(self.models['policy'].actor_mean, self.models['policy'].actor_logstd, ckpt_paths, all_preprocessor_states)
-            export_policies(self.models['value'].critic, None, critic_paths, all_preprocessor_states)
-            print(f"Successfully exported checkpoints to {ckpt_paths[0]}")
-        except Exception as e:
-            print(f"ERROR in export_policies: {e}")
-            import traceback
-            traceback.print_exc()
-            raise
+        export_policies(self.models['policy'].actor_mean, self.models['policy'].actor_logstd, ckpt_paths, all_preprocessor_states)
+        export_policies(self.models['value'].critic, None, critic_paths, all_preprocessor_states)
 
         # Upload checkpoints to WandB if enabled
         if self.upload_ckpts_to_wandb:
@@ -453,14 +428,10 @@ class BlockPPO(PPO):
 
         # Store original timestep for checkpoint/tracking checks
         original_timestep = timestep
-        if original_timestep in [0, 1, 149, 150, 151, 299, 300, 301]:  # Debug key timesteps
-            print(f"[DEBUG POST_INTERACTION] timestep={original_timestep}, checkpoint_interval={self.checkpoint_interval}, write_interval={self.write_interval}")
         timestep += 1
         self.global_step+= self.num_envs
 
         # update best models and write checkpoints
-        if original_timestep % 150 == 0:  # Debug every 150 timesteps
-            print(f"[DEBUG] Timestep {original_timestep}: checkpoint_interval={self.checkpoint_interval}, condition check: {original_timestep > 0 and self.checkpoint_interval > 0 and not original_timestep % self.checkpoint_interval}")
         if original_timestep > 0 and self.checkpoint_interval > 0 and not original_timestep % self.checkpoint_interval:
             # write checkpoints
             self.write_checkpoint(original_timestep, timesteps)
