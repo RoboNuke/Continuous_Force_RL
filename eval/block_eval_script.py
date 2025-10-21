@@ -590,6 +590,7 @@ def read_and_remove_tracker_batch(tracker_path: str, num_agents: int, batch_mode
     with lock:
         # Check if tracker file exists
         if not os.path.exists(tracker_path):
+            print(f"  DEBUG: Tracker file does not exist: {tracker_path}")
             return None
 
         # Read all lines from tracker
@@ -599,18 +600,25 @@ def read_and_remove_tracker_batch(tracker_path: str, num_agents: int, batch_mode
         # Filter out empty lines
         lines = [line.strip() for line in lines if line.strip()]
 
+        print(f"  DEBUG: Read {len(lines)} lines from tracker")
+
         if len(lines) == 0:
+            print(f"  DEBUG: No lines in tracker after filtering")
             return None
 
         # Determine how many checkpoints to take
+        print(f"  DEBUG: batch_mode={batch_mode}, num_agents={num_agents}")
         if batch_mode == 'wait_full':
             # Wait until we have at least num_agents checkpoints
             if len(lines) < num_agents:
+                print(f"  DEBUG: wait_full mode - only {len(lines)} lines available, need {num_agents}")
                 return None
             num_to_take = num_agents
         else:  # max_throughput
             # Take whatever is available (1 to num_agents)
             num_to_take = min(len(lines), num_agents)
+
+        print(f"  DEBUG: Will take {num_to_take} checkpoints")
 
         # Take first num_to_take checkpoints
         selected_lines = lines[:num_to_take]
