@@ -190,6 +190,7 @@ class BlockPPO(PPO):
         self._current_next_states = None
 
     def write_checkpoint(self, timestep: int, timesteps: int):
+        print(f"=== WRITE_CHECKPOINT CALLED at timestep {timestep} ===")
         ckpt_paths = []
         critic_paths = []
         vid_paths = []
@@ -223,8 +224,15 @@ class BlockPPO(PPO):
         if hasattr(self, '_value_preprocessor') and self._value_preprocessor is not None and hasattr(self._value_preprocessor, 'state_dict'):
             all_preprocessor_states['value_preprocessor'] = self._value_preprocessor.state_dict()
 
-        export_policies(self.models['policy'].actor_mean, self.models['policy'].actor_logstd, ckpt_paths, all_preprocessor_states)
-        export_policies(self.models['value'].critic, None, critic_paths, all_preprocessor_states)
+        try:
+            export_policies(self.models['policy'].actor_mean, self.models['policy'].actor_logstd, ckpt_paths, all_preprocessor_states)
+            export_policies(self.models['value'].critic, None, critic_paths, all_preprocessor_states)
+            print(f"Successfully exported checkpoints to {ckpt_paths[0]}")
+        except Exception as e:
+            print(f"ERROR in export_policies: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
         # Upload checkpoints to WandB if enabled
         if self.upload_ckpts_to_wandb:
