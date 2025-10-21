@@ -126,6 +126,19 @@ from agents.block_ppo import BlockPPO
 from PIL import Image, ImageDraw, ImageFont
 import torchvision.transforms.functional as F
 
+# Import factory environment class for direct instantiation
+try:
+    from isaaclab_tasks.direct.factory.factory_env import FactoryEnv
+except ImportError:
+    try:
+        from omni.isaac.lab_tasks.direct.factory.factory_env import FactoryEnv
+    except ImportError:
+        print("ERROR: Could not import FactoryEnv.")
+        print("Please ensure Isaac Lab tasks are properly installed.")
+        sys.exit(1)
+
+from wrappers.sensors.factory_env_with_sensors import create_sensor_enabled_factory_env
+
 print("All modules imported successfully")
 
 # Global state for rollback on shutdown
@@ -269,7 +282,18 @@ def setup_environment_once(config_path: str, args: argparse.Namespace) -> Tuple[
     # Create environment
     print("  Creating environment...")
     task_name = configs['experiment'].task_name
-    env = gym.make(task_name, cfg=env_cfg, render_mode="rgb_array" if args.enable_video else None)
+
+    # Wrap with sensor support if contact sensor config is present AND use_contact_sensor is enabled
+    if (hasattr(env_cfg.task, 'held_fixed_contact_sensor') and
+        configs['wrappers'].force_torque_sensor.use_contact_sensor):
+        EnvClass = create_sensor_enabled_factory_env(FactoryEnv)
+        print("    Using sensor-enabled factory environment")
+    else:
+        EnvClass = FactoryEnv
+        print("    Using standard factory environment")
+
+    # Create environment directly
+    env = EnvClass(cfg=env_cfg, render_mode="rgb_array" if args.enable_video else None)
     print(f"    Environment created: {task_name}")
 
     # Reduce scene lighting intensity for better video visibility (after env creation)
