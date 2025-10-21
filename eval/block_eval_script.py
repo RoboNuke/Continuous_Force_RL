@@ -419,6 +419,10 @@ def load_checkpoint_from_wandb(wandb_checkpoint: str) -> List[Dict[str, str]]:
 
     for field in required_fields:
         value = run.config.get(field)
+        # If not found at top level and field is break_force, check agent_specific
+        if value is None and field == 'break_force' and 'agent_specific' in run.config:
+            value = run.config['agent_specific'].get('break_force')
+
         if value is None:
             missing_fields.append(field)
         else:
@@ -523,6 +527,10 @@ def load_local_checkpoint(checkpoint_path: str, wandb_run: str) -> List[Dict[str
 
     for field in required_fields:
         value = run.config.get(field)
+        # If not found at top level and field is break_force, check agent_specific
+        if value is None and field == 'break_force' and 'agent_specific' in run.config:
+            value = run.config['agent_specific'].get('break_force')
+
         if value is None:
             missing_fields.append(field)
         else:
@@ -759,8 +767,12 @@ def fetch_break_forces_from_wandb(checkpoint_dicts: List[Dict[str, str]]) -> Lis
             # Fetch run from WandB
             run = api.run(f"{project}/{run_id}")
 
-            # Extract break_force from config
+            # Extract break_force from config (check both top-level and agent_specific)
             break_force = run.config.get('break_force', None)
+
+            # If not found at top level, check agent_specific
+            if break_force is None and 'agent_specific' in run.config:
+                break_force = run.config['agent_specific'].get('break_force', None)
 
             if break_force is None:
                 raise RuntimeError(
