@@ -140,8 +140,12 @@ class SimpleEpisodeTracker:
         if not os.path.exists(checkpoint_path):
             raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
 
-        # Upload to WandB with base_path to preserve directory structure
-        self.run.save(checkpoint_path, base_path=os.path.dirname(checkpoint_path))
+        # Upload to WandB with base_path set to parent of checkpoints folder
+        # This preserves the "checkpoints/" prefix in WandB
+        # e.g., /path/to/exp/checkpoints/agent_0.pt -> base_path=/path/to/exp -> uploads as checkpoints/agent_0.pt
+        checkpoint_dir = os.path.dirname(checkpoint_path)  # .../checkpoints
+        base_path = os.path.dirname(checkpoint_dir)  # .../exp (parent of checkpoints)
+        self.run.save(checkpoint_path, base_path=base_path)
         return True
 
     def add_metrics(self, metrics: Dict[str, torch.Tensor]):
