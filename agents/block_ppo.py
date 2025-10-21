@@ -73,6 +73,12 @@ class BlockPPO(PPO):
 
         self.env = env  ## STORE ENVIRONMENT FOR WRAPPER ACCESS ##
         print(cfg["state_preprocessor_kwargs"])
+
+        # DEBUG: Check cfg values BEFORE calling parent __init__
+        print(f"[DEBUG BlockPPO.__init__] BEFORE super().__init__():")
+        print(f"  - cfg['write_interval']: {cfg.get('write_interval', 'NOT IN CFG')}")
+        print(f"  - cfg['checkpoint_interval']: {cfg.get('checkpoint_interval', 'NOT IN CFG')}")
+
         super().__init__(
             models=models,
             memory=memory,
@@ -81,6 +87,11 @@ class BlockPPO(PPO):
             device=device,
             cfg=cfg
         )
+
+        # DEBUG: Check instance vars AFTER parent __init__
+        print(f"[DEBUG BlockPPO.__init__] AFTER super().__init__():")
+        print(f"  - self.write_interval: {self.write_interval}")
+        print(f"  - self.checkpoint_interval: {self.checkpoint_interval}")
 
         self.global_step = 0
         self.num_envs = num_envs
