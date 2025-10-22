@@ -1830,6 +1830,21 @@ def generate_videos(rollout_data: Dict[str, Any], checkpoint_dicts: List[Dict[st
         font = ImageFont.load_default()
         print("    Using default font (DejaVuSans.ttf not found)")
 
+    # Apply inverse preprocessing to ALL values at once (before per-agent processing)
+    # This is necessary because the preprocessor expects all agents' data together
+    # The preprocessor handles 3D input [batch_size, total_envs, features] where batch_size = num_steps
+    all_values = rollout_data["values"]  # [steps, total_envs] or [steps, total_envs, 1]
+
+    # Ensure values have shape [steps, total_envs, 1] for preprocessor
+    if all_values.dim() == 2:
+        all_values = all_values.unsqueeze(-1)  # [steps, total_envs, 1]
+
+    # Apply inverse preprocessing (handles 3D batched input)
+    all_values_unscaled = agent._value_preprocessor(all_values, inverse=True)  # [steps, total_envs, 1]
+
+    # Squeeze to [steps, total_envs] for easier slicing
+    all_values_unscaled = all_values_unscaled.squeeze(-1)  # [steps, total_envs]
+
     video_paths = []
 
     # Generate one video per checkpoint
@@ -1842,7 +1857,7 @@ def generate_videos(rollout_data: Dict[str, Any], checkpoint_dicts: List[Dict[st
 
         # Slice data for this checkpoint's environments
         agent_images = rollout_data["images"][:, start_env:end_env]  # [steps, num_envs_per_agent, 180, 240, 3]
-        agent_values = rollout_data["values"][:, start_env:end_env]  # [steps, num_envs_per_agent, 1] or [steps, num_envs_per_agent]
+        agent_values = all_values_unscaled[:, start_env:end_env]  # [steps, num_envs_per_agent] - already unscaled
         agent_returns = rollout_data["total_returns"][start_env:end_env]  # [num_envs_per_agent]
         agent_success_step = rollout_data["success_step"][start_env:end_env]  # [num_envs_per_agent]
         agent_termination_step = rollout_data["termination_step"][start_env:end_env]  # [num_envs_per_agent]
@@ -1855,17 +1870,6 @@ def generate_videos(rollout_data: Dict[str, Any], checkpoint_dicts: List[Dict[st
         # Compute cumulative rewards for this agent
         agent_rewards = rollout_data["rewards"][:, start_env:end_env]  # [steps, num_envs_per_agent]
         agent_cumulative_rewards = torch.cumsum(agent_rewards, dim=0)  # [steps, num_envs_per_agent]
-
-        # Squeeze values if needed (remove trailing dimension if present)
-        if agent_values.dim() == 3 and agent_values.shape[2] == 1:
-            agent_values = agent_values.squeeze(2)  # [steps, num_envs_per_agent]
-
-        # Apply inverse preprocessing to convert values back to original scale
-        # Shape: [steps, num_envs_per_agent] -> flatten -> [steps * num_envs_per_agent, 1]
-        num_steps = agent_values.shape[0]
-        flat_values = agent_values.reshape(-1, 1)
-        inverse_values = agent._value_preprocessor(flat_values, inverse=True)
-        agent_values = inverse_values.reshape(num_steps, num_envs_per_agent)
 
         # Select 12 environments based on returns (worst 4, middle 4, best 4)
         sorted_indices = torch.argsort(agent_returns)
