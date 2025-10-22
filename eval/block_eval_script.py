@@ -356,6 +356,8 @@ def create_models_and_agent(env: Any, configs: Dict[str, Any], args: argparse.Na
     print("    Creating models...")
     models = lUtils.create_policy_and_value_models(env, configs)
     print("    Models created")
+    print(f"    DEBUG: Policy model type: {type(models['policy'])}")
+    print(f"    DEBUG: Value model type: {type(models['value'])}")
 
     # Create memory (required for agent initialization, even for eval)
     print("    Creating memory...", flush=True)
@@ -369,6 +371,12 @@ def create_models_and_agent(env: Any, configs: Dict[str, Any], args: argparse.Na
     print("    Creating BlockPPO agent...", flush=True)
     agent = lUtils.create_block_ppo_agents(env, configs, models, memory)
     print("    Agent created", flush=True)
+
+    # Debug preprocessor state
+    print(f"    DEBUG: Agent has _state_preprocessor: {hasattr(agent, '_state_preprocessor')}")
+    if hasattr(agent, '_state_preprocessor'):
+        print(f"    DEBUG: _state_preprocessor type: {type(agent._state_preprocessor)}")
+        print(f"    DEBUG: _state_preprocessor bool: {bool(agent._state_preprocessor)}")
 
     print(f"  Created BlockPPO agent with {configs['primary'].total_agents} agents")
 
@@ -863,6 +871,15 @@ def load_checkpoints_into_agent(agent: Any, checkpoint_dicts: List[Dict[str, str
             # Load log_std for policy
             if 'log_std' in policy_checkpoint:
                 agent.models['policy'].actor_logstd[agent_idx].data.copy_(policy_checkpoint['log_std'].data)
+                print(f"      DEBUG: Loaded log_std with shape {policy_checkpoint['log_std'].shape}")
+            else:
+                print(f"      WARNING: No log_std found in policy checkpoint")
+
+            # Check for preprocessor in checkpoint
+            if 'preprocessor' in policy_checkpoint:
+                print(f"      DEBUG: Found preprocessor in policy checkpoint")
+            else:
+                print(f"      DEBUG: No preprocessor in policy checkpoint")
 
             # Verify
             sample_value = list(policy_checkpoint['net_state_dict'].values())[0].flatten()[0].item()
@@ -1052,17 +1069,38 @@ def run_evaluation_rollout(env: Any, agent: Any, max_rollout_steps: int, args: a
     # Reset environment
     states, info = env.reset()
 
+    print(f"  DEBUG: Initial reset - states shape: {states.shape}, dtype: {states.dtype}")
+    print(f"  DEBUG: Initial states - min: {states.min().item():.4f}, max: {states.max().item():.4f}, mean: {states.mean().item():.4f}")
+
     # Evaluation rollout loop
     step_iterator = range(max_rollout_steps)
     if args.show_progress:
         step_iterator = tqdm.tqdm(step_iterator, desc="Evaluation Rollout", file=sys.stdout)
 
     for step in step_iterator:
+        # Debug first few steps in detail
+        debug_step = (step == 0 or step == 1 or step == 10 or step == 50)
+
+        if debug_step:
+            print(f"\n  DEBUG STEP {step}:")
+            print(f"    Input states shape: {states.shape}, dtype: {states.dtype}")
+            print(f"    Input states - min: {states.min().item():.4f}, max: {states.max().item():.4f}, mean: {states.mean().item():.4f}")
+            print(f"    Input states sample [0, :5]: {states[0, :5]}")
+
         # Get action from agent (use mean action for deterministic evaluation)
         with torch.no_grad():
             outputs = agent.act(states, timestep=step, timesteps=max_rollout_steps)[-1]
             # Use mean actions for evaluation (deterministic)
             actions = outputs['mean_actions']
+
+        if debug_step:
+            print(f"    Agent output keys: {outputs.keys()}")
+            print(f"    Actions shape: {actions.shape}, dtype: {actions.dtype}")
+            print(f"    Actions - min: {actions.min().item():.4f}, max: {actions.max().item():.4f}, mean: {actions.mean().item():.4f}")
+            print(f"    Actions sample [0, :]: {actions[0, :]}")
+            if 'preprocessed_states' in outputs:
+                prep_states = outputs['preprocessed_states']
+                print(f"    Preprocessed states - min: {prep_states.min().item():.4f}, max: {prep_states.max().item():.4f}, mean: {prep_states.mean().item():.4f}")
 
         # Store observation and action
         rollout_data["observations"].append(states.clone())
@@ -1073,6 +1111,10 @@ def run_evaluation_rollout(env: Any, agent: Any, max_rollout_steps: int, args: a
             values = agent.value.act({"states": states}, role="value")[0]
             rollout_data["values"].append(values.clone())
 
+        if debug_step:
+            print(f"    Values shape: {values.shape}, dtype: {values.dtype}")
+            print(f"    Values - min: {values.min().item():.4f}, max: {values.max().item():.4f}, mean: {values.mean().item():.4f}")
+
         # Step environment
         states, rewards, terminated, truncated, info = env.step(actions)
 
@@ -1081,9 +1123,42 @@ def run_evaluation_rollout(env: Any, agent: Any, max_rollout_steps: int, args: a
         terminated = terminated.squeeze(-1)
         truncated = truncated.squeeze(-1)
 
+        if debug_step:
+            print(f"    After env.step:")
+            print(f"      New states shape: {states.shape}, min: {states.min().item():.4f}, max: {states.max().item():.4f}, mean: {states.mean().item():.4f}")
+            print(f"      Rewards - min: {rewards.min().item():.4f}, max: {rewards.max().item():.4f}, mean: {rewards.mean().item():.4f}, sum: {rewards.sum().item():.4f}")
+            print(f"      Terminated: {terminated.sum().item()}/{len(terminated)}, Truncated: {truncated.sum().item()}/{len(truncated)}")
+            if 'to_log' in info:
+                print(f"      info['to_log'] has {len(info['to_log'])} keys: {list(info['to_log'].keys())[:5]}...")
+            if 'success' in info:
+                print(f"      Success count: {info['success'].sum().item()}/{len(info['success'])}")
+
         # Store rewards
         rollout_data["rewards"].append(rewards.clone())
-        rollout_data["infos"].append(info)
+
+        # Deep clone info dict with explicit tensor cloning for nested dicts
+        info_copy = {}
+        for key, value in info.items():
+            if key == 'to_log' and isinstance(value, dict):
+                # Clone all tensors in to_log dict
+                info_copy['to_log'] = {
+                    k: v.clone() if isinstance(v, torch.Tensor) else v
+                    for k, v in value.items()
+                }
+            elif isinstance(value, torch.Tensor):
+                # Clone other tensor values
+                info_copy[key] = value.clone()
+            elif isinstance(value, dict):
+                # Recursively handle other dicts (like 'smoothness')
+                info_copy[key] = {
+                    k: v.clone() if isinstance(v, torch.Tensor) else v
+                    for k, v in value.items()
+                }
+            else:
+                # Copy primitives/other types directly
+                info_copy[key] = value
+
+        rollout_data["infos"].append(info_copy)
 
         # Accumulate returns
         rollout_data["total_returns"] += rewards
@@ -1133,6 +1208,21 @@ def run_evaluation_rollout(env: Any, agent: Any, max_rollout_steps: int, args: a
             break
 
     print(f"  Rollout complete: {step+1} steps collected")
+
+    # Debug: Rollout summary
+    print(f"\n  DEBUG: Rollout Summary:")
+    print(f"    Total steps: {len(rollout_data['observations'])}")
+    print(f"    Total rewards sum: {rollout_data['total_returns'].sum().item():.2f}")
+    print(f"    Terminated envs: {rollout_data['terminated_episodes'].sum().item()}/{env.num_envs}")
+    print(f"    Truncated envs: {rollout_data['truncated_episodes'].sum().item()}/{env.num_envs}")
+    success_count = (rollout_data['success_step'] != -1).sum().item()
+    print(f"    Successful envs: {success_count}/{env.num_envs}")
+    if len(rollout_data["infos"]) > 0:
+        print(f"    Info dicts collected: {len(rollout_data['infos'])}")
+        if 'to_log' in rollout_data["infos"][0]:
+            print(f"    to_log keys in first info: {len(rollout_data['infos'][0]['to_log'])}")
+        if 'to_log' in rollout_data["infos"][-1]:
+            print(f"    to_log keys in last info: {len(rollout_data['infos'][-1]['to_log'])}")
 
     # Convert lists to tensors for easier processing
     if len(rollout_data["observations"]) > 0:
@@ -1984,6 +2074,14 @@ def main(args):
             print("\n[4d] Loading checkpoints into agent...")
             load_checkpoints_into_agent(agent, checkpoint_dicts)
             print("  Checkpoints loaded successfully")
+
+            # Debug: Verify model state after loading
+            print("  DEBUG: Post-checkpoint loading state:")
+            print(f"    Policy model in eval mode: {not agent.models['policy'].training}")
+            print(f"    Value model in eval mode: {not agent.models['value'].training}")
+            # Sample a weight to verify loading
+            sample_weight = agent.models['policy'].actor_mean.resblocks[0].fc1.weight[0, 0].item()
+            print(f"    Sample policy weight: {sample_weight:.6f}")
 
             # 4e. Update environment break forces
             print("\n[4e] Updating environment break forces...")

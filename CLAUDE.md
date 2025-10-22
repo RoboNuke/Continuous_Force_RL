@@ -8,3 +8,4 @@
 - When reporting test results always provide number of passed, failed and total, there is no such thing as critical tests, they all must be passed.
 - Our design framework should be about failing quick and failing loud. Do not place fallbacks in the code, rather have it throw errors. The goal is that if something is happening we don't expect, to stop the program immediantly  and tell us. 
 - Do not place fallbacks in code. If the inputs are not what we expect throw an error and stop the program. Experiments take days so I need to know that what I think is happening is what is happening.
+- Never make any assumptions, always verify everything or make it clear when you don't.
