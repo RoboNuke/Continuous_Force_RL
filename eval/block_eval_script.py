@@ -885,7 +885,11 @@ def load_checkpoints_into_agent(agent: Any, checkpoint_dicts: List[Dict[str, str
                 # Create preprocessor instance if needed
                 if agent._per_agent_state_preprocessors[agent_idx] is None:
                     from skrl.resources.preprocessors.torch import RunningStandardScaler
-                    obs_size = env.observation_space.shape[0] if hasattr(env.observation_space, 'shape') else env.observation_space
+                    # Get obs_size from the checkpoint's preprocessor state (more reliable than env)
+                    obs_size = policy_checkpoint['state_preprocessor']['running_mean'].shape[0]
+                    print(f"      DEBUG: Creating state preprocessor with obs_size={obs_size} (from checkpoint)")
+                    print(f"      DEBUG: Agent model expects obs_dim={agent.models['policy'].actor_mean.obs_dim}")
+                    print(f"      DEBUG: Env num_envs={env.num_envs}")
                     agent._per_agent_state_preprocessors[agent_idx] = RunningStandardScaler(
                         size=obs_size,
                         device=agent.device
