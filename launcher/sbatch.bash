@@ -123,8 +123,8 @@ for config_name in "${CONFIG_ARRAY[@]}"; do
     # Submit SLURM job with dynamic output file paths (replace slashes with underscores for file names)
     output_name="$(echo "${config_name}" | tr '/' '_')"
     sbatch -J "$job_name" \
-           -o "../exp_logs/${EXPERIMENT_TAG}/${output_name}_%j.out" \
-           -e "../exp_logs/${EXPERIMENT_TAG}/${output_name}_%j.err" \
+           -o "exp_logs/${EXPERIMENT_TAG}/${output_name}_%j.out" \
+           -e "exp_logs/${EXPERIMENT_TAG}/${output_name}_%j.err" \
            launcher/hpc_batch.bash "$config_path" "$EXPERIMENT_TAG" "$OVERRIDES"
 
     echo "  Job submitted successfully"
