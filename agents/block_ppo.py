@@ -498,7 +498,14 @@ class BlockPPO(PPO):
 
         # write wandb
         if original_timestep > 0 and self.write_interval > 0 and not original_timestep % self.write_interval:
-            self.write_tracking_data(original_timestep, timesteps)                     
+            self.write_tracking_data(original_timestep, timesteps)
+
+        # Publish accumulated metrics to wandb after all operations complete
+        # This ensures checkpoint metrics are published with the correct timestep
+        if not self._rollout % self._rollouts and timestep >= self._learning_starts:
+            wrapper = self._get_logging_wrapper()
+            if wrapper:
+                wrapper.publish()                     
 
     def _update(self, timestep: int, timesteps: int):
         #super()._update(timestep, timesteps) def _update(self, timestep: int, timesteps: int) -> None:
@@ -744,14 +751,14 @@ class BlockPPO(PPO):
                     )
                 mini_batch += 1
 
-        # Publish accumulated learning metrics to wandb after all minibatches complete
+        # Add minibatch counts as onetime metric (will be published in post_interaction)
         wrapper = self._get_logging_wrapper()
         if wrapper:
             # Log minibatch counts before KL violation as onetime metric
             onetime_metrics = {
                 "Policy/Minibatches_Before_KL_Violation": minibatch_count.float()
             }
-            wrapper.publish(onetime_metrics=onetime_metrics)
+            wrapper.add_metrics(onetime_metrics)
 
     def log_policy_loss_components(self, policy, states, actions, advantages, old_log_probs, step):
         """
