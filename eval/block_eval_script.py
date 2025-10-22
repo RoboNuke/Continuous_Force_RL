@@ -1690,10 +1690,10 @@ def _create_checkpoint_gif(images: torch.Tensor, values: torch.Tensor, cumulativ
             is_truncated = step_idx >= truncation_step[env_idx] and truncation_step[env_idx] != -1
             is_done = is_succeeded or is_terminated or is_truncated
 
-            # Apply gray overlay if done (0.4 gray + 0.6 original)
+            # Convert to grayscale if done
             if is_done:
-                gray = torch.full_like(img, 0.5)
-                img = 0.4 * gray + 0.6 * img
+                # Convert [H, W, C] -> [C, H, W] -> grayscale -> [H, W, C]
+                img = F.rgb_to_grayscale(img.permute(2, 0, 1), num_output_channels=3).permute(1, 2, 0)
 
             # Place image in canvas
             y_start = row * 180
@@ -1737,12 +1737,20 @@ def _create_checkpoint_gif(images: torch.Tensor, values: torch.Tensor, cumulativ
                     width=3
                 )
 
-            # Draw value estimate and accumulated reward text (bottom of image)
-            val = values[step_idx, env_idx].item()
+            # Draw accumulated reward text (top left of image)
             cum_rew = cumulative_rewards[step_idx, env_idx].item()
             draw.text(
+                (x_offset + 2, y_offset + 2),
+                f"TotRew: {cum_rew:.2f}",
+                fill=(0, 255, 0),
+                font=font
+            )
+
+            # Draw value estimate (bottom of image)
+            val = values[step_idx, env_idx].item()
+            draw.text(
                 (x_offset + 2, y_offset + 160),
-                f"V-Est: {val:.2f} TotRew: {cum_rew:.2f}",
+                f"V-Est: {val:.2f}",
                 fill=(0, 255, 0),
                 font=font
             )
