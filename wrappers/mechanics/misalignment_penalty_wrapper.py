@@ -15,9 +15,9 @@ import gymnasium as gym
 from typing import Dict, Any
 
 try:
-    from isaaclab_tasks.direct.factory import factory_utils
+    import isaaclab_tasks.direct.factory.factory_utils as factory_utils
 except ImportError:
-    from omni.isaac.lab_tasks.direct.factory import factory_utils
+    import omni.isaac.lab_tasks.direct.factory.factory_utils as factory_utils
 
 
 class MisalignmentPenaltyWrapper(gym.Wrapper):
