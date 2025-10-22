@@ -370,12 +370,16 @@ def export_policies(block_model, stds, save_paths, preprocessor_states=None):
                   'net_state_dict': agent.state_dict()
               }
 
-          # Add preprocessor states if provided
+          # Add per-agent preprocessor states if provided
           if preprocessor_states is not None:
-              if preprocessor_states.get('state_preprocessor') is not None:
-                  save_dict['state_preprocessor'] = preprocessor_states['state_preprocessor']
-              if preprocessor_states.get('value_preprocessor') is not None:
-                  save_dict['value_preprocessor'] = preprocessor_states['value_preprocessor']
+              # Look up this agent's specific preprocessor states
+              agent_state_key = f'agent_{i}_state_preprocessor'
+              agent_value_key = f'agent_{i}_value_preprocessor'
+
+              if agent_state_key in preprocessor_states:
+                  save_dict['state_preprocessor'] = preprocessor_states[agent_state_key]
+              if agent_value_key in preprocessor_states:
+                  save_dict['value_preprocessor'] = preprocessor_states[agent_value_key]
 
           torch.save(save_dict, save_paths[i])
 

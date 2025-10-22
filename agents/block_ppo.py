@@ -234,6 +234,66 @@ class BlockPPO(PPO):
         export_policies(self.models['policy'].actor_mean, self.models['policy'].actor_logstd, ckpt_paths, all_preprocessor_states)
         export_policies(self.models['value'].critic, None, critic_paths, all_preprocessor_states)
 
+        # Log preprocessor statistics to WandB for verification
+        wrapper = self._get_logging_wrapper()
+        if wrapper:
+            preprocessor_metrics = {}
+
+            # Log state preprocessor metrics for each agent
+            if hasattr(self, '_per_agent_state_preprocessors'):
+                for i, preprocessor in enumerate(self._per_agent_state_preprocessors):
+                    if preprocessor is not None and hasattr(preprocessor, 'running_mean'):
+                        # Per-dimension statistics
+                        running_mean = preprocessor.running_mean  # Shape: (obs_dim,)
+                        running_var = preprocessor.running_variance  # Shape: (obs_dim,)
+                        count = preprocessor.count
+
+                        # Aggregate statistics
+                        mean_avg = running_mean.mean().item()
+                        mean_std = running_mean.std().item()
+                        var_avg = running_var.mean().item()
+                        var_std = running_var.std().item()
+
+                        print(f"    Agent {i} state preprocessor: mean_avg={mean_avg:.4f}, mean_std={mean_std:.4f}, var_avg={var_avg:.4f}, count={count}")
+
+                        # Create per-agent tensors for WandB metrics
+                        if 'state preprocessor / mean_avg' not in preprocessor_metrics:
+                            preprocessor_metrics['state preprocessor / mean_avg'] = torch.full((self.num_agents,), float('nan'), device=self.device)
+                            preprocessor_metrics['state preprocessor / mean_std'] = torch.full((self.num_agents,), float('nan'), device=self.device)
+                            preprocessor_metrics['state preprocessor / var_avg'] = torch.full((self.num_agents,), float('nan'), device=self.device)
+                            preprocessor_metrics['state preprocessor / var_std'] = torch.full((self.num_agents,), float('nan'), device=self.device)
+                            preprocessor_metrics['state preprocessor / count'] = torch.full((self.num_agents,), float('nan'), device=self.device)
+
+                        preprocessor_metrics['state preprocessor / mean_avg'][i] = mean_avg
+                        preprocessor_metrics['state preprocessor / mean_std'][i] = mean_std
+                        preprocessor_metrics['state preprocessor / var_avg'][i] = var_avg
+                        preprocessor_metrics['state preprocessor / var_std'][i] = var_std
+                        preprocessor_metrics['state preprocessor / count'][i] = float(count)
+
+            # Log value preprocessor metrics for each agent
+            if hasattr(self, '_per_agent_value_preprocessors'):
+                for i, preprocessor in enumerate(self._per_agent_value_preprocessors):
+                    if preprocessor is not None and hasattr(preprocessor, 'running_mean'):
+                        # Scalar statistics (size=1)
+                        mean_val = preprocessor.running_mean.item()
+                        var_val = preprocessor.running_variance.item()
+                        count = preprocessor.count
+
+                        print(f"    Agent {i} value preprocessor: mean={mean_val:.4f}, var={var_val:.4f}, count={count}")
+
+                        # Create per-agent tensors for WandB metrics
+                        if 'value preprocessor / mean' not in preprocessor_metrics:
+                            preprocessor_metrics['value preprocessor / mean'] = torch.full((self.num_agents,), float('nan'), device=self.device)
+                            preprocessor_metrics['value preprocessor / var'] = torch.full((self.num_agents,), float('nan'), device=self.device)
+                            preprocessor_metrics['value preprocessor / count'] = torch.full((self.num_agents,), float('nan'), device=self.device)
+
+                        preprocessor_metrics['value preprocessor / mean'][i] = mean_val
+                        preprocessor_metrics['value preprocessor / var'][i] = var_val
+                        preprocessor_metrics['value preprocessor / count'][i] = float(count)
+
+            if preprocessor_metrics:
+                wrapper.add_metrics(preprocessor_metrics)
+
         # Upload checkpoints to WandB if enabled
         if self.upload_ckpts_to_wandb:
             wrapper = self._get_logging_wrapper()

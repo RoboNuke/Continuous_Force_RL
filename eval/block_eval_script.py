@@ -875,11 +875,64 @@ def load_checkpoints_into_agent(agent: Any, checkpoint_dicts: List[Dict[str, str
             else:
                 print(f"      WARNING: No log_std found in policy checkpoint")
 
-            # Check for preprocessor in checkpoint
-            if 'preprocessor' in policy_checkpoint:
-                print(f"      DEBUG: Found preprocessor in policy checkpoint")
+            # Load state preprocessor for this agent
+            if 'state_preprocessor' in policy_checkpoint:
+                # Initialize preprocessor lists if not already done
+                if not hasattr(agent, '_per_agent_state_preprocessors'):
+                    agent._per_agent_state_preprocessors = [None] * agent.num_agents
+
+                # Create preprocessor instance if needed
+                if agent._per_agent_state_preprocessors[agent_idx] is None:
+                    from skrl.resources.preprocessors.torch import RunningStandardScaler
+                    obs_size = env.observation_space.shape[0] if hasattr(env.observation_space, 'shape') else env.observation_space
+                    agent._per_agent_state_preprocessors[agent_idx] = RunningStandardScaler(
+                        size=obs_size,
+                        device=agent.device
+                    )
+
+                # Load the state dict
+                agent._per_agent_state_preprocessors[agent_idx].load_state_dict(policy_checkpoint['state_preprocessor'])
+
+                # Verify and log statistics
+                preprocessor = agent._per_agent_state_preprocessors[agent_idx]
+                mean_avg = preprocessor.running_mean.mean().item()
+                mean_std = preprocessor.running_mean.std().item()
+                var_avg = preprocessor.running_variance.mean().item()
+                var_std = preprocessor.running_variance.std().item()
+                count = preprocessor.count
+
+                print(f"      Loaded state preprocessor: mean_avg={mean_avg:.4f}, mean_std={mean_std:.4f}, var_avg={var_avg:.4f}, var_std={var_std:.4f}, count={count}")
             else:
-                print(f"      DEBUG: No preprocessor in policy checkpoint")
+                print(f"      WARNING: No state_preprocessor in checkpoint for agent {agent_idx}")
+                raise RuntimeError(f"Checkpoint missing state_preprocessor for agent {agent_idx}")
+
+            # Load value preprocessor for this agent
+            if 'value_preprocessor' in critic_checkpoint:
+                # Initialize preprocessor lists if not already done
+                if not hasattr(agent, '_per_agent_value_preprocessors'):
+                    agent._per_agent_value_preprocessors = [None] * agent.num_agents
+
+                # Create preprocessor instance if needed
+                if agent._per_agent_value_preprocessors[agent_idx] is None:
+                    from skrl.resources.preprocessors.torch import RunningStandardScaler
+                    agent._per_agent_value_preprocessors[agent_idx] = RunningStandardScaler(
+                        size=1,
+                        device=agent.device
+                    )
+
+                # Load the state dict
+                agent._per_agent_value_preprocessors[agent_idx].load_state_dict(critic_checkpoint['value_preprocessor'])
+
+                # Verify and log statistics
+                preprocessor = agent._per_agent_value_preprocessors[agent_idx]
+                mean_val = preprocessor.running_mean.item()
+                var_val = preprocessor.running_variance.item()
+                count = preprocessor.count
+
+                print(f"      Loaded value preprocessor: mean={mean_val:.4f}, var={var_val:.4f}, count={count}")
+            else:
+                print(f"      WARNING: No value_preprocessor in checkpoint for agent {agent_idx}")
+                raise RuntimeError(f"Checkpoint missing value_preprocessor for agent {agent_idx}")
 
             # Verify
             sample_value = list(policy_checkpoint['net_state_dict'].values())[0].flatten()[0].item()
@@ -891,6 +944,21 @@ def load_checkpoints_into_agent(agent: Any, checkpoint_dicts: List[Dict[str, str
     # Pack all single-agent models into block models
     pack_agents_into_block(agent.models['policy'].actor_mean, policy_agents)
     pack_agents_into_block(agent.models['value'].critic, critic_agents)
+
+    # Wrap preprocessors for SKRL compatibility
+    if hasattr(agent, '_per_agent_state_preprocessors') and agent._per_agent_state_preprocessors:
+        from agents.block_ppo import PerAgentPreprocessorWrapper
+        agent._state_preprocessor = PerAgentPreprocessorWrapper(agent, agent._per_agent_state_preprocessors)
+        print("  DEBUG: Wrapped state preprocessors for agent compatibility")
+    else:
+        print("  WARNING: No state preprocessors loaded")
+
+    if hasattr(agent, '_per_agent_value_preprocessors') and agent._per_agent_value_preprocessors:
+        from agents.block_ppo import PerAgentPreprocessorWrapper
+        agent._value_preprocessor = PerAgentPreprocessorWrapper(agent, agent._per_agent_value_preprocessors)
+        print("  DEBUG: Wrapped value preprocessors for agent compatibility")
+    else:
+        print("  WARNING: No value preprocessors loaded")
 
     # Set models to eval mode
     agent.models['policy'].eval()
@@ -2080,7 +2148,7 @@ def main(args):
             print(f"    Policy model in eval mode: {not agent.models['policy'].training}")
             print(f"    Value model in eval mode: {not agent.models['value'].training}")
             # Sample a weight to verify loading
-            sample_weight = agent.models['policy'].actor_mean.resblocks[0].fc1.weight[0, 0].item()
+            sample_weight = agent.models['policy'].actor_mean.resblocks[0].fc1.weight.data.flatten()[0].item()
             print(f"    Sample policy weight: {sample_weight:.6f}")
 
             # 4e. Update environment break forces
