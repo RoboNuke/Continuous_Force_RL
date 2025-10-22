@@ -3,6 +3,7 @@ from wrappers.mechanics.fragile_object_wrapper import FragileObjectWrapper
 from wrappers.mechanics.force_reward_wrapper import ForceRewardWrapper
 from wrappers.mechanics.efficient_reset_wrapper import EfficientResetWrapper
 from wrappers.mechanics.close_gripper_action_wrapper import GripperCloseEnv
+from wrappers.mechanics.misalignment_penalty_wrapper import MisalignmentPenaltyWrapper
 from wrappers.sensors.force_torque_wrapper import ForceTorqueWrapper
 from wrappers.observations.observation_manager_wrapper import ObservationManagerWrapper
 from wrappers.logging.factory_metrics_wrapper import FactoryMetricsWrapper
@@ -44,6 +45,17 @@ def apply_wrappers(env, configs):
     if wrappers_config.efficient_reset_enabled:
         print("  - Applying Efficient Reset Wrapper")
         env = EfficientResetWrapper(env)
+
+    if wrappers_config.misalignment_penalty.enabled:
+        print("  - Applying Misalignment Penalty Wrapper")
+        env = MisalignmentPenaltyWrapper(
+            env,
+            config={
+                'enabled': wrappers_config.misalignment_penalty.enabled,
+                'xy_threshold': wrappers_config.misalignment_penalty.xy_threshold,
+                'height_threshold_fraction': wrappers_config.misalignment_penalty.height_threshold_fraction
+            }
+        )
 
     if wrappers_config.force_torque_sensor.enabled:
         print("  - Applying Force Torque Wrapper")

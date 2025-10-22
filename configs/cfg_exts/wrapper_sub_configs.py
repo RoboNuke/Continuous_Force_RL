@@ -127,3 +127,11 @@ class ForceRewardConfig:
 class PoseContactLoggingConfig:
     """Pose contact logging wrapper configuration."""
     enabled: bool = False
+
+
+@dataclass
+class MisalignmentPenaltyConfig:
+    """Misalignment penalty wrapper configuration."""
+    enabled: bool = False
+    xy_threshold: float = 0.0025  # XY distance threshold for alignment (default from factory)
+    height_threshold_fraction: float = 0.9  # Fraction of fixed asset height (default engage_threshold)

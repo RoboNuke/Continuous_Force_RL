@@ -200,6 +200,12 @@ wrappers:
   pose_contact_logging:
     enabled: true
 
+  # Misalignment penalty (zeros keypoint rewards when stuck on wall)
+  misalignment_penalty:
+    enabled: false
+    xy_threshold: 0.0025  # XY distance threshold for alignment
+    height_threshold_fraction: 0.9  # Fraction of fixed asset height (engage_threshold)
+
   # Force reward system with 8 reward functions
   force_reward:
     enabled: false
