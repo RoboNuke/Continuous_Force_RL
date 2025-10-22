@@ -1853,7 +1853,7 @@ def generate_videos(rollout_data: Dict[str, Any], checkpoint_dicts: List[Dict[st
         agent_force_control = rollout_data["force_control"][:, start_env:end_env]  # [steps, num_envs_per_agent, 3]
 
         # Compute cumulative rewards for this agent
-        agent_rewards = torch.stack(rollout_data["rewards"])[:, start_env:end_env]  # [steps, num_envs_per_agent]
+        agent_rewards = rollout_data["rewards"][:, start_env:end_env]  # [steps, num_envs_per_agent]
         agent_cumulative_rewards = torch.cumsum(agent_rewards, dim=0)  # [steps, num_envs_per_agent]
 
         # Squeeze values if needed (remove trailing dimension if present)
