@@ -1863,9 +1863,9 @@ def generate_videos(rollout_data: Dict[str, Any], checkpoint_dicts: List[Dict[st
         # Apply inverse preprocessing to convert values back to original scale
         # Shape: [steps, num_envs_per_agent] -> flatten -> [steps * num_envs_per_agent, 1]
         num_steps = agent_values.shape[0]
-        flat_values = agent_values.view(-1, 1)
+        flat_values = agent_values.reshape(-1, 1)
         inverse_values = agent._value_preprocessor(flat_values, inverse=True)
-        agent_values = inverse_values.view(num_steps, num_envs_per_agent)
+        agent_values = inverse_values.reshape(num_steps, num_envs_per_agent)
 
         # Select 12 environments based on returns (worst 4, middle 4, best 4)
         sorted_indices = torch.argsort(agent_returns)
