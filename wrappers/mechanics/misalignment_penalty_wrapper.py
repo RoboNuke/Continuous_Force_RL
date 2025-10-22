@@ -13,9 +13,11 @@ in extras to ensure proper wandb logging.
 import torch
 import gymnasium as gym
 from typing import Dict, Any
-import sys
-sys.path.append('/home/hunter/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/factory')
-import factory_utils
+
+try:
+    from isaaclab_tasks.direct.factory import factory_utils
+except ImportError:
+    from omni.isaac.lab_tasks.direct.factory import factory_utils
 
 
 class MisalignmentPenaltyWrapper(gym.Wrapper):
