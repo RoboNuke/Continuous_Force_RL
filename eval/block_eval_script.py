@@ -1223,11 +1223,14 @@ def run_evaluation_rollout(env: Any, agent: Any, max_rollout_steps: int, args: a
         rollout_data["terminated_episodes"] |= terminated
         rollout_data["truncated_episodes"] |= truncated
 
-        # Track success (first success timestep)
-        if "success" in info:
-            success_mask = info["success"] & (rollout_data["success_step"] == -1)
-            rollout_data["success_step"][success_mask] = step
-            rollout_data["success_history"].append(info["success"].clone())
+        # Track success (using same method as engagement detection)
+        if hasattr(env.unwrapped, '_get_curr_successes') and hasattr(env.unwrapped, 'cfg_task'):
+            if hasattr(env.unwrapped.cfg_task, 'success_threshold'):
+                success_threshold = env.unwrapped.cfg_task.success_threshold
+                curr_success = env.unwrapped._get_curr_successes(success_threshold, False)
+                success_mask = curr_success & (rollout_data["success_step"] == -1)
+                rollout_data["success_step"][success_mask] = step
+                rollout_data["success_history"].append(curr_success.clone())
 
         # Track termination (first termination timestep)
         termination_mask = terminated & (rollout_data["termination_step"] == -1)
