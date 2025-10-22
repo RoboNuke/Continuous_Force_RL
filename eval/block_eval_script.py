@@ -1691,13 +1691,13 @@ def _create_checkpoint_gif(images: torch.Tensor, values: torch.Tensor, cumulativ
             is_done = is_succeeded or is_terminated or is_truncated
 
             # Convert to grayscale if done (in-place to save memory)
-            if is_done:
-                # Calculate grayscale value: 0.299*R + 0.587*G + 0.114*B (standard luminance formula)
-                gray_value = 0.299 * img[:, :, 0] + 0.587 * img[:, :, 1] + 0.114 * img[:, :, 2]
-                # Set all channels to the grayscale value in-place
-                img[:, :, 0] = gray_value
-                img[:, :, 1] = gray_value
-                img[:, :, 2] = gray_value
+            # if is_done:
+            #     # Calculate grayscale value: 0.299*R + 0.587*G + 0.114*B (standard luminance formula)
+            #     gray_value = 0.299 * img[:, :, 0] + 0.587 * img[:, :, 1] + 0.114 * img[:, :, 2]
+            #     # Set all channels to the grayscale value in-place
+            #     img[:, :, 0] = gray_value
+            #     img[:, :, 1] = gray_value
+            #     img[:, :, 2] = gray_value
 
             # Place image in canvas
             y_start = row * 180
