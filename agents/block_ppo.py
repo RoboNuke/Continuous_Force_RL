@@ -246,7 +246,7 @@ class BlockPPO(PPO):
                         # Per-dimension statistics
                         running_mean = preprocessor.running_mean  # Shape: (obs_dim,)
                         running_var = preprocessor.running_variance  # Shape: (obs_dim,)
-                        count = preprocessor.count
+                        count = preprocessor.current_count.item()
 
                         # Aggregate statistics
                         mean_avg = running_mean.mean().item()
@@ -277,7 +277,7 @@ class BlockPPO(PPO):
                         # Scalar statistics (size=1)
                         mean_val = preprocessor.running_mean.item()
                         var_val = preprocessor.running_variance.item()
-                        count = preprocessor.count
+                        count = preprocessor.current_count.item()
 
                         print(f"    Agent {i} value preprocessor: mean={mean_val:.4f}, var={var_val:.4f}, count={count}")
 

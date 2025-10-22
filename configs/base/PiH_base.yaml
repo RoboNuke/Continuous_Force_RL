@@ -254,7 +254,7 @@ agent:
   # Checkpoint and experiment tracking
   track_ckpts: true
   upload_ckpts_to_wandb: false
-  checkpoint_interval_multiplier: 5  # Checkpoint every N write intervals
+  checkpoint_interval_multiplier: 1  # Checkpoint every N write intervals
   # ckpt_tracker_path comes from primary config automatically
 
   # SKRL PPO PARAMETERS (these override SKRL defaults)

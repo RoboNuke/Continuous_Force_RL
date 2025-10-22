@@ -899,7 +899,7 @@ def load_checkpoints_into_agent(agent: Any, checkpoint_dicts: List[Dict[str, str
                 mean_std = preprocessor.running_mean.std().item()
                 var_avg = preprocessor.running_variance.mean().item()
                 var_std = preprocessor.running_variance.std().item()
-                count = preprocessor.count
+                count = preprocessor.current_count.item()
 
                 print(f"      Loaded state preprocessor: mean_avg={mean_avg:.4f}, mean_std={mean_std:.4f}, var_avg={var_avg:.4f}, var_std={var_std:.4f}, count={count}")
             else:
@@ -927,7 +927,7 @@ def load_checkpoints_into_agent(agent: Any, checkpoint_dicts: List[Dict[str, str
                 preprocessor = agent._per_agent_value_preprocessors[agent_idx]
                 mean_val = preprocessor.running_mean.item()
                 var_val = preprocessor.running_variance.item()
-                count = preprocessor.count
+                count = preprocessor.current_count.item()
 
                 print(f"      Loaded value preprocessor: mean={mean_val:.4f}, var={var_val:.4f}, count={count}")
             else:
