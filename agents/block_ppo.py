@@ -478,6 +478,12 @@ class BlockPPO(PPO):
         :param timesteps: Number of timesteps
         :type timesteps: int
         """
+
+        # update best models and write checkpoints
+        if timestep > 0 and self.checkpoint_interval > 0 and not timestep % self.checkpoint_interval:
+            # write checkpoints
+            self.write_checkpoint(timestep, timesteps)
+
         self._rollout += 1
         if not self._rollout % self._rollouts and timestep >= self._learning_starts:
             self.set_mode("train")
@@ -491,14 +497,9 @@ class BlockPPO(PPO):
         timestep += 1
         self.global_step+= self.num_envs
 
-        # update best models and write checkpoints
-        if original_timestep > 0 and self.checkpoint_interval > 0 and not original_timestep % self.checkpoint_interval:
-            # write checkpoints
-            self.write_checkpoint(original_timestep, timesteps)
-
         # write wandb
-        if original_timestep > 0 and self.write_interval > 0 and not original_timestep % self.write_interval:
-            self.write_tracking_data(original_timestep, timesteps)
+        #if original_timestep > 0 and self.write_interval > 0 and not original_timestep % self.write_interval:
+        #    self.write_tracking_data(original_timestep, timesteps)
 
         # Publish accumulated metrics to wandb after all operations complete
         # This ensures checkpoint metrics are published with the correct timestep

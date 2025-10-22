@@ -44,7 +44,7 @@ def parse_arguments():
     parser.add_argument("--max_rollout_steps", type=int, default=None, help="Maximum rollout steps (overrides config calculation)")
     parser.add_argument("--batch_mode", type=str, default="max_throughput", choices=["wait_full", "max_throughput"],
                         help="Checkpoint batching strategy")
-    parser.add_argument("--sensitivity_mask_freq", type=int, default=10, help="Frequency for sensitivity masking (0 to disable)")
+    parser.add_argument("--sensitivity_mask_freq", type=int, default=0, help="Frequency for sensitivity masking (0 to disable)")
     parser.add_argument("--show_progress", action="store_true", default=False, help="Show progress bar during evaluation rollout")
     parser.add_argument("--override", action="append", help="Override config values: key=value")
     parser.add_argument("--upload_ckpt", action="store_true", default=False, help="Upload checkpoint to WandB after evaluation (Modes 1 & 3 only)")
@@ -356,8 +356,6 @@ def create_models_and_agent(env: Any, configs: Dict[str, Any], args: argparse.Na
     print("    Creating models...")
     models = lUtils.create_policy_and_value_models(env, configs)
     print("    Models created")
-    print(f"    DEBUG: Policy model type: {type(models['policy'])}")
-    print(f"    DEBUG: Value model type: {type(models['value'])}")
 
     # Create memory (required for agent initialization, even for eval)
     print("    Creating memory...", flush=True)
@@ -371,12 +369,6 @@ def create_models_and_agent(env: Any, configs: Dict[str, Any], args: argparse.Na
     print("    Creating BlockPPO agent...", flush=True)
     agent = lUtils.create_block_ppo_agents(env, configs, models, memory)
     print("    Agent created", flush=True)
-
-    # Debug preprocessor state
-    print(f"    DEBUG: Agent has _state_preprocessor: {hasattr(agent, '_state_preprocessor')}")
-    if hasattr(agent, '_state_preprocessor'):
-        print(f"    DEBUG: _state_preprocessor type: {type(agent._state_preprocessor)}")
-        print(f"    DEBUG: _state_preprocessor bool: {bool(agent._state_preprocessor)}")
 
     print(f"  Created BlockPPO agent with {configs['primary'].total_agents} agents")
 
@@ -749,27 +741,32 @@ def upload_checkpoints_to_wandb(checkpoint_dicts: List[Dict[str, str]]) -> None:
             )
 
 
-def fetch_break_forces_from_wandb(checkpoint_dicts: List[Dict[str, str]]) -> List[float]:
+def fetch_break_forces_from_wandb(checkpoint_dicts: List[Dict[str, str]]) -> Tuple[List[float], List[str]]:
     """
-    Query WandB for break_force config for each checkpoint.
+    Query WandB for break_force config and tags for each checkpoint.
 
     Args:
-        checkpoint_dicts: List of checkpoint dicts with project and run_id
+        checkpoint_dicts: List of checkpoint dicts with project, run_id, and ckpt_path
 
     Returns:
-        List of break_force values
+        Tuple of (break_forces, video_captions):
+            - break_forces: List of break_force values
+            - video_captions: List of caption strings for videos
 
     Raises:
         RuntimeError: If break_force not found in any WandB config
     """
+    import re
     api = wandb.Api()
     break_forces = []
+    video_captions = []
 
     for i, ckpt_dict in enumerate(checkpoint_dicts):
         project = ckpt_dict['project']
         run_id = ckpt_dict['run_id']
+        ckpt_path = ckpt_dict['ckpt_path']
 
-        print(f"  Fetching break_force for checkpoint {i+1}/{len(checkpoint_dicts)}: {project}/{run_id}")
+        print(f"  Fetching break_force and tags for checkpoint {i+1}/{len(checkpoint_dicts)}: {project}/{run_id}")
 
         try:
             # Fetch run from WandB
@@ -791,12 +788,31 @@ def fetch_break_forces_from_wandb(checkpoint_dicts: List[Dict[str, str]]) -> Lis
             print(f"    Found break_force: {break_force}")
             break_forces.append(float(break_force))
 
+            # Extract step number from checkpoint filename
+            match = re.search(r'agent_\d+_(\d+)\.pt$', ckpt_path)
+            if not match:
+                raise RuntimeError(f"Could not extract step number from checkpoint path: {ckpt_path}")
+            step_number = int(match.group(1))
+            total_steps = step_number // 256  # Same calculation as in log_to_wandb
+
+            # Extract tags
+            tags = run.tags if hasattr(run, 'tags') else []
+
+            # Find ctrl tag and agent tag
+            ctrl_tag = next((tag for tag in tags if 'ctrl' in tag.lower()), "unknown_ctrl")
+            agent_tag = next((tag for tag in tags if 'agent' in tag.lower()), "unknown_agent")
+
+            # Create caption
+            caption = f"{ctrl_tag} ({agent_tag}) evaluated at step {total_steps}"
+            video_captions.append(caption)
+            print(f"    Caption: {caption}")
+
         except Exception as e:
             raise RuntimeError(
-                f"Failed to fetch break_force from WandB for checkpoint {ckpt_dict['ckpt_path']}: {e}"
+                f"Failed to fetch break_force and tags from WandB for checkpoint {ckpt_dict['ckpt_path']}: {e}"
             )
 
-    return break_forces
+    return break_forces, video_captions
 
 
 def load_checkpoints_into_agent(agent: Any, checkpoint_dicts: List[Dict[str, str]], env: Any) -> None:
@@ -872,7 +888,6 @@ def load_checkpoints_into_agent(agent: Any, checkpoint_dicts: List[Dict[str, str
             # Load log_std for policy
             if 'log_std' in policy_checkpoint:
                 agent.models['policy'].actor_logstd[agent_idx].data.copy_(policy_checkpoint['log_std'].data)
-                print(f"      DEBUG: Loaded log_std with shape {policy_checkpoint['log_std'].shape}")
             else:
                 print(f"      WARNING: No log_std found in policy checkpoint")
 
@@ -887,9 +902,6 @@ def load_checkpoints_into_agent(agent: Any, checkpoint_dicts: List[Dict[str, str
                     from skrl.resources.preprocessors.torch import RunningStandardScaler
                     # Get obs_size from the checkpoint's preprocessor state (more reliable than env)
                     obs_size = policy_checkpoint['state_preprocessor']['running_mean'].shape[0]
-                    print(f"      DEBUG: Creating state preprocessor with obs_size={obs_size} (from checkpoint)")
-                    print(f"      DEBUG: Agent model expects obs_dim={agent.models['policy'].actor_mean.obs_dim}")
-                    print(f"      DEBUG: Env num_envs={env.num_envs}")
                     agent._per_agent_state_preprocessors[agent_idx] = RunningStandardScaler(
                         size=obs_size,
                         device=agent.device
@@ -954,14 +966,12 @@ def load_checkpoints_into_agent(agent: Any, checkpoint_dicts: List[Dict[str, str
     if hasattr(agent, '_per_agent_state_preprocessors') and agent._per_agent_state_preprocessors:
         from agents.block_ppo import PerAgentPreprocessorWrapper
         agent._state_preprocessor = PerAgentPreprocessorWrapper(agent, agent._per_agent_state_preprocessors)
-        print("  DEBUG: Wrapped state preprocessors for agent compatibility")
     else:
         print("  WARNING: No state preprocessors loaded")
 
     if hasattr(agent, '_per_agent_value_preprocessors') and agent._per_agent_value_preprocessors:
         from agents.block_ppo import PerAgentPreprocessorWrapper
         agent._value_preprocessor = PerAgentPreprocessorWrapper(agent, agent._per_agent_value_preprocessors)
-        print("  DEBUG: Wrapped value preprocessors for agent compatibility")
     else:
         print("  WARNING: No value preprocessors loaded")
 
@@ -1142,40 +1152,27 @@ def run_evaluation_rollout(env: Any, agent: Any, max_rollout_steps: int, args: a
     # Reset environment
     states, info = env.reset()
 
-    print(f"  DEBUG: Initial reset - states shape: {states.shape}, dtype: {states.dtype}")
-    print(f"  DEBUG: Initial states - min: {states.min().item():.4f}, max: {states.max().item():.4f}, mean: {states.mean().item():.4f}")
-
     # Evaluation rollout loop
     step_iterator = range(max_rollout_steps)
     if args.show_progress:
         step_iterator = tqdm.tqdm(step_iterator, desc="Evaluation Rollout", file=sys.stdout)
 
     for step in step_iterator:
-        # Debug first few steps in detail
-        debug_step = (step == 0 or step == 1 or step == 10 or step == 50)
-
-        if debug_step:
-            print(f"\n  DEBUG STEP {step}:")
-            print(f"    Input states shape: {states.shape}, dtype: {states.dtype}")
-            print(f"    Input states - min: {states.min().item():.4f}, max: {states.max().item():.4f}, mean: {states.mean().item():.4f}")
-            print(f"    Input states sample [0, :5]: {states[0, :5]}")
-
         # Get action from agent (use mean action for deterministic evaluation)
         with torch.no_grad():
             outputs = agent.act(states, timestep=step, timesteps=max_rollout_steps)[-1]
             # Use mean actions for evaluation (deterministic)
             actions = outputs['mean_actions']
 
-        if debug_step:
-            print(f"    Agent output keys: {outputs.keys()}")
-            print(f"    Actions shape: {actions.shape}, dtype: {actions.dtype}")
-            print(f"    Actions - min: {actions.min().item():.4f}, max: {actions.max().item():.4f}, mean: {actions.mean().item():.4f}")
-            print(f"    Actions sample [0, :]: {actions[0, :]}")
-            if 'preprocessed_states' in outputs:
-                prep_states = outputs['preprocessed_states']
-                print(f"    Preprocessed states - min: {prep_states.min().item():.4f}, max: {prep_states.max().item():.4f}, mean: {prep_states.mean().item():.4f}")
+        # Zero out actions for environments that are already done (success, terminated, or truncated)
+        # This ensures robots stop moving once they complete their task
+        done_mask = rollout_data["terminated_episodes"] | rollout_data["truncated_episodes"]
+        # Also include environments that have already succeeded
+        success_done_mask = rollout_data["success_step"] != -1
+        done_mask = done_mask | success_done_mask
+        actions[done_mask] *= 0
 
-        # Store observation and action
+        # Store observation and action (storing the zeroed actions)
         rollout_data["observations"].append(states.clone())
         rollout_data["actions"].append(actions.clone())
 
@@ -1184,10 +1181,6 @@ def run_evaluation_rollout(env: Any, agent: Any, max_rollout_steps: int, args: a
             values = agent.value.act({"states": states}, role="value")[0]
             rollout_data["values"].append(values.clone())
 
-        if debug_step:
-            print(f"    Values shape: {values.shape}, dtype: {values.dtype}")
-            print(f"    Values - min: {values.min().item():.4f}, max: {values.max().item():.4f}, mean: {values.mean().item():.4f}")
-
         # Step environment
         states, rewards, terminated, truncated, info = env.step(actions)
 
@@ -1195,16 +1188,6 @@ def run_evaluation_rollout(env: Any, agent: Any, max_rollout_steps: int, args: a
         rewards = rewards.squeeze(-1)
         terminated = terminated.squeeze(-1)
         truncated = truncated.squeeze(-1)
-
-        if debug_step:
-            print(f"    After env.step:")
-            print(f"      New states shape: {states.shape}, min: {states.min().item():.4f}, max: {states.max().item():.4f}, mean: {states.mean().item():.4f}")
-            print(f"      Rewards - min: {rewards.min().item():.4f}, max: {rewards.max().item():.4f}, mean: {rewards.mean().item():.4f}, sum: {rewards.sum().item():.4f}")
-            print(f"      Terminated: {terminated.sum().item()}/{len(terminated)}, Truncated: {truncated.sum().item()}/{len(truncated)}")
-            if 'to_log' in info:
-                print(f"      info['to_log'] has {len(info['to_log'])} keys: {list(info['to_log'].keys())[:5]}...")
-            if 'success' in info:
-                print(f"      Success count: {info['success'].sum().item()}/{len(info['success'])}")
 
         # Store rewards
         rollout_data["rewards"].append(rewards.clone())
@@ -1281,21 +1264,6 @@ def run_evaluation_rollout(env: Any, agent: Any, max_rollout_steps: int, args: a
             break
 
     print(f"  Rollout complete: {step+1} steps collected")
-
-    # Debug: Rollout summary
-    print(f"\n  DEBUG: Rollout Summary:")
-    print(f"    Total steps: {len(rollout_data['observations'])}")
-    print(f"    Total rewards sum: {rollout_data['total_returns'].sum().item():.2f}")
-    print(f"    Terminated envs: {rollout_data['terminated_episodes'].sum().item()}/{env.num_envs}")
-    print(f"    Truncated envs: {rollout_data['truncated_episodes'].sum().item()}/{env.num_envs}")
-    success_count = (rollout_data['success_step'] != -1).sum().item()
-    print(f"    Successful envs: {success_count}/{env.num_envs}")
-    if len(rollout_data["infos"]) > 0:
-        print(f"    Info dicts collected: {len(rollout_data['infos'])}")
-        if 'to_log' in rollout_data["infos"][0]:
-            print(f"    to_log keys in first info: {len(rollout_data['infos'][0]['to_log'])}")
-        if 'to_log' in rollout_data["infos"][-1]:
-            print(f"    to_log keys in last info: {len(rollout_data['infos'][-1]['to_log'])}")
 
     # Convert lists to tensors for easier processing
     if len(rollout_data["observations"]) > 0:
@@ -1673,16 +1641,17 @@ def calculate_metrics(rollout_data: Dict[str, Any], env: Any, agent: Any, args: 
     return metrics_list
 
 
-def _create_checkpoint_gif(images: torch.Tensor, values: torch.Tensor, success_step: torch.Tensor,
-                          termination_step: torch.Tensor, truncation_step: torch.Tensor,
-                          engagement_history: torch.Tensor, force_control: torch.Tensor,
-                          output_path: str, duration: int, font: Any) -> None:
+def _create_checkpoint_gif(images: torch.Tensor, values: torch.Tensor, cumulative_rewards: torch.Tensor,
+                          success_step: torch.Tensor, termination_step: torch.Tensor,
+                          truncation_step: torch.Tensor, engagement_history: torch.Tensor,
+                          force_control: torch.Tensor, output_path: str, duration: int, font: Any) -> None:
     """
     Create a 3x4 grid GIF from 12 selected environments.
 
     Args:
         images: [num_steps, 12, 180, 240, 3] tensor
         values: [num_steps, 12] tensor
+        cumulative_rewards: [num_steps, 12] tensor of accumulated rewards
         success_step: [12] tensor
         termination_step: [12] tensor
         truncation_step: [12] tensor
@@ -1765,11 +1734,12 @@ def _create_checkpoint_gif(images: torch.Tensor, values: torch.Tensor, success_s
                     width=3
                 )
 
-            # Draw value estimate text
+            # Draw value estimate and accumulated reward text (bottom of image)
             val = values[step_idx, env_idx].item()
+            cum_rew = cumulative_rewards[step_idx, env_idx].item()
             draw.text(
-                (x_offset, y_offset + 160),
-                f"Value Est={val:.2f}",
+                (x_offset + 2, y_offset + 160),
+                f"V-Est: {val:.2f} TotRew: {cum_rew:.2f}",
                 fill=(0, 255, 0),
                 font=font
             )
@@ -1816,7 +1786,8 @@ def _create_checkpoint_gif(images: torch.Tensor, values: torch.Tensor, success_s
 
 
 def generate_videos(rollout_data: Dict[str, Any], checkpoint_dicts: List[Dict[str, str]],
-                   num_envs_per_agent: int, policy_hz: float, args: argparse.Namespace) -> List[str]:
+                   num_envs_per_agent: int, policy_hz: float, args: argparse.Namespace,
+                   agent: Any) -> List[str]:
     """
     Generate 3x4 grid GIFs for each checkpoint.
 
@@ -1826,6 +1797,7 @@ def generate_videos(rollout_data: Dict[str, Any], checkpoint_dicts: List[Dict[st
         num_envs_per_agent: Number of environments per agent
         policy_hz: Policy frequency for GIF frame rate
         args: Command-line arguments
+        agent: BlockPPO agent (for value preprocessing)
 
     Returns:
         List of video file paths
@@ -1877,9 +1849,20 @@ def generate_videos(rollout_data: Dict[str, Any], checkpoint_dicts: List[Dict[st
 
         agent_force_control = rollout_data["force_control"][:, start_env:end_env]  # [steps, num_envs_per_agent, 3]
 
+        # Compute cumulative rewards for this agent
+        agent_rewards = torch.stack(rollout_data["rewards"])[:, start_env:end_env]  # [steps, num_envs_per_agent]
+        agent_cumulative_rewards = torch.cumsum(agent_rewards, dim=0)  # [steps, num_envs_per_agent]
+
         # Squeeze values if needed (remove trailing dimension if present)
         if agent_values.dim() == 3 and agent_values.shape[2] == 1:
             agent_values = agent_values.squeeze(2)  # [steps, num_envs_per_agent]
+
+        # Apply inverse preprocessing to convert values back to original scale
+        # Shape: [steps, num_envs_per_agent] -> flatten -> [steps * num_envs_per_agent, 1]
+        num_steps = agent_values.shape[0]
+        flat_values = agent_values.view(-1, 1)
+        inverse_values = agent._value_preprocessor(flat_values, inverse=True)
+        agent_values = inverse_values.view(num_steps, num_envs_per_agent)
 
         # Select 12 environments based on returns (worst 4, middle 4, best 4)
         sorted_indices = torch.argsort(agent_returns)
@@ -1898,12 +1881,14 @@ def generate_videos(rollout_data: Dict[str, Any], checkpoint_dicts: List[Dict[st
         selected_truncation_step = agent_truncation_step[selected_indices]
         selected_engagement = agent_engagement[:, selected_indices]
         selected_force_control = agent_force_control[:, selected_indices]
+        selected_cumulative_rewards = agent_cumulative_rewards[:, selected_indices]
 
         # Generate GIF
         output_path = ckpt_dict['vid_path']
         _create_checkpoint_gif(
             selected_images,
             selected_values,
+            selected_cumulative_rewards,
             selected_success_step,
             selected_termination_step,
             selected_truncation_step,
@@ -1922,7 +1907,7 @@ def generate_videos(rollout_data: Dict[str, Any], checkpoint_dicts: List[Dict[st
 
 
 def log_to_wandb(checkpoint_dicts: List[Dict[str, str]], metrics_list: List[Dict[str, float]],
-                 video_paths: List[str], args: argparse.Namespace) -> None:
+                 video_paths: List[str], video_captions: List[str], args: argparse.Namespace) -> None:
     """
     Resume training runs and log metrics/videos to WandB.
 
@@ -1930,6 +1915,7 @@ def log_to_wandb(checkpoint_dicts: List[Dict[str, str]], metrics_list: List[Dict
         checkpoint_dicts: List of checkpoint dicts with project, run_id
         metrics_list: List of metric dicts (one per checkpoint)
         video_paths: List of video file paths
+        video_captions: List of caption strings for videos
         args: Command-line arguments
     """
     import re
@@ -1966,7 +1952,9 @@ def log_to_wandb(checkpoint_dicts: List[Dict[str, str]], metrics_list: List[Dict
             if args.enable_video and i < len(video_paths):
                 video_path = video_paths[i]
                 if os.path.exists(video_path):
-                    metrics['Eval/Checkpoint Videos'] = wandb.Video(video_path)
+                    # Get caption from video_captions list
+                    caption = video_captions[i] if i < len(video_captions) else None
+                    metrics['Eval/Checkpoint Videos'] = wandb.Video(video_path, caption=caption)
                     video_uploaded = True
 
             # Log to WandB
@@ -2138,23 +2126,15 @@ def main(args):
             _current_batch = checkpoint_dicts
 
         try:
-            # 4c. Fetch break forces from WandB
-            print("\n[4c] Fetching break forces from WandB...")
-            break_forces = fetch_break_forces_from_wandb(checkpoint_dicts)
+            # 4c. Fetch break forces and captions from WandB
+            print("\n[4c] Fetching break forces and tags from WandB...")
+            break_forces, video_captions = fetch_break_forces_from_wandb(checkpoint_dicts)
             print(f"  Break forces: {break_forces}")
             
             # 4d. Load checkpoints into agent
             print("\n[4d] Loading checkpoints into agent...")
             load_checkpoints_into_agent(agent, checkpoint_dicts, env)
             print("  Checkpoints loaded successfully")
-
-            # Debug: Verify model state after loading
-            print("  DEBUG: Post-checkpoint loading state:")
-            print(f"    Policy model in eval mode: {not agent.models['policy'].training}")
-            print(f"    Value model in eval mode: {not agent.models['value'].training}")
-            # Sample a weight to verify loading
-            sample_weight = agent.models['policy'].actor_mean.resblocks[0].fc1.weight.data.flatten()[0].item()
-            print(f"    Sample policy weight: {sample_weight:.6f}")
 
             # 4e. Update environment break forces
             print("\n[4e] Updating environment break forces...")
@@ -2180,17 +2160,19 @@ def main(args):
             video_paths = []
             if args.enable_video:
                 print("\n[4i] Generating videos...")
-                video_paths = generate_videos(rollout_data, checkpoint_dicts, num_envs_per_agent, policy_hz, args)
+                video_paths = generate_videos(rollout_data, checkpoint_dicts, num_envs_per_agent, policy_hz, args, agent)
                 print(f"  Generated {len(video_paths)} videos")
             else:
                 print("\n[4i] Video generation disabled, skipping...")
+                # Create empty captions list for consistency when videos are disabled
+                video_captions = []
 
             # Free GPU memory
             del rollout_data
 
             # 4j. Log to WandB
             print("\n[4j] Logging to WandB...")
-            log_to_wandb(checkpoint_dicts, metrics_list, video_paths, args)
+            log_to_wandb(checkpoint_dicts, metrics_list, video_paths, video_captions, args)
             print("  Logged to WandB successfully")
 
             # 4k. Upload checkpoints to WandB (if enabled, modes 1 & 3 only)
