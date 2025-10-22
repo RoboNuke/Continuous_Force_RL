@@ -799,7 +799,7 @@ def fetch_break_forces_from_wandb(checkpoint_dicts: List[Dict[str, str]]) -> Lis
     return break_forces
 
 
-def load_checkpoints_into_agent(agent: Any, checkpoint_dicts: List[Dict[str, str]]) -> None:
+def load_checkpoints_into_agent(agent: Any, checkpoint_dicts: List[Dict[str, str]], env: Any) -> None:
     """
     Load checkpoint weights into agent's block models.
 
@@ -809,6 +809,7 @@ def load_checkpoints_into_agent(agent: Any, checkpoint_dicts: List[Dict[str, str
     Args:
         agent: BlockPPO agent with block models
         checkpoint_dicts: List of checkpoint dicts with ckpt_path
+        env: Environment instance (needed for observation space size)
 
     Raises:
         RuntimeError: If checkpoint load fails
@@ -2140,7 +2141,7 @@ def main(args):
             
             # 4d. Load checkpoints into agent
             print("\n[4d] Loading checkpoints into agent...")
-            load_checkpoints_into_agent(agent, checkpoint_dicts)
+            load_checkpoints_into_agent(agent, checkpoint_dicts, env)
             print("  Checkpoints loaded successfully")
 
             # Debug: Verify model state after loading
