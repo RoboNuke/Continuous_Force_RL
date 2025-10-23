@@ -14,7 +14,7 @@ experiment:
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
-  agents_per_break_force: 5  # Number of agents per break force condition
+  agents_per_break_force: 2  # Number of agents per break force condition
   num_envs_per_agent: 256    # Environments per individual agent
   break_forces: [10]  # Break force conditions (-1 = unbreakable)
   decimation: 8

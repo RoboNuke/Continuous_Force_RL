@@ -1164,12 +1164,10 @@ def run_evaluation_rollout(env: Any, agent: Any, max_rollout_steps: int, args: a
             # Use mean actions for evaluation (deterministic)
             actions = outputs['mean_actions']
 
-        # Zero out actions for environments that are already done (success, terminated, or truncated)
-        # This ensures robots stop moving once they complete their task
+        # Zero out actions for environments that are already done (terminated or truncated)
+        # This ensures robots stop moving once they fail or time out
+        # Note: Successful environments continue to act (success does not stop actions)
         done_mask = rollout_data["terminated_episodes"] | rollout_data["truncated_episodes"]
-        # Also include environments that have already succeeded
-        success_done_mask = rollout_data["success_step"] != -1
-        done_mask = done_mask | success_done_mask
         actions[done_mask] *= 0
 
         # Store observation and action (storing the zeroed actions)
@@ -1189,7 +1187,16 @@ def run_evaluation_rollout(env: Any, agent: Any, max_rollout_steps: int, args: a
         terminated = terminated.squeeze(-1)
         truncated = truncated.squeeze(-1)
 
-        # Store rewards
+        # Create mask for environments that were ALREADY done before this step
+        # (only terminated/truncated, NOT success)
+        already_done_mask = rollout_data["terminated_episodes"] | rollout_data["truncated_episodes"]
+
+        # Zero out rewards for environments that were already done
+        # This ensures we count the terminal reward, but not rewards after termination
+        rewards = rewards.clone()  # Clone to avoid modifying the original
+        rewards[already_done_mask] = 0.0
+
+        # Store rewards (now masked)
         rollout_data["rewards"].append(rewards.clone())
 
         # Deep clone info dict with explicit tensor cloning for nested dicts
@@ -1216,10 +1223,10 @@ def run_evaluation_rollout(env: Any, agent: Any, max_rollout_steps: int, args: a
 
         rollout_data["infos"].append(info_copy)
 
-        # Accumulate returns
+        # Accumulate returns (now correctly stopped after termination/truncation)
         rollout_data["total_returns"] += rewards
 
-        # Track termination/truncation
+        # Track termination/truncation (these flags will be used for NEXT step's masking)
         rollout_data["terminated_episodes"] |= terminated
         rollout_data["truncated_episodes"] |= truncated
 
@@ -1500,38 +1507,52 @@ def calculate_metrics(rollout_data: Dict[str, Any], env: Any, agent: Any, args: 
 
         print(f"      Returns: {total_returns_mean:.3f} ± {total_returns_std:.3f}")
 
-        # 3. Component Rewards
+        # 3. Component Rewards (per-episode sum averaged across episodes)
         # Extract from infos list - look for keys starting with 'logs_rew_'
         if len(rollout_data["infos"]) > 0:
-            component_rewards = {}
-            component_counts = {}
+            # Determine episode end step for each environment
+            agent_termination_step = rollout_data["termination_step"][start_env:end_env]
+            agent_truncation_step = rollout_data["truncation_step"][start_env:end_env]
 
-            # Iterate through all info dicts
-            for info_dict in rollout_data["infos"]:
+            # Calculate episode end (include the terminal step's reward)
+            num_steps = len(rollout_data["infos"])
+            episode_ends = torch.full((num_envs_per_agent,), num_steps, dtype=torch.long, device=agent_termination_step.device)
+
+            # Update with termination steps (+1 to include terminal reward)
+            term_mask = agent_termination_step != -1
+            if term_mask.any():
+                episode_ends[term_mask] = torch.minimum(episode_ends[term_mask], agent_termination_step[term_mask] + 1)
+
+            # Update with truncation steps (+1 to include terminal reward)
+            trunc_mask = agent_truncation_step != -1
+            if trunc_mask.any():
+                episode_ends[trunc_mask] = torch.minimum(episode_ends[trunc_mask], agent_truncation_step[trunc_mask] + 1)
+
+            # Accumulate component rewards per environment (per-episode sums)
+            component_episode_sums = defaultdict(lambda: torch.zeros(num_envs_per_agent, device=agent_termination_step.device))
+
+            for step_idx, info_dict in enumerate(rollout_data["infos"]):
                 for key, value in info_dict.items():
                     if key.startswith("logs_rew_"):
                         component_name = key.replace("logs_rew_", "")
 
-                        # Initialize if first time seeing this component
-                        if component_name not in component_rewards:
-                            component_rewards[component_name] = 0.0
-                            component_counts[component_name] = 0
-
-                        # Accumulate (take mean across this agent's environments)
                         if isinstance(value, torch.Tensor):
-                            agent_component_value = value[start_env:end_env].mean().item()
-                            component_rewards[component_name] += agent_component_value
+                            agent_component_value = value[start_env:end_env]  # [num_envs_per_agent]
+                            # Only accumulate for envs still in their episode
+                            still_active = step_idx < episode_ends
+                            component_episode_sums[component_name][still_active] += agent_component_value[still_active]
                         else:
-                            component_rewards[component_name] += float(value)
-                        component_counts[component_name] += 1
+                            # Scalar value - apply to all envs still in their episode
+                            still_active = step_idx < episode_ends
+                            component_episode_sums[component_name][still_active] += float(value)
 
-            # Calculate averages and add to metrics
-            for component_name, total_reward in component_rewards.items():
-                avg_reward = total_reward / component_counts[component_name]
-                metrics[f"Eval Component Reward/{component_name}"] = avg_reward
+            # Average per-episode sums across environments
+            for component_name, episode_sums in component_episode_sums.items():
+                avg_episode_reward = episode_sums.mean().item()
+                metrics[f"Eval Component Reward/{component_name}"] = avg_episode_reward
 
-            if len(component_rewards) > 0:
-                print(f"      Found {len(component_rewards)} reward components")
+            if len(component_episode_sums) > 0:
+                print(f"      Found {len(component_episode_sums)} reward components (per-episode sums)")
 
         # 4. Smoothness Metrics
         # Extract from final step's info['smoothness']
