@@ -793,7 +793,7 @@ def fetch_break_forces_from_wandb(checkpoint_dicts: List[Dict[str, str]]) -> Tup
             if not match:
                 raise RuntimeError(f"Could not extract step number from checkpoint path: {ckpt_path}")
             step_number = int(match.group(1))
-            total_steps = step_number // 256  # Same calculation as in log_to_wandb
+            total_steps = step_number
 
             # Extract tags
             tags = run.tags if hasattr(run, 'tags') else []
@@ -1973,7 +1973,7 @@ def log_to_wandb(checkpoint_dicts: List[Dict[str, str]], metrics_list: List[Dict
             raise RuntimeError(f"Failed to parse step number from checkpoint path (expected format: agent_{{agent_idx}}_{{step}}.pt): {ckpt_path}")
 
         step_num = int(match.group(1))
-        exp_step = step_num // 256
+        exp_step = step_num
 
         print(f"    Checkpoint {i+1}/{len(checkpoint_dicts)}: {run_id} at step {step_num}")
 
