@@ -63,7 +63,10 @@ def apply_wrappers(env, configs):
 
     if wrappers_config.force_reward.enabled:
         print("  - Applying Force Reward Wrapper")
-        raise NotImplementedError
+        env = ForceRewardWrapper(
+            env,
+            config=asdict(wrappers_config.force_reward)
+        )
 
     if wrappers_config.observation_manager.enabled:
         print("  - Applying Observation Manager Wrapper")
