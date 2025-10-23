@@ -442,7 +442,7 @@ class ForceRewardWrapper(gym.Wrapper):
         else:
             reward = diff ** 2 / norm
 
-        reward = torch.where(self.in_contact, reward, torch.zeros_like(reward))
+        reward = torch.where(torch.any(self.in_contact, dim=-1), reward, torch.zeros_like(reward))
         return reward
 
     def _calculate_alignment_award(self) -> torch.Tensor: #TODO SHOULD GET CURRENT FORCE ONCE, 
@@ -457,7 +457,7 @@ class ForceRewardWrapper(gym.Wrapper):
         reward = torch.sum(current_force * self.alignment_goal_orientation, dim=1)
 
         # Apply only when in contact
-        reward = torch.where(self.in_contact, reward, torch.zeros_like(reward))
+        reward = torch.where(torch.any(self.in_contact, dim=-1), reward, torch.zeros_like(reward))
 
         return reward
 
@@ -497,7 +497,7 @@ class ForceRewardWrapper(gym.Wrapper):
         reward = torch.exp(-self.contact_consistency_beta * diff)
 
         # Apply only when in contact
-        reward = torch.where(self.in_contact, reward, torch.zeros_like(reward))
+        reward = torch.where(torch.any(self.in_contact, dim=-1), reward, torch.zeros_like(reward))
 
         return reward
 
@@ -587,6 +587,6 @@ class ForceRewardWrapper(gym.Wrapper):
         ratio = f_z / (f_xy + 1e-8)
 
         # Apply only when in contact
-        reward = torch.where(self.in_contact, ratio, torch.zeros_like(ratio))
+        reward = torch.where(torch.any(self.in_contact, dim=-1),ratio, torch.zeros_like(ratio))
 
         return reward
