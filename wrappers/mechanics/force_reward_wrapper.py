@@ -380,7 +380,7 @@ class ForceRewardWrapper(gym.Wrapper):
         # Update contact state
         self.prev_contact = self.in_contact.clone()
         #self.in_contact = force_moving_avg > self.contact_force_threshold
-        self.in_contact = self.unwrapped.in_contact[:, :3].float()
+        self.in_contact = self.unwrapped.in_contact[:, :3]
 
     def _update_efficiency_state(self):
         """Update efficiency calculation state."""
