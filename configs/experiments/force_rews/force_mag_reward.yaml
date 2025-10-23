@@ -1,0 +1,38 @@
+# Force Magnitude Reward Experiment Configuration
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+
+primary:
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/CLoP_forceMag_tracker.txt"
+# Model configuration for hybrid agent
+model:
+  use_hybrid_agent: true
+  hybrid_agent:
+    force_init_std: 0.1 # implies a 96% range [-2.5, 2.5]
+
+# Enable hybrid control wrapper and related systems
+wrappers:
+  # Enable hybrid control wrapper
+  hybrid_control:
+    enabled: true
+    reward_type: "none"
+
+  # Enable force reward wrapper with force magnitude reward
+  force_reward:
+    enabled: true
+    enable_force_magnitude_reward: true
+
+  pose_contact_logging:
+    enabled: false
+
+agent:
+  policy_learning_rate: 5.0e-5
+  critic_learning_rate: 1.0e-5
+  #learning_epochs: 1
+
+# Experiment metadata
+experiment:
+  name: "CLoP_forceMag_forceReward"
+  tags: ['Force-Force']
+  group: "CLoP_forceMag_forceReward"

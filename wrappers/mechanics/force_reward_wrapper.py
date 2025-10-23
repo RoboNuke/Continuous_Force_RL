@@ -375,11 +375,12 @@ class ForceRewardWrapper(gym.Wrapper):
         self.force_history_idx = (self.force_history_idx + 1) % self.contact_window_size
 
         # Calculate moving average
-        force_moving_avg = self.force_history.mean(dim=1)
+        #force_moving_avg = self.force_history.mean(dim=1)
 
         # Update contact state
         self.prev_contact = self.in_contact.clone()
-        self.in_contact = force_moving_avg > self.contact_force_threshold
+        #self.in_contact = force_moving_avg > self.contact_force_threshold
+        self.in_contact = self.unwrapped.in_contact[:, :3].float()
 
     def _update_efficiency_state(self):
         """Update efficiency calculation state."""
@@ -431,13 +432,17 @@ class ForceRewardWrapper(gym.Wrapper):
         current_force = self.unwrapped.robot_force_torque[:, :3]
         force_magnitude = torch.linalg.norm(current_force, dim=1)
 
+        # ensures 1 at 0 force and 0 at magnitude
+        # force magnitude must be a positive number
+        norm = self.force_magnitude_base_force ** 3 
         diff = self.force_magnitude_base_force - force_magnitude
 
         if self.force_magnitude_keep_sign:
-            reward = torch.sign(diff) * (diff ** 2)
+            reward = torch.sign(diff) * (diff ** 2) / norm
         else:
-            reward = diff ** 2
+            reward = diff ** 2 / norm
 
+        reward = torch.where(self.in_contact, reward, torch.zeros_like(reward))
         return reward
 
     def _calculate_alignment_award(self) -> torch.Tensor: #TODO SHOULD GET CURRENT FORCE ONCE, 

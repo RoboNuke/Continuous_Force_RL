@@ -14,7 +14,7 @@ experiment:
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
-  agents_per_break_force: 2  # Number of agents per break force condition
+  agents_per_break_force: 5  # Number of agents per break force condition
   num_envs_per_agent: 256    # Environments per individual agent
   break_forces: [10]  # Break force conditions (-1 = unbreakable)
   decimation: 8
@@ -153,8 +153,8 @@ wrappers:
     contact_force_threshold: 1.5
     contact_torque_threshold: 100.0 # don't want torque activation
     log_contact_state: true
-    add_contact_obs: false
-    add_contact_state: true
+    add_contact_obs: false    # actor
+    add_contact_state: true   # critic
     use_contact_sensor: true  # Use ContactSensor for contact detection
 
   # Observation format conversion (Isaac Lab dict -> single tensor)
@@ -209,14 +209,16 @@ wrappers:
   # Force reward system with 8 reward functions
   force_reward:
     enabled: false
-    contact_force_threshold: 1.0
+    contact_force_threshold: 1.0 # not used anymore
     contact_window_size: 10
 
+    #############################################################
     # Force Magnitude Reward
     enable_force_magnitude_reward: false
     force_magnitude_reward_weight: 1.0
-    force_magnitude_base_force: 5.0
+    force_magnitude_base_force: 10.0
     force_magnitude_keep_sign: true
+    #############################################################
 
     # Alignment Award (contact only)
     enable_alignment_award: false
@@ -227,12 +229,14 @@ wrappers:
     enable_force_action_error: false
     force_action_error_reward_weight: 1.0
 
+    #############################################################
     # Contact Consistency (contact only)
     enable_contact_consistency: false
     contact_consistency_reward_weight: 1.0
     contact_consistency_beta: 1.0
     contact_consistency_use_ema: true
-    contact_consistency_ema_alpha: 0.1
+    contact_consistency_ema_alpha: 0.2
+    #############################################################
 
     # Oscillation Penalty
     enable_oscillation_penalty: false
@@ -247,9 +251,11 @@ wrappers:
     enable_efficiency: false
     efficiency_reward_weight: 1.0
 
+    #############################################################
     # Force Ratio (contact only)
     enable_force_ratio: false
     force_ratio_reward_weight: 1.0
+    #############################################################
 
 
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
@@ -260,7 +266,7 @@ agent:
   # Checkpoint and experiment tracking
   track_ckpts: true
   upload_ckpts_to_wandb: false
-  checkpoint_interval_multiplier: 1  # Checkpoint every N write intervals
+  checkpoint_interval_multiplier: 5  # Checkpoint every N write intervals
   # ckpt_tracker_path comes from primary config automatically
 
   # SKRL PPO PARAMETERS (these override SKRL defaults)
