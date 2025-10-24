@@ -10,6 +10,7 @@ from wrappers.logging.wandb_wrapper import GenericWandbLoggingWrapper
 from wrappers.logging.enhanced_action_logging_wrapper import EnhancedActionLoggingWrapper
 from wrappers.logging.pose_contact_logging_wrapper import PoseContactLoggingWrapper
 from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
+from wrappers.mechanics.two_stage_keypoint_reward_wrapper import TwoStageKeypointRewardWrapper
 
 from models.SimBa_hybrid_control import HybridControlBlockSimBaActor
 from models.block_simba import BlockSimBaActor, BlockSimBaCritic, make_agent_optimizer
@@ -66,6 +67,13 @@ def apply_wrappers(env, configs):
         env = ForceRewardWrapper(
             env,
             config=asdict(wrappers_config.force_reward)
+        )
+
+    if wrappers_config.two_stage_keypoint_reward.enabled:
+        print("  - Applying Two-Stage Keypoint Reward Wrapper")
+        env = TwoStageKeypointRewardWrapper(
+            env,
+            config=asdict(wrappers_config.two_stage_keypoint_reward)
         )
 
     if wrappers_config.observation_manager.enabled:

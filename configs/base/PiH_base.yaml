@@ -6,7 +6,7 @@
 # EXPERIMENT CONFIGURATION
 experiment:
   name: "fPiH_base"
-  tags: ["factory", 'FPiH']
+  tags: ["factory", 'FPiH', 'two-stage_rew']
   group: "force_force_tests"
   wandb_project: "debug"
   wandb_entity: "hur"
@@ -205,6 +205,10 @@ wrappers:
     enabled: false
     xy_threshold: 0.0025  # XY distance threshold for alignment
     height_threshold_fraction: 0.9  # Fraction of fixed asset height (engage_threshold)
+
+  two_stage_keypoint_reward:
+    enabled: true
+    xy_threshold: 0.0025
 
   # Force reward system with 8 reward functions
   force_reward:

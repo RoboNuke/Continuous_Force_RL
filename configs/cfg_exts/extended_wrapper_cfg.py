@@ -13,7 +13,8 @@ from .wrapper_sub_configs import (
     ForceTorqueSensorConfig, HybridControlConfig, ObservationNoiseConfig,
     WandbLoggingConfig, ActionLoggingConfig, ForceRewardConfig,
     FragileObjectConfig, ObsManagerConfig, FactoryMetricsConfig,
-    PoseContactLoggingConfig
+    PoseContactLoggingConfig, MisalignmentPenaltyConfig,
+    TwoStageKeypointRewardConfig
 )
 
 # Get configclass decorator with version compatibility
@@ -60,6 +61,12 @@ class ExtendedWrapperConfig:
 
     pose_contact_logging: PoseContactLoggingConfig = field(default_factory=PoseContactLoggingConfig)
     """Pose contact logging wrapper configuration"""
+
+    misalignment_penalty: MisalignmentPenaltyConfig = field(default_factory=MisalignmentPenaltyConfig)
+    """Misalignment penalty wrapper configuration"""
+
+    two_stage_keypoint_reward: TwoStageKeypointRewardConfig = field(default_factory=TwoStageKeypointRewardConfig)
+    """Two-stage keypoint reward wrapper configuration"""
 
     efficient_reset_enabled: bool = field(default=True)
     """Enable efficient environment resetting"""

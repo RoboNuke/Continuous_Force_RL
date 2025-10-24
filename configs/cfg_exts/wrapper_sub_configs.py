@@ -135,3 +135,10 @@ class MisalignmentPenaltyConfig:
     enabled: bool = False
     xy_threshold: float = 0.0025  # XY distance threshold for alignment (default from factory)
     height_threshold_fraction: float = 0.9  # Fraction of fixed asset height (default engage_threshold)
+
+
+@dataclass
+class TwoStageKeypointRewardConfig:
+    """Two-stage keypoint reward wrapper configuration."""
+    enabled: bool = False
+    xy_threshold: float = 0.0025  # XY distance threshold for stage transition (same as is_centered)
