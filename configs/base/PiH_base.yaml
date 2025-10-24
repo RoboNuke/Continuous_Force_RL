@@ -137,7 +137,7 @@ wrappers:
   # Fragile object behavior
   fragile_objects:
     enabled: true
-    peg_break_rew: 0.0 #-0.4 #-1.0
+    peg_break_rew: -0.4 #-1.0
     # break_force and num_agents are computed from primary config automatically
 
   # Efficient environment resetting3
@@ -207,7 +207,7 @@ wrappers:
     height_threshold_fraction: 0.9  # Fraction of fixed asset height (engage_threshold)
 
   two_stage_keypoint_reward:
-    enabled: false
+    enabled: true
     xy_threshold: 0.0025
 
   # Force reward system with 8 reward functions
