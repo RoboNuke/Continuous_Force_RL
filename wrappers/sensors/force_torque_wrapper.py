@@ -13,12 +13,15 @@ import gymnasium as gym
 try:
     from isaacsim.core.api.robots import RobotView
     from isaaclab.sensors import ContactSensor
+    from isaaclab.utils.math import quat_rotate_inverse
 except ImportError:
     try:
         from omni.isaac.core.articulations import ArticulationView as RobotView
         from omni.issac.lab.sensors import ContactSensor
+        from isaaclab.utils.math import quat_rotate_inverse
     except ImportError:
         RobotView = None
+        quat_rotate_inverse = None
 
 
 class ForceTorqueWrapper(gym.Wrapper):
@@ -438,14 +441,23 @@ class ForceTorqueWrapper(gym.Wrapper):
     def _contact_detected_in_range(self):
         # get true state from directly-held contact sensor (not from scene)
         if self._held_fixed_contact_sensor is not None:
-            net_contact_force = self._held_fixed_contact_sensor.data.net_forces_w
-            
+            # Get contact forces in WORLD frame
+            net_contact_force_world = self._held_fixed_contact_sensor.data.net_forces_w
+
+            # Transform to END-EFFECTOR frame
+            # net_forces_w shape: [num_envs, num_bodies, 3]
+            # We take the first body (index 0) to get [num_envs, 3]
+            ee_quat = self.unwrapped.fingertip_midpoint_quat  # [num_envs, 4]
+            net_contact_force_ee = quat_rotate_inverse(ee_quat, net_contact_force_world[:, 0, :])
+
+            # Detect contact using END-EFFECTOR frame forces
             self.real_contact = torch.where(
-                torch.isclose(net_contact_force , torch.zeros_like(net_contact_force), atol=1.0e-3, rtol=0.0), 
-                torch.zeros_like(net_contact_force), 
-                torch.ones_like(net_contact_force)
+                torch.isclose(net_contact_force_ee, torch.zeros_like(net_contact_force_ee), atol=1.0e-3, rtol=0.0),
+                torch.zeros_like(net_contact_force_ee),
+                torch.ones_like(net_contact_force_ee)
             ).bool()
-            self.real_contact = self.real_contact[:,0,:]
+
+            # Log END-EFFECTOR frame contact (not world frame)
             self.unwrapped.extras['to_log']['Contact / Real Contact X'] = self.real_contact[:,0].float()
             self.unwrapped.extras['to_log']['Contact / Real Contact Y'] = self.real_contact[:,1].float()
             self.unwrapped.extras['to_log']['Contact / Real Contact Z'] = self.real_contact[:,2].float()
