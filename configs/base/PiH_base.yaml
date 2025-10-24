@@ -137,7 +137,7 @@ wrappers:
   # Fragile object behavior
   fragile_objects:
     enabled: true
-    peg_break_rew: -0.4 #-1.0
+    peg_break_rew: 0.0 #-0.4 #-1.0
     # break_force and num_agents are computed from primary config automatically
 
   # Efficient environment resetting3
