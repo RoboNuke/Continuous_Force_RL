@@ -68,7 +68,7 @@ class TwoStageKeypointRewardWrapper(gym.Wrapper):
         keypoint_dist = torch.where(
             is_centered,
             self.unwrapped.keypoint_dist,  # Stage 2: use as-is
-            stage1_keypoint_dist
+            stage1_keypoint_dist + fixed_asset_height
         )
 
         # Zero reward if below hole in Stage 1
