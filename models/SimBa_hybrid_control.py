@@ -98,7 +98,7 @@ class HybridActionGMM(Distribution): #MixtureSameFamily):
         # Expand to (batch, 6) for all dimensions
         use_force_expanded = torch.zeros(batch_size, 6, dtype=torch.bool, device=action.device)
         use_force_expanded[:, :self.force_size] = use_force
-        
+        self.force_sel = use_force_expanded.clone()
         # Select position (index 0) or force (index 1) component log prob
         # comp_log_prob[:, :, 0] is position, comp_log_prob[:, :, 1] is force
         continuous_log_prob = torch.where(
@@ -111,7 +111,21 @@ class HybridActionGMM(Distribution): #MixtureSameFamily):
         #return sel_log_prob + continuous_log_prob
         return continuous_log_prob
     
-    #def entropy(self):
+    def entropy(self):
+        #print("start")
+        raw_entropy = self.component_distribution.entropy()
+        #print(type(raw_entropy))
+        #print(raw_entropy.size())
+        entropy = torch.where(
+            self.force_sel,
+            raw_entropy[:,:,1],
+            raw_entropy[:,:,0]
+
+        )
+        #print(type(entropy))
+        #print(entropy.size())
+        return entropy
+    
     #    return 0.0
     #    samples = self.sample(sample_shape=(10000,))
     #    log_prob = self.log_prob(samples)
