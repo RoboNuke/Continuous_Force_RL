@@ -660,13 +660,13 @@ class BlockPPO(PPO):
 
                     # compute entropy loss
                     #print(self._entropy_loss_scale)
+                    entropys = self.policy.get_entropy(role="policy")
+                    entropys = entropys.view(sample_size, self.num_agents, self.envs_per_agent,-1)
                     if self._entropy_loss_scale > 0.0:
-                        entropys = self.policy.get_entropy(role="policy")
-                        entropys = entropys.view(sample_size, self.num_agents, self.envs_per_agent,-1)
                         entropy_loss = -self._entropy_loss_scale * entropys[:, keep_mask,:].mean() 
                     else:
                         entropy_loss = 0
-                        entropys = None
+                        #entropys = None
                     
 
                     # compute policy loss
