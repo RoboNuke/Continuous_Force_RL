@@ -41,7 +41,7 @@ echo "Set VK_ICD_FILENAMES: $VK_ICD_FILENAMES"
 echo ""
 
 # Build the python command
-python_cmd="python eval/block_eval_script.py"
+python_cmd="python -m eval.block_eval_script"
 python_cmd="$python_cmd --config $CONFIG_PATH"
 python_cmd="$python_cmd --ckpt_tracker_path $TRACKER_PATH"
 python_cmd="$python_cmd --num_envs_per_agent 100"
