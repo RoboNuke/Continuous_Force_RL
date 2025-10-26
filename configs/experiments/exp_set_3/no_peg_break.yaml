@@ -20,6 +20,10 @@ wrappers:
     
   pose_contact_logging:
     enabled: false
+  # Fragile object behavior
+  fragile_objects:
+    enabled: true
+    peg_break_rew: 0.0
 
 agent:
   policy_learning_rate: 5.0e-5
@@ -31,9 +35,3 @@ experiment:
   name: "LCLoP2_0pegRew_ff_test"
   tags: ['Force-Force']
   group: "LCLoP2_0pegRew_ff_test"
-
-wrappers:
-  # Fragile object behavior
-  fragile_objects:
-    enabled: true
-    peg_break_rew: 0.0
