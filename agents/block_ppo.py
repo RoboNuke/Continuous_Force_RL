@@ -506,7 +506,14 @@ class BlockPPO(PPO):
         if not self._rollout % self._rollouts and timestep >= self._learning_starts:
             wrapper = self._get_logging_wrapper()
             if wrapper:
-                wrapper.publish()                     
+                wrapper.publish()
+
+        # Debug: Print log_std values periodically to check divergence
+        if original_timestep > 0 and self.write_interval > 0 and not original_timestep % self.write_interval:
+            print("\n=== Log Std Values After Training ===")
+            for i in range(self.num_agents):
+                print(f"Agent {i}: {self.policy.actor_logstd[i].data}")
+            print("=" * 50)
 
     def _update(self, timestep: int, timesteps: int):
         #super()._update(timestep, timesteps) def _update(self, timestep: int, timesteps: int) -> None:
@@ -1233,47 +1240,80 @@ class BlockPPO(PPO):
         if not wrapper:
             return
 
-        std_metrics = {}
-
         # Detect if using BlockSimBaActor with hybrid control (has sigma_idx)
         sigma_offset = 0
         if hasattr(self.policy, 'sigma_idx') and self.policy.sigma_idx > 0:
             sigma_offset = self.policy.sigma_idx
 
+        # Pre-allocate per-agent tensors for all metrics
+        std_metrics = {}
+
+        # Initialize metric tensors based on what's available
+        sample_log_std = self.policy.actor_logstd[0]
+        std_dim = sample_log_std.shape[1]
+
+        # Selection stds (if applicable)
+        if sigma_offset >= 3:
+            std_metrics['Network Output / Selection Std X'] = torch.zeros(self.num_agents, device=self.device)
+            std_metrics['Network Output / Selection Std Y'] = torch.zeros(self.num_agents, device=self.device)
+            std_metrics['Network Output / Selection Std Z'] = torch.zeros(self.num_agents, device=self.device)
+        if sigma_offset >= 6:
+            std_metrics['Network Output / Selection Std RX'] = torch.zeros(self.num_agents, device=self.device)
+            std_metrics['Network Output / Selection Std RY'] = torch.zeros(self.num_agents, device=self.device)
+            std_metrics['Network Output / Selection Std RZ'] = torch.zeros(self.num_agents, device=self.device)
+
+        # Position stds (always present)
+        std_metrics['Network Output / Pos Std X'] = torch.zeros(self.num_agents, device=self.device)
+        std_metrics['Network Output / Pos Std Y'] = torch.zeros(self.num_agents, device=self.device)
+        std_metrics['Network Output / Pos Std Z'] = torch.zeros(self.num_agents, device=self.device)
+
+        # Force stds (if available)
+        force_start_idx = sigma_offset + 6
+        if std_dim >= force_start_idx + 3:
+            std_metrics['Network Output / Force Std X'] = torch.zeros(self.num_agents, device=self.device)
+            std_metrics['Network Output / Force Std Y'] = torch.zeros(self.num_agents, device=self.device)
+            std_metrics['Network Output / Force Std Z'] = torch.zeros(self.num_agents, device=self.device)
+
+        # Torque stds (if available)
+        torque_start_idx = sigma_offset + 9
+        if std_dim >= torque_start_idx + 3:
+            std_metrics['Network Output / Torque Std X'] = torch.zeros(self.num_agents, device=self.device)
+            std_metrics['Network Output / Torque Std Y'] = torch.zeros(self.num_agents, device=self.device)
+            std_metrics['Network Output / Torque Std Z'] = torch.zeros(self.num_agents, device=self.device)
+
+        # Fill in values for each agent
         for i, log_std in enumerate(self.policy.actor_logstd):
             # log_std shape: (1, std_dim) where std_dim depends on action space
             std = log_std.exp()[0]  # Shape: (std_dim,)
 
             # Selection std by direction (if sigma_offset > 0, meaning hybrid control)
             if sigma_offset >= 3:
-                std_metrics['Network Output / Selection Std X'] = std[0]
-                std_metrics['Network Output / Selection Std Y'] = std[1]
-                std_metrics['Network Output / Selection Std Z'] = std[2]
+                std_metrics['Network Output / Selection Std X'][i] = std[0]
+                std_metrics['Network Output / Selection Std Y'][i] = std[1]
+                std_metrics['Network Output / Selection Std Z'][i] = std[2]
             if sigma_offset >= 6:
-                std_metrics['Network Output / Selection Std RX'] = std[3]
-                std_metrics['Network Output / Selection Std RY'] = std[4]
-                std_metrics['Network Output / Selection Std RZ'] = std[5]
+                std_metrics['Network Output / Selection Std RX'][i] = std[3]
+                std_metrics['Network Output / Selection Std RY'][i] = std[4]
+                std_metrics['Network Output / Selection Std RZ'][i] = std[5]
 
             # Position std by direction (always present after sigma_offset)
-            std_metrics['Network Output / Pos Std X'] = std[sigma_offset + 0]
-            std_metrics['Network Output / Pos Std Y'] = std[sigma_offset + 1]
-            std_metrics['Network Output / Pos Std Z'] = std[sigma_offset + 2]
+            std_metrics['Network Output / Pos Std X'][i] = std[sigma_offset + 0]
+            std_metrics['Network Output / Pos Std Y'][i] = std[sigma_offset + 1]
+            std_metrics['Network Output / Pos Std Z'][i] = std[sigma_offset + 2]
 
             # Force std by direction (if std has enough elements)
-            force_start_idx = sigma_offset + 6
-            if std.shape[0] >= force_start_idx + 3:
-                std_metrics['Network Output / Force Std X'] = std[force_start_idx + 0]
-                std_metrics['Network Output / Force Std Y'] = std[force_start_idx + 1]
-                std_metrics['Network Output / Force Std Z'] = std[force_start_idx + 2]
+            if std_dim >= force_start_idx + 3:
+                std_metrics['Network Output / Force Std X'][i] = std[force_start_idx + 0]
+                std_metrics['Network Output / Force Std Y'][i] = std[force_start_idx + 1]
+                std_metrics['Network Output / Force Std Z'][i] = std[force_start_idx + 2]
 
             # Torque std by direction (if std has enough elements)
-            torque_start_idx = sigma_offset + 9
-            if std.shape[0] >= torque_start_idx + 3:
-                std_metrics['Network Output / Torque Std X'] = std[torque_start_idx + 0]
-                std_metrics['Network Output / Torque Std Y'] = std[torque_start_idx + 1]
-                std_metrics['Network Output / Torque Std Z'] = std[torque_start_idx + 2]
+            if std_dim >= torque_start_idx + 3:
+                std_metrics['Network Output / Torque Std X'][i] = std[torque_start_idx + 0]
+                std_metrics['Network Output / Torque Std Y'][i] = std[torque_start_idx + 1]
+                std_metrics['Network Output / Torque Std Z'][i] = std[torque_start_idx + 2]
 
-        # All metrics are already per-agent tensors (shape: num_agents)
+        # All metrics are per-agent tensors (shape: num_agents)
         wrapper.add_metrics(std_metrics)
 
     def _log_minibatch_update(
