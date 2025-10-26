@@ -382,11 +382,16 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
         stds[0,6:] *= math.log(force_init_std)
         self.actor_logstd = nn.ParameterList(
             [
-                nn.Parameter(stds)
+                nn.Parameter(stds.clone())
                 for _ in range(self.num_agents)
             ]
             #torch.ones(1, 6 + self.force_size) #* math.log(act_init_std)
         )
+
+        # Tag parameters with agent IDs for debugging
+        for i in range(self.num_agents):
+            self.actor_logstd[i]._agent_id = i
+            self.actor_logstd[i]._name = f"logstd_{i}"
 
         self.create_net(actor_n, actor_latent, hybrid_agent_parameters, device)
 

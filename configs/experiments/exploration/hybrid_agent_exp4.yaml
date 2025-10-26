@@ -4,7 +4,7 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/CLoP_ent1-1_ff_fixed_tracker.txt"
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/CLoP_ent1-2_ff_fixed_tracker.txt"
 # Model configuration for hybrid agent
 model:
   use_hybrid_agent: true
@@ -25,10 +25,10 @@ agent:
   policy_learning_rate: 5.0e-5
   critic_learning_rate: 1.0e-5
   #learning_epochs: 1
-  entropy_loss_scale: 1.0e-1
+  entropy_loss_scale: 1.0e-2
 
 # Experiment metadata
 experiment:
-  name: "CLoP_ent1-1_ff_fixed_test"
+  name: "CLoP_ent1-2_ff_fixed_test"
   tags: ['Force-Force']
-  group: "CLoP_ent1-1_ff_fixed_test"
+  group: "CLoP_ent1-2_ff_fixed_test"

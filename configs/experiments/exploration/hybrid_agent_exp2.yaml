@@ -4,12 +4,12 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/CLoP_fstd10_ff_fixed_tracker.txt"
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/CLoP_fstd05_ff_fixed_tracker.txt"
 # Model configuration for hybrid agent
 model:
   use_hybrid_agent: true
   hybrid_agent:
-    force_init_std: 1.0 # implies a 96% range [-2.5, 2.5] 
+    force_init_std: 0.5 # implies a 96% range [-2.5, 2.5] 
 
 # Enable hybrid control wrapper and related systems
 wrappers:
@@ -28,6 +28,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "CLoP_fstd10_ff_fixed_test"
+  name: "CLoP_fstd05_ff_fixed_test"
   tags: ['Force-Force']
-  group: "CLoP_fstd10_ff_fixed_test"
+  group: "CLoP_fstd05_ff_fixed_test"
