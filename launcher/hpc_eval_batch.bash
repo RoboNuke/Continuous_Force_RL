@@ -45,7 +45,6 @@ python_cmd="python eval/block_eval_script.py"
 python_cmd="$python_cmd --config $CONFIG_PATH"
 python_cmd="$python_cmd --ckpt_tracker_path $TRACKER_PATH"
 python_cmd="$python_cmd --num_envs_per_agent 100"
-python_cmd="$python_cmd --override primary.total_agents=2"
 python_cmd="$python_cmd --upload_ckpt"
 
 # Add video flag if enabled

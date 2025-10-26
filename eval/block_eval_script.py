@@ -201,17 +201,26 @@ def setup_environment_once(config_path: str, args: argparse.Namespace) -> Tuple[
     if args.override:
         cli_overrides.extend(args.override)
 
-    # Add num_envs override if specified
-    if args.num_envs_per_agent is not None:
-        # We need to compute total_agents first to calculate num_envs
-        # For now, load config without override, then apply manually
-        pass
-
     # Load configuration using ConfigManagerV3
     config_manager = ConfigManagerV3()
     configs = config_manager.process_config(config_path, cli_overrides=cli_overrides if cli_overrides else None)
 
     print("  Configuration loaded successfully")
+
+    # Force 2 agents by setting agents_per_break_force=2 and using first break_force only
+    # This ensures total_agents property computes to 2 (1 break_force × 2 agents_per_break_force = 2)
+    original_break_forces = configs['primary'].break_forces
+    original_agents_per_break_force = configs['primary'].agents_per_break_force
+
+    configs['primary'].agents_per_break_force = 2
+    if isinstance(original_break_forces, list) and len(original_break_forces) > 0:
+        configs['primary'].break_forces = [original_break_forces[0]]
+    else:
+        configs['primary'].break_forces = [original_break_forces]
+
+    print(f"  Forced 2 agents: break_forces={configs['primary'].break_forces}, agents_per_break_force={configs['primary'].agents_per_break_force}")
+    print(f"    (original: break_forces={original_break_forces}, agents_per_break_force={original_agents_per_break_force})")
+    print(f"    total_agents property now returns: {configs['primary'].total_agents}")
 
     # Apply num_envs_per_agent override if specified
     if args.num_envs_per_agent is not None:
