@@ -433,8 +433,8 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
                 # No change
                 continue
 
-            #print(f"[Curriculum] Agent {agent_id}: min_height {old_min:.3f}m -> {new_min:.3f}m "
-            #      f"(SR={success_rate:.3f}, range=[{new_min:.3f}, {max_height:.3f}])")
+            print(f"[Curriculum] Agent {agent_id}: min_height {old_min:.3f}m -> {new_min:.3f}m "
+                  f"(SR={success_rate:.3f}, range=[{new_min:.3f}, {max_height:.3f}])")
 
     def step(self, action):
         """Step environment and ensure wrapper is initialized."""

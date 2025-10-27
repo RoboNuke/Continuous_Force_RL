@@ -644,6 +644,8 @@ class BlockPPO(PPO):
                 sampled_returns,
                 sampled_advantages,
             ) in sampled_batches:
+                if mini_batch > 5:
+                    continue
                 with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
                     sampled_states = self._state_preprocessor(sampled_states, train=not epoch)
                     _, next_log_prob, _ = self.policy.act(
