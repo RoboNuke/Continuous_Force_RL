@@ -1,0 +1,25 @@
+# Pose Control Experiment Configuration 
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+
+primary:
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/pose2_ff_tracker.txt"
+  agents_per_break_force: 2 # Number of agents per break force condition
+  num_envs_per_agent: 16   # Environments per individual agent
+  #break_forces: [5,10]
+  
+# Model configuration for hybrid agent
+model:
+  use_hybrid_agent: false
+
+wrappers:
+  # Spawn height curriculum learning
+  spawn_height_curriculum:
+    enabled: true
+
+# Experiment metadata
+experiment:
+  name: "pose2_ff_test"
+  tags: ['Force-Force']
+  group: "pose2_ff_test"
