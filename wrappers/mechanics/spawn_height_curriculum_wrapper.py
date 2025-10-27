@@ -268,8 +268,6 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
 
             # (c) iterative IK Method
             pos_error, aa_error = self.unwrapped.set_pos_inverse_kinematics(
-                ctrl_target_fingertip_midpoint_pos=above_fixed_pos,
-                ctrl_target_fingertip_midpoint_quat=hand_down_quat,
                 env_ids=bad_envs,
             )
             pos_error = torch.linalg.norm(pos_error, dim=1) > 1e-3
@@ -448,11 +446,12 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
     def reset(self, **kwargs):
         """Reset environment and update curriculum."""
         # Update curriculum based on previous rollout performance
-        
-        #if self.enabled and self._wrapper_initialized:
-        #    self._update_curriculum()
 
         obs, info = super().reset(**kwargs)
+
+        # Initialize wrapper if not done yet
+        if not self._wrapper_initialized and hasattr(self.unwrapped, '_robot'):
+            self._initialize_wrapper()
 
         if self.enabled and self._wrapper_initialized:
             self._update_curriculum()
@@ -463,10 +462,6 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
                 'agent_min_heights': agent_min_heights,
                 'height_ranges': [(min_h, max_height) for min_h in agent_min_heights]
             }
-
-        # Initialize wrapper if not done yet
-        if not self._wrapper_initialized and hasattr(self.unwrapped, '_robot'):
-            self._initialize_wrapper()
 
         return obs, info
 
