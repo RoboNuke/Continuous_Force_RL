@@ -317,12 +317,13 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
             self.unwrapped._large_gear_asset.reset()
 
         # (3) Randomize asset-in-gripper location.
-        flip_z_quat = torch.tensor([0.0, 0.0, 1.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
+        # flip gripper z orientation
+        flip_z_quat = torch.tensor([0.0, 0.0, 1.0, 0.0], device=self.unwrapped.device).unsqueeze(0).repeat(self.unwrapped.num_envs, 1)
         fingertip_flipped_quat, fingertip_flipped_pos = torch_utils.tf_combine(
             q1=self.unwrapped.fingertip_midpoint_quat,
             t1=self.unwrapped.fingertip_midpoint_pos,
             q2=flip_z_quat,
-            t2=torch.zeros((self.num_envs, 3), device=self.device),
+            t2=torch.zeros_like(self.unwrapped.fingertip_midpoint_pos),
         )
 
         # get default gripper in asset transform
@@ -336,18 +337,18 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
         )
 
         # Add asset in hand randomization
-        rand_sample = torch.rand((self.num_envs, 3), dtype=torch.float32, device=self.device)
-        held_asset_pos_noise = 2 * (rand_sample - 0.5)  # [-1, 1]
+        rand_sample = torch.rand((self.unwrapped.num_envs, 3), dtype=torch.float32, device=self.unwrapped.device)
+        self.unwrapped.held_asset_pos_noise = 2 * (rand_sample - 0.5)  # [-1, 1]
         if self.unwrapped.cfg_task.name == "gear_mesh":
-            held_asset_pos_noise[:, 2] = -rand_sample[:, 2]  # [-1, 0]
+            self.unwrapped.held_asset_pos_noise[:, 2] = -rand_sample[:, 2]  # [-1, 0]
 
-        held_asset_pos_noise_level = torch.tensor(self.unwrapped.cfg_task.held_asset_pos_noise, device=self.device)
-        held_asset_pos_noise = held_asset_pos_noise @ torch.diag(held_asset_pos_noise_level)
+        held_asset_pos_noise = torch.tensor(self.unwrapped.cfg_task.held_asset_pos_noise, device=self.unwrapped.device)
+        self.unwrapped.held_asset_pos_noise = self.unwrapped.held_asset_pos_noise @ torch.diag(held_asset_pos_noise)
         translated_held_asset_quat, translated_held_asset_pos = torch_utils.tf_combine(
             q1=translated_held_asset_quat,
             t1=translated_held_asset_pos,
-            q2=torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1),
-            t2=held_asset_pos_noise,
+            q2=self.unwrapped.identity_quat,
+            t2=self.unwrapped.held_asset_pos_noise,
         )
 
         held_state = self.unwrapped._held_asset.data.default_root_state.clone()
@@ -359,19 +360,19 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
         self.unwrapped._held_asset.reset()
 
         #  Close hand
-        reset_task_prop_gains = torch.tensor(
-            self.unwrapped.cfg.ctrl.reset_task_prop_gains, device=self.device
-        ).repeat((self.num_envs, 1))
-        self.unwrapped.task_prop_gains = reset_task_prop_gains
-        self.unwrapped.task_deriv_gains = factory_utils.get_deriv_gains(
-            reset_task_prop_gains, self.unwrapped.cfg.ctrl.reset_rot_deriv_scale
+        # Set gains to use for quick resets.
+        reset_task_prop_gains = torch.tensor(self.unwrapped.cfg.ctrl.reset_task_prop_gains, device=self.unwrapped.device).repeat(
+            (self.unwrapped.num_envs, 1)
         )
+        reset_rot_deriv_scale = self.unwrapped.cfg.ctrl.reset_rot_deriv_scale
+        self.unwrapped._set_gains(reset_task_prop_gains, reset_rot_deriv_scale)
 
         self.unwrapped.step_sim_no_action()
 
         grasp_time = 0.0
         while grasp_time < 0.25:
             self.unwrapped.ctrl_target_joint_pos[env_ids, 7:] = 0.0  # Close gripper.
+            self.unwrapped.ctrl_target_gripper_dof_pos = 0.0
             self.unwrapped.close_gripper_in_place()
             self.unwrapped.step_sim_no_action()
             grasp_time += self.unwrapped.sim.get_physics_dt()
@@ -383,14 +384,39 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
         # Set initial actions to involve no-movement. Needed for EMA/correct penalties.
         self.unwrapped.actions = torch.zeros_like(self.unwrapped.actions)
         self.unwrapped.prev_actions = torch.zeros_like(self.unwrapped.actions)
+        # Back out what actions should be for initial state.
+        # Relative position to bolt tip.
+        self.unwrapped.fixed_pos_action_frame[:] = self.unwrapped.fixed_pos_obs_frame + self.unwrapped.init_fixed_pos_obs_noise
+
+        pos_actions = self.unwrapped.fingertip_midpoint_pos - self.unwrapped.fixed_pos_action_frame
+        pos_action_bounds = torch.tensor(self.unwrapped.cfg.ctrl.pos_action_bounds, device=self.unwrapped.device)
+        pos_actions = pos_actions @ torch.diag(1.0 / pos_action_bounds)
+        self.unwrapped.actions[:, 0:3] = self.unwrapped.prev_actions[:, 0:3] = pos_actions
+
+        # Relative yaw to bolt.
+        unrot_180_euler = torch.tensor([-np.pi, 0.0, 0.0], device=self.unwrapped.device).repeat(self.unwrapped.num_envs, 1)
+        unrot_quat = torch_utils.quat_from_euler_xyz(
+            roll=unrot_180_euler[:, 0], pitch=unrot_180_euler[:, 1], yaw=unrot_180_euler[:, 2]
+        )
+
+        fingertip_quat_rel_bolt = torch_utils.quat_mul(unrot_quat, self.unwrapped.fingertip_midpoint_quat)
+        fingertip_yaw_bolt = torch_utils.get_euler_xyz(fingertip_quat_rel_bolt)[-1]
+        fingertip_yaw_bolt = torch.where(
+            fingertip_yaw_bolt > torch.pi / 2, fingertip_yaw_bolt - 2 * torch.pi, fingertip_yaw_bolt
+        )
+        fingertip_yaw_bolt = torch.where(
+            fingertip_yaw_bolt < -torch.pi, fingertip_yaw_bolt + 2 * torch.pi, fingertip_yaw_bolt
+        )
+
+        yaw_action = (fingertip_yaw_bolt + np.deg2rad(180.0)) / np.deg2rad(270.0) * 2.0 - 1.0
+        self.unwrapped.actions[:, 5] = self.unwrapped.prev_actions[:, 5] = yaw_action
 
         # Zero initial velocity.
         self.unwrapped.ee_angvel_fd[:, :] = 0.0
         self.unwrapped.ee_linvel_fd[:, :] = 0.0
 
         # Set initial gains for the episode.
-        self.unwrapped.task_prop_gains = self.unwrapped.default_gains
-        self.unwrapped.task_deriv_gains = factory_utils.get_deriv_gains(self.unwrapped.default_gains)
+        self.unwrapped._set_gains(self.unwrapped.default_gains)
 
         physics_sim_view.set_gravity(carb.Float3(*self.unwrapped.cfg.sim.gravity))
 
