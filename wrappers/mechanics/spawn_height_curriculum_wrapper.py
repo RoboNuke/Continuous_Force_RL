@@ -214,12 +214,13 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
             sampled_heights = min_heights_bad + rand_factors * height_ranges
 
             #print(sampled_heights.size(), above_fixed_pos.size())
+            print(above_fixed_pos)
             above_fixed_pos[bad_envs, 2] = sampled_heights
-
+            print(above_fixed_pos)
             # Edge case: When held object would be below fixed tip, force centered XY spawn
             # This happens when sampled_height is small (gripper near/below fixed tip)
             # Check which envs need centered spawning (held object below fixed tip)
-            held_below_fixed = sampled_heights < 0.0  # Gripper below fixed tip means held object definitely below
+            held_below_fixed = sampled_heights < 0.026  # Gripper below fixed tip means held object definitely below
 
             if torch.any(held_below_fixed):
                 # Get the bad_envs that need centered spawning
