@@ -203,7 +203,7 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
             above_fixed_pos = fixed_tip_pos.clone()
 
             # === CURRICULUM MODIFICATION: Sample height from per-env range (vectorized) ===
-            max_height = self.unwrapped.cfg_task.hand_init_pos[2]
+            max_height = self.unwrapped.cfg_task.hand_init_pos[2] + above_fixed_pos[bad_envs,2]
 
             # Get min heights for bad_envs
             min_heights_bad = self.min_heights[bad_envs]
