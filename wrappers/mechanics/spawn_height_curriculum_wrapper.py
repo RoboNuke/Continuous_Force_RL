@@ -230,7 +230,7 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
                 # Generate random position within circular region of radius xy_threshold
                 n_centered = len(centered_bad_envs)
                 random_angles = torch.rand(n_centered, device=self.device) * 2 * 3.14159
-                random_radii = torch.rand(n_centered, device=self.device) * self.xy_threshold #* 0.8  # 80% of threshold
+                random_radii = torch.rand(n_centered, device=self.device) * self.xy_threshold * 0.9  # 90% of threshold
 
                 offset_x = random_radii * torch.cos(random_angles)
                 offset_y = random_radii * torch.sin(random_angles)
@@ -390,24 +390,25 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
         Called after each rollout when episode data is available.
         """
         metrics_wrapper = self._find_factory_metrics_wrapper()
-        if not metrics_wrapper:
+        if metrics_wrapper is None or metrics_wrapper.last_pubbed_agent_metrics is None:
             return
 
         max_height = self.unwrapped.cfg_task.hand_init_pos[2]
 
         for agent_id in range(self.num_agents):
             # Get success rates from last rollout
-            agent_data = metrics_wrapper.agent_episode_data[agent_id]
+            #agent_data = metrics_wrapper.agent_episode_data[agent_id]
+            success_rate = metrics_wrapper.last_pubbed_agent_metrics['Episode/success_rate'][agent_id].item()
 
-            if not agent_data['success_rates']:
-                continue
+            #if not agent_data['success_rates']:
+            #    continue
 
             # Calculate success rate over completed episodes in this rollout
-            num_episodes = len(agent_data['success_rates'])
-            if num_episodes < self.min_episodes_for_evaluation:
-                continue
+            #num_episodes = len(agent_data['success_rates'])
+            #if num_episodes < self.min_episodes_for_evaluation:
+            #    continue
 
-            success_rate = sum(agent_data['success_rates']) / num_episodes
+            #success_rate = sum(agent_data['success_rates']) / num_episodes
 
             # Get environment indices for this agent
             start_idx = agent_id * self.envs_per_agent
@@ -447,13 +448,14 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
     def reset(self, **kwargs):
         """Reset environment and update curriculum."""
         # Update curriculum based on previous rollout performance
-        cur_data = None
-        if self.enabled and self._wrapper_initialized:
-            self._update_curriculum()
+        
+        #if self.enabled and self._wrapper_initialized:
+        #    self._update_curriculum()
 
         obs, info = super().reset(**kwargs)
 
         if self.enabled and self._wrapper_initialized:
+            self._update_curriculum()
             max_height = self.unwrapped.cfg_task.hand_init_pos[2]
             # Get per-agent min heights (sample first env of each agent)
             agent_min_heights = [self.min_heights[i * self.envs_per_agent].item() for i in range(self.num_agents)]

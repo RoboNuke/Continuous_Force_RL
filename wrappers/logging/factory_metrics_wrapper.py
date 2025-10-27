@@ -65,6 +65,7 @@ class FactoryMetricsWrapper(gym.Wrapper):
         self._force_data_checked = False
 
         # Per-agent completed episode data storage (like WandbWrapper)
+        self.last_pubbed_agent_metrics = None
         self.agent_episode_data = {}
         for i in range(self.num_agents):
             self.agent_episode_data[i] = {
@@ -404,6 +405,7 @@ class FactoryMetricsWrapper(gym.Wrapper):
 
         # Send all metrics as num_agents-sized tensors to WandbWrapper (only if publishing enabled)
         # This will trigger the "Direct agent assignment" path in _split_by_agent
+        self.last_pubbed_agent_metrics = all_agent_metrics
         if self.publish_to_wandb:
             self.env.add_metrics(all_agent_metrics)
 

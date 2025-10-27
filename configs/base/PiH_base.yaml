@@ -144,6 +144,18 @@ wrappers:
   efficient_reset:
     enabled: true
 
+  # Spawn height curriculum learning
+  spawn_height_curriculum:
+    # current default in line with IndustREAL baseline
+    enabled: false
+    progress_threshold: 0.80         # Increase min_height when success rate >= this
+    regress_threshold: 0.10          # Decrease min_height when success rate < this
+    progress_height_delta: 0.005     # Increase min by 5mm when succeeding
+    regression_height_delta: 0.003   # Decrease min by 3mmm when struggling
+    min_height: 0.015                # Starting/minimum height (never go below this)
+    # set to 256 to ensure that all envs have completed at least 1 rollout
+    min_episodes_for_evaluation: 256 # Minimum episodes before adjusting height
+
   # Force-torque sensor
   force_torque_sensor:
     enabled: true
