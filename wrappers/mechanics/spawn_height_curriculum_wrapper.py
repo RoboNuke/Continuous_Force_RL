@@ -269,9 +269,19 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
             )
 
             # (c) iterative IK Method
-            pos_error, aa_error = self.unwrapped.set_pos_inverse_kinematics(
+            """pos_error, aa_error = self.unwrapped.set_pos_inverse_kinematics(
                 env_ids=bad_envs,
             )
+            pos_error = torch.linalg.norm(pos_error, dim=1) > 1e-3
+            angle_error = torch.norm(aa_error, dim=1) > 1e-3
+            any_error = torch.logical_or(pos_error, angle_error)
+            bad_envs = bad_envs[any_error.nonzero(as_tuple=False).squeeze(-1)]
+            """
+            # (c) iterative IK Method
+            self.ctrl_target_fingertip_midpoint_pos[bad_envs, ...] = above_fixed_pos[bad_envs, ...]
+            self.ctrl_target_fingertip_midpoint_quat[bad_envs, ...] = hand_down_quat[bad_envs, :]
+
+            pos_error, aa_error = self.set_pos_inverse_kinematics(env_ids=bad_envs)
             pos_error = torch.linalg.norm(pos_error, dim=1) > 1e-3
             angle_error = torch.norm(aa_error, dim=1) > 1e-3
             any_error = torch.logical_or(pos_error, angle_error)
