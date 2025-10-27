@@ -284,6 +284,7 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
             )
 
             ik_attempt += 1
+            print(f"\t[DEBUG]: IK Attempt: {ik_attempt}")
 
         self.unwrapped.step_sim_no_action()
 
@@ -446,7 +447,7 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
     def reset(self, **kwargs):
         """Reset environment and update curriculum."""
         # Update curriculum based on previous rollout performance
-
+        print("[DEBUG]: About to call parent reset in curriculum")
         obs, info = super().reset(**kwargs)
 
         # Initialize wrapper if not done yet
