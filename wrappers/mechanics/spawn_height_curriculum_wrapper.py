@@ -415,6 +415,7 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
         """
         metrics_wrapper = self._find_factory_metrics_wrapper()
         if metrics_wrapper is None or metrics_wrapper.last_pubbed_agent_metrics is None:
+            print("[Curriculum] Skipping update")
             return
 
         max_height = self.unwrapped.cfg_task.hand_init_pos[2]
