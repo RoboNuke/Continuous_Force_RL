@@ -15,14 +15,14 @@ from typing import Dict, Any
 
 # Import Isaac Lab utilities
 try:
-    import omni.isaac.lab.utils.math as torch_utils
+    import omni.isaac.lab.utils.torch as torch_utils
     import omni.isaac.lab.sim as sim_utils
-    import isaaclab_tasks.direct.factory.factory_utils as factory_utils
+    import isaaclab_tasks.direct.factory.factory_control as factory_utils
 except ImportError:
     try:
-        import isaacsim.utils.math as torch_utils
-        import isaacsim.sim as sim_utils
-        import factory_utils
+        import isaacsim.core.utils.torch as torch_utils
+        import isaaclab.sim as sim_utils
+        import isaaclab_tasks.direct.factory.factory_control as factory_utils
     except ImportError:
         raise ImportError("Could not import Isaac Lab utilities")
 
