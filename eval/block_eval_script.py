@@ -1981,8 +1981,8 @@ def log_to_wandb(checkpoint_dicts: List[Dict[str, str]], metrics_list: List[Dict
         if not match:
             raise RuntimeError(f"Failed to parse step number from checkpoint path (expected format: agent_{{agent_idx}}_{{step}}.pt): {ckpt_path}")
 
-        step_num = int(match.group(1))
-        exp_step = step_num
+        exp_step = int(match.group(1))
+        step_num = int(match.group(1)) // 256
 
         print(f"    Checkpoint {i+1}/{len(checkpoint_dicts)}: {run_id} at step {step_num}")
 
