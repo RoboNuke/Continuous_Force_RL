@@ -253,7 +253,7 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
                 above_fixed_pos_rand[centered_bad_indices, 0:2] = 0.0  # No XY noise for centered spawns
 
             above_fixed_pos[bad_envs] += above_fixed_pos_rand
-
+            print(above_fixed_pos[:2,:])
             # (b) get random orientation facing down
             hand_down_euler = (
                 torch.tensor(self.unwrapped.cfg_task.hand_init_orn, device=self.device).unsqueeze(0).repeat(n_bad, 1)
