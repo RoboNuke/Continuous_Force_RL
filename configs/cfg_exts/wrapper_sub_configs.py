@@ -142,3 +142,23 @@ class TwoStageKeypointRewardConfig:
     """Two-stage keypoint reward wrapper configuration."""
     enabled: bool = False
     xy_threshold: float = 0.0025  # XY distance threshold for stage transition (same as is_centered)
+
+
+@dataclass
+class CurriculumConfig:
+    """Spawn height curriculum wrapper configuration for bidirectional difficulty adjustment."""
+    enabled: bool = False
+
+    # Progression thresholds
+    progress_threshold: float = 0.80        # Increase min_height when success rate >= this
+    regress_threshold: float = 0.50         # Decrease min_height when success rate < this
+
+    # Height deltas (in meters)
+    progress_height_delta: float = 0.01     # Increase min by 1cm when succeeding
+    regression_height_delta: float = 0.02   # Decrease min by 2cm when struggling
+
+    # Bounds
+    min_height: float = 0.0                 # Starting/minimum height (never go below this)
+
+    # Evaluation
+    min_episodes_for_evaluation: int = 10   # Minimum episodes before adjusting height

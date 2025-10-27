@@ -11,6 +11,7 @@ from wrappers.logging.enhanced_action_logging_wrapper import EnhancedActionLoggi
 from wrappers.logging.pose_contact_logging_wrapper import PoseContactLoggingWrapper
 from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
 from wrappers.mechanics.two_stage_keypoint_reward_wrapper import TwoStageKeypointRewardWrapper
+from wrappers.mechanics.spawn_height_curriculum_wrapper import SpawnHeightCurriculumWrapper
 
 from models.SimBa_hybrid_control import HybridControlBlockSimBaActor
 from models.block_simba import BlockSimBaActor, BlockSimBaCritic, make_agent_optimizer
@@ -45,6 +46,14 @@ def apply_wrappers(env, configs):
     if wrappers_config.efficient_reset_enabled:
         print("  - Applying Efficient Reset Wrapper")
         env = EfficientResetWrapper(env)
+
+    if wrappers_config.spawn_height_curriculum.enabled:
+        print("  - Applying Spawn Height Curriculum Wrapper")
+        env = SpawnHeightCurriculumWrapper(
+            env,
+            config=asdict(wrappers_config.spawn_height_curriculum),
+            num_agents=configs['primary'].total_agents
+        )
 
     if wrappers_config.force_torque_sensor.enabled:
         print("  - Applying Force Torque Wrapper")

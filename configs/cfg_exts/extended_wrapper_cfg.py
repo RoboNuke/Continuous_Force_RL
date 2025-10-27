@@ -14,7 +14,7 @@ from .wrapper_sub_configs import (
     WandbLoggingConfig, ActionLoggingConfig, ForceRewardConfig,
     FragileObjectConfig, ObsManagerConfig, FactoryMetricsConfig,
     PoseContactLoggingConfig, MisalignmentPenaltyConfig,
-    TwoStageKeypointRewardConfig
+    TwoStageKeypointRewardConfig, CurriculumConfig
 )
 
 # Get configclass decorator with version compatibility
@@ -67,6 +67,9 @@ class ExtendedWrapperConfig:
 
     two_stage_keypoint_reward: TwoStageKeypointRewardConfig = field(default_factory=TwoStageKeypointRewardConfig)
     """Two-stage keypoint reward wrapper configuration"""
+
+    spawn_height_curriculum: CurriculumConfig = field(default_factory=CurriculumConfig)
+    """Spawn height curriculum wrapper configuration"""
 
     efficient_reset_enabled: bool = field(default=True)
     """Enable efficient environment resetting"""
