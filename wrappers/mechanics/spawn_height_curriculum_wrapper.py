@@ -212,16 +212,13 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
             height_ranges = max_height - min_heights_bad
             rand_factors = torch.rand(len(bad_envs), device=self.device)
             sampled_heights = min_heights_bad + rand_factors * height_ranges
-            print("Sampled:", sampled_heights[:2], "\n")
-            #print(sampled_heights.size(), above_fixed_pos.size())
-            print(f"Pre above: {above_fixed_pos[:2,:]}\n")
+            
             above_fixed_pos[bad_envs, 2] = sampled_heights
-            print(f"Post abov: {above_fixed_pos[:2,:]}\n")
             # Edge case: When held object would be below fixed tip, force centered XY spawn
             # This happens when sampled_height is small (gripper near/below fixed tip)
             # Check which envs need centered spawning (held object below fixed tip)
             held_below_fixed = sampled_heights < 0.026  # Gripper below fixed tip means held object definitely below
-            print("Below:", held_below_fixed[:2])
+            
             if torch.any(held_below_fixed):
                 # Get the bad_envs that need centered spawning
                 centered_env_mask = held_below_fixed
@@ -253,7 +250,7 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
                 above_fixed_pos_rand[centered_bad_indices, 0:2] = 0.0  # No XY noise for centered spawns
 
             above_fixed_pos[bad_envs] += above_fixed_pos_rand
-            print(above_fixed_pos[:2,:])
+            
             # (b) get random orientation facing down
             hand_down_euler = (
                 torch.tensor(self.unwrapped.cfg_task.hand_init_orn, device=self.device).unsqueeze(0).repeat(n_bad, 1)
@@ -267,16 +264,6 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
             hand_down_quat[bad_envs, :] = torch_utils.quat_from_euler_xyz(
                 roll=hand_down_euler[:, 0], pitch=hand_down_euler[:, 1], yaw=hand_down_euler[:, 2]
             )
-
-            # (c) iterative IK Method
-            """pos_error, aa_error = self.unwrapped.set_pos_inverse_kinematics(
-                env_ids=bad_envs,
-            )
-            pos_error = torch.linalg.norm(pos_error, dim=1) > 1e-3
-            angle_error = torch.norm(aa_error, dim=1) > 1e-3
-            any_error = torch.logical_or(pos_error, angle_error)
-            bad_envs = bad_envs[any_error.nonzero(as_tuple=False).squeeze(-1)]
-            """
             # (c) iterative IK Method
             self.unwrapped.ctrl_target_fingertip_midpoint_pos[bad_envs, ...] = above_fixed_pos[bad_envs, ...]
             self.unwrapped.ctrl_target_fingertip_midpoint_quat[bad_envs, ...] = hand_down_quat[bad_envs, :]
