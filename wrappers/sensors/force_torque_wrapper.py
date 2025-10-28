@@ -353,23 +353,45 @@ class ForceTorqueWrapper(gym.Wrapper):
                         except Exception as e:
                             print(f"  Could not get sensor body names: {e}")
 
-                    # Print filter body names if available
-                    if hasattr(self._held_fixed_contact_sensor.contact_physx_view, '_contact_view'):
-                        try:
-                            # Try to access filter body information
-                            import omni
-                            stage = omni.usd.get_context().get_stage()
-                            filter_expr = self._held_fixed_contact_sensor.cfg.filter_prim_paths_expr[0]
-                            print(f"\n  Searching for bodies matching filter: {filter_expr}")
-                            # This is a diagnostic - print first few matching prims
-                            from pxr import Usd
-                            for prim in stage.Traverse():
-                                prim_path = str(prim.GetPath())
-                                # Check if matches filter pattern (simple check for first env)
-                                if "env_0" in prim_path and "FixedAsset" in prim_path and prim.IsA(Usd.Typed):
-                                    print(f"    Found prim: {prim_path} (type: {prim.GetTypeName()})")
-                        except Exception as e:
-                            print(f"  Could not enumerate filter bodies: {e}")
+                    # Check if ContactReportAPI is enabled on filtered bodies
+                    try:
+                        import omni
+                        from pxr import PhysxSchema, UsdPhysics
+                        stage = omni.usd.get_context().get_stage()
+                        filter_expr = self._held_fixed_contact_sensor.cfg.filter_prim_paths_expr[0]
+
+                        # Check specific path in env_0
+                        test_path = filter_expr.replace("env_.*", "env_0")
+                        test_prim = stage.GetPrimAtPath(test_path)
+
+                        print(f"\n  Checking filtered body ContactReportAPI:")
+                        print(f"    Test path: {test_path}")
+                        print(f"    Prim exists: {test_prim.IsValid()}")
+
+                        if test_prim.IsValid():
+                            # Check for ContactReportAPI
+                            has_contact_api = test_prim.HasAPI(PhysxSchema.PhysxContactReportAPI)
+                            print(f"    Has ContactReportAPI: {has_contact_api}")
+
+                            # Check if it's a rigid body
+                            has_rigid_body = test_prim.HasAPI(UsdPhysics.RigidBodyAPI)
+                            print(f"    Has RigidBodyAPI: {has_rigid_body}")
+
+                            # If has ContactReportAPI, check threshold
+                            if has_contact_api:
+                                contact_api = PhysxSchema.PhysxContactReportAPI(test_prim)
+                                if contact_api.GetThresholdAttr():
+                                    threshold = contact_api.GetThresholdAttr().Get()
+                                    print(f"    ContactReport threshold: {threshold}")
+                                else:
+                                    print(f"    ContactReport threshold: Not set")
+                            else:
+                                print(f"    [WARNING] FixedAsset body has NO ContactReportAPI!")
+                                print(f"    This is why force_matrix_w returns zeros.")
+                        else:
+                            print(f"    [ERROR] Prim does not exist at path!")
+                    except Exception as e:
+                        print(f"  Error checking ContactReportAPI: {e}")
 
                     if filter_count == 0:
                         print(f"\n  [WARNING] Filter count is 0!")
