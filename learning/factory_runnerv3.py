@@ -36,6 +36,11 @@ simulation_app = app_launcher.app
 
 print("\n\n\nApp Launched\n\n\n")
 
+# Enable PhysX contact processing for ContactSensor filtering to work
+import carb
+settings = carb.settings.get_settings()
+settings.set("/physics/disableContactProcessing", False)
+print("[INFO]: Enabled PhysX contact processing for ContactSensor")
 
 import random
 import torch

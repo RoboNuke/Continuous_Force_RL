@@ -328,6 +328,13 @@ class ForceTorqueWrapper(gym.Wrapper):
         if self.use_contact_sensor:
             if hasattr(self.unwrapped.scene, 'sensors') and "held_fixed_contact_sensor" in self.unwrapped.scene.sensors:
                 self._held_fixed_contact_sensor = self.unwrapped.scene.sensors["held_fixed_contact_sensor"]
+
+                # Debug: Print filter count to verify filtering is working
+                if hasattr(self._held_fixed_contact_sensor, 'contact_physx_view'):
+                    filter_count = self._held_fixed_contact_sensor.contact_physx_view.filter_count
+                    print(f"[CONTACT SENSOR DEBUG] Filter count: {filter_count}")
+                    if filter_count == 0:
+                        print("[WARNING] Filter count is 0 - filtering may not be working!")
             else:
                 raise ValueError(
                     "use_contact_sensor=True but held_fixed_contact_sensor not found in scene. "

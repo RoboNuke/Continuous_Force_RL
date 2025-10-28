@@ -42,7 +42,7 @@ environment:
     torque_action_threshold: [0.1, 0.1, 0.1]
     default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
     #default_task_force_gains: [0.05, 0.05, 0.05, 0.001, 0.001, 0.001]
-
+    pos_action_threshold: [0.02, 0.02, 0.1] #TODO
     #default_task_prop_gains: [50, 50, 50, 30, 30, 30]
     no_sel_ema: true
 
