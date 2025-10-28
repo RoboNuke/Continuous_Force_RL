@@ -4,7 +4,7 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/LCLoP_noDer_ff_tracker.txt"
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/LCLoP_noDer_kf05_ff_tracker.txt"
   max_steps: 10022400
 
 # Model configuration for hybrid agent
@@ -34,10 +34,10 @@ environment:
     torque_action_bounds: [0.5, 0.5, 0.5]
     force_action_threshold: [10.0, 10.0, 10.0]
     torque_action_threshold: [0.1, 0.1, 0.1]
-    default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
+    default_task_force_gains: [0.05, 0.05, 0.05, 0.001, 0.001, 0.001]
 
 # Experiment metadata
 experiment:
-  name: "LCLoP2_noDer_ff_test"
+  name: "LCLoP2_noDer_kf05_ff_test"
   tags: ['Force-Force']
-  group: "LCLoP2_noDer_ff_test"
+  group: "LCLoP2_noDer_kf05_ff_test"
