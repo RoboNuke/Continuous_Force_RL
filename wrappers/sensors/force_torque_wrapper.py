@@ -452,10 +452,36 @@ class ForceTorqueWrapper(gym.Wrapper):
             print(f"  net_forces_w shape: {net_contact_force_world.shape}")
             print(f"  net_forces_w[0]: {net_contact_force_world[0]}")
             print(f"  net_forces_w[1]: {net_contact_force_world[1]}")
+
+            # Count envs in contact per dimension using net_forces_w
+            # Contact threshold: force magnitude > 1e-3
+            contact_threshold = 1.0e-3
+            net_forces_contact = torch.abs(net_contact_force_world[:, 0, :]) > contact_threshold
+            num_envs_x_contact = net_forces_contact[:, 0].sum().item()
+            num_envs_y_contact = net_forces_contact[:, 1].sum().item()
+            num_envs_z_contact = net_forces_contact[:, 2].sum().item()
+            total_envs = net_contact_force_world.shape[0]
+            print(f"\n  net_forces_w contact counts (threshold={contact_threshold}):")
+            print(f"    X: {num_envs_x_contact}/{total_envs} envs ({100*num_envs_x_contact/total_envs:.1f}%)")
+            print(f"    Y: {num_envs_y_contact}/{total_envs} envs ({100*num_envs_y_contact/total_envs:.1f}%)")
+            print(f"    Z: {num_envs_z_contact}/{total_envs} envs ({100*num_envs_z_contact/total_envs:.1f}%)")
+
             print(f"\n  force_matrix_w shape: {force_matrix_w.shape if force_matrix_w is not None else 'None'}")
             if force_matrix_w is not None:
                 print(f"  force_matrix_w[0]:\n{force_matrix_w[0]}")
                 print(f"  force_matrix_w[1]:\n{force_matrix_w[1]}")
+
+                # Count envs in contact per dimension using force_matrix_w
+                # Sum across all bodies in the matrix to get per-env contact
+                force_matrix_summed = force_matrix_w.sum(dim=1)  # Sum over bodies dimension
+                matrix_contact = torch.abs(force_matrix_summed) > contact_threshold
+                num_envs_x_matrix = matrix_contact[:, 0].sum().item()
+                num_envs_y_matrix = matrix_contact[:, 1].sum().item()
+                num_envs_z_matrix = matrix_contact[:, 2].sum().item()
+                print(f"\n  force_matrix_w contact counts (threshold={contact_threshold}):")
+                print(f"    X: {num_envs_x_matrix}/{total_envs} envs ({100*num_envs_x_matrix/total_envs:.1f}%)")
+                print(f"    Y: {num_envs_y_matrix}/{total_envs} envs ({100*num_envs_y_matrix/total_envs:.1f}%)")
+                print(f"    Z: {num_envs_z_matrix}/{total_envs} envs ({100*num_envs_z_matrix/total_envs:.1f}%)")
             else:
                 print(f"  force_matrix_w is None")
             print(f"{'='*100}\n")
