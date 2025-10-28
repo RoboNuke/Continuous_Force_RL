@@ -444,7 +444,7 @@ class ForceTorqueWrapper(gym.Wrapper):
             # Get contact forces in WORLD frame
             #net_contact_force_world = self._held_fixed_contact_sensor.data.net_forces_w
             fixed_force_w = self._held_fixed_contact_sensor.data.force_matrix_w[:,0,0,:]
-
+            print("Max Force:", torch.max(fixed_force_w))
             # We use ee quat because we want the forces in the force-torque frame for hybrid control
             # The sensing is placed here because the data is from the end of the last step, allowing
             # the next (current) step to decide what do to based on step's starting state 

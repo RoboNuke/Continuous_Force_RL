@@ -231,6 +231,7 @@ class HybridGMMMixin(GaussianMixin):
         # clip actions
         if self._g_clip_actions:
             actions = torch.clamp(actions, min=self._g_clip_actions_min, max=self._g_clip_actions_max)
+        actions[:,5] = -1  # make it go down
         #ta = inputs.get("taken_actions", actions)
         
         # log of the probability density function
