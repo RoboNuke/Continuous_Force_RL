@@ -471,14 +471,33 @@ class ForceTorqueWrapper(gym.Wrapper):
                 print(f"  force_matrix_w[0]:\n{force_matrix_w[0]}")
                 print(f"  force_matrix_w[1]:\n{force_matrix_w[1]}")
 
-                # Count envs in contact per dimension using force_matrix_w
-                # Sum across all bodies in the matrix to get per-env contact
-                force_matrix_summed = force_matrix_w.sum(dim=1)  # Sum over bodies dimension
+                # force_matrix_w shape is [num_envs, num_sensor_bodies, num_filter_bodies, 3]
+                num_sensor_bodies = force_matrix_w.shape[1]
+                num_filter_bodies = force_matrix_w.shape[2]
+                print(f"\n  force_matrix_w breakdown:")
+                print(f"    num_sensor_bodies: {num_sensor_bodies}")
+                print(f"    num_filter_bodies: {num_filter_bodies}")
+
+                # Show contact counts for each sensor body and filter body combination
+                for sensor_body_idx in range(num_sensor_bodies):
+                    for filter_body_idx in range(num_filter_bodies):
+                        body_forces = force_matrix_w[:, sensor_body_idx, filter_body_idx, :]  # [num_envs, 3]
+                        body_contact = torch.abs(body_forces) > contact_threshold
+                        num_x = body_contact[:, 0].sum().item()
+                        num_y = body_contact[:, 1].sum().item()
+                        num_z = body_contact[:, 2].sum().item()
+                        print(f"    sensor_body[{sensor_body_idx}] vs filter_body[{filter_body_idx}]:")
+                        print(f"      X: {num_x}/{total_envs} ({100*num_x/total_envs:.1f}%)")
+                        print(f"      Y: {num_y}/{total_envs} ({100*num_y/total_envs:.1f}%)")
+                        print(f"      Z: {num_z}/{total_envs} ({100*num_z/total_envs:.1f}%)")
+
+                # Count envs in contact per dimension using force_matrix_w (total across all bodies)
+                force_matrix_summed = force_matrix_w.sum(dim=1).sum(dim=1)  # Sum over both body dimensions -> [num_envs, 3]
                 matrix_contact = torch.abs(force_matrix_summed) > contact_threshold
                 num_envs_x_matrix = matrix_contact[:, 0].sum().item()
                 num_envs_y_matrix = matrix_contact[:, 1].sum().item()
                 num_envs_z_matrix = matrix_contact[:, 2].sum().item()
-                print(f"\n  force_matrix_w contact counts (threshold={contact_threshold}):")
+                print(f"\n  force_matrix_w TOTAL contact counts (threshold={contact_threshold}):")
                 print(f"    X: {num_envs_x_matrix}/{total_envs} envs ({100*num_envs_x_matrix/total_envs:.1f}%)")
                 print(f"    Y: {num_envs_y_matrix}/{total_envs} envs ({100*num_envs_y_matrix/total_envs:.1f}%)")
                 print(f"    Z: {num_envs_z_matrix}/{total_envs} envs ({100*num_envs_z_matrix/total_envs:.1f}%)")
