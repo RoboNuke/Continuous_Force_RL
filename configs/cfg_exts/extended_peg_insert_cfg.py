@@ -31,7 +31,7 @@ class ExtendedFactoryTaskPegInsertCfg(PegInsert):
     ctrl: ExtendedCtrlCfg = None
 
     held_fixed_contact_sensor = ContactSensorCfg(
-        prim_path="/World/envs/env_.*/HeldAsset",
+        prim_path="/World/envs/env_.*/HeldAsset/forge_round_peg_8mm",
         update_period=0.0,
         history_length=0,
         debug_vis=True,
