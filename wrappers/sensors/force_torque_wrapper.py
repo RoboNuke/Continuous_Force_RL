@@ -341,8 +341,17 @@ class ForceTorqueWrapper(gym.Wrapper):
 
                     # Print the actual body names that were found
                     if hasattr(self._held_fixed_contact_sensor, '_body_physx_view'):
-                        body_names = self._held_fixed_contact_sensor._body_physx_view.body_names
-                        print(f"  Sensor body names: {body_names}")
+                        try:
+                            # Try different ways to get body names
+                            if hasattr(self._held_fixed_contact_sensor._body_physx_view, 'body_names'):
+                                body_names = self._held_fixed_contact_sensor._body_physx_view.body_names
+                            elif hasattr(self._held_fixed_contact_sensor, '_body_names'):
+                                body_names = self._held_fixed_contact_sensor._body_names
+                            else:
+                                body_names = "Could not retrieve body names"
+                            print(f"  Sensor body names: {body_names}")
+                        except Exception as e:
+                            print(f"  Could not get sensor body names: {e}")
 
                     # Print filter body names if available
                     if hasattr(self._held_fixed_contact_sensor.contact_physx_view, '_contact_view'):
