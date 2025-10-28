@@ -443,6 +443,26 @@ class ForceTorqueWrapper(gym.Wrapper):
             #    self.unwrapped.robot_force_torque.fill_(0.0)
             #    self.unwrapped.force_torque = self.unwrapped.robot_force_torque
 
+        # Compute contact state AFTER scene.update() for current-step data
+        # Moved from _wrapped_pre_physics_step to read sensor data at correct time
+        if self.use_contact_sensor:
+            # Use ContactSensor for contact detection
+            self._contact_detected_in_range()
+            self.unwrapped.in_contact[:, :3] = self.real_contact
+            self.unwrapped.in_contact[:, 3:] = False
+        else:
+            # Use force-torque thresholds for contact detection
+            self.unwrapped.in_contact[:, :3] = torch.abs(self.unwrapped.robot_force_torque[:, :3]) > self.contact_force_threshold
+            self.unwrapped.in_contact[:, 3:] = torch.abs(self.unwrapped.robot_force_torque[:, 3:]) > self.contact_torque_threshold
+
+        # Log contact state if enabled
+        if self.log_contact_state and hasattr(self.unwrapped, 'extras'):
+            if 'to_log' not in self.unwrapped.extras:
+                self.unwrapped.extras['to_log'] = {}
+            self.unwrapped.extras['to_log']['Contact / In-Contact X'] = self.unwrapped.in_contact[:, 0].float()
+            self.unwrapped.extras['to_log']['Contact / In-Contact Y'] = self.unwrapped.in_contact[:, 1].float()
+            self.unwrapped.extras['to_log']['Contact / In-Contact Z'] = self.unwrapped.in_contact[:, 2].float()
+
     ###########################################################################
     ### HERE FOR TESTING ONLY TODO REMOVE ME!! ################################
     def _contact_detected_in_range(self):
@@ -501,24 +521,8 @@ class ForceTorqueWrapper(gym.Wrapper):
         if self._original_pre_physics_step:
             self._original_pre_physics_step(action)
 
-        # Compute contact state based on the selected method
-        if self.use_contact_sensor:
-            # Use ContactSensor for contact detection
-            self._contact_detected_in_range()
-            self.unwrapped.in_contact[:, :3] = self.real_contact
-            self.unwrapped.in_contact[:, 3:] = False
-        else:
-            # Use force-torque thresholds for contact detection
-            self.unwrapped.in_contact[:, :3] = torch.abs(self.unwrapped.robot_force_torque[:, :3]) > self.contact_force_threshold
-            self.unwrapped.in_contact[:, 3:] = torch.abs(self.unwrapped.robot_force_torque[:, 3:]) > self.contact_torque_threshold
-
-        # Log contact state if enabled
-        if self.log_contact_state and hasattr(self.unwrapped, 'extras'):
-            if 'to_log' not in self.unwrapped.extras:
-                self.unwrapped.extras['to_log'] = {}
-            self.unwrapped.extras['to_log']['Contact / In-Contact X'] = self.unwrapped.in_contact[:, 0].float()
-            self.unwrapped.extras['to_log']['Contact / In-Contact Y'] = self.unwrapped.in_contact[:, 1].float()
-            self.unwrapped.extras['to_log']['Contact / In-Contact Z'] = self.unwrapped.in_contact[:, 2].float()
+        # Contact detection moved to _wrapped_compute_intermediate_values
+        # to ensure we read sensor data AFTER scene.update() for current-step accuracy
 
     def _wrapped_get_factory_obs_state_dict(self):
         """
