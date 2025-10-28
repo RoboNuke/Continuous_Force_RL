@@ -480,6 +480,7 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
             self._update_curriculum()
             max_height = self.unwrapped.cfg_task.hand_init_pos[2]
             agent_min_heights = [self.min_heights[i * self.envs_per_agent].item() for i in range(self.num_agents)]
+            self.unwrapped.extras['to_log']['Episode/curriculum_min_height'] = torch.tensor(agent_min_heights, device=self.unwrapped.device)
             print(f"[Curriculum] Updated after {len(env_ids)} env resets. Agent min heights: {agent_min_heights}")
 
         # Call original _reset_idx to maintain wrapper chain
