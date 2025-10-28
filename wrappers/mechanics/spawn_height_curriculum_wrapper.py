@@ -78,7 +78,6 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
         self.progress_height_delta = config.get('progress_height_delta', 0.01)
         self.regression_height_delta = config.get('regression_height_delta', 0.02)
         self.config_min_height = config.get('min_height', 0.0)
-        self.min_episodes_for_evaluation = config.get('min_episodes_for_evaluation', 10)
 
         # Validate configuration
         if self.progress_threshold <= self.regress_threshold:
@@ -423,10 +422,6 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
         """
         metrics_wrapper = self._find_factory_metrics_wrapper()
         if not metrics_wrapper or metrics_wrapper.last_pubbed_agent_metrics is None:
-            if metrics_wrapper:
-                print(f"[DEBUG] Found metric wrapper: {not metrics_wrapper}")
-            else:
-                print(f'[DEBUG] Found last pubbed: {metrics_wrapper.last_pubbed_agent_matrics is None}')
             print("[Curriculum] Skipping update")
             return
 

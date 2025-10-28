@@ -153,8 +153,6 @@ wrappers:
     progress_height_delta: 0.005     # Increase min by 5mm when succeeding
     regression_height_delta: 0.003   # Decrease min by 3mmm when struggling
     min_height: 0.015                # Starting/minimum height (never go below this)
-    # set to 256 to ensure that all envs have completed at least 1 rollout
-    min_episodes_for_evaluation: 256 # Minimum episodes before adjusting height
 
   # Force-torque sensor
   force_torque_sensor:
@@ -277,10 +275,10 @@ wrappers:
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
 agent:
   # Core identification
-  disable_progressbar: false #TODO
+  disable_progressbar: true
 
   # Checkpoint and experiment tracking
-  track_ckpts: false #TODOtrue
+  track_ckpts: true
   upload_ckpts_to_wandb: false
   checkpoint_interval_multiplier: 5  # Checkpoint every N write intervals
   # ckpt_tracker_path comes from primary config automatically
