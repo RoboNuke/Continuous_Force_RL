@@ -422,7 +422,11 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
         Called after each rollout when episode data is available.
         """
         metrics_wrapper = self._find_factory_metrics_wrapper()
-        if metrics_wrapper is None or metrics_wrapper.last_pubbed_agent_metrics is None:
+        if not metrics_wrapper or metrics_wrapper.last_pubbed_agent_metrics is None:
+            if metrics_wrapper:
+                print(f"[DEBUG] Found metric wrapper: {not metrics_wrapper}")
+            else:
+                print(f'[DEBUG] Found last pubbed: {metrics_wrapper.last_pubbed_agent_matrics is None}')
             print("[Curriculum] Skipping update")
             return
 
