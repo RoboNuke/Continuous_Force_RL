@@ -40,7 +40,6 @@ print("\n\n\nApp Launched\n\n\n")
 import carb
 settings = carb.settings.get_settings()
 settings.set("/physics/disableContactProcessing", False)
-print("[INFO]: Enabled PhysX contact processing for ContactSensor")
 
 import random
 import torch

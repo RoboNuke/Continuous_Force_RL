@@ -23,10 +23,10 @@ wrappers:
   pose_contact_logging:
     enabled: false
 
-agent:
-  policy_learning_rate: 1.0e-5
-  critic_learning_rate: 1.0e-5
-  #learning_epochs: 1
+#agent:
+#  policy_learning_rate: 1.0e-5
+#  critic_learning_rate: 1.0e-5
+#  #learning_epochs: 1
 
 # Experiment metadata
 experiment:

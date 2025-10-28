@@ -14,8 +14,8 @@ experiment:
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
-  agents_per_break_force: 2 #TODO 5 # Number of agents per break force condition
-  num_envs_per_agent: 16 #TODO 256   # Environments per individual agent
+  agents_per_break_force: 5 # Number of agents per break force condition
+  num_envs_per_agent: 256   # Environments per individual agent
   break_forces: [10]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
@@ -42,7 +42,6 @@ environment:
     torque_action_threshold: [0.1, 0.1, 0.1]
     default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
     #default_task_force_gains: [0.05, 0.05, 0.05, 0.001, 0.001, 0.001]
-    pos_action_threshold: [0.02, 0.02, 0.1] #TODO
     #default_task_prop_gains: [50, 50, 50, 30, 30, 30]
     no_sel_ema: true
 
@@ -275,10 +274,10 @@ wrappers:
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
 agent:
   # Core identification
-  disable_progressbar: false #TODOtrue
+  disable_progressbar: true
 
   # Checkpoint and experiment tracking
-  track_ckpts: false #TODO true
+  track_ckpts: true
   upload_ckpts_to_wandb: false
   checkpoint_interval_multiplier: 5  # Checkpoint every N write intervals
   # ckpt_tracker_path comes from primary config automatically
@@ -298,8 +297,8 @@ agent:
   #policy_learning_rate: 1.0e-5
   #critic_learning_rate: 1.0e-5
   #value_update_ratio: 2
-  policy_learning_rate: 1.0e-6 #TODO 1.0e-5
-  critic_learning_rate: 1.0e-6
+  policy_learning_rate: 1.0e-5
+  critic_learning_rate: 1.0e-5
   value_update_ratio: 2
 
   # Optimizer parameters

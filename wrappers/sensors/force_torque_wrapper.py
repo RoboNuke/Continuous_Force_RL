@@ -329,97 +329,6 @@ class ForceTorqueWrapper(gym.Wrapper):
             if hasattr(self.unwrapped.scene, 'sensors') and "held_fixed_contact_sensor" in self.unwrapped.scene.sensors:
                 self._held_fixed_contact_sensor = self.unwrapped.scene.sensors["held_fixed_contact_sensor"]
 
-                # Debug: Print comprehensive sensor and filter information
-                if hasattr(self._held_fixed_contact_sensor, 'contact_physx_view'):
-                    filter_count = self._held_fixed_contact_sensor.contact_physx_view.filter_count
-                    print(f"\n{'='*80}")
-                    print(f"[CONTACT SENSOR DEBUG]")
-                    print(f"  Sensor prim_path: {self._held_fixed_contact_sensor.cfg.prim_path}")
-                    print(f"  Filter expressions: {self._held_fixed_contact_sensor.cfg.filter_prim_paths_expr}")
-                    print(f"  Filter count: {filter_count}")
-                    print(f"  Number of sensor bodies: {self._held_fixed_contact_sensor._num_bodies}")
-
-                    # Print the actual body names that were found
-                    if hasattr(self._held_fixed_contact_sensor, '_body_physx_view'):
-                        try:
-                            # Try different ways to get body names
-                            if hasattr(self._held_fixed_contact_sensor._body_physx_view, 'body_names'):
-                                body_names = self._held_fixed_contact_sensor._body_physx_view.body_names
-                            elif hasattr(self._held_fixed_contact_sensor, '_body_names'):
-                                body_names = self._held_fixed_contact_sensor._body_names
-                            else:
-                                body_names = "Could not retrieve body names"
-                            print(f"  Sensor body names: {body_names}")
-                        except Exception as e:
-                            print(f"  Could not get sensor body names: {e}")
-
-                    # Check if ContactReportAPI is enabled on filtered bodies
-                    try:
-                        import omni
-                        from pxr import PhysxSchema, UsdPhysics
-                        stage = omni.usd.get_context().get_stage()
-                        filter_expr = self._held_fixed_contact_sensor.cfg.filter_prim_paths_expr[0]
-
-                        # Check specific path in env_0
-                        test_path = filter_expr.replace("env_.*", "env_0")
-                        test_prim = stage.GetPrimAtPath(test_path)
-
-                        print(f"\n  Checking filtered body ContactReportAPI:")
-                        print(f"    Test path: {test_path}")
-                        print(f"    Prim exists: {test_prim.IsValid()}")
-
-                        # Always enumerate FixedAsset hierarchy to find collision bodies
-                        print(f"\n  Enumerating COMPLETE FixedAsset hierarchy in env_0:")
-                        fixed_asset_path = "/World/envs/env_0/FixedAsset"
-
-                        def print_prim_tree(prim, indent=2):
-                            """Recursively print prim hierarchy with physics info"""
-                            child_path = str(prim.GetPath())
-                            has_rb = prim.HasAPI(UsdPhysics.RigidBodyAPI)
-                            has_cr = prim.HasAPI(PhysxSchema.PhysxContactReportAPI)
-                            has_collider = prim.HasAPI(UsdPhysics.CollisionAPI)
-                            print(f"{' '*indent}- {child_path}")
-                            print(f"{' '*indent}  Type: {prim.GetTypeName()}, RigidBody: {has_rb}, ContactReport: {has_cr}, Collider: {has_collider}")
-                            for child in prim.GetChildren():
-                                print_prim_tree(child, indent+2)
-
-                        fixed_asset_prim = stage.GetPrimAtPath(fixed_asset_path)
-                        if fixed_asset_prim.IsValid():
-                            print_prim_tree(fixed_asset_prim)
-                        else:
-                            print(f"    FixedAsset prim doesn't exist at {fixed_asset_path}")
-
-                        if test_prim.IsValid():
-                            # Check for ContactReportAPI
-                            has_contact_api = test_prim.HasAPI(PhysxSchema.PhysxContactReportAPI)
-                            print(f"    Has ContactReportAPI: {has_contact_api}")
-
-                            # Check if it's a rigid body
-                            has_rigid_body = test_prim.HasAPI(UsdPhysics.RigidBodyAPI)
-                            print(f"    Has RigidBodyAPI: {has_rigid_body}")
-
-                            # If has ContactReportAPI, check threshold
-                            if has_contact_api:
-                                contact_api = PhysxSchema.PhysxContactReportAPI(test_prim)
-                                if contact_api.GetThresholdAttr():
-                                    threshold = contact_api.GetThresholdAttr().Get()
-                                    print(f"    ContactReport threshold: {threshold}")
-                                else:
-                                    print(f"    ContactReport threshold: Not set")
-                            else:
-                                print(f"    [WARNING] FixedAsset body has NO ContactReportAPI!")
-                                print(f"    This is why force_matrix_w returns zeros.")
-                        else:
-                            print(f"    [ERROR] Prim does not exist at path!")
-                    except Exception as e:
-                        print(f"  Error checking ContactReportAPI: {e}")
-
-                    if filter_count == 0:
-                        print(f"\n  [WARNING] Filter count is 0!")
-                        print(f"  This means filter_prim_paths_expr is not matching any bodies in the scene.")
-                    else:
-                        print(f"  [OK] Filter is matching {filter_count} body/bodies")
-                    print(f"{'='*80}\n")
             else:
                 raise ValueError(
                     "use_contact_sensor=True but held_fixed_contact_sensor not found in scene. "
@@ -553,15 +462,8 @@ class ForceTorqueWrapper(gym.Wrapper):
     def _contact_detected_in_range(self):
         # get true state from directly-held contact sensor (not from scene)
         if self._held_fixed_contact_sensor is not None:
-            # Get contact forces in WORLD frame
-            net_contact_force_world = self._held_fixed_contact_sensor.data.net_forces_w
+            # Get contact forces in WORLD frame (filtered for peg-hole contact only)
             fixed_force_w = self._held_fixed_contact_sensor.data.force_matrix_w[:,0,0,:]
-
-            # Debug: Compare filtered vs unfiltered contact forces
-            max_net_force = torch.max(torch.abs(net_contact_force_world))
-            max_filtered_force = torch.max(torch.abs(fixed_force_w))
-            if max_net_force > 0.01 or max_filtered_force > 0.01:
-                print(f"[CONTACT DEBUG] Max net force (all contacts): {max_net_force:.4f}, Max filtered force (peg-hole only): {max_filtered_force:.4f}")
             # We use ee quat because we want the forces in the force-torque frame for hybrid control
             # The sensing is placed here because the data is from the end of the last step, allowing
             # the next (current) step to decide what do to based on step's starting state 
