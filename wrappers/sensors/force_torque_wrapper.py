@@ -443,6 +443,23 @@ class ForceTorqueWrapper(gym.Wrapper):
         if self._held_fixed_contact_sensor is not None:
             # Get contact forces in WORLD frame
             net_contact_force_world = self._held_fixed_contact_sensor.data.net_forces_w
+            force_matrix_w = self._held_fixed_contact_sensor.data.force_matrix_w
+
+            # DEBUG: Print sensor data for first 2 envs (only once)
+            if not hasattr(self, '_debug_printed'):
+                print(f"\n{'='*100}")
+                print(f"[CONTACT SENSOR DEBUG]")
+                print(f"  net_forces_w shape: {net_contact_force_world.shape}")
+                print(f"  net_forces_w[0]: {net_contact_force_world[0]}")
+                print(f"  net_forces_w[1]: {net_contact_force_world[1]}")
+                print(f"\n  force_matrix_w shape: {force_matrix_w.shape if force_matrix_w is not None else 'None'}")
+                if force_matrix_w is not None:
+                    print(f"  force_matrix_w[0]:\n{force_matrix_w[0]}")
+                    print(f"  force_matrix_w[1]:\n{force_matrix_w[1]}")
+                else:
+                    print(f"  force_matrix_w is None")
+                print(f"{'='*100}\n")
+                self._debug_printed = True
 
             # Transform to HELD ASSET frame (peg frame, not gripper frame)
             # net_forces_w shape: [num_envs, num_bodies, 3]
