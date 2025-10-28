@@ -35,7 +35,7 @@ class ExtendedFactoryTaskPegInsertCfg(PegInsert):
         update_period=0.0,
         history_length=0,
         debug_vis=True,
-        filter_prim_paths_expr=["/World/envs/env_.*/FixedAsset/.*"],
+        filter_prim_paths_expr=["/World/envs/env_.*/FixedAsset"],
         track_air_time=False,
     )
 
