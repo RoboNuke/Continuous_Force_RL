@@ -47,14 +47,6 @@ def apply_wrappers(env, configs):
         print("  - Applying Efficient Reset Wrapper")
         env = EfficientResetWrapper(env)
 
-    if wrappers_config.spawn_height_curriculum.enabled:
-        print("  - Applying Spawn Height Curriculum Wrapper")
-        env = SpawnHeightCurriculumWrapper(
-            env,
-            config=asdict(wrappers_config.spawn_height_curriculum),
-            num_agents=configs['primary'].total_agents
-        )
-
     if wrappers_config.force_torque_sensor.enabled:
         print("  - Applying Force Torque Wrapper")
 
@@ -122,6 +114,15 @@ def apply_wrappers(env, configs):
             env,
             num_agents=configs['primary'].total_agents,
             publish_to_wandb=wrappers_config.factory_metrics.publish_to_wandb
+        )
+
+    # Apply curriculum wrapper AFTER FactoryMetricsWrapper so it can read published metrics
+    if wrappers_config.spawn_height_curriculum.enabled:
+        print("  - Applying Spawn Height Curriculum Wrapper")
+        env = SpawnHeightCurriculumWrapper(
+            env,
+            config=asdict(wrappers_config.spawn_height_curriculum),
+            num_agents=configs['primary'].total_agents
         )
 
     if wrappers_config.pose_contact_logging.enabled:

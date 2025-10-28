@@ -95,6 +95,7 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
 
         # Store original randomize_initial_state method
         self._original_randomize_initial_state = None
+        self._original_reset_idx = None
         self._wrapper_initialized = False
 
         # Initialize wrapper if environment is ready
@@ -126,6 +127,13 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
             self.unwrapped.randomize_initial_state = self._curriculum_randomize_initial_state
         else:
             raise ValueError("Environment missing required randomize_initial_state method")
+
+        # Store and override _reset_idx method
+        if hasattr(self.unwrapped, '_reset_idx'):
+            self._original_reset_idx = self.unwrapped._reset_idx
+            self.unwrapped._reset_idx = self._wrapped_reset_idx
+        else:
+            raise ValueError("Environment missing required _reset_idx method")
 
         self._wrapper_initialized = True
         print("[SpawnHeightCurriculumWrapper] Wrapper initialized")
@@ -461,6 +469,24 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
             print(f"[Curriculum] Agent {agent_id}: min_height {old_min:.3f}m -> {new_min:.3f}m "
                   f"(SR={success_rate:.3f}, range=[{new_min:.3f}, {max_height:.3f}])")
 
+    def _wrapped_reset_idx(self, env_ids):
+        """Reset specified environments and update curriculum."""
+        # Convert to tensor if needed
+        if not isinstance(env_ids, torch.Tensor):
+            env_ids = torch.tensor(env_ids, device=self.device, dtype=torch.long)
+
+        # Update curriculum BEFORE reset (so new min_heights are used during randomize_initial_state)
+        # Only update when we're doing a full reset (end of rollout)
+        if len(env_ids) == self.num_envs and self.enabled and self._wrapper_initialized:
+            self._update_curriculum()
+            max_height = self.unwrapped.cfg_task.hand_init_pos[2]
+            agent_min_heights = [self.min_heights[i * self.envs_per_agent].item() for i in range(self.num_agents)]
+            print(f"[Curriculum] Updated after {len(env_ids)} env resets. Agent min heights: {agent_min_heights}")
+
+        # Call original _reset_idx to maintain wrapper chain
+        if self._original_reset_idx is not None:
+            self._original_reset_idx(env_ids)
+
     def step(self, action):
         """Step environment and ensure wrapper is initialized."""
         if not self._wrapper_initialized and hasattr(self.unwrapped, '_robot'):
@@ -469,28 +495,6 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
         obs, reward, terminated, truncated, info = super().step(action)
 
         return obs, reward, terminated, truncated, info
-
-    def reset(self, **kwargs):
-        """Reset environment and update curriculum."""
-        # Update curriculum based on previous rollout performance
-        print("[DEBUG]: About to call parent reset in curriculum")
-        obs, info = super().reset(**kwargs)
-
-        # Initialize wrapper if not done yet
-        if not self._wrapper_initialized and hasattr(self.unwrapped, '_robot'):
-            self._initialize_wrapper()
-
-        if self.enabled and self._wrapper_initialized:
-            self._update_curriculum()
-            max_height = self.unwrapped.cfg_task.hand_init_pos[2]
-            # Get per-agent min heights (sample first env of each agent)
-            agent_min_heights = [self.min_heights[i * self.envs_per_agent].item() for i in range(self.num_agents)]
-            info['curriculum'] = {
-                'agent_min_heights': agent_min_heights,
-                'height_ranges': [(min_h, max_height) for min_h in agent_min_heights]
-            }
-
-        return obs, info
 
     def get_curriculum_stats(self):
         """Get current curriculum statistics."""
