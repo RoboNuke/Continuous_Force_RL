@@ -152,7 +152,7 @@ wrappers:
     regress_threshold: 0.10          # Decrease min_height when success rate < this
     progress_height_delta: 0.005     # Increase min by 5mm when succeeding
     regression_height_delta: 0.003   # Decrease min by 3mmm when struggling
-    min_height: 0.015                # Starting/minimum height (never go below this)
+    min_height: 0.026                # Starting/minimum height (never go below this)
 
   # Force-torque sensor
   force_torque_sensor:
