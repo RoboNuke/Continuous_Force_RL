@@ -444,11 +444,11 @@ class ForceTorqueWrapper(gym.Wrapper):
             # Get contact forces in WORLD frame
             net_contact_force_world = self._held_fixed_contact_sensor.data.net_forces_w
 
-            # Transform to END-EFFECTOR frame
+            # Transform to HELD ASSET frame (peg frame, not gripper frame)
             # net_forces_w shape: [num_envs, num_bodies, 3]
             # We take the first body (index 0) to get [num_envs, 3]
-            ee_quat = self.unwrapped.fingertip_midpoint_quat  # [num_envs, 4]
-            net_contact_force_ee = quat_rotate_inverse(ee_quat, net_contact_force_world[:, 0, :])
+            held_quat = self.unwrapped.held_quat  # [num_envs, 4]
+            net_contact_force_ee = quat_rotate_inverse(held_quat, net_contact_force_world[:, 0, :])
 
             # Detect contact using END-EFFECTOR frame forces
             self.real_contact = torch.where(
