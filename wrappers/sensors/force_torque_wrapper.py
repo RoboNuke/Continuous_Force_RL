@@ -442,75 +442,15 @@ class ForceTorqueWrapper(gym.Wrapper):
         # get true state from directly-held contact sensor (not from scene)
         if self._held_fixed_contact_sensor is not None:
             # Get contact forces in WORLD frame
-            net_contact_force_world = self._held_fixed_contact_sensor.data.net_forces_w
-            force_matrix_w = self._held_fixed_contact_sensor.data.force_matrix_w
+            #net_contact_force_world = self._held_fixed_contact_sensor.data.net_forces_w
+            fixed_force_w = self._held_fixed_contact_sensor.data.force_matrix_w[:,0,0,:]
 
-            # DEBUG: Print sensor data for first 2 envs (only once)
-            #if not hasattr(self, '_debug_printed'):
-            print(f"\n{'='*100}")
-            print(f"[CONTACT SENSOR DEBUG]")
-            print(f"  net_forces_w shape: {net_contact_force_world.shape}")
-            print(f"  net_forces_w[0]: {net_contact_force_world[0]}")
-            print(f"  net_forces_w[1]: {net_contact_force_world[1]}")
-
-            # Count envs in contact per dimension using net_forces_w
-            # Contact threshold: force magnitude > 1e-3
-            contact_threshold = 1.0e-3
-            net_forces_contact = torch.abs(net_contact_force_world[:, 0, :]) > contact_threshold
-            num_envs_x_contact = net_forces_contact[:, 0].sum().item()
-            num_envs_y_contact = net_forces_contact[:, 1].sum().item()
-            num_envs_z_contact = net_forces_contact[:, 2].sum().item()
-            total_envs = net_contact_force_world.shape[0]
-            print(f"\n  net_forces_w contact counts (threshold={contact_threshold}):")
-            print(f"    X: {num_envs_x_contact}/{total_envs} envs ({100*num_envs_x_contact/total_envs:.1f}%)")
-            print(f"    Y: {num_envs_y_contact}/{total_envs} envs ({100*num_envs_y_contact/total_envs:.1f}%)")
-            print(f"    Z: {num_envs_z_contact}/{total_envs} envs ({100*num_envs_z_contact/total_envs:.1f}%)")
-
-            print(f"\n  force_matrix_w shape: {force_matrix_w.shape if force_matrix_w is not None else 'None'}")
-            if force_matrix_w is not None:
-                print(f"  force_matrix_w[0]:\n{force_matrix_w[0]}")
-                print(f"  force_matrix_w[1]:\n{force_matrix_w[1]}")
-
-                # force_matrix_w shape is [num_envs, num_sensor_bodies, num_filter_bodies, 3]
-                num_sensor_bodies = force_matrix_w.shape[1]
-                num_filter_bodies = force_matrix_w.shape[2]
-                print(f"\n  force_matrix_w breakdown:")
-                print(f"    num_sensor_bodies: {num_sensor_bodies}")
-                print(f"    num_filter_bodies: {num_filter_bodies}")
-
-                # Show contact counts for each sensor body and filter body combination
-                for sensor_body_idx in range(num_sensor_bodies):
-                    for filter_body_idx in range(num_filter_bodies):
-                        body_forces = force_matrix_w[:, sensor_body_idx, filter_body_idx, :]  # [num_envs, 3]
-                        body_contact = torch.abs(body_forces) > contact_threshold
-                        num_x = body_contact[:, 0].sum().item()
-                        num_y = body_contact[:, 1].sum().item()
-                        num_z = body_contact[:, 2].sum().item()
-                        print(f"    sensor_body[{sensor_body_idx}] vs filter_body[{filter_body_idx}]:")
-                        print(f"      X: {num_x}/{total_envs} ({100*num_x/total_envs:.1f}%)")
-                        print(f"      Y: {num_y}/{total_envs} ({100*num_y/total_envs:.1f}%)")
-                        print(f"      Z: {num_z}/{total_envs} ({100*num_z/total_envs:.1f}%)")
-
-                # Count envs in contact per dimension using force_matrix_w (total across all bodies)
-                force_matrix_summed = force_matrix_w.sum(dim=1).sum(dim=1)  # Sum over both body dimensions -> [num_envs, 3]
-                matrix_contact = torch.abs(force_matrix_summed) > contact_threshold
-                num_envs_x_matrix = matrix_contact[:, 0].sum().item()
-                num_envs_y_matrix = matrix_contact[:, 1].sum().item()
-                num_envs_z_matrix = matrix_contact[:, 2].sum().item()
-                print(f"\n  force_matrix_w TOTAL contact counts (threshold={contact_threshold}):")
-                print(f"    X: {num_envs_x_matrix}/{total_envs} envs ({100*num_envs_x_matrix/total_envs:.1f}%)")
-                print(f"    Y: {num_envs_y_matrix}/{total_envs} envs ({100*num_envs_y_matrix/total_envs:.1f}%)")
-                print(f"    Z: {num_envs_z_matrix}/{total_envs} envs ({100*num_envs_z_matrix/total_envs:.1f}%)")
-            else:
-                print(f"  force_matrix_w is None")
-            print(f"{'='*100}\n")
-            #self._debug_printed = True
-
-            # Transform to HELD ASSET frame (peg frame, not gripper frame)
-            # net_forces_w shape: [num_envs, num_bodies, 3]
-            # We take the first body (index 0) to get [num_envs, 3]
-            held_quat = self.unwrapped.held_quat  # [num_envs, 4]
-            net_contact_force_ee = quat_rotate_inverse(held_quat, net_contact_force_world[:, 0, :])
+            # We use ee quat because we want the forces in the force-torque frame for hybrid control
+            # The sensing is placed here because the data is from the end of the last step, allowing
+            # the next (current) step to decide what do to based on step's starting state 
+            ee_quat = self.unwrapped.fingertip_midpoint_quat  # [num_envs, 4]
+            #held_quat = self.unwrapped.held_quat  # [num_envs, 4]
+            net_contact_force_ee = quat_rotate_inverse(ee_quat, fixed_force_w)
 
             # Detect contact using END-EFFECTOR frame forces
             self.real_contact = torch.where(
