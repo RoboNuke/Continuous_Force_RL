@@ -4,7 +4,7 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/LCLoP_curr_ff_tracker.txt"
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/LCLoP_curr_clr5e-4_ff_tracker.txt"
   max_steps: 6022400
   
 # Model configuration for hybrid agent
@@ -26,13 +26,13 @@ wrappers:
   spawn_height_curriculum:
     enabled: true
 
-agent:
-  policy_learning_rate: 1.0e-5
-  critic_learning_rate: 1.0e-5
-  #learning_epochs: 1
+#agent:
+#  policy_learning_rate: 1.0e-5
+#  critic_learning_rate: 1.0e-5
+#  #learning_epochs: 1
 
 # Experiment metadata
 experiment:
-  name: "LCLoP2_curr_ff_test"
+  name: "LCLoP2_curr_clr1e-6_ff_test"
   tags: ['Force-Force']
-  group: "LCLoP2_curr_ff_test"
+  group: "LCLoP2_curr_clr1e-6_ff_test"
