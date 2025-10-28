@@ -4,7 +4,7 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/pose2_curr_ff_tracker.txt"
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/pose_curr_clr5e-4_ff_tracker.txt"
   #break_forces: [5,10]
   
 # Model configuration for hybrid agent
@@ -18,6 +18,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: "pose2_curr_ff_test"
+  name: "pose_curr_clr5e-4_ff_test"
   tags: ['Force-Force']
-  group: "pose2_curr_ff_test"
+  group: "pose_curr_clr5e-4_ff_test"
