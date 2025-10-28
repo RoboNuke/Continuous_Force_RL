@@ -369,16 +369,23 @@ class ForceTorqueWrapper(gym.Wrapper):
                         print(f"    Prim exists: {test_prim.IsValid()}")
 
                         # Always enumerate FixedAsset hierarchy to find collision bodies
-                        print(f"\n  Enumerating FixedAsset hierarchy in env_0:")
+                        print(f"\n  Enumerating COMPLETE FixedAsset hierarchy in env_0:")
                         fixed_asset_path = "/World/envs/env_0/FixedAsset"
+
+                        def print_prim_tree(prim, indent=2):
+                            """Recursively print prim hierarchy with physics info"""
+                            child_path = str(prim.GetPath())
+                            has_rb = prim.HasAPI(UsdPhysics.RigidBodyAPI)
+                            has_cr = prim.HasAPI(PhysxSchema.PhysxContactReportAPI)
+                            has_collider = prim.HasAPI(UsdPhysics.CollisionAPI)
+                            print(f"{' '*indent}- {child_path}")
+                            print(f"{' '*indent}  Type: {prim.GetTypeName()}, RigidBody: {has_rb}, ContactReport: {has_cr}, Collider: {has_collider}")
+                            for child in prim.GetChildren():
+                                print_prim_tree(child, indent+2)
+
                         fixed_asset_prim = stage.GetPrimAtPath(fixed_asset_path)
                         if fixed_asset_prim.IsValid():
-                            for child in fixed_asset_prim.GetAllChildren():
-                                child_path = str(child.GetPath())
-                                has_rb = child.HasAPI(UsdPhysics.RigidBodyAPI)
-                                has_cr = child.HasAPI(PhysxSchema.PhysxContactReportAPI)
-                                print(f"    - {child_path}")
-                                print(f"      Type: {child.GetTypeName()}, RigidBody: {has_rb}, ContactReport: {has_cr}")
+                            print_prim_tree(fixed_asset_prim)
                         else:
                             print(f"    FixedAsset prim doesn't exist at {fixed_asset_path}")
 
