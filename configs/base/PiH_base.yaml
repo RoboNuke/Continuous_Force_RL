@@ -14,8 +14,8 @@ experiment:
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
-  agents_per_break_force: 5 # Number of agents per break force condition
-  num_envs_per_agent: 256   # Environments per individual agent
+  agents_per_break_force: 2 #TODO 5 # Number of agents per break force condition
+  num_envs_per_agent: 16 #TODO 256   # Environments per individual agent
   break_forces: [10]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
@@ -275,10 +275,10 @@ wrappers:
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
 agent:
   # Core identification
-  disable_progressbar: true
+  disable_progressbar: false #TODOtrue
 
   # Checkpoint and experiment tracking
-  track_ckpts: true
+  track_ckpts: false #TODO true
   upload_ckpts_to_wandb: false
   checkpoint_interval_multiplier: 5  # Checkpoint every N write intervals
   # ckpt_tracker_path comes from primary config automatically
