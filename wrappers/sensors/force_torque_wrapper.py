@@ -368,20 +368,19 @@ class ForceTorqueWrapper(gym.Wrapper):
                         print(f"    Test path: {test_path}")
                         print(f"    Prim exists: {test_prim.IsValid()}")
 
-                        # If test path doesn't exist, enumerate what does exist
-                        if not test_prim.IsValid():
-                            print(f"\n  Enumerating FixedAsset hierarchy in env_0:")
-                            fixed_asset_path = "/World/envs/env_0/FixedAsset"
-                            fixed_asset_prim = stage.GetPrimAtPath(fixed_asset_path)
-                            if fixed_asset_prim.IsValid():
-                                for child in fixed_asset_prim.GetAllChildren():
-                                    child_path = str(child.GetPath())
-                                    has_rb = child.HasAPI(UsdPhysics.RigidBodyAPI)
-                                    has_cr = child.HasAPI(PhysxSchema.PhysxContactReportAPI)
-                                    print(f"    - {child_path}")
-                                    print(f"      Type: {child.GetTypeName()}, RigidBody: {has_rb}, ContactReport: {has_cr}")
-                            else:
-                                print(f"    FixedAsset prim doesn't exist at {fixed_asset_path}")
+                        # Always enumerate FixedAsset hierarchy to find collision bodies
+                        print(f"\n  Enumerating FixedAsset hierarchy in env_0:")
+                        fixed_asset_path = "/World/envs/env_0/FixedAsset"
+                        fixed_asset_prim = stage.GetPrimAtPath(fixed_asset_path)
+                        if fixed_asset_prim.IsValid():
+                            for child in fixed_asset_prim.GetAllChildren():
+                                child_path = str(child.GetPath())
+                                has_rb = child.HasAPI(UsdPhysics.RigidBodyAPI)
+                                has_cr = child.HasAPI(PhysxSchema.PhysxContactReportAPI)
+                                print(f"    - {child_path}")
+                                print(f"      Type: {child.GetTypeName()}, RigidBody: {has_rb}, ContactReport: {has_cr}")
+                        else:
+                            print(f"    FixedAsset prim doesn't exist at {fixed_asset_path}")
 
                         if test_prim.IsValid():
                             # Check for ContactReportAPI
