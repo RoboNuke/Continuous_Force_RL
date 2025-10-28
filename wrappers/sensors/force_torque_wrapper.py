@@ -339,13 +339,32 @@ class ForceTorqueWrapper(gym.Wrapper):
                     print(f"  Filter count: {filter_count}")
                     print(f"  Number of sensor bodies: {self._held_fixed_contact_sensor._num_bodies}")
 
+                    # Print the actual body names that were found
+                    if hasattr(self._held_fixed_contact_sensor, '_body_physx_view'):
+                        body_names = self._held_fixed_contact_sensor._body_physx_view.body_names
+                        print(f"  Sensor body names: {body_names}")
+
+                    # Print filter body names if available
+                    if hasattr(self._held_fixed_contact_sensor.contact_physx_view, '_contact_view'):
+                        try:
+                            # Try to access filter body information
+                            import omni
+                            stage = omni.usd.get_context().get_stage()
+                            filter_expr = self._held_fixed_contact_sensor.cfg.filter_prim_paths_expr[0]
+                            print(f"\n  Searching for bodies matching filter: {filter_expr}")
+                            # This is a diagnostic - print first few matching prims
+                            from pxr import Usd
+                            for prim in stage.Traverse():
+                                prim_path = str(prim.GetPath())
+                                # Check if matches filter pattern (simple check for first env)
+                                if "env_0" in prim_path and "FixedAsset" in prim_path and prim.IsA(Usd.Typed):
+                                    print(f"    Found prim: {prim_path} (type: {prim.GetTypeName()})")
+                        except Exception as e:
+                            print(f"  Could not enumerate filter bodies: {e}")
+
                     if filter_count == 0:
                         print(f"\n  [WARNING] Filter count is 0!")
                         print(f"  This means filter_prim_paths_expr is not matching any bodies in the scene.")
-                        print(f"  Possible causes:")
-                        print(f"    1. Filter path pattern doesn't match actual USD structure")
-                        print(f"    2. FixedAsset bodies don't have ContactReportAPI enabled")
-                        print(f"    3. Prims don't exist at the specified paths")
                     else:
                         print(f"  [OK] Filter is matching {filter_count} body/bodies")
                     print(f"{'='*80}\n")
@@ -483,9 +502,14 @@ class ForceTorqueWrapper(gym.Wrapper):
         # get true state from directly-held contact sensor (not from scene)
         if self._held_fixed_contact_sensor is not None:
             # Get contact forces in WORLD frame
-            #net_contact_force_world = self._held_fixed_contact_sensor.data.net_forces_w
+            net_contact_force_world = self._held_fixed_contact_sensor.data.net_forces_w
             fixed_force_w = self._held_fixed_contact_sensor.data.force_matrix_w[:,0,0,:]
-            print("Max Force:", torch.max(torch.abs(fixed_force_w)))
+
+            # Debug: Compare filtered vs unfiltered contact forces
+            max_net_force = torch.max(torch.abs(net_contact_force_world))
+            max_filtered_force = torch.max(torch.abs(fixed_force_w))
+            if max_net_force > 0.01 or max_filtered_force > 0.01:
+                print(f"[CONTACT DEBUG] Max net force (all contacts): {max_net_force:.4f}, Max filtered force (peg-hole only): {max_filtered_force:.4f}")
             # We use ee quat because we want the forces in the force-torque frame for hybrid control
             # The sensing is placed here because the data is from the end of the last step, allowing
             # the next (current) step to decide what do to based on step's starting state 
