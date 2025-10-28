@@ -329,12 +329,26 @@ class ForceTorqueWrapper(gym.Wrapper):
             if hasattr(self.unwrapped.scene, 'sensors') and "held_fixed_contact_sensor" in self.unwrapped.scene.sensors:
                 self._held_fixed_contact_sensor = self.unwrapped.scene.sensors["held_fixed_contact_sensor"]
 
-                # Debug: Print filter count to verify filtering is working
+                # Debug: Print comprehensive sensor and filter information
                 if hasattr(self._held_fixed_contact_sensor, 'contact_physx_view'):
                     filter_count = self._held_fixed_contact_sensor.contact_physx_view.filter_count
-                    print(f"[CONTACT SENSOR DEBUG] Filter count: {filter_count}")
+                    print(f"\n{'='*80}")
+                    print(f"[CONTACT SENSOR DEBUG]")
+                    print(f"  Sensor prim_path: {self._held_fixed_contact_sensor.cfg.prim_path}")
+                    print(f"  Filter expressions: {self._held_fixed_contact_sensor.cfg.filter_prim_paths_expr}")
+                    print(f"  Filter count: {filter_count}")
+                    print(f"  Number of sensor bodies: {self._held_fixed_contact_sensor._num_bodies}")
+
                     if filter_count == 0:
-                        print("[WARNING] Filter count is 0 - filtering may not be working!")
+                        print(f"\n  [WARNING] Filter count is 0!")
+                        print(f"  This means filter_prim_paths_expr is not matching any bodies in the scene.")
+                        print(f"  Possible causes:")
+                        print(f"    1. Filter path pattern doesn't match actual USD structure")
+                        print(f"    2. FixedAsset bodies don't have ContactReportAPI enabled")
+                        print(f"    3. Prims don't exist at the specified paths")
+                    else:
+                        print(f"  [OK] Filter is matching {filter_count} body/bodies")
+                    print(f"{'='*80}\n")
             else:
                 raise ValueError(
                     "use_contact_sensor=True but held_fixed_contact_sensor not found in scene. "
