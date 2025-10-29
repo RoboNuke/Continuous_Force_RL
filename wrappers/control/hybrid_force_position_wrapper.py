@@ -664,7 +664,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
     def _wrapped_reset_idx(self, env_ids):
         """Track early terminations by control mode before resetting."""
         # Convert to tensor if needed
-        if not isinstance(env_ids, torch.Tensor):
+        if not isinstance(env_ids, torch.Tensor):    
             env_ids = torch.tensor(env_ids, device=self.device, dtype=torch.long)
 
         # FIRST: Track early terminations (always, whether partial or full reset)
@@ -742,6 +742,17 @@ class HybridForcePositionWrapper(gym.Wrapper):
         self.unwrapped.ctrl_target_gripper_dof_pos = 0.0
 
         # Compute pose wrench using filtered targets
+        """
+        if self.sel_matrix[0,2]:
+            self.zero_z = True
+        fake_target = self.unwrapped.fixed_pos + self.unwrapped.scene.env_origins
+        try:
+            if self.zero_z:
+                fake_target[0,2] = 0
+        except:
+            self.zero_z = False
+        fake_target[:,0] = self.unwrapped.fingertip_midpoint_pos[:,0]
+        """
         pose_wrench = compute_pose_task_wrench(
             cfg=self.unwrapped.cfg,
             dof_pos=self.unwrapped.joint_pos,
@@ -823,7 +834,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         # Combine wrenches using filtered selection matrix
         task_wrench = (1 - self.sel_matrix) * pose_wrench + self.sel_matrix * force_wrench
-
+        #task_wrench = pose_wrench
         # Apply bounds constraint to final wrench - prevent motion outside boundaries
         delta_pos = self.unwrapped.fingertip_midpoint_pos - self.unwrapped.fixed_pos_action_frame
         pos_bounds = self.unwrapped.cfg.ctrl.pos_action_bounds

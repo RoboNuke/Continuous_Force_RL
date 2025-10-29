@@ -473,7 +473,7 @@ class ForceTorqueWrapper(gym.Wrapper):
 
             # Detect contact using END-EFFECTOR frame forces
             self.real_contact = torch.where(
-                torch.isclose(net_contact_force_ee, torch.zeros_like(net_contact_force_ee), atol=1.0e-3, rtol=0.0),
+                torch.isclose(net_contact_force_ee, torch.zeros_like(net_contact_force_ee), atol=1.0, rtol=0.0),
                 torch.zeros_like(net_contact_force_ee),
                 torch.ones_like(net_contact_force_ee)
             ).bool()
