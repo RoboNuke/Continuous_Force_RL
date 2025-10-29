@@ -19,11 +19,13 @@ class SimpleEpisodeTracker:
             num_envs: int,
             device: torch.device,
             agent_config: Dict[str, Any],
-            all_configs: Dict[str, Any]
+            all_configs: Dict[str, Any],
+            disable_logging: bool = False
         ):
         """Initialize simple episode tracker."""
         self.num_envs = num_envs
         self.device = device
+        self.disable_logging = disable_logging
 
         # Build complete config dict from all sections
         complete_config = {}
@@ -38,23 +40,27 @@ class SimpleEpisodeTracker:
         # Add agent-specific config
         complete_config['agent_specific'] = self._convert_to_dict(agent_config)
 
-        wandb_kwargs = agent_config['experiment']['wandb_kwargs']
-        self.run = wandb.init(
-            entity=wandb_kwargs.get('entity'),
-            project=wandb_kwargs.get('project'),
-            name=wandb_kwargs.get('run_name'),
-            reinit="create_new",
-            config=complete_config,
-            group=wandb_kwargs.get('group'),
-            tags=wandb_kwargs.get('tags'),
-            #settings=wandb.Settings(
-            #    _disable_stats=True,  # Reduce wandb overhead
-            #    _disable_meta=True,   # Reduce metadata collection
-            #    console="off",        # Reduce console spam
-            #    _service_wait=300     # Longer service timeout
-            #)
+        # Only initialize wandb if logging is enabled
+        if not self.disable_logging:
+            wandb_kwargs = agent_config['experiment']['wandb_kwargs']
+            self.run = wandb.init(
+                entity=wandb_kwargs.get('entity'),
+                project=wandb_kwargs.get('project'),
+                name=wandb_kwargs.get('run_name'),
+                reinit="create_new",
+                config=complete_config,
+                group=wandb_kwargs.get('group'),
+                tags=wandb_kwargs.get('tags'),
+                #settings=wandb.Settings(
+                #    _disable_stats=True,  # Reduce wandb overhead
+                #    _disable_meta=True,   # Reduce metadata collection
+                #    console="off",        # Reduce console spam
+                #    _service_wait=300     # Longer service timeout
+                #)
 
-        )
+            )
+        else:
+            self.run = None
 
         # Metric storage
         self.accumulated_metrics = {}
@@ -136,6 +142,10 @@ class SimpleEpisodeTracker:
         Returns:
             bool: True if upload succeeded, False otherwise
         """
+        # Skip upload if logging is disabled
+        if self.disable_logging:
+            return True
+
         import os
         if not os.path.exists(checkpoint_path):
             raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
@@ -198,15 +208,16 @@ class SimpleEpisodeTracker:
         final_metrics["total_steps"] = self.total_steps
         final_metrics["env_steps"] = self.env_steps
 
-        # Publish to wandb
-        self.run.log(final_metrics)
+        # Publish to wandb only if logging is enabled
+        if not self.disable_logging:
+            self.run.log(final_metrics)
 
         # Clear accumulated data
         self.accumulated_metrics.clear()
 
     def close(self):
         """Close wandb run."""
-        if hasattr(self, 'run'):
+        if hasattr(self, 'run') and self.run is not None:
             self.run.finish()
 
 
@@ -236,6 +247,11 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
 
         agent_configs = all_configs['agent'].agent_exp_cfgs
 
+        # Extract disable_logging flag from wrappers config
+        disable_logging = False
+        if 'wrappers' in all_configs and hasattr(all_configs['wrappers'], 'wandb_logging'):
+            disable_logging = getattr(all_configs['wrappers'].wandb_logging, 'disable_logging', False)
+
         self.num_agents = num_agents
         self.num_envs = env.unwrapped.num_envs
         self.device = env.unwrapped.device
@@ -250,7 +266,7 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         self.trackers = []
         for i in range(self.num_agents):
             agent_config = agent_configs[i]
-            tracker = SimpleEpisodeTracker(self.envs_per_agent, self.device, agent_config, all_configs)
+            tracker = SimpleEpisodeTracker(self.envs_per_agent, self.device, agent_config, all_configs, disable_logging)
             self.trackers.append(tracker)
 
         # Episode tracking for basic metrics
