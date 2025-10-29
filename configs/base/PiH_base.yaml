@@ -147,7 +147,7 @@ wrappers:
   spawn_height_curriculum:
     # current default in line with IndustREAL baseline
     enabled: false
-    progress_threshold: 0.80         # Increase min_height when success rate >= this
+    progress_threshold: 0.60         # Increase min_height when success rate >= this
     regress_threshold: 0.10          # Decrease min_height when success rate < this
     progress_height_delta: 0.005     # Increase min by 5mm when succeeding
     regression_height_delta: 0.003   # Decrease min by 3mmm when struggling
