@@ -10,11 +10,12 @@ except:
 parser = argparse.ArgumentParser(description="Train an RL agent with configuration system.")
 
 # Essential arguments
-parser.add_argument("--config", type=str, required=True, help="Path to configuration file")
+parser.add_argument("--config", type=str, default=None, help="Path to configuration file (optional if --manual-control used)")
 parser.add_argument("--task", type=str, default=None, help="Name of the task (defaults to config value)")
 #parser.add_argument("--device", type=str, default=None, help="Device to run on")
 parser.add_argument("--seed", type=int, default=-1, help="Random seed for reproducibility (-1 for random)")
 parser.add_argument("--override", action="append", help="Override config values: key=value")
+parser.add_argument("--manual-control", action="store_true", help="Enable manual control mode with visualization")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -22,9 +23,21 @@ AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli, hydra_args = parser.parse_known_args()
 
+# Handle manual control config selection
+if args_cli.manual_control:
+    if args_cli.config is None:
+        args_cli.config = "configs/base/manual_control_base.yaml"
+        print(f"[INFO]: --manual-control flag set, using default config: {args_cli.config}")
+    else:
+        print(f"[INFO]: --manual-control flag set, using provided config: {args_cli.config}")
+else:
+    if args_cli.config is None:
+        raise ValueError("--config argument is required when not using --manual-control")
+
+# Set visualization based on manual control flag
 args_cli.video = False
-args_cli.enable_cameras = False
-args_cli.headless = True
+args_cli.enable_cameras = args_cli.manual_control
+args_cli.headless = not args_cli.manual_control
 
 # clear out sys.argv for Hydra
 sys.argv = [sys.argv[0]] + hydra_args
@@ -135,6 +148,12 @@ def main(
     configManager = ConfigManagerV3()
 
     configs = configManager.process_config(args_cli.config, args_cli.override)
+
+    # Validate manual control mode consistency
+    if args_cli.manual_control:
+        if 'wrappers' not in configs or not configs['wrappers'].manual_control.enabled:
+            raise ValueError("--manual-control flag set but manual_control.enabled=False in config")
+
     print("[INFO]: STEP 1 - Loading Configuration")
     # set or generate seed
     if configs['primary'].seed == -1:
@@ -150,9 +169,38 @@ def main(
     # create agent specific configs
     lUtils.define_agent_configs(configs)
 
-    # Should not matter but removes annoying warning message    
+    # Should not matter but removes annoying warning message
     configs["environment"].sim.render_interval = configs["primary"].decimation
 
+    # Setup camera configuration for manual control visualization
+    if args_cli.manual_control:
+        print("[INFO]: Setting up camera configuration for manual control...")
+        try:
+            from isaaclab.sensors import TiledCameraCfg, CameraCfg
+            import isaaclab.sim as sim_utils
+        except:
+            from omni.isaac.lab.sensors import TiledCameraCfg, CameraCfg
+            import omni.isaac.lab.sim as sim_utils
+
+        configs['environment'].scene.tiled_camera = TiledCameraCfg(
+            prim_path="/World/envs/env_.*/Camera",
+            offset=TiledCameraCfg.OffsetCfg(
+                pos=(1.0, 0.0, 0.35),#(1.25, 0.0, 0.35),
+                rot=(-0.3535534, 0.6123724, 0.6123724, -0.3535534),
+                convention="ros"
+            ),
+            data_types=["rgb"],
+            spawn=sim_utils.PinholeCameraCfg(
+                focal_length=24.0,
+                focus_distance=0.05,
+                horizontal_aperture=20.955,
+                clipping_range=(0.1, 20.0)
+            ),
+            width=240,
+            height=180,
+            debug_vis=False,
+        )
+        print("[INFO]:   Camera configured: 240x180, RGB")
 
     print(f"[INFO]: Environment Configured from {args_cli.config}")
     print(f"[INFO]: Task: {configs['experiment'].task_name}")
@@ -178,7 +226,27 @@ def main(
     # Create environment directly
     env = EnvClass(cfg=configs['environment'], render_mode=None)
     print("[INFO]: Environment created successfully")
-    
+
+    # Enable camera light and set viewport camera for manual control mode
+    if args_cli.manual_control:
+        try:
+            import omni.kit.viewport.utility as vp_utils
+            viewport_api = vp_utils.get_active_viewport()
+            if viewport_api:
+                # Switch viewport to use our configured camera
+                camera_path = "/World/envs/env_0/Camera"
+                viewport_api.set_active_camera(camera_path)
+                print(f"[INFO]:   Viewport camera set to {camera_path}")
+
+                # Enable camera light (headlight) using carb settings
+                # This is the Omniverse-standard way to enable viewport headlight
+                settings.set("/rtx/useViewLightingMode", True)
+                print("[INFO]:   Camera light (headlight) enabled via RTX settings")
+        except Exception as e:
+            print(f"[WARNING]: Could not configure viewport camera: {e}")
+            import traceback
+            traceback.print_exc()
+
     # ===== STEP 3: APPLY WRAPPER STACK =====
     # Apply wrappers using pre-configured wrapper settings from Step 1
     print("=" * 100)

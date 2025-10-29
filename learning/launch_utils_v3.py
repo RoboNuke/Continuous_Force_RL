@@ -10,6 +10,7 @@ from wrappers.logging.wandb_wrapper import GenericWandbLoggingWrapper
 from wrappers.logging.enhanced_action_logging_wrapper import EnhancedActionLoggingWrapper
 from wrappers.logging.pose_contact_logging_wrapper import PoseContactLoggingWrapper
 from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
+from wrappers.control.manual_control_wrapper import ManualControlWrapper
 from wrappers.mechanics.two_stage_keypoint_reward_wrapper import TwoStageKeypointRewardWrapper
 from wrappers.mechanics.spawn_height_curriculum_wrapper import SpawnHeightCurriculumWrapper
 
@@ -97,6 +98,14 @@ def apply_wrappers(env, configs):
             ctrl_cfg=configs['environment'].ctrl,
             task_cfg=configs['environment'].hybrid_task,
             num_agents=configs['primary'].total_agents
+        )
+
+    if wrappers_config.manual_control.enabled:
+        print("  - Applying Manual Control Wrapper")
+        env = ManualControlWrapper(
+            env,
+            config=wrappers_config.manual_control,
+            is_hybrid_control=wrappers_config.hybrid_control.enabled
         )
 
     # Apply WandbWrapper BEFORE FactoryMetricsWrapper so factory metrics can send data to wandb
