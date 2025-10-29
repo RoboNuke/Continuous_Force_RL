@@ -83,8 +83,8 @@ def compute_force_task_wrench(
 ):
     """Compute task-space wrench for force control."""
     force_wrench = task_gains * (ctrl_target_force - eef_force)
-    #force_wrench[ :, 0:3 ] += task_deriv_gains[:, 0:3] * (0.0 - fingertip_midpoint_linvel)
-    #force_wrench[ :, 3:6 ] += task_deriv_gains[:, 3:6] * (0.0 - fingertip_midpoint_angvel)
+    force_wrench[ :, 0:3 ] += task_deriv_gains[:, 0:3] * (0.0 - fingertip_midpoint_linvel)
+    force_wrench[ :, 3:6 ] += task_deriv_gains[:, 3:6] * (0.0 - fingertip_midpoint_angvel)
     return force_wrench
 
 
