@@ -1,0 +1,40 @@
+# Manual Control Experiment Configuration
+# Inherits from PiH_base.yaml but overrides for manual control testing
+
+base_config: configs/base/PiH_base.yaml
+
+# Override for single environment
+primary:
+  agents_per_break_force: 1
+  num_envs_per_agent: 1
+  break_forces: [10000]  # High break force (essentially unbreakable)
+
+environment:
+  scene:
+    num_envs: 1
+  episode_length_s: 300  # 5 minutes for manual testing
+
+# Enable manual control wrapper
+wrappers:
+  manual_control:
+    enabled: true
+    checkpoint_path: null  # Set to checkpoint path to enable RL toggle
+    action_scale: 0.5
+    force_scale: 0.1
+    start_in_manual_mode: true
+
+  # Keep wandb wrapper for interface but disable actual logging
+  wandb_logging:
+    enabled: true
+    disable_logging: true
+
+  factory_metrics:
+    enabled: false
+
+  action_logging:
+    enabled: false
+
+  fragile_objects:
+    enabled: false
+
+  efficient_reset_enabled: false

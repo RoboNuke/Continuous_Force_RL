@@ -55,6 +55,7 @@ class ObservationNoiseConfig:
 class WandbLoggingConfig:
     """Wandb logging wrapper configuration."""
     enabled: bool = True
+    disable_logging: bool = False  # If True, keeps wrapper interface but skips actual wandb logging
     wandb_project: str = "Continuous_Force_RL"
     wandb_entity: str = "hur"
     wandb_name: Optional[str] = None
@@ -162,3 +163,13 @@ class CurriculumConfig:
 
     # Evaluation
     min_episodes_for_evaluation: int = 10   # Minimum episodes before adjusting height
+
+
+@dataclass
+class ManualControlConfig:
+    """Manual control wrapper configuration for keyboard-based robot control."""
+    enabled: bool = False
+    checkpoint_path: Optional[str] = None   # Path to RL checkpoint for toggle mode
+    action_scale: float = 0.1               # Scale for incremental position/rotation actions
+    force_scale: float = 0.1                # Scale for force commands (hybrid control only)
+    start_in_manual_mode: bool = True       # Start in manual mode (True) or RL mode (False)

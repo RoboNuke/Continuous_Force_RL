@@ -1,0 +1,261 @@
+# Manual Control Base Configuration
+# Simplified configuration for keyboard-controlled manual testing
+
+# EXPERIMENT CONFIGURATION
+experiment:
+  name: "manual_control"
+  tags: ["factory", "manual", "testing"]
+  group: "manual_control"
+  wandb_project: "debug"
+  wandb_entity: "hur"
+  task_name: "Isaac-Factory-PegInsert-Direct-v0"
+
+# PRIMARY PARAMETERS
+primary:
+  agents_per_break_force: 1  # Single agent for manual control
+  num_envs_per_agent: 1      # Single environment for manual control
+  break_forces: [10000]      # High break force for testing (essentially unbreakable)
+  decimation: 8
+  policy_hz: 15
+  max_steps: 100000          # Large number for extended manual sessions
+  debug_mode: false
+  seed: 42
+  ckpt_tracker_path: "/tmp/manual_control_ckpt_tracker.txt"
+  ctrl_torque: false
+
+# ENVIRONMENT OVERRIDES
+environment:
+  #sim:
+  #  dt: 0.004166667
+
+  task:
+    name: 'peg_insert'
+
+    # ===== PHYSICS OVERRIDES - Contact Stability Tuning =====
+    # These override IsaacLab's default factory physics parameters to debug contact bouncing
+    # Current issue: Peg bounces off surface every timestep despite constant downward command
+    # Uncomment recommended values ONE AT A TIME to isolate which parameter fixes the issue
+
+    # Peg (held object) physics properties
+    held_asset:
+      spawn:
+        rigid_props:
+          # PRIORITY 1: Depenetration velocity (how fast objects separate after overlap)
+          max_depenetration_velocity: 5.0  # DEFAULT - IsaacLab factory default (very aggressive)
+          # max_depenetration_velocity: 0.5  # RECOMMENDED - Gentler separation prevents bounce-off (5m/s → 0.5m/s)
+
+          # PRIORITY 2: Velocity solver iterations (accuracy of contact velocity resolution)
+          solver_velocity_iteration_count: 1  # DEFAULT - Very low, causes jitter/bounce
+          # solver_velocity_iteration_count: 8  # RECOMMENDED - More iterations for stable contact forces
+
+        collision_props:
+          # PRIORITY 3: Contact detection range and target separation
+          contact_offset: 0.005  # DEFAULT - 5mm contact detection buffer zone
+          # contact_offset: 0.002  # RECOMMENDED - Tighter tolerance (5mm → 2mm)
+
+          rest_offset: 0.0  # DEFAULT - Target separation distance (0mm = touching)
+          # rest_offset: 0.001  # RECOMMENDED - Small 1mm gap reduces stick-slip in contact zone
+
+    # Hole (fixed object) physics properties
+    fixed_asset:
+      spawn:
+        rigid_props:
+          # PRIORITY 1: Depenetration velocity
+          max_depenetration_velocity: 5.0  # DEFAULT
+          # max_depenetration_velocity: 0.5  # RECOMMENDED - Match with held_asset
+
+          # PRIORITY 2: Velocity solver iterations
+          solver_velocity_iteration_count: 1  # DEFAULT
+          # solver_velocity_iteration_count: 8  # RECOMMENDED - Match with held_asset
+
+        collision_props:
+          # PRIORITY 3: Contact detection and separation
+          contact_offset: 0.005  # DEFAULT
+          # contact_offset: 0.002  # RECOMMENDED - Match with held_asset
+
+          rest_offset: 0.0  # DEFAULT
+          #  rest_offset: 0.001  # RECOMMENDED - Match with held_asset
+
+    # NOTE: Physics timestep dt=1/120s (8.33ms) from IsaacLab factory defaults
+    # Your observed contact_time of 0.008s = exactly 1 physics timestep
+    # If above changes don't help, may need to reduce sim.dt (affects entire simulation)
+
+  episode_length_s: 300  # 5 minutes for manual testing
+  scene:
+    num_envs: 1  # Enforce single environment
+    filter_collisions: false
+
+  # Control configuration
+  ctrl:
+    ema_factor: 0.2
+    force_action_bounds: [50.0, 50.0, 50.0]
+    torque_action_bounds: [0.5, 0.5, 0.5]
+    force_action_threshold: [10.0, 10.0, 10.0]
+    torque_action_threshold: [0.1, 0.1, 0.1]
+    default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
+    no_sel_ema: true
+
+  hybrid_task:
+    good_force_cmd_rew: 0.1
+    bad_force_cmd_rew: -0.1
+    wrench_norm_scale: 0.1
+
+  # Observation attribute mapping
+  component_attr_map:
+    fingertip_pos: "fingertip_midpoint_pos"
+    fingertip_pos_rel_fixed: "fingertip_pos_rel_fixed"
+    fingertip_quat: "fingertip_midpoint_quat"
+    ee_linvel: "ee_linvel_fd"
+    ee_angvel: "ee_angvel_fd"
+    joint_pos: "joint_pos"
+    prev_actions: "prev_actions"
+    force_torque: "robot_force_torque"
+    held_pos: "held_pos"
+    held_pos_rel_fixed: "held_pos_rel_fixed"
+    held_quat: "held_quat"
+    fixed_pos: "fixed_pos"
+    fixed_quat: "fixed_quat"
+
+# MODEL CONFIGURATION (Minimal for manual control)
+model:
+  force_encoding: null
+  last_layer_scale: 0.1
+  act_init_std: 1.0
+  critic_output_init_mean: 50
+  use_separate_heads: false
+  use_hybrid_agent: false
+
+  actor:
+    n: 1
+    latent_size: 256
+
+  critic:
+    n: 3
+    latent_size: 1024
+
+  hybrid_agent:
+    ctrl_torque: false
+    unit_std_init: false
+    unit_factor_std_init: 1.0
+    pos_init_std: 1.0
+    rot_init_std: 1.0
+    force_init_std: 1.0
+    pos_scale: 1.0
+    rot_scale: 1.0
+    force_scale: 1.0
+    torque_scale: 1.0
+    selection_adjustment_types: ['init_bias']
+    init_scale_weights_factor: 1.0
+    init_bias: 2.5
+    pre_layer_scale_factor: 0.1
+    init_scale_last_layer: true
+    init_layer_scale: 0.1
+    uniform_sampling_rate: 0.0
+
+# WRAPPERS CONFIGURATION (Minimal for manual control)
+wrappers:
+  # Manual control wrapper (MAIN FEATURE)
+  manual_control:
+    enabled: true
+    checkpoint_path: null  # No RL agent by default
+    action_scale: 0.1      # Incremental action scale
+    force_scale: 0.1       # Force command scale (for hybrid control)
+    start_in_manual_mode: true
+
+  # Fragile objects (disabled for testing)
+  fragile_objects:
+    enabled: false
+    peg_break_rew: -0.4
+
+  # Efficient reset (disabled - manual reset via keyboard)
+  efficient_reset_enabled: false
+
+  # Spawn height curriculum (disabled)
+  spawn_height_curriculum:
+    enabled: false
+
+  # Force-torque sensor (enabled for feedback)
+  force_torque_sensor:
+    enabled: true
+    use_tanh_scaling: false
+    tanh_scale: 0.03
+    add_force_obs: true
+    contact_force_threshold: 1.5
+    contact_torque_threshold: 100.0
+    log_contact_state: true
+    add_contact_obs: false
+    add_contact_state: true
+    use_contact_sensor: true
+
+  # Observation manager (required)
+  observation_manager:
+    enabled: true
+    merge_strategy: "concatenate"
+
+  # Observation noise (disabled)
+  observation_noise:
+    enabled: false
+
+  # Hybrid control (disabled by default, can be enabled via CLI override)
+  hybrid_control:
+    enabled: true
+    reward_type: "none"
+
+  # Metrics and logging (all disabled for manual testing)
+  factory_metrics:
+    enabled: false
+    publish_to_wandb: false
+
+  wandb_logging:
+    enabled: true
+    disable_logging: true
+
+  action_logging:
+    enabled: false
+
+  pose_contact_logging:
+    enabled: false
+
+  misalignment_penalty:
+    enabled: false
+
+  two_stage_keypoint_reward:
+    enabled: false
+
+  force_reward:
+    enabled: false
+
+# AGENT CONFIGURATION (Minimal - not used for manual control)
+agent:
+  disable_progressbar: true
+  track_ckpts: false
+  upload_ckpts_to_wandb: false
+  checkpoint_interval_multiplier: 100
+  learning_epochs: 1
+  mini_batches: 1
+  discount_factor: 0.99
+  lambda_: 0.95
+  random_timesteps: 0
+  learning_starts: 0
+  random_value_timesteps: 0
+  mixed_precision: false
+  policy_learning_rate: 1.0e-5
+  critic_learning_rate: 1.0e-5
+  value_update_ratio: 2
+  optimizer_betas: [0.999, 0.999]
+  optimizer_eps: 1.0e-8
+  optimizer_weight_decay: 0
+  use_huber_value_loss: true
+  grad_norm_clip: 0.5
+  ratio_clip: 0.2
+  clip_predicted_values: false
+  value_clip: 0.2
+  entropy_loss_scale: 0.0
+  value_loss_scale: 1.0
+  kl_threshold: 0.05
+  time_limit_bootstrap: true
+  reward_shaper_type: 'const_scale'
+  rewards_shaper_scale: 0.25
+  state_preprocessor: true
+  value_preprocessor: true
+  learning_rate_scheduler: null

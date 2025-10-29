@@ -33,10 +33,10 @@ class ExtendedFactoryTaskPegInsertCfg(PegInsert):
     held_fixed_contact_sensor = ContactSensorCfg(
         prim_path="/World/envs/env_.*/HeldAsset/forge_round_peg_8mm",
         update_period=0.0,
-        history_length=0,
-        debug_vis=True,
+        history_length=0,  # Track last 10 timesteps of contact history
+        debug_vis=False,
         filter_prim_paths_expr=["/World/envs/env_.*/FixedAsset/forge_hole_8mm/forge_hole_8mm"],
-        track_air_time=False,
+        track_air_time=True,  # Enable tracking of time in contact vs air time
     )
 
     def __post_init__(self):
