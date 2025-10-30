@@ -123,6 +123,11 @@ class ForceRewardConfig:
     enable_force_ratio: bool = False
     force_ratio_reward_weight: float = 1.0
 
+    enable_contact_reward: bool = False
+    contact_reward_weight: float = 1.0
+
+
+
 
 @dataclass
 class PoseContactLoggingConfig:

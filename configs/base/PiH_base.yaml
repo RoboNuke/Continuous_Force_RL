@@ -269,6 +269,9 @@ wrappers:
     enable_force_ratio: false
     force_ratio_reward_weight: 1.0
     #############################################################
+    
+    enable_contact_reward: False
+    contact_reward_weight: 1.0
 
 
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)

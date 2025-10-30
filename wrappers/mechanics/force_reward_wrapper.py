@@ -169,6 +169,9 @@ class ForceRewardWrapper(gym.Wrapper):
         self.enable_force_ratio = self.config.get('enable_force_ratio', False)
         self.force_ratio_reward_weight = self.config.get('force_ratio_reward_weight', 1.0)
 
+        self.enable_contact_rew = self.config.get('enable_contact_reward', False)
+        self.contact_rew_weight = self.config.get('contact_reward_weight', 1.0)
+
     def _init_state_management(self):
         """Initialize per-environment state variables for reward calculations."""
         # Contact detection state
@@ -361,6 +364,10 @@ class ForceRewardWrapper(gym.Wrapper):
             total_force_reward += ratio_reward * self.force_ratio_reward_weight
             self.unwrapped.extras['logs_rew_force_ratio'] = ratio_reward
 
+        if self.enable_contact_rew:
+            contact_rew = self._calculate_contact_reward()
+            total_force_reward += contact_rew * self.contact_rew_weight
+            self.unwrapped.extras['logs_rew_contact_rew'] = total_force_reward
         # Return combined rewards
         return base_rewards + total_force_reward
 
@@ -444,7 +451,10 @@ class ForceRewardWrapper(gym.Wrapper):
 
         reward = torch.where(torch.any(self.in_contact, dim=-1), reward, torch.zeros_like(reward))
         return reward
-
+    
+    def _calculate_contact_reward(self) -> torch.Tensor:
+        return torch.any(self.in_contact, dim=-1) * self.contact_reward
+    
     def _calculate_alignment_award(self) -> torch.Tensor: #TODO SHOULD GET CURRENT FORCE ONCE, 
         """
         Calculate alignment award (contact only).
