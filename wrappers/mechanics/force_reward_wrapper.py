@@ -453,7 +453,7 @@ class ForceRewardWrapper(gym.Wrapper):
         return reward
     
     def _calculate_contact_reward(self) -> torch.Tensor:
-        return torch.any(self.in_contact, dim=-1) * self.contact_reward
+        return torch.any(self.in_contact, dim=-1) 
     
     def _calculate_alignment_award(self) -> torch.Tensor: #TODO SHOULD GET CURRENT FORCE ONCE, 
         """
