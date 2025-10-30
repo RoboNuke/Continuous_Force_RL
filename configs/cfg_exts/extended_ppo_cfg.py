@@ -22,12 +22,17 @@ class ExtendedPPOConfig:
     """
     
     # CUSTOM EXTENSIONS FOR BLOCK PPO
-    
+
     disable_progressbar: bool = True
     """Should we display a CLI progress bar?"""
+
     # Multi-agent parameters
     num_agents: int = 1
     """Number of agents in multi-agent setup"""
+
+    # Memory configuration
+    memory_type: str = 'multi_random'
+    """Type of memory to use ('multi_random' or 'importance_sampling')"""
 
     # Custom learning parameters
     policy_learning_rate: Optional[float] = None

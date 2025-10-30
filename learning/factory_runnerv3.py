@@ -90,6 +90,7 @@ except ImportError:
         sys.exit(1)
 
 from memories.multi_random import MultiRandomMemory
+from memories.importance_sampling_memory import ImportanceSamplingMemory
 import learning.launch_utils_v3 as lUtils
 from configs.config_manager_v3 import ConfigManagerV3
 from wrappers.skrl.async_critic_isaaclab_wrapper import AsyncCriticIsaacLabWrapper
@@ -265,14 +266,33 @@ def main(
 
     # Create memory using pre-configured parameters
     print("[INFO]:   Creating memory")
-    memory = MultiRandomMemory(
-        memory_size=configs['primary'].rollout_steps(configs['environment'].episode_length_s),
-        num_envs=env.num_envs,
-        device=device,
-        replacement=True,
-        num_agents=configs['primary'].total_agents
-    )
-    print("[INFO]:   Memory Created")
+    memory_type = configs['agent'].memory_type
+
+    if memory_type == 'multi_random':
+        memory = MultiRandomMemory(
+            memory_size=configs['primary'].rollout_steps(configs['environment'].episode_length_s),
+            num_envs=env.num_envs,
+            device=device,
+            replacement=True,
+            num_agents=configs['primary'].total_agents
+        )
+        print(f"[INFO]:   Memory Created: MultiRandomMemory")
+    elif memory_type == 'importance_sampling':
+        memory = ImportanceSamplingMemory(
+            memory_size=configs['primary'].rollout_steps(configs['environment'].episode_length_s),
+            num_envs=env.num_envs,
+            device=device,
+            replacement=True,
+            num_agents=configs['primary'].total_agents,
+            target_true_ratio=0.5,  # Default value, can be made configurable later
+            min_true_percentage=0.05  # Default value, can be made configurable later
+        )
+        print(f"[INFO]:   Memory Created: ImportanceSamplingMemory")
+    else:
+        raise ValueError(
+            f"Invalid memory_type '{memory_type}'. "
+            f"Must be 'multi_random' or 'importance_sampling'"
+        )
 
     # Create models using pre-configured parameters
     print("[INFO]:   Creating models")
