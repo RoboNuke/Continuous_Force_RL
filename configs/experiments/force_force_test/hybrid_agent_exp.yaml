@@ -4,7 +4,7 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/LCLoP_wDf_calib_ff_tracker.txt"
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/LCLoP0_wDf_calib_ff_tracker.txt"
   max_steps: 10022400
 
 # Model configuration for hybrid agent
@@ -30,6 +30,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: "LCLo2_wDf_calib_ff_test"
+  name: "LCLoP0_wDf_calib_ff_test"
   tags: ['Force-Force']
-  group: "LCLoP_wDf_calib_ff_test"
+  group: "LCLoP0_wDf_calib_ff_test"
