@@ -457,8 +457,6 @@ class ForceTorqueWrapper(gym.Wrapper):
             self.unwrapped.extras['to_log']['Contact / In-Contact Y'] = self.unwrapped.in_contact[:, 1].float()
             self.unwrapped.extras['to_log']['Contact / In-Contact Z'] = self.unwrapped.in_contact[:, 2].float()
 
-    ###########################################################################
-    ### HERE FOR TESTING ONLY TODO REMOVE ME!! ################################
     def _contact_detected_in_range(self):
         # get true state from directly-held contact sensor (not from scene)
         if self._held_fixed_contact_sensor is not None:
@@ -482,8 +480,6 @@ class ForceTorqueWrapper(gym.Wrapper):
             self.unwrapped.extras['to_log']['Contact / Real Contact X'] = self.real_contact[:,0].float()
             self.unwrapped.extras['to_log']['Contact / Real Contact Y'] = self.real_contact[:,1].float()
             self.unwrapped.extras['to_log']['Contact / Real Contact Z'] = self.real_contact[:,2].float()
-
-        #########################################################################
 
     def _wrapped_reset_buffers(self, env_ids):
         """

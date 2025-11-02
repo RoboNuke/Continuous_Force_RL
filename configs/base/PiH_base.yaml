@@ -183,6 +183,7 @@ wrappers:
     enabled: false
     # ctrl_torque is computed from primary config automatically
     reward_type: "none" #"simp"
+    use_ground_truth_selection: false
 
   # Factory-specific metrics tracking
   factory_metrics:

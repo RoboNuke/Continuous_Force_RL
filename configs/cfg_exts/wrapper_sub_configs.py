@@ -40,6 +40,7 @@ class HybridControlConfig:
     """Hybrid control wrapper configuration."""
     enabled: bool = False
     reward_type: str = "simp"
+    use_ground_truth_selection: bool = False
 
 
 @dataclass

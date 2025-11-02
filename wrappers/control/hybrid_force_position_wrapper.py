@@ -47,7 +47,8 @@ class HybridForcePositionWrapper(gym.Wrapper):
             reward_type="simp",
             ctrl_cfg=None,
             task_cfg=None,
-            num_agents=1
+            num_agents=1,
+            use_ground_truth_selection=False
         ):
         """
         Initialize hybrid force-position control wrapper.
@@ -65,6 +66,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
             ctrl_cfg: HybridCtrlCfg instance. Must be provided - no defaults.
             task_cfg: HybridTaskCfg instance. Must be provided - no defaults.
             num_agents: Number of agents for static environment assignment.
+            use_ground_truth_selection: If True, override selection actions with ground truth contact state.
         """
         # Store original action space size before modification
         self._original_action_size = getattr(env.unwrapped.cfg, 'action_space', 6)
@@ -115,6 +117,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
         self.ema_factor = self.ctrl_cfg.ema_factor
         self.no_sel_ema = self.ctrl_cfg.no_sel_ema
         self.target_init_mode = self.ctrl_cfg.target_init_mode
+        self.use_ground_truth_selection = use_ground_truth_selection
 
         # Update action space to include selection matrix + position + force
         original_action_space = 6  # Original position + rotation actions
@@ -326,7 +329,8 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Create a modified action tensor that replaces selection values
         # Clone preserves gradients for position/force, detach prevents gradients for ground truth
         modified_action = action.clone()
-        modified_action[:, :self.force_size] = self.unwrapped.in_contact[:, :self.force_size].float().detach()
+        if self.use_ground_truth_selection:
+            modified_action[:, :self.force_size] = self.unwrapped.in_contact[:, :self.force_size].float().detach()
 
         # Override base env's EMA - hybrid control does its own EMA on actions
         # Use modified action for storage

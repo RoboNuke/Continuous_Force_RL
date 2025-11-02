@@ -20,6 +20,7 @@ wrappers:
   hybrid_control:
     enabled: true
     reward_type: "none"
+    use_ground_truth_selection: true
     
   pose_contact_logging:
     enabled: false

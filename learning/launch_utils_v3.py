@@ -97,7 +97,8 @@ def apply_wrappers(env, configs):
             reward_type=wrappers_config.hybrid_control.reward_type,
             ctrl_cfg=configs['environment'].ctrl,
             task_cfg=configs['environment'].hybrid_task,
-            num_agents=configs['primary'].total_agents
+            num_agents=configs['primary'].total_agents,
+            use_ground_truth_selection=wrappers_config.hybrid_control.use_ground_truth_selection
         )
 
     if wrappers_config.manual_control.enabled:
