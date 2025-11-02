@@ -211,6 +211,7 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
         self.curriculum_sampled_relative_heights = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
 
         hand_down_quat = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
+        envs_needing_centered_xy = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         while True:
             n_bad = bad_envs.shape[0]
 
@@ -234,6 +235,7 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
             # Edge case: When held object would be below fixed tip, force centered XY spawn
             peg_tip_z = above_fixed_pos_rand[:,2] - self.unwrapped.cfg_task.held_asset_pos_noise[2] - hand_to_held[bad_envs, 2]
             held_below_fixed = peg_tip_z  <= 0.0
+            envs_needing_centered_xy[bad_envs[held_below_fixed]] = True
             if torch.any(held_below_fixed):
                 # center peg when below safe height
                 above_fixed_pos_rand[held_below_fixed, 0] = 0.0
@@ -321,9 +323,9 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
         # Add asset in hand randomization
         rand_sample = torch.rand((self.unwrapped.num_envs, 3), dtype=torch.float32, device=self.unwrapped.device) #* 0.0 + 0.5
 
-        # TODO=== CURRICULUM MODIFICATION: Zero noise for below-hole spawns ===
+        # === CURRICULUM MODIFICATION: Zero noise for below-hole spawns ===
         if torch.any(held_below_fixed):
-            rand_sample[held_below_fixed, :2] = 0.5
+            rand_sample[envs_needing_centered_xy, :2] = 0.5
             
         self.unwrapped.held_asset_pos_noise = 2 * (rand_sample - 0.5)  # [-1, 1]
         if self.unwrapped.cfg_task.name == "gear_mesh":
