@@ -352,6 +352,10 @@ def create_block_ppo_agents(env, configs, models, memory):
         else:
             print(f"  - WARNING: Unknown learning_rate_scheduler: {scheduler_name}")
 
+    # Determine force_size based on ctrl_torque configuration
+    force_size = 6 if configs['primary'].ctrl_torque else 3
+    configs['agent'].force_size = force_size
+
     # Create BlockPPO agent
 
     agent = BlockPPO(

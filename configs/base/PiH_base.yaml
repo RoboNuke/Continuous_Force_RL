@@ -320,6 +320,8 @@ agent:
   value_loss_scale: 1.0
   kl_threshold: 0.05
   time_limit_bootstrap: true
+
+  supervised_selection_loss_weight: 0.0
   #checkpoint_interval: 1500
 
   # Reward shaping

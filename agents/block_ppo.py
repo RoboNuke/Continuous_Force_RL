@@ -114,6 +114,10 @@ class BlockPPO(PPO):
         self._random_value_timesteps = cfg['random_value_timesteps']
         self.upload_ckpts_to_wandb = cfg.get('upload_ckpts_to_wandb', False)
 
+        # Supervised selection loss parameters
+        self.force_size = cfg.get('force_size', 3)
+        self.supervised_selection_loss_weight = cfg.get('supervised_selection_loss_weight', 0.0)
+
         # Initialize agent experiment configs
         self.agent_exp_cfgs = cfg['agent_exp_cfgs']
         """for i in range(self.num_agents):
@@ -188,9 +192,10 @@ class BlockPPO(PPO):
             self.memory.create_tensor(name="values", size=1, dtype=torch.float32)
             self.memory.create_tensor(name="returns", size=1, dtype=torch.float32)
             self.memory.create_tensor(name="advantages", size=1, dtype=torch.float32)
+            self.memory.create_tensor(name="in-contact", size=self.force_size, dtype=torch.float32)
 
             # tensors sampled during training
-            self._tensors_names = ["states", "actions", "log_prob", "values", "returns", "advantages"]
+            self._tensors_names = ["states", "actions", "log_prob", "values", "returns", "advantages", "in-contact"]
 
 
         # create temporary variables needed for storage and computation
@@ -451,23 +456,38 @@ class BlockPPO(PPO):
                 rewards += self._discount_factor * values_reshaped * truncated
             
             
-            # alternative approach to deal with termination, see ppo but no matter what it 
-            # goes through every sample in the memory (even if not filled), this way we set 
+            # alternative approach to deal with termination, see ppo but no matter what it
+            # goes through every sample in the memory (even if not filled), this way we set
             # the actions to zero on termination, and then pass the fixed state in basically
             #copy_state = {'policy':states['policy'].clone(), 'critic':states['critic'].clone()}
             #copy_next_state = {'policy':next_states['policy'].clone(), 'critic':next_states['critic'].clone()}
             #print("Wandb Log Prob Size:", self._current_log_prob.size())
             #ta = actions
             #print("Wandb Action Pos:", torch.max(ta[:,3:6]).item(), torch.min(ta[:,3:6]).item(), torch.median(ta[:,3:6]).item())
+
+            # Get in-contact state from ForceTorqueWrapper
+            ft_wrapper = self._get_force_torque_wrapper()
+            if ft_wrapper is not None and hasattr(ft_wrapper.unwrapped, 'in_contact'):
+                # Extract first force_size contact flags (no aggregation)
+                # in_contact shape: (num_envs, 6) -> extract (num_envs, force_size)
+                in_contact_state = ft_wrapper.unwrapped.in_contact[:, :self.force_size].float()
+            else:
+                # Error if wrapper not found - fail fast and loud
+                raise RuntimeError(
+                    "ForceTorqueWrapper not found in environment wrapper chain or in_contact attribute missing. "
+                    "Ensure ForceTorqueWrapper is properly applied to the environment."
+                )
+
             self.add_sample_to_memory(
-                states=states.clone(), 
-                actions=actions.clone(), 
-                rewards=rewards.clone(), 
+                states=states.clone(),
+                actions=actions.clone(),
+                rewards=rewards.clone(),
                 next_states=next_states.clone(),
                 terminated=terminated.clone(),
-                truncated=truncated.clone(), 
-                log_prob=self._current_log_prob.clone(), 
-                values=values.clone()
+                truncated=truncated.clone(),
+                log_prob=self._current_log_prob.clone(),
+                values=values.clone(),
+                in_contact=in_contact_state.clone()
             )   
     
     def post_interaction(self, timestep: int, timesteps: int) -> None:
@@ -643,12 +663,14 @@ class BlockPPO(PPO):
                 sampled_values,
                 sampled_returns,
                 sampled_advantages,
+                sampled_in_contact,
             ) in sampled_batches:
                 with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
                     sampled_states = self._state_preprocessor(sampled_states, train=not epoch)
-                    _, next_log_prob, _ = self.policy.act(
+                    _, next_log_prob, policy_outputs = self.policy.act(
                         {"states": sampled_states, "taken_actions": sampled_actions}, role="policy"
                     )
+                    mean_actions = policy_outputs["mean_actions"]  # Extract mean actions for supervised loss
                     sampled_states = sampled_states.view(sample_size, self.num_agents, self.envs_per_agent, -1)
                     next_log_prob = next_log_prob.view(sample_size, self.num_agents, self.envs_per_agent)
                     sampled_log_prob = sampled_log_prob.view(sample_size, self.num_agents, self.envs_per_agent)
@@ -687,6 +709,37 @@ class BlockPPO(PPO):
                     policy_losses = -torch.min(surrogate, surrogate_clipped)
                     policy_loss = policy_losses[:,keep_mask,:].mean()
 
+                    # Compute supervised selection loss
+                    if self.supervised_selection_loss_weight > 1e-8:  # Check if enabled
+                        # Extract selection probabilities from mean_actions (already computed)
+                        # mean_actions shape: (sample_size * num_agents * envs_per_agent, action_dim)
+                        # First force_size values are selection probabilities (after sigmoid)
+                        selection_probs = mean_actions[:, :self.force_size]
+
+                        # Reshape both to match minibatch structure
+                        selection_probs = selection_probs.view(sample_size, self.num_agents, self.envs_per_agent, self.force_size)
+
+                        # sampled_in_contact shape: (total_num_envs, force_size) where total_num_envs = sample_size * num_agents * envs_per_agent
+                        # Reshape to: (sample_size, num_agents, envs_per_agent, force_size)
+                        sampled_in_contact = sampled_in_contact.view(sample_size, self.num_agents, self.envs_per_agent, self.force_size)
+
+                        # Binary cross-entropy per sample: compare predicted probs vs ground truth contact
+                        # Shape: (sample_size, num_agents, envs_per_agent, force_size)
+                        supervised_losses_per_dim = F.binary_cross_entropy(
+                            selection_probs,
+                            sampled_in_contact,
+                            reduction='none'
+                        )
+                        # Average across force dimensions to get per-sample loss
+                        # Shape: (sample_size, num_agents, envs_per_agent)
+                        supervised_losses = supervised_losses_per_dim.mean(dim=-1)
+
+                        # Compute total loss for backprop (with weight and keep_mask filtering)
+                        supervised_loss = self.supervised_selection_loss_weight * supervised_losses[:, keep_mask, :].mean()
+                    else:
+                        supervised_loss = 0
+                        supervised_losses = None
+
                     # compute value loss
                     batch_total_envs = sample_size * self.num_agents * self.envs_per_agent
                     predicted_values, _, _ = self.value.act({"states": sampled_states.view(batch_total_envs,-1)}, role="value")
@@ -712,7 +765,8 @@ class BlockPPO(PPO):
                     old_log_probs = sampled_log_prob,
                     new_log_probs = next_log_prob,
                     entropies = entropys,
-                    policy_losses = policy_losses
+                    policy_losses = policy_losses,
+                    supervised_losses = supervised_losses
                 )
 
                 self.optimizer.zero_grad()
@@ -722,7 +776,7 @@ class BlockPPO(PPO):
                 if timestep < self._random_value_timesteps:
                     self.update_nets(value_loss, update_policy=False, update_critic=True)  # Value-only training
                 else:
-                    self.update_nets(policy_loss + entropy_loss + value_loss, update_policy=True, update_critic=True)  # Both networks
+                    self.update_nets(policy_loss + entropy_loss + value_loss + supervised_loss, update_policy=True, update_critic=True)  # Both networks
 
 
                 if self.value_update_ratio > 1:
@@ -743,7 +797,8 @@ class BlockPPO(PPO):
                         keep_mask = keep_mask,
                         returns = sampled_returns,
                         values = predicted_values,
-                        value_losses = value_losses
+                        value_losses = value_losses,
+                        supervised_losses = supervised_losses
                     )
                 else:
                     # Log all metrics - network states already collected
@@ -756,7 +811,8 @@ class BlockPPO(PPO):
                         new_log_probs = next_log_prob,
                         entropies = entropys,
                         policy_losses = policy_losses,
-                        value_losses=value_losses
+                        value_losses=value_losses,
+                        supervised_losses = supervised_losses
                     )
                 mini_batch += 1
 
@@ -1326,7 +1382,8 @@ class BlockPPO(PPO):
             new_log_probs=None,
             entropies=None,
             policy_losses=None,
-            value_losses=None
+            value_losses=None,
+            supervised_losses=None
     ):
         """Log minibatch update metrics through wrapper system with per-agent support.
 
@@ -1345,6 +1402,7 @@ class BlockPPO(PPO):
             entropies: Entropy values tensor (sample_size, num_agents, envs_per_agent)
             policy_losses: Policy loss values tensor (sample_size, num_agents, envs_per_agent)
             value_losses: Value loss values tensor (sample_size, num_agents, envs_per_agent)
+            supervised_losses: Supervised selection loss tensor (sample_size, num_agents, envs_per_agent) or None
         """
         wrapper = self._get_logging_wrapper()
         if wrapper is None:
@@ -1449,6 +1507,14 @@ class BlockPPO(PPO):
                     if keep_mask is not None:
                         adv_skew[~keep_mask] = float('nan')
                     stats["Advantage/Skew"] = adv_skew
+
+                # --- Supervised Selection Loss stats (vectorized) ---
+                if supervised_losses is not None:
+                    # Vectorized mean and quantiles (same as policy_losses processing)
+                    supervised_loss_avg = supervised_losses.mean(dim=(0, 2))  # Shape: (num_agents,)
+                    if keep_mask is not None:
+                        supervised_loss_avg[~keep_mask] = float('nan')
+                    stats["Policy/Supervised_Loss_Avg"] = supervised_loss_avg
 
             # Pass vectorized tensors to wrapper system (no .item() calls!)
             wrapper.add_metrics(stats)
@@ -1686,6 +1752,33 @@ class BlockPPO(PPO):
 
         while current_env is not None and search_depth < max_depth:
             if hasattr(current_env, 'add_metrics'):
+                return current_env
+
+            # Try different wrapper access patterns
+            next_env = None
+            for attr in ['env', '_env', 'unwrapped']:
+                if hasattr(current_env, attr):
+                    next_env = getattr(current_env, attr)
+                    break
+
+            current_env = next_env
+            search_depth += 1
+
+        return None
+
+    def _get_force_torque_wrapper(self):
+        """Get the ForceTorqueWrapper for accessing contact state.
+
+        Returns the wrapper object if found, None otherwise.
+        Searches through the wrapper chain to find ForceTorqueWrapper.
+        """
+        current_env = self.env
+        search_depth = 0
+        max_depth = 10  # Prevent infinite loops
+
+        while current_env is not None and search_depth < max_depth:
+            # Check if this is the ForceTorqueWrapper
+            if hasattr(current_env, '__class__') and 'ForceTorqueWrapper' in str(current_env.__class__):
                 return current_env
 
             # Try different wrapper access patterns

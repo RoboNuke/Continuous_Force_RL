@@ -58,6 +58,9 @@ class ExtendedPPOConfig:
     use_huber_value_loss: bool = False
     """Use Huber loss for value function"""
 
+    supervised_selection_loss_weight: float = 0.0
+    """Weight for supervised selection loss (0.0 = disabled)"""
+
     # Reward shaping
     reward_shaper_type: str = 'const_scale'
     """Type of reward shaper ('const_scale', etc.)"""
@@ -75,6 +78,9 @@ class ExtendedPPOConfig:
     # Block PPO specific parameters
     break_force: Optional[float] = None
     """Break force for this agent (set during multi-agent setup)"""
+
+    force_size: int = 3
+    """Size of force selection vector (3 for XYZ, 6 for XYZ + torque)"""
 
     easy_mode: bool = False
     """Enable easy mode for debugging"""
@@ -283,6 +289,7 @@ class ExtendedPPOConfig:
             'critic_learning_rate': self.critic_learning_rate,
             'value_update_ratio': self.value_update_ratio,
             'use_huber_value_loss': self.use_huber_value_loss,
+            'supervised_selection_loss_weight': self.supervised_selection_loss_weight,
             'clip_predicted_values': self.clip_predicted_values,
             'reward_shaper_type': self.reward_shaper_type,
             'rewards_shaper_scale': self.rewards_shaper_scale,
@@ -304,6 +311,7 @@ class ExtendedPPOConfig:
             # Agent-specific parameters
             'disable_progressbar': self.disable_progressbar,
             'break_force': self.break_force,
+            'force_size': self.force_size,
             'easy_mode': self.easy_mode,
             'track_ckpts': self.track_ckpts,
             'upload_ckpts_to_wandb': self.upload_ckpts_to_wandb,
