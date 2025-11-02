@@ -6,6 +6,9 @@ This wrapper implements bidirectional curriculum learning for spawn height diffi
 - Decreases difficulty (lowers min spawn height) when agent struggles
 - Per-agent curriculum progression based on rollout success rates
 - Uses full factory environment randomization logic (robot IK + held object positioning)
+
+Note: All height values (min_height, max_height) are RELATIVE OFFSETS above the fixed tip,
+not absolute world coordinates. E.g., min_height=0.026 means "spawn at least 2.6cm above the hole tip".
 """
 
 import torch
@@ -86,6 +89,7 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
             )
 
         # Per-environment minimum heights (vectorized for efficiency)
+        # NOTE: min_heights represents RELATIVE OFFSETS above the fixed tip, not absolute world coordinates
         # Initialize all environments to config min_height
         self.min_heights = torch.full((self.num_envs,), self.config_min_height, device=self.device, dtype=torch.float32)
 
@@ -104,7 +108,7 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
         print(f"[SpawnHeightCurriculumWrapper] Initialized with {self.num_agents} agents")
         print(f"  Progress threshold: {self.progress_threshold}, Regress threshold: {self.regress_threshold}")
         print(f"  Height deltas: +{self.progress_height_delta}m (progress), -{self.regression_height_delta}m (regress)")
-        print(f"  Min height: {self.config_min_height}m")
+        print(f"  Min relative height: {self.config_min_height}m (offset above fixed tip)")
 
     def _find_factory_metrics_wrapper(self):
         """Find FactoryMetricsWrapper in the wrapper chain."""
@@ -203,67 +207,51 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
         bad_envs = env_ids.clone()
         ik_attempt = 0
 
+        # Store sampled heights for all envs (for held asset noise clamping later)
+        self.curriculum_sampled_relative_heights = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
+
         hand_down_quat = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
         while True:
             n_bad = bad_envs.shape[0]
 
-            above_fixed_pos = fixed_tip_pos.clone()
+            above_fixed_pos = fixed_tip_pos.clone() # n x 3
+            above_fixed_pos[:, 2] += self.unwrapped.cfg_task.hand_init_pos[2] # n x 3
 
+            rand_sample = torch.rand((n_bad, 3), dtype=torch.float32, device=self.device) #b x 3
+            above_fixed_pos_rand = 2 * (rand_sample - 0.5)  # [-1, 1] b x 3
+            hand_init_pos_rand = torch.tensor(self.unwrapped.cfg_task.hand_init_pos_noise, device=self.device) # 1 x 3
+            above_fixed_pos_rand = above_fixed_pos_rand @ torch.diag(hand_init_pos_rand) # b x 3
             # === CURRICULUM MODIFICATION: Sample height from per-env range (vectorized) ===
-            max_height = self.unwrapped.cfg_task.hand_init_pos[2] + above_fixed_pos[bad_envs,2]
+            # above_fixed_pos starts a hand_init_pos height, so the above_fixed_pos_rand is relative to hand init height
+            max_relative_height = above_fixed_pos[bad_envs, 2] + self.unwrapped.cfg_task.hand_init_pos_noise[2] # b x 3
+            # we add the hand_to_held height in here because user specifies minimum in peg tip frame, but needs to be in
+            # fingertip frame
+            hand_to_held, _ = self.unwrapped.get_handheld_asset_relative_pose()
+            min_relative_heights = self.min_heights[bad_envs] + hand_to_held[bad_envs, 2] # b x 3
+            height_ranges = max_relative_height - min_relative_heights # b x 3
+            above_fixed_pos_rand[:, 2] = height_ranges * ( 2.0 * (rand_sample[:, 2]-0.5)) + min_relative_heights # b x 3
 
-            # Get min heights for bad_envs
-            min_heights_bad = self.min_heights[bad_envs]
-            #print(min_heights_bad)
-            # Sample heights uniformly from [min_height, max_height] for each env
-            height_ranges = max_height - min_heights_bad
-            rand_factors = torch.rand(len(bad_envs), device=self.device)
-            sampled_heights = min_heights_bad + rand_factors * height_ranges
-            
-            above_fixed_pos[bad_envs, 2] = sampled_heights
             # Edge case: When held object would be below fixed tip, force centered XY spawn
-            # This happens when sampled_height is small (gripper near/below fixed tip)
-            # Check which envs need centered spawning (held object below fixed tip)
-            held_below_fixed = sampled_heights < 0.026  # Gripper below fixed tip means held object definitely below
-            
+            peg_tip_z = above_fixed_pos_rand[:,2] - self.unwrapped.cfg_task.held_asset_pos_noise[2] - hand_to_held[bad_envs, 2]
+            held_below_fixed = peg_tip_z  <= 0.0
             if torch.any(held_below_fixed):
-                # Get the bad_envs that need centered spawning
-                centered_env_mask = held_below_fixed
-                centered_bad_indices = torch.where(centered_env_mask)[0]
-                centered_bad_envs = bad_envs[centered_bad_indices]
+                # center peg when below safe height
+                above_fixed_pos_rand[held_below_fixed, 0] = 0.0
+                above_fixed_pos_rand[held_below_fixed, 1] = 0.0
 
-                # Force XY position to be within xy_threshold of fixed tip
-                # Generate random position within circular region of radius xy_threshold
-                n_centered = len(centered_bad_envs)
-                random_angles = torch.rand(n_centered, device=self.device) * 2 * 3.14159
-                random_radii = torch.rand(n_centered, device=self.device) * self.xy_threshold * 0.9  # 90% of threshold
-
-                offset_x = random_radii * torch.cos(random_angles)
-                offset_y = random_radii * torch.sin(random_angles)
-
-                # Apply centered offsets (override XY, keep Z from curriculum)
-                above_fixed_pos[centered_bad_envs, 0] = fixed_tip_pos[centered_bad_envs, 0] + offset_x
-                above_fixed_pos[centered_bad_envs, 1] = fixed_tip_pos[centered_bad_envs, 1] + offset_y
+            #################################################################################
             # === END CURRICULUM MODIFICATION ===
 
-            # Apply position noise (for non-centered envs, and XY noise for centered envs)
-            rand_sample = torch.rand((n_bad, 3), dtype=torch.float32, device=self.device)
-            above_fixed_pos_rand = 2 * (rand_sample - 0.5)  # [-1, 1]
-            hand_init_pos_rand = torch.tensor(self.unwrapped.cfg_task.hand_init_pos_noise, device=self.device)
-            above_fixed_pos_rand = above_fixed_pos_rand @ torch.diag(hand_init_pos_rand)
+            # move it into local/world (unclear) frame
+            above_fixed_pos[bad_envs] += above_fixed_pos_rand # b x 3
+            above_fixed_pos[bad_envs, 2] = above_fixed_pos_rand[:, 2] + fixed_tip_pos.clone()[bad_envs,2]
 
-            # Only apply XY noise to non-centered envs (centered envs already have controlled XY)
-            if torch.any(held_below_fixed):
-                above_fixed_pos_rand[centered_bad_indices, 0:2] = 0.0  # No XY noise for centered spawns
-
-            above_fixed_pos[bad_envs] += above_fixed_pos_rand
-            
             # (b) get random orientation facing down
             hand_down_euler = (
                 torch.tensor(self.unwrapped.cfg_task.hand_init_orn, device=self.device).unsqueeze(0).repeat(n_bad, 1)
             )
 
-            rand_sample = torch.rand((n_bad, 3), dtype=torch.float32, device=self.device)
+            rand_sample = torch.rand((n_bad, 3), dtype=torch.float32, device=self.device) #* 0.0 + 0.5
             above_fixed_orn_noise = 2 * (rand_sample - 0.5)  # [-1, 1]
             hand_init_orn_rand = torch.tensor(self.unwrapped.cfg_task.hand_init_orn_noise, device=self.device)
             above_fixed_orn_noise = above_fixed_orn_noise @ torch.diag(hand_init_orn_rand)
@@ -271,6 +259,7 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
             hand_down_quat[bad_envs, :] = torch_utils.quat_from_euler_xyz(
                 roll=hand_down_euler[:, 0], pitch=hand_down_euler[:, 1], yaw=hand_down_euler[:, 2]
             )
+
             # (c) iterative IK Method
             self.unwrapped.ctrl_target_fingertip_midpoint_pos[bad_envs, ...] = above_fixed_pos[bad_envs, ...]
             self.unwrapped.ctrl_target_fingertip_midpoint_quat[bad_envs, ...] = hand_down_quat[bad_envs, :]
@@ -290,7 +279,6 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
             )
 
             ik_attempt += 1
-            print(f"\t[DEBUG]: IK Attempt: {ik_attempt} \tRemaining: {bad_envs.shape[0]}")
 
         self.unwrapped.step_sim_no_action()
 
@@ -331,7 +319,12 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
         )
 
         # Add asset in hand randomization
-        rand_sample = torch.rand((self.unwrapped.num_envs, 3), dtype=torch.float32, device=self.unwrapped.device)
+        rand_sample = torch.rand((self.unwrapped.num_envs, 3), dtype=torch.float32, device=self.unwrapped.device) #* 0.0 + 0.5
+
+        # TODO=== CURRICULUM MODIFICATION: Zero noise for below-hole spawns ===
+        if torch.any(held_below_fixed):
+            rand_sample[held_below_fixed, :2] = 0.5
+            
         self.unwrapped.held_asset_pos_noise = 2 * (rand_sample - 0.5)  # [-1, 1]
         if self.unwrapped.cfg_task.name == "gear_mesh":
             self.unwrapped.held_asset_pos_noise[:, 2] = -rand_sample[:, 2]  # [-1, 0]
@@ -352,7 +345,6 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
         self.unwrapped._held_asset.write_root_pose_to_sim(held_state[:, 0:7])
         self.unwrapped._held_asset.write_root_velocity_to_sim(held_state[:, 7:])
         self.unwrapped._held_asset.reset()
-
         #  Close hand
         # Set gains to use for quick resets.
         reset_task_prop_gains = torch.tensor(self.unwrapped.cfg.ctrl.reset_task_prop_gains, device=self.unwrapped.device).repeat(
@@ -378,6 +370,7 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
         # Set initial actions to involve no-movement. Needed for EMA/correct penalties.
         self.unwrapped.actions = torch.zeros_like(self.unwrapped.actions)
         self.unwrapped.prev_actions = torch.zeros_like(self.unwrapped.actions)
+        
         # Back out what actions should be for initial state.
         # Relative position to bolt tip.
         self.unwrapped.fixed_pos_action_frame[:] = self.unwrapped.fixed_pos_obs_frame + self.unwrapped.init_fixed_pos_obs_noise
@@ -419,13 +412,15 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
         Update curriculum min heights for all agents based on rollout success rates.
 
         Called after each rollout when episode data is available.
+        Note: All heights are relative offsets above the fixed tip.
         """
         metrics_wrapper = self._find_factory_metrics_wrapper()
         if not metrics_wrapper or metrics_wrapper.last_pubbed_agent_metrics is None:
             print("[Curriculum] Skipping update")
             return
 
-        max_height = self.unwrapped.cfg_task.hand_init_pos[2]
+        # Max relative height (offset above fixed tip)
+        max_relative_height = self.unwrapped.cfg_task.hand_init_pos[2]
 
         for agent_id in range(self.num_agents):
             # Get success rates from last rollout
@@ -452,12 +447,12 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
 
             # Simple delta adjustment
             if success_rate >= self.progress_threshold:
-                # Make harder: increase min_height
-                new_min = min(old_min + self.progress_height_delta, max_height)
+                # Make harder: increase min_relative_height
+                new_min = min(old_min + self.progress_height_delta, max_relative_height)
                 # Update all environments for this agent
                 self.min_heights[agent_env_indices] = new_min
             elif success_rate < self.regress_threshold:
-                # Make easier: decrease min_height
+                # Make easier: decrease min_relative_height
                 new_min = max(old_min - self.regression_height_delta, self.config_min_height)
                 # Update all environments for this agent
                 self.min_heights[agent_env_indices] = new_min
@@ -465,8 +460,8 @@ class SpawnHeightCurriculumWrapper(gym.Wrapper):
                 # No change
                 continue
 
-            print(f"[Curriculum] Agent {agent_id}: min_height {old_min:.3f}m -> {new_min:.3f}m "
-                  f"(SR={success_rate:.3f}, range=[{new_min:.3f}, {max_height:.3f}])")
+            print(f"[Curriculum] Agent {agent_id}: min_relative_height {old_min:.3f}m -> {new_min:.3f}m "
+                  f"(SR={success_rate:.3f}, relative_range=[{new_min:.3f}, {max_relative_height:.3f}])")
 
     def _wrapped_reset_idx(self, env_ids):
         """Reset specified environments and update curriculum."""

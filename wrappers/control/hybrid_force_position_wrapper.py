@@ -834,7 +834,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         # Combine wrenches using filtered selection matrix
         task_wrench = (1 - self.sel_matrix) * pose_wrench + self.sel_matrix * force_wrench
-        #task_wrench = pose_wrench
+        
         # Apply bounds constraint to final wrench - prevent motion outside boundaries
         delta_pos = self.unwrapped.fingertip_midpoint_pos - self.unwrapped.fixed_pos_action_frame
         pos_bounds = self.unwrapped.cfg.ctrl.pos_action_bounds

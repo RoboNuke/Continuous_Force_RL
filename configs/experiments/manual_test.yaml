@@ -12,10 +12,28 @@ primary:
 environment:
   scene:
     num_envs: 1
-  episode_length_s: 300  # 5 minutes for manual testing
+  episode_length_s: 300  # 5 minutes for manual testing    
+  task:
+    # Fixed Asset (applies to all tasks)
+    fixed_asset_init_pos_noise: [0.0, 0.0, 0.0]
+    fixed_asset_init_orn_deg: 0.0
+    fixed_asset_init_orn_range_deg: 0.0
 
 # Enable manual control wrapper
 wrappers:
+  # Spawn height curriculum learning
+  spawn_height_curriculum:
+    enabled: true 
+    progress_threshold: 0.60         # Increase min_height when success rate >= this
+    regress_threshold: 0.10          # Decrease min_height when success rate < this
+    progress_height_delta: 0.005     # Increase min by 5mm when succeeding
+    regression_height_delta: 0.003   # Decrease min by 3mmm when struggling
+    min_height: 0.0 #0.015  
+    
+  hybrid_control:
+    enabled: true
+    reward_type: "none"
+
   manual_control:
     enabled: true
     checkpoint_path: null  # Set to checkpoint path to enable RL toggle

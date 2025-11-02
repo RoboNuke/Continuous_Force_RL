@@ -264,15 +264,17 @@ class ManualControlWrapper(gym.Wrapper):
             rot_offset = 6
             force_offset = 9
 
-            print("\n[MANUAL CONTROL] Current Actions:")
-            print(f"  Position: X={action[pos_offset]:.3f}, Y={action[pos_offset+1]:.3f}, Z={action[pos_offset+2]:.3f}")
-            print(f"  Rotation: Rx={action[rot_offset]:.3f}, Ry={action[rot_offset+1]:.3f}, Rz={action[rot_offset+2]:.3f}")
-            print(f"  Force:    Fx={action[force_offset]:.3f}, Fy={action[force_offset+1]:.3f}, Fz={action[force_offset+2]:.3f}")
+            # print("\n[MANUAL CONTROL] Current Actions:")
+            # print(f"  Position: X={action[pos_offset]:.3f}, Y={action[pos_offset+1]:.3f}, Z={action[pos_offset+2]:.3f}")
+            # print(f"  Rotation: Rx={action[rot_offset]:.3f}, Ry={action[rot_offset+1]:.3f}, Rz={action[rot_offset+2]:.3f}")
+            # print(f"  Force:    Fx={action[force_offset]:.3f}, Fy={action[force_offset+1]:.3f}, Fz={action[force_offset+2]:.3f}")
+            pass
         else:
             # Pose control: [px, py, pz, rx, ry, rz]
-            print("\n[MANUAL CONTROL] Current Actions:")
-            print(f"  Position: X={action[0]:.3f}, Y={action[1]:.3f}, Z={action[2]:.3f}")
-            print(f"  Rotation: Rx={action[3]:.3f}, Ry={action[4]:.3f}, Rz={action[5]:.3f}")
+            # print("\n[MANUAL CONTROL] Current Actions:")
+            # print(f"  Position: X={action[0]:.3f}, Y={action[1]:.3f}, Z={action[2]:.3f}")
+            # print(f"  Rotation: Rx={action[3]:.3f}, Ry={action[4]:.3f}, Rz={action[5]:.3f}")
+            pass
 
     def _print_contact_info(self):
         """Print contact sensor state and values."""
@@ -325,7 +327,8 @@ class ManualControlWrapper(gym.Wrapper):
 
         # Print all on one line with tabs
         if contact_parts:
-            print(f"[CONTACT]\t" + "\t".join(contact_parts))
+            # print(f"[CONTACT]\t" + "\t".join(contact_parts))
+            pass
 
     def step(self, action):
         """

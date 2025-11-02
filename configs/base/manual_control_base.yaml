@@ -27,9 +27,13 @@ primary:
 environment:
   #sim:
   #  dt: 0.004166667
+  # Fixed Asset (applies to all tasks)
 
   task:
     name: 'peg_insert'
+    fixed_asset_init_pos_noise: [0.0, 0.0, 0.0]
+    fixed_asset_init_orn_deg: 0.0
+    fixed_asset_init_orn_range_deg: 0.0
 
     # ===== PHYSICS OVERRIDES - Contact Stability Tuning =====
     # These override IsaacLab's default factory physics parameters to debug contact bouncing
@@ -154,6 +158,14 @@ model:
 
 # WRAPPERS CONFIGURATION (Minimal for manual control)
 wrappers:
+  spawn_height_curriculum:
+    enabled: true 
+    progress_threshold: 0.60         # Increase min_height when success rate >= this
+    regress_threshold: 0.10          # Decrease min_height when success rate < this
+    progress_height_delta: 0.005     # Increase min by 5mm when succeeding
+    regression_height_delta: 0.003   # Decrease min by 3mmm when struggling
+    min_height: -0.011 
+    
   # Manual control wrapper (MAIN FEATURE)
   manual_control:
     enabled: true
@@ -169,10 +181,6 @@ wrappers:
 
   # Efficient reset (disabled - manual reset via keyboard)
   efficient_reset_enabled: false
-
-  # Spawn height curriculum (disabled)
-  spawn_height_curriculum:
-    enabled: false
 
   # Force-torque sensor (enabled for feedback)
   force_torque_sensor:
@@ -203,7 +211,7 @@ wrappers:
 
   # Metrics and logging (all disabled for manual testing)
   factory_metrics:
-    enabled: false
+    enabled: true
     publish_to_wandb: false
 
   wandb_logging:

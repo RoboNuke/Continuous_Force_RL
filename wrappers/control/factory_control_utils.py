@@ -124,6 +124,7 @@ def compute_dof_torque_from_wrench(
     u_null = cfg.ctrl.kd_null * -dof_vel[:, :7] + cfg.ctrl.kp_null * distance_to_default_dof_pos
     u_null = arm_mass_matrix @ u_null.unsqueeze(-1)
     torque_null = (torch.eye(7, device=device).unsqueeze(0) - torch.transpose(jacobian, 1, 2) @ j_eef_inv) @ u_null
+    #print(f"Null-space torques: {torque_null[0].squeeze()}")
     dof_torque[:, 0:7] += torque_null.squeeze(-1)
 
     # Clamp torques to safe limits
