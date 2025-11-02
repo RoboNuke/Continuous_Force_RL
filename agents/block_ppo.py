@@ -721,13 +721,19 @@ class BlockPPO(PPO):
 
                         # sampled_in_contact shape: (total_num_envs, force_size) where total_num_envs = sample_size * num_agents * envs_per_agent
                         # Reshape to: (sample_size, num_agents, envs_per_agent, force_size)
-                        sampled_in_contact = sampled_in_contact.view(sample_size, self.num_agents, self.envs_per_agent, self.force_size)
+                        sampled_in_contact_reshaped = sampled_in_contact.view(sample_size, self.num_agents, self.envs_per_agent, self.force_size)
+
+                        # Ensure targets are valid binary labels [0, 1] (they should already be, but clamp to be safe)
+                        sampled_in_contact_reshaped = torch.clamp(sampled_in_contact_reshaped, min=0.0, max=1.0)
+
+                        # Clamp selection_probs to valid range [eps, 1-eps] to avoid log(0) or log(1) issues
+                        selection_probs_clamped = torch.clamp(selection_probs, min=1e-7, max=1.0 - 1e-7)
 
                         # Binary cross-entropy per sample: compare predicted probs vs ground truth contact
                         # Shape: (sample_size, num_agents, envs_per_agent, force_size)
                         supervised_losses_per_dim = F.binary_cross_entropy(
-                            selection_probs,
-                            sampled_in_contact,
+                            selection_probs_clamped,
+                            sampled_in_contact_reshaped,
                             reduction='none'
                         )
                         # Average across force dimensions to get per-sample loss
