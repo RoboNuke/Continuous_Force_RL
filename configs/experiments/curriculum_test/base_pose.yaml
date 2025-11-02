@@ -1,0 +1,23 @@
+# Pose Control Experiment Configuration 
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+
+primary:
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/pose_curr_ff_tracker.txt"
+  #break_forces: [5,10]
+  
+# Model configuration for hybrid agent
+model:
+  use_hybrid_agent: false
+
+wrappers:
+  # Spawn height curriculum learning
+  spawn_height_curriculum:
+    enabled: true
+
+# Experiment metadata
+experiment:
+  name: "pose_curr_ff_test"
+  tags: ['Force-Force']
+  group: "pose_curr_ff_test"
