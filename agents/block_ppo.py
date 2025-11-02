@@ -711,6 +711,16 @@ class BlockPPO(PPO):
 
                     # Compute supervised selection loss
                     if self.supervised_selection_loss_weight > 1e-8:  # Check if enabled
+                        # Debug: Check for invalid values in sampled_in_contact before processing
+                        if torch.isnan(sampled_in_contact).any():
+                            raise RuntimeError("sampled_in_contact contains NaN values!")
+                        if torch.isinf(sampled_in_contact).any():
+                            raise RuntimeError("sampled_in_contact contains Inf values!")
+                        if (sampled_in_contact < 0.0).any() or (sampled_in_contact > 1.0).any():
+                            min_val = sampled_in_contact.min().item()
+                            max_val = sampled_in_contact.max().item()
+                            raise RuntimeError(f"sampled_in_contact has values outside [0,1]: min={min_val}, max={max_val}")
+
                         # Extract selection probabilities from mean_actions (already computed)
                         # mean_actions shape: (sample_size * num_agents * envs_per_agent, action_dim)
                         # First force_size values are selection probabilities (after sigmoid)
@@ -723,8 +733,9 @@ class BlockPPO(PPO):
                         # Reshape to: (sample_size, num_agents, envs_per_agent, force_size)
                         sampled_in_contact_reshaped = sampled_in_contact.view(sample_size, self.num_agents, self.envs_per_agent, self.force_size)
 
-                        # Ensure targets are valid binary labels [0, 1] (they should already be, but clamp to be safe)
-                        sampled_in_contact_reshaped = torch.clamp(sampled_in_contact_reshaped, min=0.0, max=1.0)
+                        # Ensure targets are valid binary labels [0, 1]
+                        # Clamp to be safe in case of numerical issues during conversion
+                        target_contact = torch.clamp(sampled_in_contact_reshaped, min=0.0, max=1.0)
 
                         # Clamp selection_probs to valid range [eps, 1-eps] to avoid log(0) or log(1) issues
                         selection_probs_clamped = torch.clamp(selection_probs, min=1e-7, max=1.0 - 1e-7)
@@ -733,7 +744,7 @@ class BlockPPO(PPO):
                         # Shape: (sample_size, num_agents, envs_per_agent, force_size)
                         supervised_losses_per_dim = F.binary_cross_entropy(
                             selection_probs_clamped,
-                            sampled_in_contact_reshaped,
+                            target_contact,
                             reduction='none'
                         )
                         # Average across force dimensions to get per-sample loss
