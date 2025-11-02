@@ -22,7 +22,8 @@ class HybridActionGMM(Distribution): #MixtureSameFamily):
             force_weight: float = 1.0,
             torque_weight: float = 1.0,
             uniform_rate: float = 0.01,
-            ctrl_torque: bool = False
+            ctrl_torque: bool = False,
+            learn_selection: bool = True
     ) -> None:
         self.mixture_distribution = mixture_distribution
         self.component_distribution = component_distribution
@@ -34,6 +35,7 @@ class HybridActionGMM(Distribution): #MixtureSameFamily):
         self.force_size = 6 if ctrl_torque else 3
         self.uniform_rate = uniform_rate
         self.sample_uniform = (self.uniform_rate > 0.0)
+        self.learn_sel = learn_selection
                 
     def sample(self, sample_shape=torch.Size()):
         with torch.no_grad():
@@ -108,8 +110,10 @@ class HybridActionGMM(Distribution): #MixtureSameFamily):
         ).sum(dim=-1)  # Sum over all 6 dimensions -> (batch,)
         #print(f"sel_log_prob shape: {sel_log_prob.shape}, continuous_log_prob shape: {continuous_log_prob.shape}")
 
-        #return sel_log_prob + continuous_log_prob
-        return continuous_log_prob
+        if self.learn_sel:
+            return sel_log_prob + continuous_log_prob
+        else:
+            return continuous_log_prob
     
     def entropy(self):
         #print("start")
@@ -122,9 +126,11 @@ class HybridActionGMM(Distribution): #MixtureSameFamily):
             raw_entropy[:,:,0]
 
         )
-        #print(type(entropy))
-        #print(entropy.size())
-        return entropy
+        #TODO I CAN'T imagine this is correct
+        if self.learn_sel:
+            return entropy + self.mixture_distribution.entropy()
+        else:
+            return entropy
     
     #    return 0.0
     #    samples = self.sample(sample_shape=(10000,))
@@ -147,7 +153,8 @@ class HybridGMMMixin(GaussianMixin):
             force_scale=1.0,
             torque_scale=1.0,
             uniform_rate=0.0,
-            ctrl_torque=False
+            ctrl_torque=False,
+            learn_selection = True
     ) -> None:
         super().__init__(clip_actions, clip_log_std, min_log_std, max_log_std, reduction, role)
         self.force_size = 6 if ctrl_torque else 3
@@ -156,6 +163,7 @@ class HybridGMMMixin(GaussianMixin):
         self.pos_scale = pos_scale
         self.rot_scale = rot_scale
         self.uniform_rate = uniform_rate
+        self.learn_sel = learn_selection
         
     def act(
         self, 
@@ -224,7 +232,8 @@ class HybridGMMMixin(GaussianMixin):
             pos_weight=self.pos_scale,
             rot_weight = self.rot_scale,
             ctrl_torque = self.force_size > 3,
-            uniform_rate = self.uniform_rate
+            uniform_rate = self.uniform_rate,
+            learn_selection=self.learn_sel
         )
         actions = self._g_distribution.sample()
     
@@ -318,6 +327,7 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
             action_space,
             device, 
             hybrid_agent_parameters={},
+            learn_selection = True,
 
             actor_n = 2,
             actor_latent=512,            
@@ -356,7 +366,8 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
             force_scale=force_scale,
             torque_scale=torque_scale,
             ctrl_torque=ctrl_torque,
-            uniform_rate=uniform_rate
+            uniform_rate=uniform_rate,
+            learn_selection=learn_selection
         )
         print("[INFO]: Clipping Log STD" if clip_log_std else "[INFO]: No Lot STD Clipping")
         #self.end_tanh = force_bias_type in ['none', 'bias_sel']

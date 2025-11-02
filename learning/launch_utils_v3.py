@@ -269,7 +269,8 @@ def _create_hybrid_policy_model(env, configs):
         hybrid_agent_parameters=asdict(configs['model'].hybrid_agent),
         actor_n=configs['model'].actor.n,
         actor_latent=configs['model'].actor.latent_size,
-        num_agents=configs['primary'].total_agents
+        num_agents=configs['primary'].total_agents,
+        learn_selection=configs['wrappers'].hybrid_control.use_ground_truth_selection
     )
 
 def _configure_hybrid_agent_parameters(configs):
