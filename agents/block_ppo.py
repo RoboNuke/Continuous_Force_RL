@@ -194,15 +194,8 @@ class BlockPPO(PPO):
             self.memory.create_tensor(name="advantages", size=1, dtype=torch.float32)
             self.memory.create_tensor(name="in-contact", size=self.force_size, dtype=torch.float32)
 
-            # DEBUG: Check Cause #1 - Memory initialization
-            # Check if in-contact tensor is properly initialized (should be zeros, not NaN)
-            in_contact_memory = self.memory.get_tensor_by_name("in-contact")
-            if torch.isnan(in_contact_memory).any():
-                nan_count = torch.isnan(in_contact_memory).sum().item()
-                total_size = in_contact_memory.numel()
-                print(f"[DEBUG] Cause #1: Memory 'in-contact' tensor has {nan_count}/{total_size} NaN values after creation!")
-                print(f"[DEBUG] Memory shape: {in_contact_memory.shape}, dtype: {in_contact_memory.dtype}")
-                raise RuntimeError("Memory 'in-contact' tensor contains NaN values immediately after creation!")
+            # NOTE: All float tensors are filled with NaN by SKRL's create_tensor implementation.
+            # This is expected behavior - NaN values will be overwritten during record_transition().
 
             # tensors sampled during training
             self._tensors_names = ["states", "actions", "log_prob", "values", "returns", "advantages", "in-contact"]

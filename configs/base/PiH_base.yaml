@@ -278,10 +278,10 @@ wrappers:
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
 agent:
   # Core identification
-  disable_progressbar: true
+  disable_progressbar: false #TODO
 
   # Checkpoint and experiment tracking
-  track_ckpts: true
+  track_ckpts: false #true
   upload_ckpts_to_wandb: false
   checkpoint_interval_multiplier: 2  # Checkpoint every N write intervals
   # ckpt_tracker_path comes from primary config automatically
