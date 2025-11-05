@@ -30,9 +30,9 @@ wrappers:
   spawn_height_curriculum:
     enabled: true
 
-#agent:
-#  policy_learning_rate: 5.0e-4
-#  critic_learning_rate: 1.0e-4
+agent:
+  policy_learning_rate: 1.0e-4
+  critic_learning_rate: 1.0e-4
 #  #learning_epochs: 1
 
 # Experiment metadata
