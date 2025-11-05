@@ -194,6 +194,16 @@ class BlockPPO(PPO):
             self.memory.create_tensor(name="advantages", size=1, dtype=torch.float32)
             self.memory.create_tensor(name="in-contact", size=self.force_size, dtype=torch.float32)
 
+            # DEBUG: Check Cause #1 - Memory initialization
+            # Check if in-contact tensor is properly initialized (should be zeros, not NaN)
+            in_contact_memory = self.memory.get_tensor_by_name("in-contact")
+            if torch.isnan(in_contact_memory).any():
+                nan_count = torch.isnan(in_contact_memory).sum().item()
+                total_size = in_contact_memory.numel()
+                print(f"[DEBUG] Cause #1: Memory 'in-contact' tensor has {nan_count}/{total_size} NaN values after creation!")
+                print(f"[DEBUG] Memory shape: {in_contact_memory.shape}, dtype: {in_contact_memory.dtype}")
+                raise RuntimeError("Memory 'in-contact' tensor contains NaN values immediately after creation!")
+
             # tensors sampled during training
             self._tensors_names = ["states", "actions", "log_prob", "values", "returns", "advantages", "in-contact"]
 
@@ -470,7 +480,37 @@ class BlockPPO(PPO):
             if ft_wrapper is not None and hasattr(ft_wrapper.unwrapped, 'in_contact'):
                 # Extract first force_size contact flags (no aggregation)
                 # in_contact shape: (num_envs, 6) -> extract (num_envs, force_size)
-                in_contact_state = ft_wrapper.unwrapped.in_contact[:, :self.force_size].float()
+                raw_in_contact = ft_wrapper.unwrapped.in_contact[:, :self.force_size]
+
+                # DEBUG: Check Cause #2 - ForceTorqueWrapper returns NaN
+                if torch.isnan(raw_in_contact).any():
+                    nan_count = torch.isnan(raw_in_contact).sum().item()
+                    print(f"[DEBUG] Cause #2: ForceTorqueWrapper in_contact contains {nan_count} NaN values!")
+                    print(f"[DEBUG] raw_in_contact dtype: {raw_in_contact.dtype}, shape: {raw_in_contact.shape}")
+                    print(f"[DEBUG] Sample values: {raw_in_contact[0]}")
+                    raise RuntimeError("ForceTorqueWrapper in_contact tensor contains NaN values!")
+
+                # DEBUG: Check Cause #3 - Boolean to Float conversion issue
+                if raw_in_contact.dtype == torch.bool:
+                    # Valid boolean tensor - convert to float
+                    in_contact_state = raw_in_contact.float()
+                else:
+                    # Already float - just copy
+                    in_contact_state = raw_in_contact.clone()
+
+                # DEBUG: Verify conversion didn't introduce NaN
+                if torch.isnan(in_contact_state).any():
+                    print(f"[DEBUG] Cause #3: NaN appeared after float conversion!")
+                    print(f"[DEBUG] Before conversion dtype: {raw_in_contact.dtype}")
+                    print(f"[DEBUG] After conversion - NaN count: {torch.isnan(in_contact_state).sum().item()}")
+                    raise RuntimeError("Float conversion introduced NaN values!")
+
+                # DEBUG: Check for invalid values outside [0, 1]
+                if (in_contact_state < 0.0).any() or (in_contact_state > 1.0).any():
+                    min_val = in_contact_state.min().item()
+                    max_val = in_contact_state.max().item()
+                    print(f"[DEBUG] in_contact_state has invalid values: min={min_val}, max={max_val}")
+                    raise RuntimeError(f"in_contact_state outside [0,1] range before storing to memory!")
             else:
                 # Error if wrapper not found - fail fast and loud
                 raise RuntimeError(
