@@ -475,35 +475,21 @@ class BlockPPO(PPO):
                 # in_contact shape: (num_envs, 6) -> extract (num_envs, force_size)
                 raw_in_contact = ft_wrapper.unwrapped.in_contact[:, :self.force_size]
 
-                # DEBUG: Check Cause #2 - ForceTorqueWrapper returns NaN
-                if torch.isnan(raw_in_contact).any():
-                    nan_count = torch.isnan(raw_in_contact).sum().item()
-                    print(f"[DEBUG] Cause #2: ForceTorqueWrapper in_contact contains {nan_count} NaN values!")
-                    print(f"[DEBUG] raw_in_contact dtype: {raw_in_contact.dtype}, shape: {raw_in_contact.shape}")
-                    print(f"[DEBUG] Sample values: {raw_in_contact[0]}")
-                    raise RuntimeError("ForceTorqueWrapper in_contact tensor contains NaN values!")
-
-                # DEBUG: Check Cause #3 - Boolean to Float conversion issue
+                # Convert to float if boolean
                 if raw_in_contact.dtype == torch.bool:
-                    # Valid boolean tensor - convert to float
                     in_contact_state = raw_in_contact.float()
                 else:
-                    # Already float - just copy
                     in_contact_state = raw_in_contact.clone()
 
-                # DEBUG: Verify conversion didn't introduce NaN
+                # Validate: fail fast if wrapper returns invalid data
                 if torch.isnan(in_contact_state).any():
-                    print(f"[DEBUG] Cause #3: NaN appeared after float conversion!")
-                    print(f"[DEBUG] Before conversion dtype: {raw_in_contact.dtype}")
-                    print(f"[DEBUG] After conversion - NaN count: {torch.isnan(in_contact_state).sum().item()}")
-                    raise RuntimeError("Float conversion introduced NaN values!")
-
-                # DEBUG: Check for invalid values outside [0, 1]
+                    raise RuntimeError("ForceTorqueWrapper in_contact tensor contains NaN values!")
+                if torch.isinf(in_contact_state).any():
+                    raise RuntimeError("ForceTorqueWrapper in_contact tensor contains Inf values!")
                 if (in_contact_state < 0.0).any() or (in_contact_state > 1.0).any():
                     min_val = in_contact_state.min().item()
                     max_val = in_contact_state.max().item()
-                    print(f"[DEBUG] in_contact_state has invalid values: min={min_val}, max={max_val}")
-                    raise RuntimeError(f"in_contact_state outside [0,1] range before storing to memory!")
+                    raise RuntimeError(f"ForceTorqueWrapper in_contact has invalid values: min={min_val}, max={max_val}")
             else:
                 # Error if wrapper not found - fail fast and loud
                 raise RuntimeError(
@@ -520,7 +506,7 @@ class BlockPPO(PPO):
                 truncated=truncated.clone(),
                 log_prob=self._current_log_prob.clone(),
                 values=values.clone(),
-                in_contact=in_contact_state.clone()
+                **{"in-contact": in_contact_state.clone()}
             )   
     
     def post_interaction(self, timestep: int, timesteps: int) -> None:
@@ -744,16 +730,6 @@ class BlockPPO(PPO):
 
                     # Compute supervised selection loss
                     if self.supervised_selection_loss_weight > 1e-8:  # Check if enabled
-                        # Debug: Check for invalid values in sampled_in_contact before processing
-                        if torch.isnan(sampled_in_contact).any():
-                            raise RuntimeError("sampled_in_contact contains NaN values!")
-                        if torch.isinf(sampled_in_contact).any():
-                            raise RuntimeError("sampled_in_contact contains Inf values!")
-                        if (sampled_in_contact < 0.0).any() or (sampled_in_contact > 1.0).any():
-                            min_val = sampled_in_contact.min().item()
-                            max_val = sampled_in_contact.max().item()
-                            raise RuntimeError(f"sampled_in_contact has values outside [0,1]: min={min_val}, max={max_val}")
-
                         # Extract selection probabilities from mean_actions (already computed)
                         # mean_actions shape: (sample_size * num_agents * envs_per_agent, action_dim)
                         # First force_size values are selection probabilities (after sigmoid)
