@@ -414,12 +414,37 @@ def load_checkpoint_from_wandb(wandb_checkpoint: str) -> List[Dict[str, str]]:
 
     print(f"  Downloading checkpoint from WandB: {project}/{run_id} at step {step_number}")
 
-    # Fetch run from WandB
-    api = wandb.Api()
-    try:
-        run = api.run(f"{project}/{run_id}")
-    except Exception as e:
-        raise RuntimeError(f"Failed to fetch WandB run {project}/{run_id}: {e}")
+    # Fetch run from WandB with rate limit handling
+    import time
+    api = wandb.Api(timeout=60)
+    run_key = f"{project}/{run_id}"
+    max_retries = 5
+    retry_delay = 2.0
+    run = None
+
+    for attempt in range(max_retries):
+        try:
+            run = api.run(run_key)
+            break
+        except wandb.errors.CommError as e:
+            if "429" in str(e) or "rate limit" in str(e).lower():
+                if attempt < max_retries - 1:
+                    print(f"    Rate limit hit, waiting {retry_delay:.1f}s before retry {attempt+1}/{max_retries-1}...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                else:
+                    raise RuntimeError(
+                        f"Failed to fetch run after {max_retries} attempts due to rate limiting. "
+                        f"Please wait a few minutes before running again."
+                    )
+            else:
+                raise RuntimeError(f"Failed to fetch WandB run {run_key}: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to fetch WandB run {run_key}: {e}")
+
+    if run is None:
+        raise RuntimeError(f"Failed to fetch WandB run {run_key} after all retries")
 
     # Extract required config fields
     required_fields = ['agent_idx', 'break_force', 'directory', 'experiment_name']
@@ -522,12 +547,37 @@ def load_local_checkpoint(checkpoint_path: str, wandb_run: str) -> List[Dict[str
     print(f"  Loading local checkpoint: {checkpoint_path}")
     print(f"  Fetching config from WandB: {project}/{run_id}")
 
-    # Fetch run from WandB
-    api = wandb.Api()
-    try:
-        run = api.run(f"{project}/{run_id}")
-    except Exception as e:
-        raise RuntimeError(f"Failed to fetch WandB run {project}/{run_id}: {e}")
+    # Fetch run from WandB with rate limit handling
+    import time
+    api = wandb.Api(timeout=60)
+    run_key = f"{project}/{run_id}"
+    max_retries = 5
+    retry_delay = 2.0
+    run = None
+
+    for attempt in range(max_retries):
+        try:
+            run = api.run(run_key)
+            break
+        except wandb.errors.CommError as e:
+            if "429" in str(e) or "rate limit" in str(e).lower():
+                if attempt < max_retries - 1:
+                    print(f"    Rate limit hit, waiting {retry_delay:.1f}s before retry {attempt+1}/{max_retries-1}...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                else:
+                    raise RuntimeError(
+                        f"Failed to fetch run after {max_retries} attempts due to rate limiting. "
+                        f"Please wait a few minutes before running again."
+                    )
+            else:
+                raise RuntimeError(f"Failed to fetch WandB run {run_key}: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to fetch WandB run {run_key}: {e}")
+
+    if run is None:
+        raise RuntimeError(f"Failed to fetch WandB run {run_key} after all retries")
 
     # Extract required config fields
     required_fields = ['agent_idx', 'break_force', 'directory', 'experiment_name']
@@ -772,6 +822,8 @@ def fetch_break_forces_from_wandb(checkpoint_dicts: List[Dict[str, str]]) -> Tup
     """
     Query WandB for break_force config and tags for each checkpoint.
 
+    Includes rate limit handling with retries and run caching.
+
     Args:
         checkpoint_dicts: List of checkpoint dicts with project, run_id, and ckpt_path
 
@@ -784,60 +836,102 @@ def fetch_break_forces_from_wandb(checkpoint_dicts: List[Dict[str, str]]) -> Tup
         RuntimeError: If break_force not found in any WandB config
     """
     import re
-    api = wandb.Api()
+    import time
+
+    # Initialize API with longer timeout to avoid timeout warnings
+    api = wandb.Api(timeout=60)
     break_forces = []
     video_captions = []
+
+    # Cache runs to avoid re-fetching the same run multiple times
+    run_cache = {}
 
     for i, ckpt_dict in enumerate(checkpoint_dicts):
         project = ckpt_dict['project']
         run_id = ckpt_dict['run_id']
         ckpt_path = ckpt_dict['ckpt_path']
+        run_key = f"{project}/{run_id}"
 
-        print(f"  Fetching break_force and tags for checkpoint {i+1}/{len(checkpoint_dicts)}: {project}/{run_id}")
+        print(f"  Fetching break_force and tags for checkpoint {i+1}/{len(checkpoint_dicts)}: {run_key}")
 
-        try:
-            # Fetch run from WandB
-            run = api.run(f"{project}/{run_id}")
+        # Try to fetch run with retry logic for rate limiting
+        max_retries = 5
+        retry_delay = 2.0  # Start with 2 seconds
+        run = None
 
-            # Extract break_force from config (check both top-level and agent_specific)
-            break_force = run.config.get('break_force', None)
+        for attempt in range(max_retries):
+            try:
+                # Check cache first
+                if run_key in run_cache:
+                    print(f"    Using cached run data")
+                    run = run_cache[run_key]
+                else:
+                    # Fetch run from WandB
+                    run = api.run(run_key)
+                    run_cache[run_key] = run
 
-            # If not found at top level, check agent_specific
-            if break_force is None and 'agent_specific' in run.config:
-                break_force = run.config['agent_specific'].get('break_force', None)
+                    # Small delay to avoid rate limiting (but not on cached hits)
+                    if i > 0:  # Don't delay on first request
+                        time.sleep(0.5)
 
-            if break_force is None:
-                raise RuntimeError(
-                    f"break_force not found in WandB config for run {project}/{run_id}. "
-                    f"Available config keys: {list(run.config.keys())}"
-                )
+                # Successfully fetched, break out of retry loop
+                break
 
-            print(f"    Found break_force: {break_force}")
-            break_forces.append(float(break_force))
+            except wandb.errors.CommError as e:
+                if "429" in str(e) or "rate limit" in str(e).lower():
+                    if attempt < max_retries - 1:
+                        print(f"    Rate limit hit, waiting {retry_delay:.1f}s before retry {attempt+1}/{max_retries-1}...")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                        continue
+                    else:
+                        raise RuntimeError(
+                            f"Failed to fetch run after {max_retries} attempts due to rate limiting. "
+                            f"Please wait a few minutes before running again."
+                        )
+                else:
+                    raise RuntimeError(f"Failed to fetch WandB run {run_key}: {e}")
+            except Exception as e:
+                raise RuntimeError(f"Failed to fetch WandB run {run_key}: {e}")
 
-            # Extract step number from checkpoint filename
-            match = re.search(r'agent_\d+_(\d+)\.pt$', ckpt_path)
-            if not match:
-                raise RuntimeError(f"Could not extract step number from checkpoint path: {ckpt_path}")
-            step_number = int(match.group(1))
-            total_steps = step_number
+        # Verify we got a run
+        if run is None:
+            raise RuntimeError(f"Failed to fetch WandB run {run_key} after all retries")
 
-            # Extract tags
-            tags = run.tags if hasattr(run, 'tags') else []
+        # Extract break_force from config (check both top-level and agent_specific)
+        break_force = run.config.get('break_force', None)
 
-            # Find ctrl tag and agent tag
-            ctrl_tag = next((tag for tag in tags if 'ctrl' in tag.lower()), "unknown_ctrl")
-            agent_tag = next((tag for tag in tags if 'agent' in tag.lower()), "unknown_agent")
+        # If not found at top level, check agent_specific
+        if break_force is None and 'agent_specific' in run.config:
+            break_force = run.config['agent_specific'].get('break_force', None)
 
-            # Create caption
-            caption = f"{ctrl_tag} ({agent_tag}) evaluated at step {total_steps}"
-            video_captions.append(caption)
-            print(f"    Caption: {caption}")
-
-        except Exception as e:
+        if break_force is None:
             raise RuntimeError(
-                f"Failed to fetch break_force and tags from WandB for checkpoint {ckpt_dict['ckpt_path']}: {e}"
+                f"break_force not found in WandB config for run {run_key}. "
+                f"Available config keys: {list(run.config.keys())}"
             )
+
+        print(f"    Found break_force: {break_force}")
+        break_forces.append(float(break_force))
+
+        # Extract step number from checkpoint filename
+        match = re.search(r'agent_\d+_(\d+)\.pt$', ckpt_path)
+        if not match:
+            raise RuntimeError(f"Could not extract step number from checkpoint path: {ckpt_path}")
+        step_number = int(match.group(1))
+        total_steps = step_number
+
+        # Extract tags
+        tags = run.tags if hasattr(run, 'tags') else []
+
+        # Find ctrl tag and agent tag
+        ctrl_tag = next((tag for tag in tags if 'ctrl' in tag.lower()), "unknown_ctrl")
+        agent_tag = next((tag for tag in tags if 'agent' in tag.lower()), "unknown_agent")
+
+        # Create caption
+        caption = f"{ctrl_tag} ({agent_tag}) evaluated at step {total_steps}"
+        video_captions.append(caption)
+        print(f"    Caption: {caption}")
 
     return break_forces, video_captions
 
