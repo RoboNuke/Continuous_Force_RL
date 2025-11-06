@@ -703,6 +703,7 @@ def upload_checkpoints_to_wandb(checkpoint_dicts: List[Dict[str, str]]) -> None:
         RuntimeError: If upload fails
     """
     import re
+    import shutil
 
     for i, ckpt_dict in enumerate(checkpoint_dicts):
         project = ckpt_dict['project']
@@ -732,13 +733,29 @@ def upload_checkpoints_to_wandb(checkpoint_dicts: List[Dict[str, str]]) -> None:
             # Resume WandB run
             run = wandb.init(project=project, id=run_id, resume="must")
 
-            # Upload policy checkpoint
-            run.save(ckpt_path, base_path="ckpts/policies", policy="now")
-            print(f"    Uploaded policy: {ckpt_path}")
+            # Create directory structure in wandb.run.dir
+            policies_dir = os.path.join(wandb.run.dir, "ckpts", "policies")
+            critics_dir = os.path.join(wandb.run.dir, "ckpts", "critics")
+            os.makedirs(policies_dir, exist_ok=True)
+            os.makedirs(critics_dir, exist_ok=True)
 
-            # Upload critic checkpoint
-            run.save(critic_path, base_path="ckpts/critics", policy="now")
-            print(f"    Uploaded critic: {critic_path}")
+            # Get filenames
+            policy_filename = os.path.basename(ckpt_path)
+            critic_filename = os.path.basename(critic_path)
+
+            # Copy files to wandb run directory
+            policy_dest = os.path.join(policies_dir, policy_filename)
+            critic_dest = os.path.join(critics_dir, critic_filename)
+
+            shutil.copy2(ckpt_path, policy_dest)
+            shutil.copy2(critic_path, critic_dest)
+
+            # Save to trigger upload immediately
+            wandb.save(os.path.join("ckpts", "policies", policy_filename), policy="now")
+            wandb.save(os.path.join("ckpts", "critics", critic_filename), policy="now")
+
+            print(f"    Uploaded policy: {policy_filename}")
+            print(f"    Uploaded critic: {critic_filename}")
 
             wandb.finish()
             print(f"  Successfully uploaded checkpoints to WandB")
