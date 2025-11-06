@@ -734,8 +734,9 @@ def upload_checkpoints_to_wandb(checkpoint_dicts: List[Dict[str, str]]) -> None:
             run = wandb.init(project=project, id=run_id, resume="must")
 
             # Create directory structure in wandb.run.dir
-            policies_dir = os.path.join(wandb.run.dir, "ckpts", "policies")
-            critics_dir = os.path.join(wandb.run.dir, "ckpts", "critics")
+            ckpts_base_dir = os.path.join(wandb.run.dir, "ckpts")
+            policies_dir = os.path.join(ckpts_base_dir, "policies")
+            critics_dir = os.path.join(ckpts_base_dir, "critics")
             os.makedirs(policies_dir, exist_ok=True)
             os.makedirs(critics_dir, exist_ok=True)
 
@@ -750,9 +751,9 @@ def upload_checkpoints_to_wandb(checkpoint_dicts: List[Dict[str, str]]) -> None:
             shutil.copy2(ckpt_path, policy_dest)
             shutil.copy2(critic_path, critic_dest)
 
-            # Save to trigger upload immediately (use absolute paths to the copied files)
-            wandb.save(policy_dest, policy="now")
-            wandb.save(critic_dest, policy="now")
+            # Save to trigger upload immediately with base_path to preserve ckpts/ directory
+            wandb.save(policy_dest, base_path=wandb.run.dir, policy="now")
+            wandb.save(critic_dest, base_path=wandb.run.dir, policy="now")
 
             print(f"    Uploaded policy: {policy_filename}")
             print(f"    Uploaded critic: {critic_filename}")
