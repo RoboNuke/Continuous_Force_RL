@@ -803,12 +803,40 @@ def upload_checkpoints_to_wandb(checkpoint_dicts: List[Dict[str, str]]) -> None:
             shutil.copy2(ckpt_path, policy_dest)
             shutil.copy2(critic_path, critic_dest)
 
-            # Save to trigger upload immediately with base_path to preserve ckpts/ directory
-            wandb.save(policy_dest, base_path=wandb.run.dir, policy="now")
-            wandb.save(critic_dest, base_path=wandb.run.dir, policy="now")
+            # Upload with retry logic for timeout handling
+            import time
+            from requests.exceptions import ReadTimeout, ConnectionError, Timeout
 
-            print(f"    Uploaded policy: {policy_filename}")
-            print(f"    Uploaded critic: {critic_filename}")
+            max_upload_retries = 3
+            upload_retry_delay = 5.0
+
+            # Upload policy checkpoint with retries
+            for attempt in range(max_upload_retries):
+                try:
+                    wandb.save(policy_dest, base_path=wandb.run.dir, policy="now")
+                    print(f"    Uploaded policy: {policy_filename}")
+                    break
+                except (ReadTimeout, ConnectionError, Timeout, TimeoutError) as e:
+                    if attempt < max_upload_retries - 1:
+                        print(f"    Upload timeout for policy, retrying in {upload_retry_delay:.1f}s (attempt {attempt+1}/{max_upload_retries-1})...")
+                        time.sleep(upload_retry_delay)
+                        continue
+                    else:
+                        raise RuntimeError(f"Failed to upload policy after {max_upload_retries} attempts: {e}")
+
+            # Upload critic checkpoint with retries
+            for attempt in range(max_upload_retries):
+                try:
+                    wandb.save(critic_dest, base_path=wandb.run.dir, policy="now")
+                    print(f"    Uploaded critic: {critic_filename}")
+                    break
+                except (ReadTimeout, ConnectionError, Timeout, TimeoutError) as e:
+                    if attempt < max_upload_retries - 1:
+                        print(f"    Upload timeout for critic, retrying in {upload_retry_delay:.1f}s (attempt {attempt+1}/{max_upload_retries-1})...")
+                        time.sleep(upload_retry_delay)
+                        continue
+                    else:
+                        raise RuntimeError(f"Failed to upload critic after {max_upload_retries} attempts: {e}")
 
             wandb.finish()
             print(f"  Successfully uploaded checkpoints to WandB")
