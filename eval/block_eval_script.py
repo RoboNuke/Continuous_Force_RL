@@ -750,9 +750,9 @@ def upload_checkpoints_to_wandb(checkpoint_dicts: List[Dict[str, str]]) -> None:
             shutil.copy2(ckpt_path, policy_dest)
             shutil.copy2(critic_path, critic_dest)
 
-            # Save to trigger upload immediately
-            wandb.save(os.path.join("ckpts", "policies", policy_filename), policy="now")
-            wandb.save(os.path.join("ckpts", "critics", critic_filename), policy="now")
+            # Save to trigger upload immediately (use absolute paths to the copied files)
+            wandb.save(policy_dest, policy="now")
+            wandb.save(critic_dest, policy="now")
 
             print(f"    Uploaded policy: {policy_filename}")
             print(f"    Uploaded critic: {critic_filename}")
