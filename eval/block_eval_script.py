@@ -743,8 +743,10 @@ def upload_checkpoints_to_wandb(checkpoint_dicts: List[Dict[str, str]]) -> None:
     Upload checkpoint files to WandB run.
 
     Uploads both policy and critic checkpoints to organized directories:
-    - ckpts/policies/agent_{agent_idx}_{step}.pt
-    - ckpts/critics/critic_{agent_idx}_{step}.pt
+    - ckpts/policies/{step}.pt
+    - ckpts/critics/{step}.pt
+
+    Note: Agent index is removed from filenames since each run corresponds to a single agent.
 
     Args:
         checkpoint_dicts: List of checkpoint dicts with project, run_id, ckpt_path
@@ -790,11 +792,11 @@ def upload_checkpoints_to_wandb(checkpoint_dicts: List[Dict[str, str]]) -> None:
             os.makedirs(policies_dir, exist_ok=True)
             os.makedirs(critics_dir, exist_ok=True)
 
-            # Get filenames
-            policy_filename = os.path.basename(ckpt_path)
-            critic_filename = os.path.basename(critic_path)
+            # Create filenames without agent index (since each run is a single agent)
+            policy_filename = f"{step_number}.pt"
+            critic_filename = f"{step_number}.pt"
 
-            # Copy files to wandb run directory
+            # Copy files to wandb run directory with new names
             policy_dest = os.path.join(policies_dir, policy_filename)
             critic_dest = os.path.join(critics_dir, critic_filename)
 
