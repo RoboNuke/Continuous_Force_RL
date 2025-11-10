@@ -202,6 +202,92 @@ class ConfigManagerV3:
 
         return configs
 
+    def config_from_wandb(self, run) -> Dict[str, Any]:
+        """Load configuration from WandB run by downloading config files.
+
+        Downloads base and experiment config YAML files from a WandB run,
+        adjusts the experiment config to point to the downloaded base config,
+        then processes using standard config loading logic.
+
+        Args:
+            run: WandB run object (from wandb.Api().run(path))
+
+        Returns:
+            Dictionary containing config instances and metadata
+
+        Raises:
+            RuntimeError: If config files not found in run or download fails
+        """
+        import tempfile
+        import os
+
+        print(f"Loading config from WandB run: {run.project}/{run.id}")
+
+        # Create temporary directory for downloaded configs
+        temp_dir = tempfile.mkdtemp(prefix="wandb_config_")
+        print(f"  Created temporary directory: {temp_dir}")
+
+        try:
+            # Download base config (always required)
+            base_file = run.file('config_base.yaml')
+            base_path = base_file.download(root=temp_dir, replace=True)
+            print(f"  Downloaded base config: {base_path}")
+
+            # Check if experiment config exists
+            exp_path = None
+            try:
+                exp_file = run.file('config_experiment.yaml')
+                exp_path = exp_file.download(root=temp_dir, replace=True)
+                print(f"  Downloaded experiment config: {exp_path}")
+            except Exception:
+                # No experiment config - this is fine, just use base
+                print(f"  No experiment config found, using base config only")
+
+            # If we have an experiment config, adjust its base_config reference
+            if exp_path:
+                # Read experiment config
+                with open(exp_path, 'r') as f:
+                    exp_data = yaml.safe_load(f)
+
+                # Update base_config path to point to downloaded base
+                exp_data['base_config'] = str(base_path)
+
+                # Write modified experiment config back
+                with open(exp_path, 'w') as f:
+                    yaml.safe_dump(exp_data, f)
+
+                print(f"  Adjusted experiment config base_config to: {base_path}")
+
+                # Process experiment config (which will load base config internally)
+                configs = self.process_config(str(exp_path))
+
+                # Update metadata to indicate WandB source
+                configs['config_paths'] = {
+                    'source': 'wandb',
+                    'run_id': run.id,
+                    'base': str(base_path),
+                    'exp': str(exp_path)
+                }
+            else:
+                # Process base config only
+                configs = self.process_config(str(base_path))
+
+                # Update metadata to indicate WandB source
+                configs['config_paths'] = {
+                    'source': 'wandb',
+                    'run_id': run.id,
+                    'base': str(base_path)
+                }
+
+            print(f"  Successfully loaded config from WandB")
+            return configs
+
+        except Exception as e:
+            # Clean up temp directory on error
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise RuntimeError(f"Failed to load config from WandB run {run.id}: {e}")
+
     def process_base_config(self, base_config_path: str) -> Dict[str, Any]:
         """
         Process a base configuration file and create config instances.

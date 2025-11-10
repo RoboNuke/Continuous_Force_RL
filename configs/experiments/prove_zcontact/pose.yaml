@@ -1,0 +1,29 @@
+# Hybrid Agent Control Experiment Configuration 
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+
+primary:
+  ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/pose_contactRew_proof_tracker.txt"
+
+# Model configuration for hybrid agent
+model:
+  use_hybrid_agent: false
+
+# Enable hybrid control wrapper and related systems
+wrappers:
+
+  force_reward:
+    enabled: true
+    enable_contact_reward: true
+
+#agent:
+#  policy_learning_rate: 5.0e-4
+#  critic_learning_rate: 1.0e-4
+#  #learning_epochs: 1
+
+# Experiment metadata
+experiment:
+  name: "pose_contactRew_proof"
+  tags: ['Force-Force']
+  group: "pose_contactRew_proof"
