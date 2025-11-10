@@ -225,6 +225,14 @@ def define_agent_configs(configs):
                 "run_name": log_dir
             }
 
+            # Generate timestamp tag for evaluation discovery
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H:%M")
+            experiment_tag = f"{configs['experiment'].group}:{timestamp}"
+
+            # Add experiment tag to the tags list
+            wandb_kwargs["tags"] = wandb_kwargs["tags"] + [experiment_tag]
+
             configs['agent'].agent_exp_cfgs[agent_idx]['experiment']["wandb_kwargs"] = wandb_kwargs
             agent_idx += 1
             
