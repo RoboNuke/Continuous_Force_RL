@@ -459,37 +459,37 @@ class HybridForcePositionWrapper(gym.Wrapper):
             case_no_contact_pos = torch.logical_and(~in_contact, pos_control).float()
 
             # Log translational axes
-            self.unwrapped.extras['to_log']['Control Mode / Contact+Force X'] = case_contact_force[:, 0]
-            self.unwrapped.extras['to_log']['Control Mode / Contact+Pos X'] = case_contact_pos[:, 0]
-            self.unwrapped.extras['to_log']['Control Mode / NoContact+Force X'] = case_no_contact_force[:, 0]
-            self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos X'] = case_no_contact_pos[:, 0]
+            self.unwrapped.extras['to_log']['Control Mode / Contact+Force X summed_total'] = case_contact_force[:, 0]
+            self.unwrapped.extras['to_log']['Control Mode / Contact+Pos X summed_total'] = case_contact_pos[:, 0]
+            self.unwrapped.extras['to_log']['Control Mode / NoContact+Force X summed_total'] = case_no_contact_force[:, 0]
+            self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos X summed_total'] = case_no_contact_pos[:, 0]
 
-            self.unwrapped.extras['to_log']['Control Mode / Contact+Force Y'] = case_contact_force[:, 1]
-            self.unwrapped.extras['to_log']['Control Mode / Contact+Pos Y'] = case_contact_pos[:, 1]
-            self.unwrapped.extras['to_log']['Control Mode / NoContact+Force Y'] = case_no_contact_force[:, 1]
-            self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos Y'] = case_no_contact_pos[:, 1]
+            self.unwrapped.extras['to_log']['Control Mode / Contact+Force Y summed_total'] = case_contact_force[:, 1]
+            self.unwrapped.extras['to_log']['Control Mode / Contact+Pos Y summed_total'] = case_contact_pos[:, 1]
+            self.unwrapped.extras['to_log']['Control Mode / NoContact+Force Y summed_total'] = case_no_contact_force[:, 1]
+            self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos Y summed_total'] = case_no_contact_pos[:, 1]
 
-            self.unwrapped.extras['to_log']['Control Mode / Contact+Force Z'] = case_contact_force[:, 2]
-            self.unwrapped.extras['to_log']['Control Mode / Contact+Pos Z'] = case_contact_pos[:, 2]
-            self.unwrapped.extras['to_log']['Control Mode / NoContact+Force Z'] = case_no_contact_force[:, 2]
-            self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos Z'] = case_no_contact_pos[:, 2]
+            self.unwrapped.extras['to_log']['Control Mode / Contact+Force Z summed_total'] = case_contact_force[:, 2]
+            self.unwrapped.extras['to_log']['Control Mode / Contact+Pos Z summed_total'] = case_contact_pos[:, 2]
+            self.unwrapped.extras['to_log']['Control Mode / NoContact+Force Z summed_total'] = case_no_contact_force[:, 2]
+            self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos Z summed_total'] = case_no_contact_pos[:, 2]
 
             # Log rotational axes if controlling torques
             if self.force_size > 3:
-                self.unwrapped.extras['to_log']['Control Mode / Contact+Force RX'] = case_contact_force[:, 3]
-                self.unwrapped.extras['to_log']['Control Mode / Contact+Pos RX'] = case_contact_pos[:, 3]
-                self.unwrapped.extras['to_log']['Control Mode / NoContact+Force RX'] = case_no_contact_force[:, 3]
-                self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos RX'] = case_no_contact_pos[:, 3]
+                self.unwrapped.extras['to_log']['Control Mode / Contact+Force RX summed_total'] = case_contact_force[:, 3]
+                self.unwrapped.extras['to_log']['Control Mode / Contact+Pos RX summed_total'] = case_contact_pos[:, 3]
+                self.unwrapped.extras['to_log']['Control Mode / NoContact+Force RX summed_total'] = case_no_contact_force[:, 3]
+                self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos RX summed_total'] = case_no_contact_pos[:, 3]
 
-                self.unwrapped.extras['to_log']['Control Mode / Contact+Force RY'] = case_contact_force[:, 4]
-                self.unwrapped.extras['to_log']['Control Mode / Contact+Pos RY'] = case_contact_pos[:, 4]
-                self.unwrapped.extras['to_log']['Control Mode / NoContact+Force RY'] = case_no_contact_force[:, 4]
-                self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos RY'] = case_no_contact_pos[:, 4]
+                self.unwrapped.extras['to_log']['Control Mode / Contact+Force RY summed_total'] = case_contact_force[:, 4]
+                self.unwrapped.extras['to_log']['Control Mode / Contact+Pos RY summed_total'] = case_contact_pos[:, 4]
+                self.unwrapped.extras['to_log']['Control Mode / NoContact+Force RY summed_total'] = case_no_contact_force[:, 4]
+                self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos RY summed_total'] = case_no_contact_pos[:, 4]
 
-                self.unwrapped.extras['to_log']['Control Mode / Contact+Force RZ'] = case_contact_force[:, 5]
-                self.unwrapped.extras['to_log']['Control Mode / Contact+Pos RZ'] = case_contact_pos[:, 5]
-                self.unwrapped.extras['to_log']['Control Mode / NoContact+Force RZ'] = case_no_contact_force[:, 5]
-                self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos RZ'] = case_no_contact_pos[:, 5]
+                self.unwrapped.extras['to_log']['Control Mode / Contact+Force RZ summed_total'] = case_contact_force[:, 5]
+                self.unwrapped.extras['to_log']['Control Mode / Contact+Pos RZ summed_total'] = case_contact_pos[:, 5]
+                self.unwrapped.extras['to_log']['Control Mode / NoContact+Force RZ summed_total'] = case_no_contact_force[:, 5]
+                self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos RZ summed_total'] = case_no_contact_pos[:, 5]
 
         # 2. Position target (Isaac Lab style: current_pos + scaled_action)
         pos_actions = self.ema_actions[:, self.force_size:self.force_size+3] * self.unwrapped.pos_threshold

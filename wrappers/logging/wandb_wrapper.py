@@ -20,12 +20,14 @@ class SimpleEpisodeTracker:
             device: torch.device,
             agent_config: Dict[str, Any],
             all_configs: Dict[str, Any],
+            config_paths: Dict[str, str],
             disable_logging: bool = False
         ):
         """Initialize simple episode tracker."""
         self.num_envs = num_envs
         self.device = device
         self.disable_logging = disable_logging
+        self.config_paths = config_paths
 
         # Build complete config dict from all sections
         complete_config = {}
@@ -59,6 +61,10 @@ class SimpleEpisodeTracker:
                 #)
 
             )
+
+            # Upload config YAML files to WandB
+            print(f"  Uploading config files to WandB...")
+            self.upload_config_files()
         else:
             self.run = None
 
@@ -133,29 +139,130 @@ class SimpleEpisodeTracker:
         self.total_steps = self.env_steps * self.num_envs
 
     def upload_checkpoint(self, checkpoint_path: str, checkpoint_type: str) -> bool:
-        """Upload checkpoint file to WandB and return success status.
+        """Upload checkpoint file to WandB with standardized naming and directory structure.
+
+        Uploads checkpoints to:
+        - ckpts/policies/{step}.pt
+        - ckpts/critics/{step}.pt
+
+        Note: Agent index is removed from filenames since each WandB run corresponds to a single agent.
 
         Args:
-            checkpoint_path: Full path to checkpoint file
+            checkpoint_path: Full path to checkpoint file (e.g., agent_{i}_{step}.pt or critic_{i}_{step}.pt)
             checkpoint_type: Type identifier ('policy' or 'critic')
 
         Returns:
             bool: True if upload succeeded, False otherwise
+
+        Raises:
+            FileNotFoundError: If checkpoint file doesn't exist
+            ValueError: If checkpoint filename format is invalid
+            RuntimeError: If upload fails after retries
         """
         # Skip upload if logging is disabled
         if self.disable_logging:
             return True
 
         import os
+        import re
+        import shutil
+        import time
+        from requests.exceptions import ReadTimeout, ConnectionError, Timeout
+
         if not os.path.exists(checkpoint_path):
             raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
 
-        # Upload to WandB with base_path set to parent of checkpoints folder
-        # This preserves the "checkpoints/" prefix in WandB
-        # e.g., /path/to/exp/checkpoints/agent_0.pt -> base_path=/path/to/exp -> uploads as checkpoints/agent_0.pt
-        checkpoint_dir = os.path.dirname(checkpoint_path)  # .../checkpoints
-        base_path = os.path.dirname(checkpoint_dir)  # .../exp (parent of checkpoints)
-        self.run.save(checkpoint_path, base_path=base_path)
+        # Extract step number from filename
+        # Expected format: agent_{agent_idx}_{step}.pt or critic_{agent_idx}_{step}.pt
+        filename = os.path.basename(checkpoint_path)
+        match = re.search(r'(?:agent|critic)_\d+_(\d+)\.pt$', filename)
+        if not match:
+            raise ValueError(
+                f"Invalid checkpoint filename format: {filename}. "
+                f"Expected format: agent_{{agent_idx}}_{{step}}.pt or critic_{{agent_idx}}_{{step}}.pt"
+            )
+
+        step_number = int(match.group(1))
+
+        # Determine subdirectory based on checkpoint type
+        if checkpoint_type == 'policy':
+            subdir = 'policies'
+        elif checkpoint_type == 'critic':
+            subdir = 'critics'
+        else:
+            raise ValueError(f"Invalid checkpoint_type: {checkpoint_type}. Must be 'policy' or 'critic'")
+
+        # Create directory structure in wandb.run.dir
+        ckpts_base_dir = os.path.join(self.run.dir, "ckpts")
+        target_dir = os.path.join(ckpts_base_dir, subdir)
+        os.makedirs(target_dir, exist_ok=True)
+
+        # Create filename without agent index (since each run is a single agent)
+        new_filename = f"{step_number}.pt"
+        target_path = os.path.join(target_dir, new_filename)
+
+        # Copy file to wandb run directory
+        shutil.copy2(checkpoint_path, target_path)
+
+        # Upload with retry logic for timeout handling
+        max_upload_retries = 3
+        upload_retry_delay = 5.0
+
+        for attempt in range(max_upload_retries):
+            try:
+                # Use wandb.save() with base_path to preserve ckpts/ directory structure
+                import wandb
+                wandb.save(target_path, base_path=self.run.dir, policy="now")
+                return True
+            except (ReadTimeout, ConnectionError, Timeout, TimeoutError) as e:
+                if attempt < max_upload_retries - 1:
+                    print(f"    Upload timeout for {checkpoint_type}, retrying in {upload_retry_delay:.1f}s (attempt {attempt+1}/{max_upload_retries-1})...")
+                    time.sleep(upload_retry_delay)
+                    continue
+                else:
+                    raise RuntimeError(f"Failed to upload {checkpoint_type} checkpoint after {max_upload_retries} attempts: {e}")
+
+        return False  # Should not reach here
+
+    def upload_config_files(self) -> bool:
+        """Upload config YAML files to WandB run.
+
+        Uses self.config_paths dict with 'base' and optionally 'exp' keys.
+
+        Returns:
+            bool: True if successful
+
+        Raises:
+            RuntimeError: If config files don't exist or upload fails
+        """
+        import os
+        import shutil
+
+        # Validate config_paths structure
+        if 'base' not in self.config_paths:
+            raise RuntimeError("config_paths missing required 'base' key")
+
+        # Upload base config
+        base_path = self.config_paths['base']
+        if not os.path.exists(base_path):
+            raise RuntimeError(f"Base config file not found: {base_path}")
+
+        target_base = os.path.join(self.run.dir, 'config_base.yaml')
+        shutil.copy(base_path, target_base)
+        wandb.save(target_base, base_path=self.run.dir, policy="now")
+        print(f"    Uploaded base config: {base_path} -> config_base.yaml")
+
+        # Upload experiment config if present
+        if 'exp' in self.config_paths:
+            exp_path = self.config_paths['exp']
+            if not os.path.exists(exp_path):
+                raise RuntimeError(f"Experiment config file not found: {exp_path}")
+
+            target_exp = os.path.join(self.run.dir, 'config_experiment.yaml')
+            shutil.copy(exp_path, target_exp)
+            wandb.save(target_exp, base_path=self.run.dir, policy="now")
+            print(f"    Uploaded experiment config: {exp_path} -> config_experiment.yaml")
+
         return True
 
     def add_metrics(self, metrics: Dict[str, torch.Tensor]):
@@ -194,6 +301,8 @@ class SimpleEpisodeTracker:
                     # Use max aggregation for metrics with 'max' in name, mean for others
                     if 'max' in name:
                         result = valid_values.max().item()
+                    elif 'summed_total' in name:
+                        result = valid_values.sum().item()
                     else:
                         result = valid_values.mean().item()
                     final_metrics[name] = result
@@ -266,7 +375,14 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         self.trackers = []
         for i in range(self.num_agents):
             agent_config = agent_configs[i]
-            tracker = SimpleEpisodeTracker(self.envs_per_agent, self.device, agent_config, all_configs, disable_logging)
+            tracker = SimpleEpisodeTracker(
+                self.envs_per_agent,
+                self.device,
+                agent_config,
+                all_configs,
+                all_configs.get('config_paths', {}),  # Pass config_paths explicitly
+                disable_logging
+            )
             self.trackers.append(tracker)
 
         # Episode tracking for basic metrics
