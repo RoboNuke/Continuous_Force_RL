@@ -127,10 +127,10 @@ class HybridActionGMM(Distribution): #MixtureSameFamily):
 
         )
         #TODO I CAN'T imagine this is correct
-        if self.learn_sel:
-            return entropy + self.mixture_distribution.entropy()
-        else:
-            return entropy
+        #if self.learn_sel:
+        #    return entropy + self.mixture_distribution.entropy()
+        #else:
+        return entropy
     
     #    return 0.0
     #    samples = self.sample(sample_shape=(10000,))
