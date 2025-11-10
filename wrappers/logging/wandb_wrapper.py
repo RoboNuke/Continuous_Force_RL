@@ -210,9 +210,8 @@ class SimpleEpisodeTracker:
 
         for attempt in range(max_upload_retries):
             try:
-                # Use wandb.save() with base_path to preserve ckpts/ directory structure
-                import wandb
-                wandb.save(target_path, base_path=self.run.dir, policy="now")
+                # Use self.run.save() with base_path to preserve ckpts/ directory structure
+                self.run.save(target_path, base_path=self.run.dir, policy="now")
                 return True
             except (ReadTimeout, ConnectionError, Timeout, TimeoutError) as e:
                 if attempt < max_upload_retries - 1:
@@ -249,7 +248,7 @@ class SimpleEpisodeTracker:
 
         target_base = os.path.join(self.run.dir, 'config_base.yaml')
         shutil.copy(base_path, target_base)
-        wandb.save(target_base, base_path=self.run.dir, policy="now")
+        self.run.save(target_base, base_path=self.run.dir, policy="now")
         print(f"    Uploaded base config: {base_path} -> config_base.yaml")
 
         # Upload experiment config if present
@@ -260,7 +259,7 @@ class SimpleEpisodeTracker:
 
             target_exp = os.path.join(self.run.dir, 'config_experiment.yaml')
             shutil.copy(exp_path, target_exp)
-            wandb.save(target_exp, base_path=self.run.dir, policy="now")
+            self.run.save(target_exp, base_path=self.run.dir, policy="now")
             print(f"    Uploaded experiment config: {exp_path} -> config_experiment.yaml")
 
         return True
