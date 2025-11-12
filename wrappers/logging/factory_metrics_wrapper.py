@@ -272,6 +272,10 @@ class FactoryMetricsWrapper(gym.Wrapper):
                 engage_threshold = self.unwrapped.cfg_task.engage_threshold
                 curr_engaged = self.unwrapped._get_curr_successes(engage_threshold, False)
 
+        # Store current states as attributes for external access (e.g., evaluation scripts)
+        self.successes = curr_successes
+        self.curr_engaged = curr_engaged
+
         # Update success tracking
         first_success = torch.logical_and(curr_successes, torch.logical_not(self.ep_succeeded))
         self.ep_succeeded[curr_successes] = True

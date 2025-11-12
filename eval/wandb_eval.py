@@ -1,0 +1,1697 @@
+#!/usr/bin/env python3
+"""
+WandB Tag-Based Evaluation Script
+
+Discovers and evaluates checkpoints using WandB tags.
+Queries runs by tag, downloads checkpoints, runs evaluation, and logs results.
+"""
+
+import argparse
+import sys
+
+# Parse arguments BEFORE importing anything else (AppLauncher needs this)
+def parse_arguments():
+    """
+    Parse command-line arguments for WandB evaluation script.
+
+    Returns:
+        Tuple of (args, hydra_args): Parsed arguments and remaining Hydra arguments
+    """
+    # Import AppLauncher here to avoid circular dependencies
+    try:
+        from isaaclab.app import AppLauncher
+    except:
+        from omni.isaac.lab.app import AppLauncher
+
+    parser = argparse.ArgumentParser(description="WandB Tag-Based Checkpoint Evaluation")
+
+    # Required arguments
+    parser.add_argument("--tag", type=str, required=True,
+                        help="Experiment tag to query (format: group_name:YYYY-MM-DD_HH:MM)")
+
+    # Optional arguments
+    parser.add_argument("--entity", type=str, default="hur",
+                        help="WandB entity (username or team name)")
+    parser.add_argument("--project", type=str, default="Voltron_Baseline",
+                        help="WandB project name")
+    parser.add_argument("--run_id", type=str, default=None,
+                        help="Specific run ID to evaluate (if not provided, evaluates all runs with tag)")
+    parser.add_argument("--checkpoint", type=int, default=None,
+                        help="Specific checkpoint step to evaluate (e.g., 10000)")
+    parser.add_argument("--checkpoint_range", type=str, default=None,
+                        help="Checkpoint range to evaluate (format: start:end:step, e.g., 5000:50000:5000)")
+    parser.add_argument("--eval_seed", type=int, default=42,
+                        help="Fixed seed for consistent evaluation")
+    parser.add_argument("--enable_video", action="store_true", default=False,
+                        help="Enable video generation")
+    parser.add_argument("--show_progress", action="store_true", default=False,
+                        help="Show progress bar during evaluation rollout")
+
+    # Append AppLauncher args
+    AppLauncher.add_app_launcher_args(parser)
+
+    # Parse arguments (separate cli args from hydra args)
+    args_cli, hydra_args = parser.parse_known_args()
+
+    return args_cli, hydra_args
+
+
+# Parse arguments and launch AppLauncher BEFORE importing anything else
+print("Parsing arguments...")
+args_cli, hydra_args = parse_arguments()
+
+# Configure video/camera settings for evaluation
+args_cli.video = args_cli.enable_video
+args_cli.enable_cameras = args_cli.enable_video
+args_cli.headless = True  # Always run headless
+
+# Clear out sys.argv for Hydra
+sys.argv = [sys.argv[0]] + hydra_args
+
+print("Launching Isaac Sim AppLauncher...")
+try:
+    from isaaclab.app import AppLauncher
+except:
+    from omni.isaac.lab.app import AppLauncher
+
+app_launcher = AppLauncher(args_cli)
+simulation_app = app_launcher.app
+
+print("AppLauncher initialized, importing modules...")
+
+# NOW import everything else after AppLauncher is initialized
+import os
+import time
+import re
+import tempfile
+import shutil
+from typing import List, Dict, Any, Tuple, Optional
+from collections import defaultdict
+
+# Enable camera view lighting mode (camera headlight)
+import carb
+carb_settings = carb.settings.get_settings()
+carb_settings.set_bool("/rtx/useViewLightingMode", True)
+print("Enabled camera view lighting mode (/rtx/useViewLightingMode)")
+
+
+
+import torch
+import numpy as np
+import gymnasium as gym
+import tqdm
+import wandb
+
+from skrl.utils import set_seed
+from configs.config_manager_v3 import ConfigManagerV3
+import learning.launch_utils_v3 as lUtils
+
+# Wrappers
+from wrappers.mechanics.fragile_object_wrapper import FragileObjectWrapper
+from wrappers.mechanics.force_reward_wrapper import ForceRewardWrapper
+from wrappers.mechanics.efficient_reset_wrapper import EfficientResetWrapper
+from wrappers.sensors.force_torque_wrapper import ForceTorqueWrapper
+from wrappers.observations.observation_manager_wrapper import ObservationManagerWrapper
+from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
+
+# Environment and SKRL wrappers
+try:
+    from isaaclab_rl.skrl import SkrlVecEnvWrapper
+    import isaaclab_tasks
+except ImportError:
+    from omni.isaac.lab_tasks.utils.wrappers.skrl import SkrlVecEnvWrapper
+    import omni.isaac.lab_tasks
+
+# Models
+from models.block_simba import BlockSimBaActor, BlockSimBaCritic
+from agents.block_ppo import BlockPPO
+
+# Image processing for video
+from PIL import Image, ImageDraw, ImageFont
+import torchvision.transforms.functional as F
+
+# Import factory environment class
+try:
+    from isaaclab_tasks.direct.factory.factory_env import FactoryEnv
+except ImportError:
+    try:
+        from omni.isaac.lab_tasks.direct.factory.factory_env import FactoryEnv
+    except ImportError:
+        print("ERROR: Could not import FactoryEnv.")
+        print("Please ensure Isaac Lab tasks are properly installed.")
+        sys.exit(1)
+
+from wrappers.sensors.factory_env_with_sensors import create_sensor_enabled_factory_env
+
+# Import camera and sensor utils
+try:
+    from isaaclab.sensors.camera import TiledCameraCfg
+    import isaaclab.sim as sim_utils
+except ImportError:
+    from omni.isaac.lab.sensors.camera import TiledCameraCfg
+    import omni.isaac.lab.sim as sim_utils
+
+print("All modules imported successfully")
+
+
+class Img2InfoWrapper(gym.Wrapper):
+    """
+    Wrapper to capture camera images and add them to info dict for video generation.
+    """
+    def __init__(self, env, key='tiled_camera'):
+        super().__init__(env)
+        self.cam_key = key
+
+    def step(self, action):
+        """Steps through environment and captures images."""
+        observations, rewards, terminateds, truncateds, infos = self.env.step(action)
+
+        # Capture camera images if available
+        if hasattr(self.unwrapped.scene, 'sensors') and self.cam_key in self.unwrapped.scene.sensors:
+            infos['img'] = self.unwrapped.scene.sensors[self.cam_key].data.output['rgb']
+
+        return observations, rewards, terminateds, truncateds, infos
+
+    def reset(self, **kwargs):
+        """Reset environment and capture initial images."""
+        observations, info = super().reset(**kwargs)
+
+        # Capture initial camera images if available
+        if hasattr(self.unwrapped.scene, 'sensors') and self.cam_key in self.unwrapped.scene.sensors:
+            info['img'] = self.unwrapped.scene.sensors[self.cam_key].data.output['rgb']
+
+        return observations, info
+
+
+# ===== WANDB QUERY FUNCTIONS =====
+
+def query_runs_by_tag(tag: str, entity: str, project: str, run_id: Optional[str] = None) -> List[wandb.Run]:
+    """
+    Query WandB for runs with specified tag.
+
+    Args:
+        tag: Experiment tag (format: group_name:YYYY-MM-DD_HH:MM)
+        entity: WandB entity (username or team name)
+        project: WandB project name
+        run_id: Optional specific run ID to filter by
+
+    Returns:
+        List of WandB runs
+
+    Raises:
+        RuntimeError: If no runs found or API query fails
+    """
+    print(f"Querying WandB for runs with tag: {tag}")
+    print(f"  Entity: {entity}")
+    print(f"  Project: {project}")
+
+    api = wandb.Api(timeout=60)
+    max_retries = 5
+    retry_delay = 2.0
+
+    for attempt in range(max_retries):
+        try:
+            # Query all runs with the tag in the specified project
+            project_path = f"{entity}/{project}"
+            runs = api.runs(project_path, filters={"tags": {"$in": [tag]}})
+
+            # Convert to list to actually execute query
+            runs_list = list(runs)
+
+            if len(runs_list) == 0:
+                raise RuntimeError(f"No runs found with tag: {tag}")
+
+            # Filter by run_id if specified
+            if run_id is not None:
+                runs_list = [r for r in runs_list if r.id == run_id]
+                if len(runs_list) == 0:
+                    raise RuntimeError(f"No runs found with tag '{tag}' and run_id '{run_id}'")
+
+            print(f"  Found {len(runs_list)} run(s) with tag '{tag}'")
+            for r in runs_list:
+                print(f"    - {r.project}/{r.id} ({r.name})")
+
+            return runs_list
+
+        except wandb.errors.CommError as e:
+            if "429" in str(e) or "rate limit" in str(e).lower():
+                if attempt < max_retries - 1:
+                    print(f"    Rate limit hit, waiting {retry_delay:.1f}s before retry {attempt+1}/{max_retries-1}...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                else:
+                    raise RuntimeError(
+                        f"Failed to query runs after {max_retries} attempts due to rate limiting. "
+                        f"Please wait a few minutes before running again."
+                    )
+            else:
+                raise RuntimeError(f"Failed to query WandB runs: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to query WandB runs: {e}")
+
+    raise RuntimeError(f"Failed to query WandB runs after all retries")
+
+
+# ===== CONFIG RECONSTRUCTION =====
+
+def reconstruct_config_from_wandb(run: wandb.Run) -> Dict[str, Any]:
+    """Reconstruct configuration from WandB run using config files.
+
+    Downloads config YAML files and uses ConfigManagerV3 to load them.
+
+    Args:
+        run: WandB run object
+
+    Returns:
+        Dictionary with config instances compatible with setup_environment_once
+
+    Raises:
+        RuntimeError: If config files missing or loading fails
+    """
+    print(f"Reconstructing config from WandB run: {run.project}/{run.id}")
+
+    # Use ConfigManagerV3's new config_from_wandb method
+    config_manager = ConfigManagerV3()
+    configs = config_manager.config_from_wandb(run)
+
+    print(f"  Successfully reconstructed {len(configs)} config sections")
+    return configs
+
+
+# ===== CHECKPOINT DISCOVERY =====
+
+def get_checkpoint_steps(run: wandb.Run, args: argparse.Namespace) -> List[int]:
+    """
+    Determine which checkpoint steps to evaluate.
+
+    Args:
+        run: WandB run object
+        args: Command-line arguments
+
+    Returns:
+        List of checkpoint step numbers
+
+    Raises:
+        RuntimeError: If no checkpoints found or invalid range specified
+    """
+    print(f"Determining checkpoint steps for run {run.id}...")
+
+    # If specific checkpoint specified
+    if args.checkpoint is not None:
+        print(f"  Using specific checkpoint: {args.checkpoint}")
+        return [args.checkpoint]
+
+    # If checkpoint range specified
+    if args.checkpoint_range is not None:
+        try:
+            parts = args.checkpoint_range.split(':')
+            if len(parts) != 3:
+                raise ValueError(f"Invalid format: {args.checkpoint_range}")
+
+            start, end, step = int(parts[0]), int(parts[1]), int(parts[2])
+            checkpoint_steps = list(range(start, end + 1, step))
+            print(f"  Using checkpoint range: {start}:{end}:{step} ({len(checkpoint_steps)} checkpoints)")
+            return checkpoint_steps
+        except Exception as e:
+            raise RuntimeError(f"Failed to parse checkpoint range '{args.checkpoint_range}': {e}")
+
+    # Otherwise, query WandB for all available checkpoints
+    print("  Querying WandB for all available checkpoints...")
+
+    try:
+        # List all files in the run
+        files = run.files()
+
+        # Filter for policy checkpoint files in ckpts/policies/
+        policy_files = [f for f in files if f.name.startswith('ckpts/policies/') and f.name.endswith('.pt')]
+
+        if len(policy_files) == 0:
+            raise RuntimeError(f"No checkpoint files found in run {run.id}")
+
+        # Extract step numbers from filenames
+        checkpoint_steps = []
+        for f in policy_files:
+            # Extract step number from ckpts/policies/{step}.pt
+            match = re.search(r'ckpts/policies/(\d+)\.pt$', f.name)
+            if match:
+                step_num = int(match.group(1))
+                checkpoint_steps.append(step_num)
+
+        checkpoint_steps.sort()
+
+        if len(checkpoint_steps) == 0:
+            raise RuntimeError(f"Could not extract step numbers from checkpoint files in run {run.id}")
+
+        print(f"  Found {len(checkpoint_steps)} checkpoint(s): {checkpoint_steps}")
+        return checkpoint_steps
+
+    except Exception as e:
+        raise RuntimeError(f"Failed to query checkpoints from WandB run {run.id}: {e}")
+
+
+def download_checkpoint_pair(run: wandb.Run, step: int) -> Tuple[str, str]:
+    """
+    Download policy and critic checkpoints from WandB.
+
+    Args:
+        run: WandB run object
+        step: Checkpoint step number
+
+    Returns:
+        Tuple of (policy_path, critic_path)
+
+    Raises:
+        RuntimeError: If download fails
+    """
+    print(f"  Downloading checkpoint pair for step {step}...")
+
+    # Construct file paths on WandB
+    policy_filename = f"ckpts/policies/{step}.pt"
+    critic_filename = f"ckpts/critics/{step}.pt"
+
+    # Create temporary download directory
+    download_dir = tempfile.mkdtemp(prefix="wandb_ckpt_")
+
+    try:
+        # Download policy checkpoint
+        policy_file = run.file(policy_filename)
+        policy_path = policy_file.download(root=download_dir, replace=True).name
+        print(f"    Downloaded policy: {policy_path}")
+
+        # Download critic checkpoint
+        critic_file = run.file(critic_filename)
+        critic_path = critic_file.download(root=download_dir, replace=True).name
+        print(f"    Downloaded critic: {critic_path}")
+
+        return policy_path, critic_path
+
+    except Exception as e:
+        # Clean up temp directory on failure
+        shutil.rmtree(download_dir, ignore_errors=True)
+        raise RuntimeError(
+            f"Failed to download checkpoint files from WandB run {run.project}/{run.id} at step {step}: {e}"
+        )
+
+
+# ===== ENVIRONMENT SETUP =====
+
+def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) -> Tuple[Any, Any, int, float]:
+    """
+    Create environment and agent once for all evaluations.
+
+    Args:
+        configs: Configuration dictionary from WandB
+        args: Command-line arguments
+
+    Returns:
+        Tuple of (env, agent, max_rollout_steps, policy_hz)
+
+    Raises:
+        RuntimeError: If environment or agent creation fails
+    """
+    print("Setting up environment and agent...")
+
+    # Import camera config
+    try:
+        from isaaclab.sensors import TiledCameraCfg, CameraCfg
+        import isaaclab.sim as sim_utils
+    except:
+        from omni.isaac.lab.sensors import TiledCameraCfg, CameraCfg
+        import omni.isaac.lab.sim as sim_utils
+
+    from memories.multi_random import MultiRandomMemory
+
+    # TODO: The config structure needs to be properly reconstructed from WandB
+    # For now, we assume configs has the same structure as from ConfigManagerV3
+    # This may need adjustment based on actual WandB run.config structure
+
+    # Force 1 agent (evaluate one run at a time)
+    # NOTE: Unlike block_eval_script which forces 2 agents, we force 1 agent here
+    original_break_forces = configs['primary'].break_forces
+    original_agents_per_break_force = configs['primary'].agents_per_break_force
+
+    configs['primary'].agents_per_break_force = 1
+    if isinstance(original_break_forces, list) and len(original_break_forces) > 0:
+        configs['primary'].break_forces = [original_break_forces[0]]
+    else:
+        configs['primary'].break_forces = [original_break_forces]
+
+    print(f"  Forced 1 agent: break_forces={configs['primary'].break_forces}, agents_per_break_force={configs['primary'].agents_per_break_force}")
+    print(f"    (original: break_forces={original_break_forces}, agents_per_break_force={original_agents_per_break_force})")
+    print(f"    total_agents property now returns: {configs['primary'].total_agents}")
+
+    # Hardcode num_envs_per_agent = 100
+    num_envs_per_agent = 100
+    total_agents = configs['primary'].total_agents
+    total_envs = num_envs_per_agent * total_agents
+    configs['environment'].scene.num_envs = total_envs
+    print(f"  Set num_envs: {total_envs} ({num_envs_per_agent} per agent × {total_agents} agents)")
+
+    # Handle seed configuration - use eval_seed from command line for deterministic evaluation
+    eval_seed = args.eval_seed
+    print(f"  Using eval_seed for deterministic evaluation: {eval_seed}")
+
+    # Set environment variables for CUDA deterministic operations
+    os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+
+    # Set seed with deterministic mode for PyTorch
+    set_seed(eval_seed, deterministic=True)
+    configs['environment'].seed = eval_seed
+
+    # Set render interval to decimation for faster execution
+    configs['environment'].sim.render_interval = configs['environment'].decimation
+    print(f"  Set render_interval to decimation: {configs['environment'].decimation}")
+
+    # Calculate max_rollout_steps
+    env_cfg = configs['environment']
+    max_rollout_steps = int(
+        (1 / env_cfg.sim.dt) / env_cfg.decimation * env_cfg.episode_length_s
+    )
+    print(f"  Calculated max_rollout_steps: {max_rollout_steps}")
+    print(f"    sim.dt: {env_cfg.sim.dt}")
+    print(f"    decimation: {env_cfg.decimation}")
+    print(f"    episode_length_s: {env_cfg.episode_length_s}")
+
+    # Calculate policy_hz
+    policy_hz = max_rollout_steps / env_cfg.episode_length_s
+    print(f"  Calculated policy_hz: {policy_hz}")
+
+    # Setup camera configuration for video recording if enabled
+    if args.enable_video:
+        print("  Setting up camera configuration for video recording...")
+        env_cfg.scene.tiled_camera = TiledCameraCfg(
+            prim_path="/World/envs/env_.*/Camera",
+            offset=TiledCameraCfg.OffsetCfg(
+                pos=(1.0, 0.0, 0.35),
+                rot=(-0.3535534, 0.6123724, 0.6123724, -0.3535534),
+                convention="ros"
+            ),
+            data_types=["rgb"],
+            spawn=sim_utils.PinholeCameraCfg(
+                focal_length=24.0,
+                focus_distance=0.05,
+                horizontal_aperture=20.955,
+                clipping_range=(0.1, 20.0)
+            ),
+            width=240,
+            height=180,
+            debug_vis=False,
+        )
+        print("    Camera configured: 240x180, RGB")
+
+    # Create environment
+    print("  Creating environment...")
+    task_name = configs['experiment'].task_name
+
+    # Wrap with sensor support if contact sensor config is present AND use_contact_sensor is enabled
+    if (hasattr(env_cfg.task, 'held_fixed_contact_sensor') and
+        configs['wrappers'].force_torque_sensor.use_contact_sensor):
+        EnvClass = create_sensor_enabled_factory_env(FactoryEnv)
+        print("    Using sensor-enabled factory environment")
+    else:
+        EnvClass = FactoryEnv
+        print("    Using standard factory environment")
+
+    # Create environment directly
+    env = EnvClass(cfg=env_cfg, render_mode="rgb_array" if args.enable_video else None)
+    print(f"    Environment created: {task_name}")
+
+    # Disable wrappers not needed for evaluation
+    print("  Configuring wrappers for evaluation...")
+    configs['wrappers'].wandb_logging.enabled = False
+    configs['wrappers'].action_logging.enabled = False
+
+    # Enable factory_metrics but disable WandB publishing (for smoothness data in info)
+    configs['wrappers'].factory_metrics.enabled = True
+    configs['wrappers'].factory_metrics.publish_to_wandb = False
+
+    # Apply wrappers using launch_utils_v3
+    print("  Applying evaluation wrappers...")
+    env = lUtils.apply_wrappers(env, configs)
+
+    # Add image capture wrapper for video
+    if args.enable_video:
+        print("  - Img2InfoWrapper for video capture")
+        env = Img2InfoWrapper(env)
+
+    # Apply AsyncCriticIsaacLabWrapper (flattens policy+critic observations)
+    print("  - AsyncCriticIsaacLabWrapper")
+    from wrappers.skrl.async_critic_isaaclab_wrapper import AsyncCriticIsaacLabWrapper
+    env = AsyncCriticIsaacLabWrapper(env)
+
+    print("  Environment setup complete")
+
+    # Create models and agent
+    print("  Creating block models and agent...")
+
+    # Create models using launch_utils_v3
+    print("    Creating models...")
+    models = lUtils.create_policy_and_value_models(env, configs)
+    print("    Models created")
+
+    # Create memory (required for agent initialization, even for eval)
+    print("    Creating memory...")
+    memory = MultiRandomMemory(memory_size=16, num_envs=env.num_envs, device=env.device)
+    print("    Memory created")
+
+    # Disable checkpoint tracking for evaluation
+    configs['agent'].track_ckpts = False
+
+    # Create agent using launch_utils_v3
+    print("    Creating BlockPPO agent...")
+    agent = lUtils.create_block_ppo_agents(env, configs, models, memory)
+    print("    Agent created")
+
+    print(f"  Created BlockPPO agent with {configs['primary'].total_agents} agents")
+    print("  Setup complete!")
+
+    return env, agent, max_rollout_steps, policy_hz
+
+
+# ===== WANDB LOGGING =====
+
+def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
+                        video_path: Optional[str], args: argparse.Namespace) -> None:
+    """
+    Log evaluation results back to the WandB run.
+
+    Args:
+        run: WandB run object
+        step: Checkpoint step number
+        metrics: Dictionary of evaluation metrics
+        video_path: Path to generated video (if any)
+        args: Command-line arguments
+
+    Raises:
+        RuntimeError: If logging fails
+    """
+    print(f"  Logging results to WandB run {run.id} at step {step}...")
+
+    try:
+        # Resume the WandB run
+        wandb.init(project=run.project, id=run.id, resume="must")
+
+        # Add eval_seed and step metrics
+        metrics_to_log = metrics.copy()
+        metrics_to_log['eval_seed'] = args.eval_seed
+        metrics_to_log['total_steps'] = step
+        metrics_to_log['env_steps'] = step / 256
+
+        # Add video if available
+        video_uploaded = False
+        if args.enable_video and video_path is not None and os.path.exists(video_path):
+            caption = f"Evaluation at step {step}"
+            metrics_to_log['Eval/Checkpoint Videos'] = wandb.Video(video_path, caption=caption)
+            video_uploaded = True
+
+        """
+        # FOR TESTING: Print metrics and save video locally instead of logging to WandB
+        print(f"\n{'=' * 80}")
+        print(f"EVALUATION METRICS FOR STEP {step}")
+        print(f"{'=' * 80}")
+        for key, value in sorted(metrics_to_log.items()):
+            if key != 'Eval/Checkpoint Videos':
+                print(f"  {key}: {value}")
+        print(f"{'=' * 80}\n")
+
+        # Save video locally
+        if args.enable_video and video_path is not None and os.path.exists(video_path):
+            import shutil
+            local_video_path = f"./eval_step_{step}.gif"
+            shutil.copy(video_path, local_video_path)
+            print(f"    Saved video locally to: {local_video_path}")
+
+        # COMMENTED OUT FOR TESTING
+        """
+        wandb.log(metrics_to_log)
+
+        # Print status
+        if video_uploaded:
+            print(f"    Logged metrics and video for step {step}")
+        else:
+            print(f"    Logged metrics for step {step}")
+
+    except Exception as e:
+        raise RuntimeError(f"Failed to log metrics to WandB for {run.id} at step {step}: {e}")
+    finally:
+        # Always finish the run
+        wandb.finish()
+
+
+# ===== EVALUATION FUNCTIONS =====
+
+def run_basic_evaluation(
+    env: Any,
+    agent: Any,
+    configs: Dict[str, Any],
+    max_rollout_steps: int,
+    enable_video: bool = False,
+    show_progress: bool = False,
+    eval_seed: int = None
+) -> Tuple[Dict[str, float], Dict[str, Any]]:
+    """
+    Run basic evaluation rollout for 100 episodes (one per environment).
+
+    Args:
+        env: Environment instance (wrapped with metrics wrappers)
+        agent: Agent instance with loaded checkpoint
+        configs: Configuration dictionary
+        max_rollout_steps: Maximum steps per episode
+        enable_video: Whether to capture video frames
+        show_progress: Whether to show progress bar
+        eval_seed: Seed for deterministic evaluation
+
+    Returns:
+        Tuple of (metrics_dict, rollout_data_dict)
+            - metrics_dict: Aggregated metrics
+            - rollout_data_dict: Raw rollout data for video generation (or None if video disabled)
+
+    Raises:
+        RuntimeError: If evaluation fails
+    """
+    print("  Running basic evaluation rollout...")
+
+    # Set seed for deterministic evaluation
+    if eval_seed is not None:
+        from skrl.utils import set_seed
+        set_seed(eval_seed, deterministic=True)
+        print(f"    Set eval seed: {eval_seed}")
+
+    # Get device and num_envs
+    device = env.unwrapped.device
+    num_envs = env.unwrapped.num_envs
+
+    # Pre-allocate all tracking arrays to maximum possible size
+    # Episode data storage [num_envs]
+    episode_lengths = torch.zeros(num_envs, dtype=torch.long, device=device)
+    episode_rewards = torch.zeros(num_envs, dtype=torch.float32, device=device)
+    episode_terminated = torch.zeros(num_envs, dtype=torch.bool, device=device)
+
+    # Success/engagement tracking [num_envs]
+    episode_succeeded = torch.zeros(num_envs, dtype=torch.bool, device=device)
+    episode_success_times = torch.zeros(num_envs, dtype=torch.long, device=device)
+    episode_engaged = torch.zeros(num_envs, dtype=torch.bool, device=device)
+    episode_engagement_times = torch.zeros(num_envs, dtype=torch.long, device=device)
+    episode_engagement_lengths = torch.zeros(num_envs, dtype=torch.long, device=device)
+
+    # Smoothness tracking [num_envs]
+    episode_ssv = torch.zeros(num_envs, dtype=torch.float32, device=device)
+    episode_ssjv = torch.zeros(num_envs, dtype=torch.float32, device=device)
+
+    # Force tracking [num_envs]
+    episode_max_force = torch.zeros(num_envs, dtype=torch.float32, device=device)
+    episode_sum_force = torch.zeros(num_envs, dtype=torch.float32, device=device)
+    episode_force_steps = torch.zeros(num_envs, dtype=torch.long, device=device)
+
+    # Contact metrics [num_envs, 3] for X/Y/Z axes
+    contact_force_counts = torch.zeros((num_envs, 3), dtype=torch.long, device=device)
+    contact_pos_counts = torch.zeros((num_envs, 3), dtype=torch.long, device=device)
+    no_contact_force_counts = torch.zeros((num_envs, 3), dtype=torch.long, device=device)
+    no_contact_pos_counts = torch.zeros((num_envs, 3), dtype=torch.long, device=device)
+
+    # Episode completion tracking
+    completed_episodes = torch.zeros(num_envs, dtype=torch.bool, device=device)
+    termination_step = torch.full((num_envs,), -1, dtype=torch.long, device=device)
+    truncation_step = torch.full((num_envs,), -1, dtype=torch.long, device=device)
+    success_step = torch.full((num_envs,), -1, dtype=torch.long, device=device)
+
+    # Reset environment
+    obs_dict, info = env.reset()
+
+    # Preallocate tensors for video generation (only if enabled)
+    # We need max_rollout_steps + 1 frames (initial + each step)
+    if enable_video:
+        # Get image dimensions from first frame
+        if 'img' in info:
+            img_shape = info['img'].shape  # [num_envs, H, W, C]
+            max_video_steps = max_rollout_steps + 1
+
+            # Preallocate on CPU to save GPU memory
+            video_frames = torch.zeros((max_video_steps, num_envs, img_shape[1], img_shape[2], img_shape[3]),
+                                      dtype=torch.float32, device='cpu')
+            step_values = torch.zeros((max_video_steps, num_envs), dtype=torch.float32, device=device)
+            step_rewards = torch.zeros((max_video_steps, num_envs), dtype=torch.float32, device=device)
+            step_engagement = torch.zeros((max_video_steps, num_envs), dtype=torch.bool, device=device)
+            step_success = torch.zeros((max_video_steps, num_envs), dtype=torch.bool, device=device)
+            step_force_control = torch.zeros((max_video_steps, num_envs, 3), dtype=torch.bool, device=device)
+
+            # Capture initial frame
+            video_frames[0] = info['img'].cpu()
+
+            # Capture initial value estimate
+            with torch.no_grad():
+                if isinstance(obs_dict, dict) and 'critic' in obs_dict:
+                    critic_obs = obs_dict['critic']
+                else:
+                    critic_obs = obs_dict
+                values = agent.value.act({"states": critic_obs}, role="value")[0]
+                if values.dim() > 1:
+                    values = values.squeeze(-1)
+                step_values[0] = values
+
+            # Initial reward is 0 (already initialized)
+
+            # Initial engagement and success state - find factory metrics wrapper
+            factory_wrapper = env
+            while hasattr(factory_wrapper, 'env'):
+                if hasattr(factory_wrapper, 'curr_engaged') and hasattr(factory_wrapper, 'successes'):
+                    break
+                factory_wrapper = factory_wrapper.env
+
+            if hasattr(factory_wrapper, 'curr_engaged'):
+                step_engagement[0] = factory_wrapper.curr_engaged
+            # else: already initialized to False
+
+            if hasattr(factory_wrapper, 'successes'):
+                step_success[0] = factory_wrapper.successes
+            # else: already initialized to False
+
+            # Initial force control is all zeros (already initialized)
+        else:
+            # No video available
+            video_frames = None
+            step_values = None
+            step_rewards = None
+            step_engagement = None
+            step_force_control = None
+    else:
+        video_frames = None
+        step_values = None
+        step_rewards = None
+        step_engagement = None
+        step_force_control = None
+
+    # Rollout loop
+    step_count = 0
+    progress_bar = tqdm.tqdm(total=num_envs, desc="Episodes completed", disable=not show_progress)
+
+    while not completed_episodes.all():
+        # Get actions from agent (deterministic evaluation)
+        with torch.no_grad():
+            #actions = agent.act(obs_dict, deterministic=True)[0]
+            outputs = agent.act(obs_dict, timestep=step_count, timesteps=max_rollout_steps)[-1]
+            # Use mean actions for evaluation (deterministic)
+            actions = outputs['mean_actions']
+
+        # Get value estimates for video if enabled
+        if enable_video and step_values is not None:
+            with torch.no_grad():
+                # Get critic observations - handle both flat and dict observations
+                if isinstance(obs_dict, dict) and 'critic' in obs_dict:
+                    critic_obs = obs_dict['critic']
+                else:
+                    critic_obs = obs_dict
+                values = agent.value.act({"states": critic_obs}, role="value")[0]
+                if values.dim() > 1:
+                    values = values.squeeze(-1)
+                step_values[step_count + 1] = values
+
+        # Step environment
+        obs_dict, rewards, terminated, truncated, info = env.step(actions)
+
+        # Ensure all tensors are 1D [num_envs]
+        if rewards.dim() > 1:
+            rewards = rewards.squeeze(-1)
+        if terminated.dim() > 1:
+            terminated = terminated.squeeze(-1)
+        if truncated.dim() > 1:
+            truncated = truncated.squeeze(-1)
+
+        # Store per-step data for video (write into preallocated tensors)
+        if enable_video and video_frames is not None:
+            # Capture video frame
+            if 'img' in info:
+                # For environments that have already completed, reuse their last frame
+                # For active environments, capture the new frame
+                new_frame = info['img'].cpu()
+
+                # Start with previous frame for all environments
+                video_frames[step_count + 1] = video_frames[step_count].clone()
+
+                # Update only the active (not yet completed) environments with new frames
+                active_mask = ~completed_episodes
+                if active_mask.any():
+                    # Get indices of active environments
+                    active_indices = torch.where(active_mask)[0].cpu()
+                    for idx in active_indices:
+                        video_frames[step_count + 1, idx] = new_frame[idx]
+
+            # Store rewards
+            step_rewards[step_count + 1] = rewards
+
+            # Track engagement and success - find factory metrics wrapper
+            factory_wrapper = env
+            while hasattr(factory_wrapper, 'env'):
+                if hasattr(factory_wrapper, 'curr_engaged') and hasattr(factory_wrapper, 'successes'):
+                    break
+                factory_wrapper = factory_wrapper.env
+
+            if hasattr(factory_wrapper, 'curr_engaged'):
+                step_engagement[step_count + 1] = factory_wrapper.curr_engaged
+
+            if hasattr(factory_wrapper, 'successes'):
+                step_success[step_count + 1] = factory_wrapper.successes
+
+            # Track force control (first 3 dimensions of action space)
+            unwrapped_env = env.unwrapped if hasattr(env, 'unwrapped') else env
+            if hasattr(unwrapped_env, 'actions'):
+                force_control_actions = unwrapped_env.actions[:, :3]  # First 3 dimensions
+                force_control_mask = force_control_actions > 0.5
+                step_force_control[step_count + 1] = force_control_mask
+
+        # Active environments mask (not yet completed)
+        active_mask = ~completed_episodes
+
+        # Update episode rewards for active environments
+        episode_rewards[active_mask] += rewards[active_mask]
+
+        # Update episode lengths for active environments
+        episode_lengths[active_mask] += 1
+
+        # Track success and engagement states from info dict
+        if 'smoothness' in info:
+            # Factory metrics wrapper adds smoothness info
+            smoothness_info = info['smoothness']
+
+            # Find the factory metrics wrapper in the wrapper stack
+            # It stores successes and curr_engaged attributes
+            factory_wrapper = env
+            while hasattr(factory_wrapper, 'env'):
+                if hasattr(factory_wrapper, 'successes') and hasattr(factory_wrapper, 'curr_engaged'):
+                    break
+                factory_wrapper = factory_wrapper.env
+
+            # Check if we have success/engagement data
+            if hasattr(factory_wrapper, 'successes'):
+                curr_successes = factory_wrapper.successes  # Boolean tensor [num_envs]
+
+                # Track first success for active environments
+                first_success = curr_successes & ~episode_succeeded & active_mask
+                episode_succeeded[curr_successes & active_mask] = True
+                if first_success.any():
+                    episode_success_times[first_success] = episode_lengths[first_success].clone()
+                    success_step[first_success] = step_count
+
+            # Check for engagement state
+            if hasattr(factory_wrapper, 'curr_engaged'):
+                curr_engaged = factory_wrapper.curr_engaged  # Boolean tensor [num_envs]
+
+                # Track first engagement for active environments
+                first_engaged = curr_engaged & ~episode_engaged & active_mask
+                episode_engaged[curr_engaged & active_mask] = True
+                if first_engaged.any():
+                    episode_engagement_times[first_engaged] = episode_lengths[first_engaged].clone()
+
+                # Increment engagement length for currently engaged active environments
+                episode_engagement_lengths[curr_engaged & active_mask] += 1
+
+        # Update smoothness and force metrics from info dict
+        if 'smoothness' in info:
+            smoothness_info = info['smoothness']
+
+            # Sum squared velocity from info
+            if 'ssv' in smoothness_info:
+                # ssv is cumulative per episode, so just copy the current value
+                episode_ssv = smoothness_info['ssv'].clone()
+
+            # Sum squared joint velocity from info
+            if 'ssjv' in smoothness_info:
+                # ssjv is cumulative per episode, so just copy the current value
+                episode_ssjv = smoothness_info['ssjv'].clone()
+
+            # Force metrics from info
+            if 'max_force' in smoothness_info:
+                episode_max_force = smoothness_info['max_force'].clone()
+
+            if 'sum_force' in smoothness_info:
+                # Calculate average from sum
+                episode_sum_force = smoothness_info['sum_force'].clone()
+                # Count steps for averaging (use episode length as proxy)
+                episode_force_steps = episode_lengths.clone()
+
+        # Accumulate contact metrics from to_log for active environments
+        if hasattr(env.unwrapped, 'extras') and 'to_log' in env.unwrapped.extras:
+            to_log = env.unwrapped.extras['to_log']
+
+            # Check if hybrid control wrapper is present
+            has_hybrid_control = 'Control Mode / Force Control X' in to_log
+
+            if has_hybrid_control:
+                for axis_idx, axis in enumerate(['X', 'Y', 'Z']):
+                    # Get control mode for this axis from to_log
+                    force_control_key = f'Control Mode / Force Control {axis}'
+                    if force_control_key in to_log:
+                        force_control = to_log[force_control_key] > 0.5  # [num_envs]
+                        pos_control = ~force_control
+
+                        # Get contact state for this axis
+                        # Check if in_contact is available
+                        if hasattr(env.unwrapped, 'in_contact'):
+                            in_contact = env.unwrapped.in_contact[:, axis_idx]  # [num_envs]
+
+                            # Update counts for active environments only
+                            contact_force_counts[active_mask, axis_idx] += (in_contact[active_mask] & force_control[active_mask]).long()
+                            contact_pos_counts[active_mask, axis_idx] += (in_contact[active_mask] & pos_control[active_mask]).long()
+                            no_contact_force_counts[active_mask, axis_idx] += (~in_contact[active_mask] & force_control[active_mask]).long()
+                            no_contact_pos_counts[active_mask, axis_idx] += (~in_contact[active_mask] & pos_control[active_mask]).long()
+
+        # Check for newly completed episodes (terminated OR truncated ONLY - success is not terminal)
+        newly_completed = ((terminated | truncated) & ~completed_episodes)
+
+        # Track termination and truncation steps
+        if newly_completed.any():
+            termination_mask = newly_completed & terminated
+            truncation_mask = newly_completed & truncated
+            termination_step[termination_mask] = step_count
+            truncation_step[truncation_mask] = step_count
+
+        # Mark completed
+        completed_episodes = completed_episodes | newly_completed
+
+        # Track which episodes terminated vs truncated
+        episode_terminated[newly_completed & terminated] = True
+
+        # Update progress bar
+        if show_progress and newly_completed.any():
+            progress_bar.update(newly_completed.sum().item())
+
+        step_count += 1
+
+        # Safety check to prevent infinite loops
+        if step_count > max_rollout_steps * 2:
+            raise RuntimeError(f"Evaluation exceeded maximum steps ({max_rollout_steps * 2}). Some environments may not be terminating.")
+
+    progress_bar.close()
+    print(f"    Completed {num_envs} episodes in {step_count} steps")
+
+    # Compute aggregated metrics from raw data
+    print("  Computing aggregated metrics...")
+    metrics = _compute_aggregated_metrics(
+        episode_lengths=episode_lengths,
+        episode_rewards=episode_rewards,
+        episode_terminated=episode_terminated,
+        episode_succeeded=episode_succeeded,
+        episode_success_times=episode_success_times,
+        episode_engaged=episode_engaged,
+        episode_engagement_times=episode_engagement_times,
+        episode_engagement_lengths=episode_engagement_lengths,
+        episode_ssv=episode_ssv,
+        episode_ssjv=episode_ssjv,
+        episode_max_force=episode_max_force,
+        episode_sum_force=episode_sum_force,
+        episode_force_steps=episode_force_steps,
+        contact_force_counts=contact_force_counts,
+        contact_pos_counts=contact_pos_counts,
+        no_contact_force_counts=no_contact_force_counts,
+        no_contact_pos_counts=no_contact_pos_counts,
+    )
+
+    # Prepare rollout data for video generation
+    rollout_data = None
+    if enable_video and video_frames is not None:
+        # Slice tensors to actual number of steps taken (step_count + 1 for initial frame)
+        actual_steps = step_count + 1
+        rollout_data = {
+            'images': video_frames[:actual_steps],  # [actual_steps, num_envs, H, W, C]
+            'values': step_values[:actual_steps],    # [actual_steps, num_envs]
+            'rewards': step_rewards[:actual_steps],  # [actual_steps, num_envs]
+            'engagement_history': step_engagement[:actual_steps],  # [actual_steps, num_envs]
+            'success_history': step_success[:actual_steps],  # [actual_steps, num_envs]
+            'force_control': step_force_control[:actual_steps],  # [actual_steps, num_envs, 3]
+            'total_returns': episode_rewards,  # [num_envs]
+            'success_step': success_step,      # [num_envs]
+            'termination_step': termination_step,  # [num_envs]
+            'truncation_step': truncation_step,    # [num_envs]
+        }
+
+    return metrics, rollout_data
+
+
+def _compute_aggregated_metrics(
+    episode_lengths: torch.Tensor,
+    episode_rewards: torch.Tensor,
+    episode_terminated: torch.Tensor,
+    episode_succeeded: torch.Tensor,
+    episode_success_times: torch.Tensor,
+    episode_engaged: torch.Tensor,
+    episode_engagement_times: torch.Tensor,
+    episode_engagement_lengths: torch.Tensor,
+    episode_ssv: torch.Tensor,
+    episode_ssjv: torch.Tensor,
+    episode_max_force: torch.Tensor,
+    episode_sum_force: torch.Tensor,
+    episode_force_steps: torch.Tensor,
+    contact_force_counts: torch.Tensor,
+    contact_pos_counts: torch.Tensor,
+    no_contact_force_counts: torch.Tensor,
+    no_contact_pos_counts: torch.Tensor,
+) -> Dict[str, float]:
+    """
+    Compute aggregated metrics from raw episode data.
+
+    Args:
+        episode_lengths: Episode lengths [num_envs]
+        episode_rewards: Episode total rewards [num_envs]
+        episode_terminated: Whether episode terminated (vs truncated) [num_envs]
+        episode_succeeded: Whether episode succeeded [num_envs]
+        episode_success_times: Step at which success occurred [num_envs]
+        episode_engaged: Whether episode engaged [num_envs]
+        episode_engagement_times: Step at which engagement occurred [num_envs]
+        episode_engagement_lengths: Total engagement length [num_envs]
+        episode_ssv: Sum squared velocity [num_envs]
+        episode_ssjv: Sum squared joint velocity [num_envs]
+        episode_max_force: Maximum force magnitude [num_envs]
+        episode_sum_force: Sum of force magnitudes [num_envs]
+        episode_force_steps: Number of steps with force data [num_envs]
+        contact_force_counts: Contact+Force counts [num_envs, 3]
+        contact_pos_counts: Contact+Pos counts [num_envs, 3]
+        no_contact_force_counts: NoContact+Force counts [num_envs, 3]
+        no_contact_pos_counts: NoContact+Pos counts [num_envs, 3]
+
+    Returns:
+        Dictionary of aggregated metrics
+    """
+    metrics = {}
+    num_envs = episode_lengths.shape[0]
+
+    # Basic episode metrics
+    metrics['episode_length'] = episode_lengths.float().mean().item()
+    metrics['total_reward'] = episode_rewards.mean().item() * 0.0
+    metrics['total_reward_std'] = episode_rewards.std().item()
+    metrics['termination_rate'] = episode_terminated.float().mean().item()
+
+    # Success metrics
+    metrics['success_rate'] = episode_succeeded.float().mean().item()
+    # Success time only from successful episodes
+    if episode_succeeded.any():
+        metrics['success_time'] = episode_success_times[episode_succeeded].float().mean().item()
+    else:
+        metrics['success_time'] = 0.0
+
+    # Engagement metrics
+    metrics['engagement_rate'] = episode_engaged.float().mean().item()
+    if episode_engaged.any():
+        metrics['engagement_time'] = episode_engagement_times[episode_engaged].float().mean().item()
+        metrics['engagement_length'] = episode_engagement_lengths[episode_engaged].float().mean().item()
+    else:
+        metrics['engagement_time'] = 0.0
+        metrics['engagement_length'] = 0.0
+
+    # Smoothness metrics
+    metrics['ssv'] = episode_ssv.mean().item()
+    metrics['ssjv'] = episode_ssjv.mean().item()
+
+    # Force metrics
+    metrics['max_force'] = episode_max_force.max().item()
+    # Average force across all episodes
+    if episode_force_steps.sum() > 0:
+        metrics['avg_force'] = episode_sum_force.sum().item() / episode_force_steps.sum().item()
+    else:
+        metrics['avg_force'] = 0.0
+
+    # Contact metrics per axis - only publish if there's actual contact data
+    # Check if any contact data was collected (sum of all counts > 0)
+    total_contact_data = (contact_force_counts.sum() + contact_pos_counts.sum() +
+                          no_contact_force_counts.sum() + no_contact_pos_counts.sum()).item()
+
+    if total_contact_data > 0:
+        axis_names = ['X', 'Y', 'Z']
+        for axis_idx, axis in enumerate(axis_names):
+            # Sum across all environments for total counts
+            contact_force = contact_force_counts[:, axis_idx].sum().item()
+            contact_pos = contact_pos_counts[:, axis_idx].sum().item()
+            no_contact_force = no_contact_force_counts[:, axis_idx].sum().item()
+            no_contact_pos = no_contact_pos_counts[:, axis_idx].sum().item()
+
+            # Raw counts
+            metrics[f'contact_force_{axis}'] = contact_force
+            metrics[f'contact_pos_{axis}'] = contact_pos
+            metrics[f'no_contact_force_{axis}'] = no_contact_force
+            metrics[f'no_contact_pos_{axis}'] = no_contact_pos
+
+            # Precision: Contact+Force / (Contact+Force + NoContact+Force)
+            denominator_precision = contact_force + no_contact_force
+            if denominator_precision > 0:
+                metrics[f'precision_{axis}'] = contact_force / denominator_precision
+            else:
+                metrics[f'precision_{axis}'] = 0.0
+
+            # Recall: Contact+Force / (Contact+Force + Contact+Pos)
+            denominator_recall = contact_force + contact_pos
+            if denominator_recall > 0:
+                metrics[f'recall_{axis}'] = contact_force / denominator_recall
+            else:
+                metrics[f'recall_{axis}'] = 0.0
+
+    return metrics
+
+
+def _create_checkpoint_gif(images: torch.Tensor, values: torch.Tensor, cumulative_rewards: torch.Tensor,
+                          success_step: torch.Tensor, termination_step: torch.Tensor,
+                          truncation_step: torch.Tensor, engagement_history: torch.Tensor,
+                          success_history: torch.Tensor, force_control: torch.Tensor,
+                          output_path: str, duration: int, font: Any) -> None:
+    """
+    Create a 3x4 grid GIF from 12 selected environments.
+
+    Args:
+        images: [num_steps, 12, 180, 240, 3] tensor
+        values: [num_steps, 12] tensor
+        cumulative_rewards: [num_steps, 12] tensor of accumulated rewards
+        success_step: [12] tensor (kept for backward compatibility, not used)
+        termination_step: [12] tensor
+        truncation_step: [12] tensor
+        engagement_history: [num_steps, 12] tensor
+        success_history: [num_steps, 12] tensor
+        force_control: [num_steps, 12, 3] tensor
+        output_path: Path to save GIF
+        duration: Frame duration in milliseconds
+        font: PIL ImageFont to use
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    num_steps = images.shape[0]
+    pil_frames = []
+
+    # Process each timestep
+    for step_idx in range(num_steps):
+        # Create empty canvas for 3x4 grid (540 height × 960 width)
+        canvas = torch.zeros((540, 960, 3), dtype=torch.float32, device=images.device)
+
+        # Process each of 12 environments
+        for env_idx in range(12):
+            # Calculate grid position
+            row = env_idx // 4
+            col = env_idx % 4
+
+            # Get image for this environment at this step [180, 240, 3]
+            img = images[step_idx, env_idx].clone()
+
+            # Invert colors
+            img = 1.0 - img
+
+            # Place image in canvas
+            y_start = row * 180
+            y_end = (row + 1) * 180
+            x_start = col * 240
+            x_end = (col + 1) * 240
+            canvas[y_start:y_end, x_start:x_end] = img
+
+        # Convert canvas to PIL Image
+        canvas_np = (canvas.cpu().numpy() * 255).astype(np.uint8)
+        pil_img = Image.fromarray(canvas_np)
+        draw = ImageDraw.Draw(pil_img)
+
+        # Draw annotations for each environment
+        for env_idx in range(12):
+            row = env_idx // 4
+            col = env_idx % 4
+            x_offset = col * 240
+            y_offset = row * 180
+
+            # Determine border color (precedence: success > termination/truncation > engagement)
+            is_succeeded = success_history[step_idx, env_idx].item()
+            is_terminated = step_idx >= termination_step[env_idx] and termination_step[env_idx] != -1
+            is_truncated = step_idx >= truncation_step[env_idx] and truncation_step[env_idx] != -1
+            is_engaged = engagement_history[step_idx, env_idx].item()
+
+            border_color = None
+            if is_succeeded:
+                border_color = "green"
+            elif is_terminated or is_truncated:
+                border_color = "red"
+            elif is_engaged:
+                border_color = "orange"
+
+            # Draw border if needed
+            if border_color is not None:
+                draw.rectangle(
+                    [(x_offset, y_offset), (x_offset + 240, y_offset + 180)],
+                    outline=border_color,
+                    width=3
+                )
+
+            # Draw accumulated reward text (top left of image)
+            cum_rew = cumulative_rewards[step_idx, env_idx].item()
+            draw.text(
+                (x_offset + 2, y_offset + 2),
+                f"TotRew: {cum_rew:.2f}",
+                fill=(0, 255, 0),
+                font=font
+            )
+
+            # Draw value estimate (bottom of image)
+            val = values[step_idx, env_idx].item()
+            draw.text(
+                (x_offset + 2, y_offset + 160),
+                f"V-Est: {val:.2f}",
+                fill=(0, 255, 0),
+                font=font
+            )
+
+            # Draw force control indicators (X/Y/Z)
+            force_x = force_control[step_idx, env_idx, 0].item() > 0.5
+            force_y = force_control[step_idx, env_idx, 1].item() > 0.5
+            force_z = force_control[step_idx, env_idx, 2].item() > 0.5
+
+            draw.text(
+                (x_offset + 20, y_offset + 135),
+                "X",
+                fill=(0, 255, 0) if force_x else (255, 0, 0),
+                font=font
+            )
+            draw.text(
+                (x_offset + 50, y_offset + 135),
+                "Y",
+                fill=(0, 255, 0) if force_y else (255, 0, 0),
+                font=font
+            )
+            draw.text(
+                (x_offset + 80, y_offset + 135),
+                "Z",
+                fill=(0, 255, 0) if force_z else (255, 0, 0),
+                font=font
+            )
+
+        pil_frames.append(pil_img)
+
+    # Create output directory if needed
+    output_dir = os.path.dirname(output_path)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+
+    # Save as GIF
+    pil_frames[0].save(
+        output_path,
+        save_all=True,
+        append_images=pil_frames[1:],
+        duration=duration,
+        loop=0
+    )
+
+
+def generate_evaluation_video(rollout_data: Dict[str, Any], agent: Any,
+                              policy_hz: float, output_path: str) -> str:
+    """
+    Generate 3x4 grid GIF for evaluation checkpoint.
+
+    Args:
+        rollout_data: Dictionary with collected rollout data including images, values, rewards, etc.
+        agent: Agent instance (for value preprocessing)
+        policy_hz: Policy frequency for GIF frame rate
+        output_path: Path to save the video
+
+    Returns:
+        Path to generated video file
+
+    Raises:
+        RuntimeError: If video generation fails
+    """
+    print(f"  Generating evaluation video...")
+
+    # Verify images are available
+    if rollout_data["images"] is None:
+        raise RuntimeError("Cannot generate video: rollout_data['images'] is None")
+
+    if len(rollout_data["images"]) == 0:
+        raise RuntimeError(
+            "Cannot generate video: No images were captured during rollout. "
+            "This likely means the camera was not properly configured in the scene. "
+            "Check that the environment has a 'tiled_camera' in the scene."
+        )
+
+    # Calculate frame duration in milliseconds
+    duration = int(1000 / policy_hz)
+    print(f"    Frame duration: {duration}ms (policy_hz: {policy_hz})")
+
+    # Try to load font with fallback
+    try:
+        from PIL import ImageFont
+        font = ImageFont.truetype("DejaVuSans.ttf", 20)
+        print("    Using DejaVuSans.ttf font")
+    except:
+        from PIL import ImageFont
+        font = ImageFont.load_default()
+        print("    Using default font (DejaVuSans.ttf not found)")
+
+    # Apply inverse preprocessing to ALL values at once
+    all_values = rollout_data["values"]  # [steps, num_envs]
+
+    # Ensure values have shape [steps, num_envs, 1] for preprocessor
+    if all_values.dim() == 2:
+        all_values = all_values.unsqueeze(-1)  # [steps, num_envs, 1]
+
+    # Apply inverse preprocessing (handles 3D batched input)
+    all_values_unscaled = agent._value_preprocessor(all_values, inverse=True)  # [steps, num_envs, 1]
+
+    # Squeeze to [steps, num_envs] for easier slicing
+    all_values_unscaled = all_values_unscaled.squeeze(-1)  # [steps, num_envs]
+
+    # Get data dimensions
+    num_envs = rollout_data["total_returns"].shape[0]
+
+    # Compute cumulative rewards
+    # Mask rewards after termination/truncation
+    step_rewards = rollout_data["rewards"]  # [steps, num_envs]
+    num_steps = step_rewards.shape[0]
+
+    # Create mask for active environments at each step
+    termination_step = rollout_data["termination_step"]  # [num_envs]
+    truncation_step = rollout_data["truncation_step"]    # [num_envs]
+
+    # For each step, determine which envs are still active
+    # An env is inactive after its termination or truncation step
+    reward_mask = torch.ones_like(step_rewards, dtype=torch.bool)
+    for step_idx in range(num_steps):
+        # Mark envs as inactive if they terminated/truncated at or before this step
+        inactive = ((termination_step != -1) & (termination_step <= step_idx)) | \
+                   ((truncation_step != -1) & (truncation_step <= step_idx))
+        reward_mask[step_idx, inactive] = False
+
+    # Apply mask and compute cumulative sum
+    masked_rewards = step_rewards.clone()
+    masked_rewards[~reward_mask] = 0.0
+    cumulative_rewards = torch.cumsum(masked_rewards, dim=0)  # [steps, num_envs]
+
+    # Select 12 environments based on returns (worst 4, middle 4, best 4)
+    sorted_indices = torch.argsort(rollout_data["total_returns"])
+    n = sorted_indices.shape[0]
+
+    # Ensure we have at least 12 environments
+    if n < 12:
+        raise RuntimeError(f"Need at least 12 environments for video generation, but only have {n}")
+
+    selected_indices = torch.cat([
+        sorted_indices[-4:],              # best 4
+        sorted_indices[n//2-2:n//2+2],   # middle 4
+        sorted_indices[:4]                # worst 4
+    ])
+
+    # Slice data for selected 12 environments (move to CPU if needed to save GPU memory)
+    images_tensor = rollout_data["images"]
+    if images_tensor.device.type == 'cuda':
+        images_tensor = images_tensor.cpu()
+
+    # Move selected_indices to same device as the tensors we're indexing
+    selected_indices_cpu = selected_indices.cpu()
+    selected_images = images_tensor[:, selected_indices_cpu]
+
+    selected_values = all_values_unscaled[:, selected_indices].cpu()
+    selected_success_step = rollout_data["success_step"][selected_indices].cpu()
+    selected_termination_step = rollout_data["termination_step"][selected_indices].cpu()
+    selected_truncation_step = rollout_data["truncation_step"][selected_indices].cpu()
+    selected_engagement = rollout_data["engagement_history"][:, selected_indices].cpu()
+    selected_success = rollout_data["success_history"][:, selected_indices].cpu()
+    selected_force_control = rollout_data["force_control"][:, selected_indices].cpu()
+    selected_cumulative_rewards = cumulative_rewards[:, selected_indices].cpu()
+
+    # Generate GIF
+    _create_checkpoint_gif(
+        selected_images,
+        selected_values,
+        selected_cumulative_rewards,
+        selected_success_step,
+        selected_termination_step,
+        selected_truncation_step,
+        selected_engagement,
+        selected_success,
+        selected_force_control,
+        output_path,
+        duration,
+        font
+    )
+
+    print(f"    Saved video to: {output_path}")
+    return output_path
+
+
+def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
+                       configs: Dict[str, Any], args: argparse.Namespace,
+                       max_rollout_steps: int, policy_hz: float) -> Tuple[Dict[str, float], Optional[str]]:
+    """
+    Evaluate a single checkpoint.
+
+    Args:
+        run: WandB run object
+        step: Checkpoint step number
+        env: Environment instance
+        agent: Agent instance
+        configs: Configuration dictionary
+        args: Command-line arguments
+        max_rollout_steps: Maximum rollout steps
+        policy_hz: Policy frequency
+
+    Returns:
+        Tuple of (metrics_dict, video_path)
+
+    Raises:
+        RuntimeError: If checkpoint loading or evaluation fails
+    """
+    print(f"  Evaluating checkpoint at step {step}...")
+
+    # Download checkpoint pair from WandB
+    policy_path, critic_path = download_checkpoint_pair(run, step)
+
+    try:
+        # Import required modules for checkpoint loading
+        from models.SimBa import SimBaNet
+        from models.block_simba import pack_agents_into_block
+        from agents.block_ppo import PerAgentPreprocessorWrapper
+
+        # Load checkpoints into agent models
+        print(f"    Loading policy checkpoint: {policy_path}")
+        policy_checkpoint = torch.load(policy_path, map_location=env.unwrapped.device, weights_only=False)
+
+        # Verify policy checkpoint has required fields
+        if 'net_state_dict' not in policy_checkpoint:
+            raise RuntimeError("Policy checkpoint missing 'net_state_dict'")
+
+        print(f"    Loading critic checkpoint: {critic_path}")
+        critic_checkpoint = torch.load(critic_path, map_location=env.unwrapped.device, weights_only=False)
+
+        # Verify critic checkpoint has required fields
+        if 'net_state_dict' not in critic_checkpoint:
+            raise RuntimeError("Critic checkpoint missing 'net_state_dict'")
+
+        # Create single-agent SimBaNet models for policy and critic
+        agent_idx = 0  # We're loading into agent slot 0
+
+        print(f"      Creating SimBaNet for policy...")
+        policy_agent = SimBaNet(
+            n=len(agent.policy.actor_mean.resblocks),
+            in_size=agent.policy.actor_mean.obs_dim,
+            out_size=agent.policy.actor_mean.act_dim,
+            latent_size=agent.policy.actor_mean.hidden_dim,
+            device=agent.device,
+            tan_out=agent.policy.actor_mean.use_tanh
+        )
+        policy_agent.load_state_dict(policy_checkpoint['net_state_dict'])
+        print(f"      Loaded policy SimBaNet state dict")
+
+        print(f"      Creating SimBaNet for critic...")
+        critic_agent = SimBaNet(
+            n=len(agent.value.critic.resblocks),
+            in_size=agent.value.critic.obs_dim,
+            out_size=agent.value.critic.act_dim,
+            latent_size=agent.value.critic.hidden_dim,
+            device=agent.device,
+            tan_out=agent.value.critic.use_tanh
+        )
+        critic_agent.load_state_dict(critic_checkpoint['net_state_dict'])
+        print(f"      Loaded critic SimBaNet state dict")
+
+        # Pack single-agent models into block models at agent_idx=0
+        print(f"      Packing policy into BlockSimBa at agent index {agent_idx}...")
+        pack_agents_into_block(agent.policy.actor_mean, {agent_idx: policy_agent})
+
+        print(f"      Packing critic into BlockSimBa at agent index {agent_idx}...")
+        pack_agents_into_block(agent.value.critic, {agent_idx: critic_agent})
+
+        # Load log_std for policy
+        if 'log_std' in policy_checkpoint:
+            agent.policy.actor_logstd[agent_idx].data.copy_(policy_checkpoint['log_std'].data)
+            print(f"      Loaded log_std for agent {agent_idx}")
+        else:
+            print(f"      WARNING: No log_std found in policy checkpoint")
+
+        # Load state preprocessor
+        if 'state_preprocessor' in policy_checkpoint:
+            if not hasattr(agent, '_per_agent_state_preprocessors'):
+                agent._per_agent_state_preprocessors = [None] * agent.num_agents
+
+            if agent._per_agent_state_preprocessors[agent_idx] is None:
+                from skrl.resources.preprocessors.torch import RunningStandardScaler
+                obs_size = policy_checkpoint['state_preprocessor']['running_mean'].shape[0]
+                agent._per_agent_state_preprocessors[agent_idx] = RunningStandardScaler(
+                    size=obs_size,
+                    device=agent.device
+                )
+
+            agent._per_agent_state_preprocessors[agent_idx].load_state_dict(policy_checkpoint['state_preprocessor'])
+
+            preprocessor = agent._per_agent_state_preprocessors[agent_idx]
+            mean_avg = preprocessor.running_mean.mean().item()
+            mean_std = preprocessor.running_mean.std().item()
+            var_avg = preprocessor.running_variance.mean().item()
+            count = preprocessor.current_count.item()
+            print(f"      Loaded state preprocessor: mean_avg={mean_avg:.4f}, mean_std={mean_std:.4f}, var_avg={var_avg:.4f}, count={count}")
+        else:
+            raise RuntimeError("Policy checkpoint missing 'state_preprocessor'")
+
+        # Load value preprocessor
+        if 'value_preprocessor' in critic_checkpoint:
+            if not hasattr(agent, '_per_agent_value_preprocessors'):
+                agent._per_agent_value_preprocessors = [None] * agent.num_agents
+
+            if agent._per_agent_value_preprocessors[agent_idx] is None:
+                from skrl.resources.preprocessors.torch import RunningStandardScaler
+                agent._per_agent_value_preprocessors[agent_idx] = RunningStandardScaler(
+                    size=1,
+                    device=agent.device
+                )
+
+            agent._per_agent_value_preprocessors[agent_idx].load_state_dict(critic_checkpoint['value_preprocessor'])
+
+            preprocessor = agent._per_agent_value_preprocessors[agent_idx]
+            mean_val = preprocessor.running_mean.item()
+            var_val = preprocessor.running_variance.item()
+            count = preprocessor.current_count.item()
+            print(f"      Loaded value preprocessor: mean={mean_val:.4f}, var={var_val:.4f}, count={count}")
+        else:
+            raise RuntimeError("Critic checkpoint missing 'value_preprocessor'")
+
+        # Wrap preprocessors for SKRL compatibility
+        print(f"      Wrapping preprocessors for SKRL...")
+        if hasattr(agent, '_per_agent_state_preprocessors') and agent._per_agent_state_preprocessors:
+            agent._state_preprocessor = PerAgentPreprocessorWrapper(agent, agent._per_agent_state_preprocessors)
+        else:
+            print("      WARNING: No state preprocessors to wrap")
+
+        if hasattr(agent, '_per_agent_value_preprocessors') and agent._per_agent_value_preprocessors:
+            agent._value_preprocessor = PerAgentPreprocessorWrapper(agent, agent._per_agent_value_preprocessors)
+        else:
+            print("      WARNING: No value preprocessors to wrap")
+
+        # Verify loading
+        sample_value = list(policy_checkpoint['net_state_dict'].values())[0].flatten()[0].item()
+        print(f"      Checkpoint loading verified (sample weight: {sample_value:.4f})")
+
+        # Set agent to eval mode
+        agent.set_running_mode("eval")
+        print(f"    Checkpoint loading complete!")
+
+        # Run basic evaluation
+        metrics, rollout_data = run_basic_evaluation(
+            env=env,
+            agent=agent,
+            configs=configs,
+            max_rollout_steps=max_rollout_steps,
+            enable_video=args.enable_video,
+            show_progress=args.show_progress,
+            eval_seed=args.eval_seed
+        )
+
+        # Generate video if rollout data is available
+        video_path = None
+        if args.enable_video and rollout_data is not None:
+            # Create temp video path
+            fd, video_path = tempfile.mkstemp(suffix=".gif", prefix=f"eval_step_{step}_")
+            os.close(fd)
+
+            video_path = generate_evaluation_video(
+                rollout_data=rollout_data,
+                agent=agent,
+                policy_hz=policy_hz,
+                output_path=video_path
+            )
+
+        # Add Eval/ prefix to all metrics for WandB namespacing
+        eval_metrics = {f"Eval/{key}": value for key, value in metrics.items()}
+
+        print(f"  Checkpoint {step} evaluation complete")
+        print(f"    Success rate: {metrics.get('success_rate', 0.0):.2%}")
+        print(f"    Mean reward: {metrics.get('total_reward', 0.0):.2f}")
+
+        return eval_metrics, video_path
+
+    finally:
+        # Clean up downloaded checkpoint files
+        if os.path.exists(policy_path):
+            download_dir = os.path.dirname(os.path.dirname(policy_path))
+            shutil.rmtree(download_dir, ignore_errors=True)
+
+
+# ===== MAIN EXECUTION =====
+
+def main():
+    """Main execution function."""
+    print("=" * 80)
+    print("WandB Tag-Based Evaluation Script")
+    print("=" * 80)
+
+    try:
+        # Query runs by tag
+        runs = query_runs_by_tag(args_cli.tag, args_cli.entity, args_cli.project, args_cli.run_id)
+
+        # Get representative run for config
+        representative_run = runs[0]
+        print(f"\nUsing run {representative_run.id} as configuration source")
+
+        # Reconstruct config from WandB
+        configs = reconstruct_config_from_wandb(representative_run)
+
+        # Setup environment once
+        print("\nSetting up environment...")
+        env, agent, max_rollout_steps, policy_hz = setup_environment_once(configs, args_cli)
+
+        print(f"\nEnvironment configured:")
+        print(f"  - Environments per agent: 100 (hardcoded)")
+        print(f"  - Max rollout steps: {max_rollout_steps}")
+        print(f"  - Policy Hz: {policy_hz}")
+
+        # Evaluate each run
+        for run_idx, run in enumerate(runs):
+            print(f"\n{'=' * 80}")
+            print(f"Evaluating run {run_idx + 1}/{len(runs)}: {run.project}/{run.id}")
+            print(f"{'=' * 80}")
+
+            # Get checkpoint steps for this run
+            checkpoint_steps = get_checkpoint_steps(run, args_cli)
+
+            # Evaluate each checkpoint
+            for step_idx, step in enumerate(checkpoint_steps):
+                print(f"\nCheckpoint {step_idx + 1}/{len(checkpoint_steps)}: step {step}")
+
+                try:
+                    # Evaluate this checkpoint
+                    metrics, video_path = evaluate_checkpoint(
+                        run, step, env, agent, configs, args_cli,
+                        max_rollout_steps, policy_hz
+                    )
+
+                    # Log results to WandB
+                    log_results_to_wandb(run, step, metrics, video_path, args_cli)
+
+                except Exception as e:
+                    print(f"  ERROR: Failed to evaluate checkpoint at step {step}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
+
+        print(f"\n{'=' * 80}")
+        print("Evaluation complete!")
+        print(f"{'=' * 80}")
+
+    except Exception as e:
+        print(f"\nFATAL ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+    finally:
+        # Clean up simulation
+        simulation_app.close()
+
+
+if __name__ == "__main__":
+    main()

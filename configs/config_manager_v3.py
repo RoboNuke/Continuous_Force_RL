@@ -230,14 +230,18 @@ class ConfigManagerV3:
         try:
             # Download base config (always required)
             base_file = run.file('config_base.yaml')
-            base_path = base_file.download(root=temp_dir, replace=True)
+            base_file_handle = base_file.download(root=temp_dir, replace=True)
+            base_path = base_file_handle.name  # Extract path from file handle
+            base_file_handle.close()  # Close the file handle
             print(f"  Downloaded base config: {base_path}")
 
             # Check if experiment config exists
             exp_path = None
             try:
                 exp_file = run.file('config_experiment.yaml')
-                exp_path = exp_file.download(root=temp_dir, replace=True)
+                exp_file_handle = exp_file.download(root=temp_dir, replace=True)
+                exp_path = exp_file_handle.name  # Extract path from file handle
+                exp_file_handle.close()  # Close the file handle
                 print(f"  Downloaded experiment config: {exp_path}")
             except Exception:
                 # No experiment config - this is fine, just use base
