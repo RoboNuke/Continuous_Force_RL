@@ -1077,7 +1077,7 @@ def _compute_aggregated_metrics(
 
     # Basic episode metrics
     metrics['episode_length'] = episode_lengths.float().mean().item()
-    metrics['total_reward'] = episode_rewards.mean().item() * 0.0
+    metrics['total_reward'] = episode_rewards.mean().item() 
     metrics['total_reward_std'] = episode_rewards.std().item()
     metrics['termination_rate'] = episode_terminated.float().mean().item()
 
