@@ -11,6 +11,17 @@ from .version_compat import get_isaac_lab_factory_imports
 configclass, PegFactoryEnv, _, _, = get_isaac_lab_factory_imports()
 from configs.cfg_exts.extended_peg_insert_cfg import ExtendedFactoryTaskPegInsertCfg
 from configs.cfg_exts.ctrl_cfg import ExtendedCtrlCfg
+
+@configclass
+class ExtendedObsRandCfg:
+    """Extended observation randomization config with force-torque noise."""
+
+    fixed_asset_pos: list = [0.001, 0.001, 0.001]
+    """Position noise for fixed asset (meters) - default 1mm per axis"""
+
+    force_torque: list = [0.25, 0.25, 0.25, 0.01, 0.01, 0.01]
+    """Force-torque sensor noise [Fx, Fy, Fz, Tx, Ty, Tz] in N and Nm - applied per step"""
+
 @configclass
 class ExtendedFactoryPegEnvCfg(PegFactoryEnv):
     """
@@ -19,8 +30,11 @@ class ExtendedFactoryPegEnvCfg(PegFactoryEnv):
     Inherits from Isaac Lab's FactoryEnvCfg and adds our custom parameters.
     """
     task: ExtendedFactoryTaskPegInsertCfg = None
-    
+
     ctrl: ExtendedCtrlCfg = None
+
+    obs_rand: ExtendedObsRandCfg = ExtendedObsRandCfg()
+    """Observation randomization configuration with force-torque noise support"""
 
     # Additional data fields can be added here if needed
     filter_collisions: bool = True

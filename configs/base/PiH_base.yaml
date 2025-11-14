@@ -66,6 +66,11 @@ environment:
     fixed_pos: "fixed_pos"
     fixed_quat: "fixed_quat"
 
+# OBSERVATION RANDOMIZATION CONFIGURATION
+obs_rand:
+  fixed_asset_pos: [0.001, 0.001, 0.001]  # 1mm position noise (default from IsaacLab)
+  force_torque: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # Force (N) and Torque (Nm) noise - applied per step
+
 # MODEL CONFIGURATION (SimBa architecture parameters)
 model:
   # Standard model parameters

@@ -17,7 +17,7 @@ from typing import Dict, Any, Tuple, Type, List, Optional
 
 # Import required config classes
 from configs.cfg_exts.primary_cfg import PrimaryConfig
-from configs.cfg_exts.extended_factory_peg_env_cfg import ExtendedFactoryPegEnvCfg
+from configs.cfg_exts.extended_factory_peg_env_cfg import ExtendedFactoryPegEnvCfg, ExtendedObsRandCfg
 from configs.cfg_exts.extended_peg_insert_cfg import ExtendedFactoryTaskPegInsertCfg
 from configs.cfg_exts.extended_model_cfg import ExtendedModelConfig, ExtendedHybridAgentConfig
 from configs.cfg_exts.extended_wrapper_cfg import ExtendedWrapperConfig
@@ -34,6 +34,7 @@ from configs.cfg_exts.wrapper_sub_configs import HybridControlConfig, PoseContac
 SECTION_MAPPING = {
     'primary': PrimaryConfig,
     'environment': ExtendedFactoryPegEnvCfg,
+    'obs_rand': ExtendedObsRandCfg,
     'task': ExtendedFactoryTaskPegInsertCfg,
     'model': ExtendedModelConfig,
     'wrappers': ExtendedWrapperConfig,
