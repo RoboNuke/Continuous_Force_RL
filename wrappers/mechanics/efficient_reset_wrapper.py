@@ -138,6 +138,7 @@ class EfficientResetWrapper(gym.Wrapper):
             # Cache the initial state after full reset
             if hasattr(self.unwrapped, 'scene') and hasattr(self.unwrapped.scene, 'get_state'):
                 self.start_state = self.unwrapped.scene.get_state()
+                self._cache_factory_states()
         else:
             # Partial reset - use DirectRLEnv method + efficient state shuffling
             if self._directrl_reset_idx:
@@ -196,6 +197,36 @@ class EfficientResetWrapper(gym.Wrapper):
                     # Reset the articulation
                     articulation.reset(env_ids)
 
+        # Shuffle fixed_pos_obs_frame from cached states
+        self.unwrapped.fixed_pos_obs_frame[env_ids, :] = self.cached_factory_states['fixed_pos_obs_frame'][source_idxs, :].clone()
+
+        # Regenerate observation noise (fresh random noise for each reset)
+        fixed_asset_pos_noise = torch.randn((num_reset_envs, 3), dtype=torch.float32, device=self.unwrapped.device)
+        fixed_asset_pos_rand = torch.tensor(
+            self.unwrapped.cfg.obs_rand.fixed_asset_pos,
+            dtype=torch.float32,
+            device=self.unwrapped.device
+        )
+        fixed_asset_pos_noise = fixed_asset_pos_noise @ torch.diag(fixed_asset_pos_rand)
+        self.unwrapped.init_fixed_pos_obs_noise[env_ids, :] = fixed_asset_pos_noise
+
+        # Update action frame with shuffled obs frame + new noise
+        self.unwrapped.fixed_pos_action_frame[env_ids, :] = (
+            self.unwrapped.fixed_pos_obs_frame[env_ids, :] +
+            self.unwrapped.init_fixed_pos_obs_noise[env_ids, :]
+        )
+
+        # Shuffle previous state tracking from cached states
+        self.unwrapped.prev_joint_pos[env_ids, :] = self.cached_factory_states['prev_joint_pos'][source_idxs, :].clone()
+        self.unwrapped.prev_fingertip_pos[env_ids, :] = self.cached_factory_states['prev_fingertip_pos'][source_idxs, :].clone()
+        self.unwrapped.prev_fingertip_quat[env_ids, :] = self.cached_factory_states['prev_fingertip_quat'][source_idxs, :].clone()
+
+        # Zero out actions and velocities (preserve tensor shape with explicit indexing)
+        self.unwrapped.actions[env_ids, :] = torch.zeros_like(self.unwrapped.actions[env_ids, :])
+        self.unwrapped.prev_actions[env_ids, :] = torch.zeros_like(self.unwrapped.prev_actions[env_ids, :])
+        self.unwrapped.ee_angvel_fd[env_ids, :] = torch.zeros_like(self.unwrapped.ee_angvel_fd[env_ids, :])
+        self.unwrapped.ee_linvel_fd[env_ids, :] = torch.zeros_like(self.unwrapped.ee_linvel_fd[env_ids, :])
+
     def step(self, action):
         """Step the environment and ensure wrapper is initialized."""
         # Initialize wrapper if not done yet
@@ -231,4 +262,13 @@ class EfficientResetWrapper(gym.Wrapper):
         return {
             'has_cached_state': self.has_cached_state(),
             'supports_efficient_reset': hasattr(self.unwrapped, 'scene'),
+        }
+
+    def _cache_factory_states(self):
+        """Cache factory-specific state variables needed for efficient reset."""
+        self.cached_factory_states = {
+            'fixed_pos_obs_frame': self.unwrapped.fixed_pos_obs_frame.clone(),
+            'prev_joint_pos': self.unwrapped.prev_joint_pos.clone(),
+            'prev_fingertip_pos': self.unwrapped.prev_fingertip_pos.clone(),
+            'prev_fingertip_quat': self.unwrapped.prev_fingertip_quat.clone(),
         }
