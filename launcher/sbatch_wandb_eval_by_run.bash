@@ -34,7 +34,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 --run_ids \"run_id1 run_id2 run_id3\" --tag \"tag_name\" --eval_mode \"performance|noise\" [--video/--no-video]"
+            echo "Usage: $0 --run_ids \"run_id1 run_id2 run_id3\" --tag \"tag_name\" --eval_mode \"performance|noise|rotation\" [--video/--no-video]"
             exit 1
             ;;
     esac
@@ -43,25 +43,25 @@ done
 # Validate required arguments
 if [[ -z "$RUN_IDS" ]]; then
     echo "Error: --run_ids is required"
-    echo "Usage: $0 --run_ids \"run_id1 run_id2 run_id3\" --tag \"tag_name\" --eval_mode \"performance|noise\" [--video/--no-video]"
+    echo "Usage: $0 --run_ids \"run_id1 run_id2 run_id3\" --tag \"tag_name\" --eval_mode \"performance|noise|rotation\" [--video/--no-video]"
     exit 1
 fi
 
 if [[ -z "$TAG" ]]; then
     echo "Error: --tag is required"
-    echo "Usage: $0 --run_ids \"run_id1 run_id2 run_id3\" --tag \"tag_name\" --eval_mode \"performance|noise\" [--video/--no-video]"
+    echo "Usage: $0 --run_ids \"run_id1 run_id2 run_id3\" --tag \"tag_name\" --eval_mode \"performance|noise|rotation\" [--video/--no-video]"
     exit 1
 fi
 
 if [[ -z "$EVAL_MODE" ]]; then
     echo "Error: --eval_mode is required"
-    echo "Usage: $0 --run_ids \"run_id1 run_id2 run_id3\" --tag \"tag_name\" --eval_mode \"performance|noise\" [--video/--no-video]"
+    echo "Usage: $0 --run_ids \"run_id1 run_id2 run_id3\" --tag \"tag_name\" --eval_mode \"performance|noise|rotation\" [--video/--no-video]"
     exit 1
 fi
 
 # Validate eval_mode
-if [[ "$EVAL_MODE" != "performance" && "$EVAL_MODE" != "noise" ]]; then
-    echo "Error: --eval_mode must be either 'performance' or 'noise'"
+if [[ "$EVAL_MODE" != "performance" && "$EVAL_MODE" != "noise" && "$EVAL_MODE" != "rotation" ]]; then
+    echo "Error: --eval_mode must be either 'performance', 'noise', or 'rotation'"
     exit 1
 fi
 

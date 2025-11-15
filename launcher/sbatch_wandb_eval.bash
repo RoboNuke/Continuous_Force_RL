@@ -29,7 +29,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 --tags \"tag1 tag2 tag3\" --eval_mode \"performance|noise\" [--video/--no-video]"
+            echo "Usage: $0 --tags \"tag1 tag2 tag3\" --eval_mode \"performance|noise|rotation\" [--video/--no-video]"
             exit 1
             ;;
     esac
@@ -38,19 +38,19 @@ done
 # Validate required arguments
 if [[ -z "$TAGS" ]]; then
     echo "Error: --tags is required"
-    echo "Usage: $0 --tags \"tag1 tag2 tag3\" --eval_mode \"performance|noise\" [--video/--no-video]"
+    echo "Usage: $0 --tags \"tag1 tag2 tag3\" --eval_mode \"performance|noise|rotation\" [--video/--no-video]"
     exit 1
 fi
 
 if [[ -z "$EVAL_MODE" ]]; then
     echo "Error: --eval_mode is required"
-    echo "Usage: $0 --tags \"tag1 tag2 tag3\" --eval_mode \"performance|noise\" [--video/--no-video]"
+    echo "Usage: $0 --tags \"tag1 tag2 tag3\" --eval_mode \"performance|noise|rotation\" [--video/--no-video]"
     exit 1
 fi
 
 # Validate eval_mode
-if [[ "$EVAL_MODE" != "performance" && "$EVAL_MODE" != "noise" ]]; then
-    echo "Error: --eval_mode must be either 'performance' or 'noise'"
+if [[ "$EVAL_MODE" != "performance" && "$EVAL_MODE" != "noise" && "$EVAL_MODE" != "rotation" ]]; then
+    echo "Error: --eval_mode must be either 'performance', 'noise', or 'rotation'"
     exit 1
 fi
 

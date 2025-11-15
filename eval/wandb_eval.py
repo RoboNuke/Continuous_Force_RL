@@ -47,8 +47,8 @@ def parse_arguments():
     parser.add_argument("--show_progress", action="store_true", default=True,
                         help="Show progress bar during evaluation rollout")
     parser.add_argument("--eval_mode", type=str, required=True,
-                        choices=["performance", "noise"],
-                        help="Evaluation mode: 'performance' (100 envs, videos) or 'noise' (500 envs, noise analysis)")
+                        choices=["performance", "noise", "rotation"],
+                        help="Evaluation mode: 'performance' (100 envs, videos), 'noise' (500 envs, noise analysis), or 'rotation' (500 envs, rotation analysis)")
 
     # Append AppLauncher args
     AppLauncher.add_app_launcher_args(parser)
@@ -176,6 +176,18 @@ ENVS_PER_NOISE_RANGE = 100
 NOISE_MODE_TOTAL_ENVS = len(NOISE_RANGES) * ENVS_PER_NOISE_RANGE
 
 
+# ===== ROTATION EVALUATION CONSTANTS =====
+
+# Define rotation angles for rotation robustness evaluation (in degrees)
+ROTATION_ANGLES_DEG = [1, 2, 3, 4, 5]
+
+# Number of environments per rotation angle
+ENVS_PER_ROTATION_ANGLE = 100
+
+# Total environments for rotation mode
+ROTATION_MODE_TOTAL_ENVS = len(ROTATION_ANGLES_DEG) * ENVS_PER_ROTATION_ANGLE
+
+
 # ===== WRAPPERS =====
 
 class Img2InfoWrapper(gym.Wrapper):
@@ -246,6 +258,64 @@ class FixedNoiseWrapper(gym.Wrapper):
         new_observations = self.unwrapped._get_observations()
 
         return new_observations, info
+
+
+class FixedAssetRotationWrapper(gym.Wrapper):
+    """
+    Wrapper to rotate the fixed asset by predetermined angles around random axes.
+    Used for rotation robustness evaluation.
+    """
+    def __init__(self, env, rotation_assignments):
+        """
+        Initialize the fixed asset rotation wrapper.
+
+        Args:
+            env: Base environment to wrap
+            rotation_assignments: [num_envs, 5] tensor with (angle_rad, axis_x, axis_y, axis_z, direction) for each environment
+                - angle_rad: rotation angle in radians
+                - axis_x, axis_y, axis_z: rotation axis (unit vector in xy-plane, z=0)
+                - direction: +1 or -1 for rotation direction
+        """
+        super().__init__(env)
+        self.rotation_assignments = rotation_assignments
+
+        # Import torch utils for quaternion operations
+        import isaacsim.core.utils.torch as torch_utils
+        self.torch_utils = torch_utils
+
+    def reset(self, **kwargs):
+        """Reset environment and apply rotation to fixed asset."""
+        # Let the base environment complete its reset
+        observations, info = super().reset(**kwargs)
+
+        # Get current fixed asset state
+        fixed_asset = self.unwrapped._fixed_asset
+        current_state = fixed_asset.data.root_state_w.clone()
+
+        # Extract rotation parameters for each environment
+        angles = self.rotation_assignments[:, 0] * self.rotation_assignments[:, 4]  # angle * direction
+        axes = self.rotation_assignments[:, 1:4]  # (x, y, z) - z should be 0
+
+        # Create rotation quaternion from angle-axis
+        rotation_quat = self.torch_utils.quat_from_angle_axis(angles, axes)
+
+        # Compose rotation with current orientation
+        current_quat = current_state[:, 3:7]
+        new_quat = self.torch_utils.quat_mul(rotation_quat, current_quat)
+
+        # Update the state with new orientation
+        current_state[:, 3:7] = new_quat
+
+        # Write the rotated pose to simulation
+        env_ids = torch.arange(self.unwrapped.num_envs, device=self.unwrapped.device)
+        fixed_asset.write_root_pose_to_sim(current_state[:, 0:7], env_ids=env_ids)
+        fixed_asset.write_root_velocity_to_sim(current_state[:, 7:13], env_ids=env_ids)
+
+        # Reset the asset to apply changes
+        fixed_asset.reset()
+
+        # The observations don't need to be recomputed - the agent is unaware of rotation
+        return observations, info
 
 
 # ===== WANDB QUERY FUNCTIONS =====
@@ -461,7 +531,7 @@ def download_checkpoint_pair(run: wandb.Run, step: int) -> Tuple[str, str]:
 
 # ===== ENVIRONMENT SETUP =====
 
-def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) -> Tuple[Any, Any, int, float, Optional[torch.Tensor]]:
+def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) -> Tuple[Any, Any, int, float, Optional[torch.Tensor], Optional[torch.Tensor]]:
     """
     Create environment and agent once for all evaluations.
 
@@ -470,8 +540,9 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
         args: Command-line arguments
 
     Returns:
-        Tuple of (env, agent, max_rollout_steps, policy_hz, noise_assignments)
-        noise_assignments is None for performance mode, [num_envs, 2] tensor for noise mode
+        Tuple of (env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments)
+        noise_assignments is None except for noise mode ([num_envs, 2] tensor)
+        rotation_assignments is None except for rotation mode ([num_envs, 5] tensor)
 
     Raises:
         RuntimeError: If environment or agent creation fails
@@ -512,6 +583,8 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
         num_envs_per_agent = 100
     elif args.eval_mode == "noise":
         num_envs_per_agent = NOISE_MODE_TOTAL_ENVS
+    elif args.eval_mode == "rotation":
+        num_envs_per_agent = ROTATION_MODE_TOTAL_ENVS
     else:
         raise RuntimeError(f"Unknown eval_mode: {args.eval_mode}")
 
@@ -628,6 +701,42 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
         print("  - FixedNoiseWrapper for noise mode")
         env = FixedNoiseWrapper(env, noise_assignments)
 
+    # Generate rotation assignments for rotation mode
+    rotation_assignments = None
+    if args.eval_mode == "rotation":
+        print("  Generating rotation assignments for rotation mode...")
+
+        rotation_assignments_list = []
+        for angle_deg in ROTATION_ANGLES_DEG:
+            # Convert angle to radians
+            angle_rad = torch.tensor(angle_deg * 3.14159265359 / 180.0, device=env.device)
+
+            # Generate 100 environments for this angle
+            for i in range(ENVS_PER_ROTATION_ANGLE):
+                # Random angle in xy-plane [0, 2π]
+                theta = torch.rand(1, device=env.device) * 2 * 3.14159265359
+
+                # Unit vector in xy-plane
+                axis_x = torch.cos(theta)
+                axis_y = torch.sin(theta)
+                axis_z = torch.zeros(1, device=env.device)
+
+                # Random direction: +1 or -1
+                direction = torch.tensor(1.0 if torch.rand(1).item() > 0.5 else -1.0, device=env.device)
+
+                # Store: [angle_rad, axis_x, axis_y, axis_z, direction]
+                # Note: axis_z is always 0 for xy-plane rotation
+                rotation_assignments_list.append(
+                    torch.tensor([angle_rad, axis_x.item(), axis_y.item(), 0.0, direction], device=env.device)
+                )
+
+        rotation_assignments = torch.stack(rotation_assignments_list, dim=0)  # [ROTATION_MODE_TOTAL_ENVS, 5]
+        print(f"    Generated {rotation_assignments.shape[0]} rotation assignments ({len(ROTATION_ANGLES_DEG)} angles × {ENVS_PER_ROTATION_ANGLE} envs)")
+
+        # Apply FixedAssetRotationWrapper
+        print("  - FixedAssetRotationWrapper for rotation mode")
+        env = FixedAssetRotationWrapper(env, rotation_assignments)
+
     # Add image capture wrapper for video (only in performance mode)
     if args.enable_video and args.eval_mode == "performance":
         print("  - Img2InfoWrapper for video capture")
@@ -664,7 +773,7 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
     print(f"  Created BlockPPO agent with {configs['primary'].total_agents} agents")
     print("  Setup complete!")
 
-    return env, agent, max_rollout_steps, policy_hz, noise_assignments
+    return env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments
 
 
 # ===== WANDB LOGGING =====
@@ -710,6 +819,12 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
                 caption = f"Noise Evaluation at step {step}"
                 metrics_to_log['eval_media/noise_images'] = wandb.Image(media_path, caption=caption)
                 media_uploaded = True
+        elif args.eval_mode == "rotation":
+            # Add rotation visualization image
+            if media_path is not None and os.path.exists(media_path):
+                caption = f"Rotation Evaluation at step {step}"
+                metrics_to_log['eval_media/rotation_images'] = wandb.Image(media_path, caption=caption)
+                media_uploaded = True
 
         """
         # FOR TESTING: Print metrics and save video locally instead of logging to WandB
@@ -738,6 +853,8 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
                 print(f"    Logged metrics and video for step {step}")
             elif args.eval_mode == "noise":
                 print(f"    Logged metrics and noise visualization for step {step}")
+            elif args.eval_mode == "rotation":
+                print(f"    Logged metrics and rotation visualization for step {step}")
         else:
             print(f"    Logged metrics for step {step}")
 
@@ -893,7 +1010,7 @@ def run_basic_evaluation(
 
     # Rollout loop
     step_count = 0
-    progress_bar = tqdm.tqdm(total=num_envs, desc="Episodes completed", disable=not show_progress)
+    progress_bar = tqdm.tqdm(total=max_rollout_steps + 1, desc="Steps completed", disable=not show_progress)
 
     while not completed_episodes.all():
         # Get actions from agent (deterministic evaluation)
@@ -1081,9 +1198,9 @@ def run_basic_evaluation(
         # Track which episodes terminated vs truncated
         episode_terminated[newly_completed & terminated] = True
 
-        # Update progress bar
-        if show_progress and newly_completed.any():
-            progress_bar.update(newly_completed.sum().item())
+        # Update progress bar (increment by 1 step)
+        if show_progress:
+            progress_bar.update(1)
 
         step_count += 1
 
@@ -1336,6 +1453,74 @@ def run_noise_evaluation(
     # Prepare rollout data for visualization
     rollout_data_for_viz = {
         'noise_assignments': noise_assignments,  # [500, 2]
+        'episode_succeeded': rollout_data['episode_succeeded'],  # [500]
+        'termination_step': rollout_data['termination_step'],  # [500]
+        'truncation_step': rollout_data['truncation_step'],    # [500]
+    }
+
+    return split_metrics, rollout_data_for_viz
+
+
+def run_rotation_evaluation(
+    env: Any,
+    agent: Any,
+    configs: Dict[str, Any],
+    max_rollout_steps: int,
+    rotation_assignments: torch.Tensor,
+    show_progress: bool = False,
+    eval_seed: int = None
+) -> Tuple[Dict[str, float], Dict[str, Any]]:
+    """
+    Run rotation robustness evaluation with 500 environments across 5 rotation angles.
+
+    Args:
+        env: Environment instance (wrapped with metrics wrappers and FixedAssetRotationWrapper)
+        agent: Agent instance with loaded checkpoint
+        configs: Configuration dictionary
+        max_rollout_steps: Maximum steps per episode
+        rotation_assignments: [500, 5] tensor with (angle_rad, axis_x, axis_y, axis_z, direction) for each environment
+        show_progress: Whether to show progress bar
+        eval_seed: Seed for deterministic evaluation
+
+    Returns:
+        Tuple of (metrics_dict, rollout_data_dict)
+            - metrics_dict: Aggregated metrics split by rotation angle
+            - rollout_data_dict: Contains success/failure data per environment for visualization
+    """
+    print("  Running rotation robustness evaluation...")
+
+    # Run basic evaluation (no video)
+    metrics, rollout_data = run_basic_evaluation(
+        env=env,
+        agent=agent,
+        configs=configs,
+        max_rollout_steps=max_rollout_steps,
+        enable_video=False,  # No video in rotation mode
+        show_progress=show_progress,
+        eval_seed=eval_seed
+    )
+
+    # Split metrics by rotation angle
+    split_metrics = {}
+    for angle_idx, angle_deg in enumerate(ROTATION_ANGLES_DEG):
+        start_idx = angle_idx * ENVS_PER_ROTATION_ANGLE
+        end_idx = start_idx + ENVS_PER_ROTATION_ANGLE
+
+        # Extract data for this rotation angle
+        angle_metrics = _compute_range_metrics(
+            rollout_data=rollout_data,
+            start_idx=start_idx,
+            end_idx=end_idx,
+            range_name=f"{angle_deg}deg"
+        )
+
+        # Add to split metrics with prefix
+        for key, value in angle_metrics.items():
+            split_metrics[f"Eval({angle_deg}deg)/{key}"] = value
+
+    # Prepare rollout data for visualization
+    rollout_data_for_viz = {
+        'rotation_assignments': rotation_assignments,  # [500, 5]
         'episode_succeeded': rollout_data['episode_succeeded'],  # [500]
         'termination_step': rollout_data['termination_step'],  # [500]
         'truncation_step': rollout_data['truncation_step'],    # [500]
@@ -1816,10 +2001,90 @@ def generate_noise_visualization(rollout_data: Dict[str, Any], step: int, output
     return output_path
 
 
+def generate_rotation_visualization(rollout_data: Dict[str, Any], step: int, output_path: str) -> str:
+    """
+    Generate bar chart visualization for rotation robustness evaluation.
+
+    Args:
+        rollout_data: Dictionary containing:
+            - rotation_assignments: [500, 5] tensor with rotation parameters
+            - episode_succeeded: [500] boolean tensor
+            - termination_step: [500] int tensor
+            - truncation_step: [500] int tensor
+        step: Training step number (for title)
+        output_path: Path to save the visualization
+
+    Returns:
+        Path to the saved visualization
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib import cm
+
+    print(f"  Generating rotation visualization...")
+
+    # Extract data
+    rotation_assignments = rollout_data['rotation_assignments'].cpu().numpy()  # [500, 5]
+    episode_succeeded = rollout_data['episode_succeeded'].cpu().numpy()  # [500]
+
+    # Compute success rate for each rotation angle
+    success_rates = []
+    for angle_idx, angle_deg in enumerate(ROTATION_ANGLES_DEG):
+        start_idx = angle_idx * ENVS_PER_ROTATION_ANGLE
+        end_idx = start_idx + ENVS_PER_ROTATION_ANGLE
+        success_rate = episode_succeeded[start_idx:end_idx].mean()
+        success_rates.append(success_rate)
+
+    # Create bar chart
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+
+    # X positions and labels
+    x_positions = np.arange(len(ROTATION_ANGLES_DEG))
+    x_labels = [f"{angle}°" for angle in ROTATION_ANGLES_DEG]
+
+    # Color bars based on success rate using Red-Yellow-Green colormap
+    colormap = cm.get_cmap('RdYlGn')
+    colors = [colormap(rate) for rate in success_rates]
+
+    # Create bars
+    bars = ax.bar(x_positions, success_rates, color=colors, edgecolor='black', linewidth=1.5, alpha=0.9)
+
+    # Customize plot
+    ax.set_xlabel('Rotation Angle', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Success Rate', fontsize=14, fontweight='bold')
+    ax.set_title(f'Rotation Robustness at Step {step}', fontsize=16, fontweight='bold')
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(x_labels)
+    ax.set_ylim(0, 1.0)
+    ax.set_yticks([0, 0.25, 0.5, 0.75, 1.0])
+    ax.set_yticklabels(['0%', '25%', '50%', '75%', '100%'])
+    ax.grid(axis='y', alpha=0.3, linestyle='--')
+
+    # Add value labels on top of each bar
+    for bar, rate in zip(bars, success_rates):
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2., height + 0.02,
+                f'{rate*100:.1f}%',
+                ha='center', va='bottom', fontsize=12, fontweight='bold')
+
+    # Save figure
+    output_dir = os.path.dirname(output_path)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=100, bbox_inches='tight')
+    plt.close(fig)
+
+    print(f"    Saved rotation visualization to: {output_path}")
+    return output_path
+
+
 def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
                        configs: Dict[str, Any], args: argparse.Namespace,
                        max_rollout_steps: int, policy_hz: float,
-                       noise_assignments: Optional[torch.Tensor] = None) -> Tuple[Dict[str, float], Optional[str]]:
+                       noise_assignments: Optional[torch.Tensor] = None,
+                       rotation_assignments: Optional[torch.Tensor] = None) -> Tuple[Dict[str, float], Optional[str]]:
     """
     Evaluate a single checkpoint.
 
@@ -2027,6 +2292,31 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
                 output_path=media_path
             )
 
+        elif args.eval_mode == "rotation":
+            # Run rotation evaluation (no video)
+            if rotation_assignments is None:
+                raise RuntimeError("rotation_assignments is None in rotation mode evaluation")
+
+            eval_metrics, rollout_data = run_rotation_evaluation(
+                env=env,
+                agent=agent,
+                configs=configs,
+                max_rollout_steps=max_rollout_steps,
+                rotation_assignments=rotation_assignments,
+                show_progress=args.show_progress,
+                eval_seed=args.eval_seed
+            )
+
+            # Generate rotation visualization
+            fd, media_path = tempfile.mkstemp(suffix=".png", prefix=f"rotation_eval_step_{step}_")
+            os.close(fd)
+
+            media_path = generate_rotation_visualization(
+                rollout_data=rollout_data,
+                step=step,
+                output_path=media_path
+            )
+
         else:
             raise RuntimeError(f"Unknown eval_mode: {args.eval_mode}")
 
@@ -2044,6 +2334,11 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
             for min_val, max_val, range_name in NOISE_RANGES:
                 success_rate = eval_metrics.get(f'Eval({range_name})/success_rate', 0.0)
                 print(f"    {range_name}: {success_rate:.2%}")
+        elif args.eval_mode == "rotation":
+            # Print summary for each rotation angle
+            for angle_deg in ROTATION_ANGLES_DEG:
+                success_rate = eval_metrics.get(f'Eval({angle_deg}deg)/success_rate', 0.0)
+                print(f"    {angle_deg}deg: {success_rate:.2%}")
 
         return eval_metrics, media_path
 
@@ -2075,13 +2370,15 @@ def main():
 
         # Setup environment once
         print("\nSetting up environment...")
-        env, agent, max_rollout_steps, policy_hz, noise_assignments = setup_environment_once(configs, args_cli)
+        env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments = setup_environment_once(configs, args_cli)
 
         print(f"\nEnvironment configured:")
         if args_cli.eval_mode == "performance":
             print(f"  - Environments per agent: 100")
         elif args_cli.eval_mode == "noise":
             print(f"  - Environments per agent: {NOISE_MODE_TOTAL_ENVS} (noise mode: {len(NOISE_RANGES)} ranges × {ENVS_PER_NOISE_RANGE} envs)")
+        elif args_cli.eval_mode == "rotation":
+            print(f"  - Environments per agent: {ROTATION_MODE_TOTAL_ENVS} (rotation mode: {len(ROTATION_ANGLES_DEG)} angles × {ENVS_PER_ROTATION_ANGLE} envs)")
         print(f"  - Max rollout steps: {max_rollout_steps}")
         print(f"  - Policy Hz: {policy_hz}")
 
@@ -2102,7 +2399,7 @@ def main():
                     # Evaluate this checkpoint
                     metrics, media_path = evaluate_checkpoint(
                         run, step, env, agent, configs, args_cli,
-                        max_rollout_steps, policy_hz, noise_assignments
+                        max_rollout_steps, policy_hz, noise_assignments, rotation_assignments
                     )
 
                     # Log results to WandB
