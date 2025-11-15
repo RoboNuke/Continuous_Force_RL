@@ -12,6 +12,7 @@
 RUN_ID=$1
 TAG=$2
 VIDEO_FLAG=$3
+EVAL_MODE=$4
 
 echo "=== HPC WandB Eval by Run ID Batch Script Started ==="
 echo "Job Name: $SLURM_JOB_NAME"
@@ -19,6 +20,7 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Run ID: $RUN_ID"
 echo "Tag: $TAG"
 echo "Video Enabled: $VIDEO_FLAG"
+echo "Eval Mode: $EVAL_MODE"
 echo ""
 
 # Create log directory if it doesn't exist
@@ -42,6 +44,7 @@ echo ""
 python_cmd="python -m eval.wandb_eval"
 python_cmd="$python_cmd --tag $TAG"
 python_cmd="$python_cmd --run_id $RUN_ID"
+python_cmd="$python_cmd --eval_mode $EVAL_MODE"
 
 # Add video flag if enabled
 if [[ "$VIDEO_FLAG" == "true" ]]; then

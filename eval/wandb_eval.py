@@ -44,8 +44,11 @@ def parse_arguments():
                         help="Fixed seed for consistent evaluation")
     parser.add_argument("--enable_video", action="store_true", default=False,
                         help="Enable video generation")
-    parser.add_argument("--show_progress", action="store_true", default=False,
+    parser.add_argument("--show_progress", action="store_true", default=True,
                         help="Show progress bar during evaluation rollout")
+    parser.add_argument("--eval_mode", type=str, required=True,
+                        choices=["performance", "noise"],
+                        help="Evaluation mode: 'performance' (100 envs, videos) or 'noise' (500 envs, noise analysis)")
 
     # Append AppLauncher args
     AppLauncher.add_app_launcher_args(parser)
@@ -154,6 +157,27 @@ except ImportError:
 print("All modules imported successfully")
 
 
+# ===== NOISE EVALUATION CONSTANTS =====
+
+# Define noise ranges for noise robustness evaluation
+# Format: (min_val_meters, max_val_meters, display_name)
+NOISE_RANGES = [
+    (0.0, 0.001, "0mm-1mm"),        # 0-1mm
+    (0.001, 0.0025, "1mm-2.5mm"),   # 1-2.5mm
+    (0.0025, 0.005, "2.5mm-5mm"),   # 2.5-5mm
+    (0.005, 0.0075, "5mm-7.5mm"),   # 5-7.5mm
+    (0.0075, 0.01, "7.5mm-10mm")    # 7.5-10mm
+]
+
+# Number of environments per noise range
+ENVS_PER_NOISE_RANGE = 100
+
+# Total environments for noise mode
+NOISE_MODE_TOTAL_ENVS = len(NOISE_RANGES) * ENVS_PER_NOISE_RANGE
+
+
+# ===== WRAPPERS =====
+
 class Img2InfoWrapper(gym.Wrapper):
     """
     Wrapper to capture camera images and add them to info dict for video generation.
@@ -181,6 +205,47 @@ class Img2InfoWrapper(gym.Wrapper):
             info['img'] = self.unwrapped.scene.sensors[self.cam_key].data.output['rgb']
 
         return observations, info
+
+
+class FixedNoiseWrapper(gym.Wrapper):
+    """
+    Wrapper to override fixed asset position noise with predetermined values.
+    Used for noise robustness evaluation.
+    """
+    def __init__(self, env, noise_assignments):
+        """
+        Initialize the fixed noise wrapper.
+
+        Args:
+            env: Base environment to wrap
+            noise_assignments: [num_envs, 2] tensor with (x, y) noise values in meters for each environment
+        """
+        super().__init__(env)
+        self.noise_assignments = noise_assignments
+
+    def reset(self, **kwargs):
+        """Reset environment and override noise with predetermined values."""
+        # Let the base environment complete its reset
+        observations, info = super().reset(**kwargs)
+
+        # Override the noise with our custom values
+        # Note: z-axis noise remains 0 (only x and y are varied)
+        self.unwrapped.init_fixed_pos_obs_noise[:, 0] = self.noise_assignments[:, 0]
+        self.unwrapped.init_fixed_pos_obs_noise[:, 1] = self.noise_assignments[:, 1]
+        self.unwrapped.init_fixed_pos_obs_noise[:, 2] = 0.0
+
+        # CRITICAL: Update fixed_pos_action_frame to maintain consistency
+        # between what the policy sees and how its actions are interpreted
+        self.unwrapped.fixed_pos_action_frame[:] = (
+            self.unwrapped.fixed_pos_obs_frame +
+            self.unwrapped.init_fixed_pos_obs_noise
+        )
+
+        # Recompute observations with the new noise
+        # Get the observations with our overridden noise
+        new_observations = self.unwrapped._get_observations()
+
+        return new_observations, info
 
 
 # ===== WANDB QUERY FUNCTIONS =====
@@ -396,7 +461,7 @@ def download_checkpoint_pair(run: wandb.Run, step: int) -> Tuple[str, str]:
 
 # ===== ENVIRONMENT SETUP =====
 
-def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) -> Tuple[Any, Any, int, float]:
+def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) -> Tuple[Any, Any, int, float, Optional[torch.Tensor]]:
     """
     Create environment and agent once for all evaluations.
 
@@ -405,7 +470,8 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
         args: Command-line arguments
 
     Returns:
-        Tuple of (env, agent, max_rollout_steps, policy_hz)
+        Tuple of (env, agent, max_rollout_steps, policy_hz, noise_assignments)
+        noise_assignments is None for performance mode, [num_envs, 2] tensor for noise mode
 
     Raises:
         RuntimeError: If environment or agent creation fails
@@ -441,12 +507,18 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
     print(f"    (original: break_forces={original_break_forces}, agents_per_break_force={original_agents_per_break_force})")
     print(f"    total_agents property now returns: {configs['primary'].total_agents}")
 
-    # Hardcode num_envs_per_agent = 100
-    num_envs_per_agent = 100
+    # Set num_envs based on eval mode
+    if args.eval_mode == "performance":
+        num_envs_per_agent = 100
+    elif args.eval_mode == "noise":
+        num_envs_per_agent = NOISE_MODE_TOTAL_ENVS
+    else:
+        raise RuntimeError(f"Unknown eval_mode: {args.eval_mode}")
+
     total_agents = configs['primary'].total_agents
     total_envs = num_envs_per_agent * total_agents
     configs['environment'].scene.num_envs = total_envs
-    print(f"  Set num_envs: {total_envs} ({num_envs_per_agent} per agent × {total_agents} agents)")
+    print(f"  Set num_envs: {total_envs} ({num_envs_per_agent} per agent × {total_agents} agents) [mode: {args.eval_mode}]")
 
     # Handle seed configuration - use eval_seed from command line for deterministic evaluation
     eval_seed = args.eval_seed
@@ -530,8 +602,34 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
     print("  Applying evaluation wrappers...")
     env = lUtils.apply_wrappers(env, configs)
 
-    # Add image capture wrapper for video
-    if args.enable_video:
+    # Generate noise assignments for noise mode
+    noise_assignments = None
+    if args.eval_mode == "noise":
+        print("  Generating noise assignments for noise mode...")
+
+        noise_assignments_list = []
+        for min_val, max_val, range_name in NOISE_RANGES:
+            # Uniform sampling for x and y independently
+            # Sample uniformly in range [-max_val, max_val] but constrained to ring [min_val, max_val]
+            # Generate random angles and radii within the annulus
+            angles = torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) * 2 * 3.14159265359  # Random angles [0, 2π]
+            radii = torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) * (max_val - min_val) + min_val  # Random radii [min_val, max_val]
+
+            # Convert polar to Cartesian
+            x_noise = radii * torch.cos(angles)
+            y_noise = radii * torch.sin(angles)
+
+            noise_assignments_list.append(torch.stack([x_noise, y_noise], dim=1))
+
+        noise_assignments = torch.cat(noise_assignments_list, dim=0)  # [NOISE_MODE_TOTAL_ENVS, 2]
+        print(f"    Generated {noise_assignments.shape[0]} noise assignments ({len(NOISE_RANGES)} ranges × {ENVS_PER_NOISE_RANGE} envs)")
+
+        # Apply FixedNoiseWrapper
+        print("  - FixedNoiseWrapper for noise mode")
+        env = FixedNoiseWrapper(env, noise_assignments)
+
+    # Add image capture wrapper for video (only in performance mode)
+    if args.enable_video and args.eval_mode == "performance":
         print("  - Img2InfoWrapper for video capture")
         env = Img2InfoWrapper(env)
 
@@ -566,13 +664,13 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
     print(f"  Created BlockPPO agent with {configs['primary'].total_agents} agents")
     print("  Setup complete!")
 
-    return env, agent, max_rollout_steps, policy_hz
+    return env, agent, max_rollout_steps, policy_hz, noise_assignments
 
 
 # ===== WANDB LOGGING =====
 
 def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
-                        video_path: Optional[str], args: argparse.Namespace) -> None:
+                        media_path: Optional[str], args: argparse.Namespace) -> None:
     """
     Log evaluation results back to the WandB run.
 
@@ -580,7 +678,7 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
         run: WandB run object
         step: Checkpoint step number
         metrics: Dictionary of evaluation metrics
-        video_path: Path to generated video (if any)
+        media_path: Path to generated media (video for performance mode, image for noise mode)
         args: Command-line arguments
 
     Raises:
@@ -598,12 +696,20 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
         metrics_to_log['total_steps'] = step
         metrics_to_log['env_steps'] = step / 256
 
-        # Add video if available
-        video_uploaded = False
-        if args.enable_video and video_path is not None and os.path.exists(video_path):
-            caption = f"Evaluation at step {step}"
-            metrics_to_log['Eval/Checkpoint Videos'] = wandb.Video(video_path, caption=caption)
-            video_uploaded = True
+        # Add media based on eval mode
+        media_uploaded = False
+        if args.eval_mode == "performance":
+            # Add video if available
+            if args.enable_video and media_path is not None and os.path.exists(media_path):
+                caption = f"Evaluation at step {step}"
+                metrics_to_log['Eval/Checkpoint Videos'] = wandb.Video(media_path, caption=caption)
+                media_uploaded = True
+        elif args.eval_mode == "noise":
+            # Add noise visualization image
+            if media_path is not None and os.path.exists(media_path):
+                caption = f"Noise Evaluation at step {step}"
+                metrics_to_log['eval_media/noise_images'] = wandb.Image(media_path, caption=caption)
+                media_uploaded = True
 
         """
         # FOR TESTING: Print metrics and save video locally instead of logging to WandB
@@ -627,8 +733,11 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
         wandb.log(metrics_to_log)
 
         # Print status
-        if video_uploaded:
-            print(f"    Logged metrics and video for step {step}")
+        if media_uploaded:
+            if args.eval_mode == "performance":
+                print(f"    Logged metrics and video for step {step}")
+            elif args.eval_mode == "noise":
+                print(f"    Logged metrics and noise visualization for step {step}")
         else:
             print(f"    Logged metrics for step {step}")
 
@@ -1007,7 +1116,7 @@ def run_basic_evaluation(
         no_contact_pos_counts=no_contact_pos_counts,
     )
 
-    # Prepare rollout data for video generation
+    # Prepare rollout data for video generation and/or noise evaluation
     rollout_data = None
     if enable_video and video_frames is not None:
         # Slice tensors to actual number of steps taken (step_count + 1 for initial frame)
@@ -1023,6 +1132,26 @@ def run_basic_evaluation(
             'success_step': success_step,      # [num_envs]
             'termination_step': termination_step,  # [num_envs]
             'truncation_step': truncation_step,    # [num_envs]
+        }
+    else:
+        # Even without video, include per-environment data for noise evaluation
+        rollout_data = {
+            'episode_lengths': episode_lengths,      # [num_envs]
+            'episode_rewards': episode_rewards,      # [num_envs]
+            'episode_terminated': episode_terminated,  # [num_envs]
+            'episode_succeeded': episode_succeeded,    # [num_envs]
+            'episode_success_times': episode_success_times,  # [num_envs]
+            'episode_engaged': episode_engaged,        # [num_envs]
+            'episode_engagement_times': episode_engagement_times,  # [num_envs]
+            'episode_engagement_lengths': episode_engagement_lengths,  # [num_envs]
+            'episode_ssv': episode_ssv,  # [num_envs]
+            'episode_ssjv': episode_ssjv,  # [num_envs]
+            'episode_max_force': episode_max_force,  # [num_envs]
+            'episode_sum_force': episode_sum_force,  # [num_envs]
+            'episode_force_steps': episode_force_steps,  # [num_envs]
+            'termination_step': termination_step,  # [num_envs]
+            'truncation_step': truncation_step,    # [num_envs]
+            'success_step': success_step,          # [num_envs]
         }
 
     return metrics, rollout_data
@@ -1145,6 +1274,151 @@ def _compute_aggregated_metrics(
                 metrics[f'recall_{axis}'] = 0.0
 
     return metrics
+
+
+def run_noise_evaluation(
+    env: Any,
+    agent: Any,
+    configs: Dict[str, Any],
+    max_rollout_steps: int,
+    noise_assignments: torch.Tensor,
+    show_progress: bool = False,
+    eval_seed: int = None
+) -> Tuple[Dict[str, float], Dict[str, Any]]:
+    """
+    Run noise robustness evaluation with 500 environments across 5 noise ranges.
+
+    Args:
+        env: Environment instance (wrapped with metrics wrappers and FixedNoiseWrapper)
+        agent: Agent instance with loaded checkpoint
+        configs: Configuration dictionary
+        max_rollout_steps: Maximum steps per episode
+        noise_assignments: [500, 2] tensor with (x, y) noise for each environment
+        show_progress: Whether to show progress bar
+        eval_seed: Seed for deterministic evaluation
+
+    Returns:
+        Tuple of (metrics_dict, rollout_data_dict)
+            - metrics_dict: Aggregated metrics split by noise range
+            - rollout_data_dict: Contains success/failure data per environment for visualization
+    """
+    print("  Running noise robustness evaluation...")
+
+    # Run basic evaluation (no video)
+    metrics, rollout_data = run_basic_evaluation(
+        env=env,
+        agent=agent,
+        configs=configs,
+        max_rollout_steps=max_rollout_steps,
+        enable_video=False,  # No video in noise mode
+        show_progress=show_progress,
+        eval_seed=eval_seed
+    )
+
+    # Split metrics by noise range
+    split_metrics = {}
+    for range_idx, (min_val, max_val, range_name) in enumerate(NOISE_RANGES):
+        start_idx = range_idx * ENVS_PER_NOISE_RANGE
+        end_idx = start_idx + ENVS_PER_NOISE_RANGE
+
+        # Extract data for this noise range
+        range_metrics = _compute_range_metrics(
+            rollout_data=rollout_data,
+            start_idx=start_idx,
+            end_idx=end_idx,
+            range_name=range_name
+        )
+
+        # Add to split metrics with prefix
+        for key, value in range_metrics.items():
+            split_metrics[f"Eval({range_name})/{key}"] = value
+
+    # Prepare rollout data for visualization
+    rollout_data_for_viz = {
+        'noise_assignments': noise_assignments,  # [500, 2]
+        'episode_succeeded': rollout_data['episode_succeeded'],  # [500]
+        'termination_step': rollout_data['termination_step'],  # [500]
+        'truncation_step': rollout_data['truncation_step'],    # [500]
+    }
+
+    return split_metrics, rollout_data_for_viz
+
+
+def _compute_range_metrics(
+    rollout_data: Dict[str, torch.Tensor],
+    start_idx: int,
+    end_idx: int,
+    range_name: str
+) -> Dict[str, float]:
+    """
+    Compute metrics for a specific noise range from per-environment data.
+
+    Args:
+        rollout_data: Per-environment data from run_basic_evaluation
+        start_idx: Start environment index for this range
+        end_idx: End environment index for this range
+        range_name: Name of the noise range (for logging)
+
+    Returns:
+        Dictionary of metrics for this range
+    """
+    print(f"    Computing metrics for range {range_name} (envs {start_idx}-{end_idx})")
+
+    # Extract per-environment data for this range
+    episode_lengths = rollout_data['episode_lengths'][start_idx:end_idx]
+    episode_rewards = rollout_data['episode_rewards'][start_idx:end_idx]
+    episode_terminated = rollout_data['episode_terminated'][start_idx:end_idx]
+    episode_succeeded = rollout_data['episode_succeeded'][start_idx:end_idx]
+    episode_success_times = rollout_data['episode_success_times'][start_idx:end_idx]
+    episode_engaged = rollout_data['episode_engaged'][start_idx:end_idx]
+    episode_engagement_times = rollout_data['episode_engagement_times'][start_idx:end_idx]
+    episode_engagement_lengths = rollout_data['episode_engagement_lengths'][start_idx:end_idx]
+    episode_ssv = rollout_data['episode_ssv'][start_idx:end_idx]
+    episode_ssjv = rollout_data['episode_ssjv'][start_idx:end_idx]
+    episode_max_force = rollout_data['episode_max_force'][start_idx:end_idx]
+    episode_sum_force = rollout_data['episode_sum_force'][start_idx:end_idx]
+    episode_force_steps = rollout_data['episode_force_steps'][start_idx:end_idx]
+
+    # Reuse the existing aggregation function
+    # Note: Contact metrics are not available per-range in the current implementation
+    # We would need to pass contact tensors through rollout_data to support this
+    range_metrics = {}
+    num_envs = episode_lengths.shape[0]
+
+    # Basic episode metrics
+    range_metrics['episode_length'] = episode_lengths.float().mean().item()
+    range_metrics['total_reward'] = episode_rewards.mean().item()
+    range_metrics['total_reward_std'] = episode_rewards.std().item()
+    range_metrics['termination_rate'] = episode_terminated.float().mean().item()
+
+    # Success metrics
+    range_metrics['success_rate'] = episode_succeeded.float().mean().item()
+    if episode_succeeded.any():
+        range_metrics['success_time'] = episode_success_times[episode_succeeded].float().mean().item()
+    else:
+        range_metrics['success_time'] = 0.0
+
+    # Engagement metrics
+    range_metrics['engagement_rate'] = episode_engaged.float().mean().item()
+    if episode_engaged.any():
+        range_metrics['engagement_time'] = episode_engagement_times[episode_engaged].float().mean().item()
+        range_metrics['engagement_length'] = episode_engagement_lengths[episode_engaged].float().mean().item()
+    else:
+        range_metrics['engagement_time'] = 0.0
+        range_metrics['engagement_length'] = 0.0
+
+    # Smoothness metrics
+    range_metrics['ssv'] = episode_ssv.mean().item()
+    range_metrics['ssjv'] = episode_ssjv.mean().item()
+
+    # Force metrics
+    range_metrics['max_force'] = episode_max_force.max().item()
+    if episode_force_steps.sum() > 0:
+        range_metrics['avg_force'] = episode_sum_force.sum().item() / episode_force_steps.sum().item()
+    else:
+        range_metrics['avg_force'] = 0.0
+
+    return range_metrics
 
 
 def _create_checkpoint_gif(images: torch.Tensor, values: torch.Tensor, cumulative_rewards: torch.Tensor,
@@ -1426,9 +1700,126 @@ def generate_evaluation_video(rollout_data: Dict[str, Any], agent: Any,
     return output_path
 
 
+def generate_noise_visualization(rollout_data: Dict[str, Any], step: int, output_path: str) -> str:
+    """
+    Generate noise robustness visualization image.
+
+    Creates concentric circles representing noise ranges with dots showing
+    success (green) or failure (red) for each environment, and ring shading
+    based on success rate.
+
+    Args:
+        rollout_data: Dictionary with noise_assignments, episode_succeeded, termination_step, truncation_step
+        step: Checkpoint step number (for caption)
+        output_path: Path to save the image
+
+    Returns:
+        Path to generated image file
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+    from matplotlib import cm
+    import numpy as np
+
+    print(f"  Generating noise visualization...")
+
+    # Extract data
+    noise_assignments = rollout_data['noise_assignments'].cpu().numpy()  # [500, 2] in meters
+    episode_succeeded = rollout_data['episode_succeeded'].cpu().numpy()  # [500]
+    termination_step = rollout_data['termination_step'].cpu().numpy()    # [500]
+    truncation_step = rollout_data['truncation_step'].cpu().numpy()      # [500]
+
+    # Compute success rate per range
+    success_rates = []
+    for range_idx in range(len(NOISE_RANGES)):
+        start_idx = range_idx * ENVS_PER_NOISE_RANGE
+        end_idx = start_idx + ENVS_PER_NOISE_RANGE
+        success_rate = episode_succeeded[start_idx:end_idx].mean()
+        success_rates.append(success_rate)
+
+    # Create figure (1024x1024)
+    fig, ax = plt.subplots(1, 1, figsize=(10.24, 10.24), dpi=100)
+    ax.set_xlim(-0.012, 0.012)
+    ax.set_ylim(-0.012, 0.012)
+    ax.set_aspect('equal')
+    ax.axis('off')
+
+    # Draw concentric circles with shading based on success rate
+    # Draw from largest to smallest so smaller rings appear on top
+    colormap = cm.get_cmap('cividis')  # Cividis colormap (perceptually uniform)
+    # Extract outer radii from NOISE_RANGES
+    ring_radii = [max_val for min_val, max_val, range_name in NOISE_RANGES]
+
+    # Draw in reverse order (largest to smallest)
+    for ring_idx in reversed(range(len(NOISE_RANGES))):
+        min_val, max_val, range_name = NOISE_RANGES[ring_idx]
+        outer_radius = ring_radii[ring_idx]
+        inner_radius = 0.0 if ring_idx == 0 else ring_radii[ring_idx - 1]
+        success_rate = success_rates[ring_idx]
+
+        # Draw filled circle with color based on success rate
+        # Use success_rate directly as it's already in [0, 1] range
+        # This ensures 0.0 -> red, 0.5 -> yellow, 1.0 -> green consistently
+        circle = patches.Circle(
+            (0, 0), outer_radius,
+            facecolor=colormap(success_rate), edgecolor='black', linewidth=1.5, alpha=1.0
+        )
+        ax.add_patch(circle)
+
+    # Plot dots for each environment
+    for env_idx in range(NOISE_MODE_TOTAL_ENVS):
+        x_noise = noise_assignments[env_idx, 0]
+        y_noise = noise_assignments[env_idx, 1]
+        succeeded = episode_succeeded[env_idx]
+        terminated = termination_step[env_idx] != -1
+        truncated = truncation_step[env_idx] != -1
+
+        # Determine dot color: green for success, red for terminated/truncated
+        if succeeded:
+            color = 'green'
+        elif terminated or truncated:
+            color = 'red'
+        else:
+            color = 'gray'  # Should not happen in practice
+
+        ax.scatter(x_noise, y_noise, c=color, s=20, alpha=0.8, edgecolors='black', linewidths=0.5)
+
+    # Add success rate text labels in a single box in the bottom right corner
+    text_lines = []
+    for min_val, max_val, range_name in NOISE_RANGES:
+        ring_idx = NOISE_RANGES.index((min_val, max_val, range_name))
+        success_rate = success_rates[ring_idx]
+        text_lines.append(f"{range_name}: {success_rate*100:.1f}%")
+
+    text_content = '\n'.join(text_lines)
+    ax.text(
+        0.9975, 0.0075, text_content,
+        fontsize=18, verticalalignment='bottom', horizontalalignment='right',
+        transform=ax.transAxes,
+        bbox=dict(boxstyle='round,pad=0.5', facecolor='white', edgecolor='black', alpha=0.9)
+    )
+
+    # Add title with minimal padding
+    ax.set_title(f"Noise Robustness at Step {step}", fontsize=16, fontweight='bold', pad=0)
+
+    # Save figure
+    output_dir = os.path.dirname(output_path)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+
+    plt.tight_layout()
+    fig.subplots_adjust(top=0.90)
+    plt.savefig(output_path, dpi=100, bbox_inches='tight')
+    plt.close(fig)
+
+    print(f"    Saved noise visualization to: {output_path}")
+    return output_path
+
+
 def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
                        configs: Dict[str, Any], args: argparse.Namespace,
-                       max_rollout_steps: int, policy_hz: float) -> Tuple[Dict[str, float], Optional[str]]:
+                       max_rollout_steps: int, policy_hz: float,
+                       noise_assignments: Optional[torch.Tensor] = None) -> Tuple[Dict[str, float], Optional[str]]:
     """
     Evaluate a single checkpoint.
 
@@ -1581,39 +1972,80 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
         agent.set_running_mode("eval")
         print(f"    Checkpoint loading complete!")
 
-        # Run basic evaluation
-        metrics, rollout_data = run_basic_evaluation(
-            env=env,
-            agent=agent,
-            configs=configs,
-            max_rollout_steps=max_rollout_steps,
-            enable_video=args.enable_video,
-            show_progress=args.show_progress,
-            eval_seed=args.eval_seed
-        )
-
-        # Generate video if rollout data is available
-        video_path = None
-        if args.enable_video and rollout_data is not None:
-            # Create temp video path
-            fd, video_path = tempfile.mkstemp(suffix=".gif", prefix=f"eval_step_{step}_")
-            os.close(fd)
-
-            video_path = generate_evaluation_video(
-                rollout_data=rollout_data,
+        # Branch based on eval mode
+        media_path = None
+        if args.eval_mode == "performance":
+            # Run basic evaluation with video
+            metrics, rollout_data = run_basic_evaluation(
+                env=env,
                 agent=agent,
-                policy_hz=policy_hz,
-                output_path=video_path
+                configs=configs,
+                max_rollout_steps=max_rollout_steps,
+                enable_video=args.enable_video,
+                show_progress=args.show_progress,
+                eval_seed=args.eval_seed
             )
 
-        # Add Eval/ prefix to all metrics for WandB namespacing
-        eval_metrics = {f"Eval/{key}": value for key, value in metrics.items()}
+            # Generate video if enabled and rollout data is available
+            if args.enable_video and rollout_data is not None:
+                # Create temp video path
+                fd, media_path = tempfile.mkstemp(suffix=".gif", prefix=f"eval_step_{step}_")
+                os.close(fd)
+
+                media_path = generate_evaluation_video(
+                    rollout_data=rollout_data,
+                    agent=agent,
+                    policy_hz=policy_hz,
+                    output_path=media_path
+                )
+
+            # Add Eval/ prefix to all metrics for WandB namespacing
+            eval_metrics = {f"Eval/{key}": value for key, value in metrics.items()}
+
+        elif args.eval_mode == "noise":
+            # Run noise evaluation (no video)
+            if noise_assignments is None:
+                raise RuntimeError("noise_assignments is None in noise mode evaluation")
+
+            eval_metrics, rollout_data = run_noise_evaluation(
+                env=env,
+                agent=agent,
+                configs=configs,
+                max_rollout_steps=max_rollout_steps,
+                noise_assignments=noise_assignments,
+                show_progress=args.show_progress,
+                eval_seed=args.eval_seed
+            )
+
+            # Generate noise visualization
+            fd, media_path = tempfile.mkstemp(suffix=".png", prefix=f"noise_eval_step_{step}_")
+            os.close(fd)
+
+            media_path = generate_noise_visualization(
+                rollout_data=rollout_data,
+                step=step,
+                output_path=media_path
+            )
+
+        else:
+            raise RuntimeError(f"Unknown eval_mode: {args.eval_mode}")
 
         print(f"  Checkpoint {step} evaluation complete")
-        print(f"    Success rate: {metrics.get('success_rate', 0.0):.2%}")
-        print(f"    Mean reward: {metrics.get('total_reward', 0.0):.2f}")
 
-        return eval_metrics, video_path
+        # Print summary (different for each mode)
+        if args.eval_mode == "performance":
+            # Access metrics from the dict (they have Eval/ prefix already)
+            success_rate = eval_metrics.get('Eval/success_rate', 0.0)
+            mean_reward = eval_metrics.get('Eval/total_reward', 0.0)
+            print(f"    Success rate: {success_rate:.2%}")
+            print(f"    Mean reward: {mean_reward:.2f}")
+        elif args.eval_mode == "noise":
+            # Print summary for each noise range
+            for min_val, max_val, range_name in NOISE_RANGES:
+                success_rate = eval_metrics.get(f'Eval({range_name})/success_rate', 0.0)
+                print(f"    {range_name}: {success_rate:.2%}")
+
+        return eval_metrics, media_path
 
     finally:
         # Clean up downloaded checkpoint files
@@ -1643,10 +2075,13 @@ def main():
 
         # Setup environment once
         print("\nSetting up environment...")
-        env, agent, max_rollout_steps, policy_hz = setup_environment_once(configs, args_cli)
+        env, agent, max_rollout_steps, policy_hz, noise_assignments = setup_environment_once(configs, args_cli)
 
         print(f"\nEnvironment configured:")
-        print(f"  - Environments per agent: 100 (hardcoded)")
+        if args_cli.eval_mode == "performance":
+            print(f"  - Environments per agent: 100")
+        elif args_cli.eval_mode == "noise":
+            print(f"  - Environments per agent: {NOISE_MODE_TOTAL_ENVS} (noise mode: {len(NOISE_RANGES)} ranges × {ENVS_PER_NOISE_RANGE} envs)")
         print(f"  - Max rollout steps: {max_rollout_steps}")
         print(f"  - Policy Hz: {policy_hz}")
 
@@ -1665,13 +2100,13 @@ def main():
 
                 try:
                     # Evaluate this checkpoint
-                    metrics, video_path = evaluate_checkpoint(
+                    metrics, media_path = evaluate_checkpoint(
                         run, step, env, agent, configs, args_cli,
-                        max_rollout_steps, policy_hz
+                        max_rollout_steps, policy_hz, noise_assignments
                     )
 
                     # Log results to WandB
-                    log_results_to_wandb(run, step, metrics, video_path, args_cli)
+                    log_results_to_wandb(run, step, metrics, media_path, args_cli)
 
                 except Exception as e:
                     print(f"  ERROR: Failed to evaluate checkpoint at step {step}: {e}")
