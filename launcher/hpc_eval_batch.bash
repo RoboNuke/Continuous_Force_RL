@@ -2,7 +2,7 @@
 #SBATCH -J EVAL_JOB		            # job name (will be overridden by sbatch -J)
 #SBATCH -A virl-grp	                # sponsored account name
 #SBATCH -p tiamat,gpu,eecs2               # partition names
-#SBATCH --time=0-04:00:00           # time limit: 2 hours (evals are shorter than training)
+#SBATCH --time=0-23:59:59           # time limit: 2 hours (evals are shorter than training)
 #SBATCH --gres=gpu:1                # number of GPUs to request
 #SBATCH --mem=32G                   # request 32 gigabytes memory
 #SBATCH -c 12                       # number of cores/threads per task
