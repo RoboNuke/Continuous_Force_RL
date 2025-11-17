@@ -13,6 +13,7 @@ from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWr
 from wrappers.control.manual_control_wrapper import ManualControlWrapper
 from wrappers.mechanics.two_stage_keypoint_reward_wrapper import TwoStageKeypointRewardWrapper
 from wrappers.mechanics.spawn_height_curriculum_wrapper import SpawnHeightCurriculumWrapper
+from wrappers.mechanics.dynamics_randomization_wrapper import DynamicsRandomizationWrapper
 
 from models.SimBa_hybrid_control import HybridControlBlockSimBaActor
 from models.block_simba import BlockSimBaActor, BlockSimBaCritic, make_agent_optimizer
@@ -33,7 +34,7 @@ def set_reward_shaping(env_cfg, agent_cfg):
         agent_cfg.rewards_shaper = RunningStandardScaler(**{"size": 1, "device": env_cfg.sim.device})
 
 
-def apply_wrappers(env, configs):
+def apply_wrappers(env, configs, eval_mode='None'):
     wrappers_config = configs['wrappers']
     if wrappers_config.fragile_objects.enabled:
         print(f"  - Applying Fragile Object Wrapper with break forces: {configs['primary'].break_forces}")
@@ -47,6 +48,13 @@ def apply_wrappers(env, configs):
     if wrappers_config.efficient_reset_enabled:
         print("  - Applying Efficient Reset Wrapper")
         env = EfficientResetWrapper(env)
+
+    if wrappers_config.dynamics_randomization.enabled:
+        print("  - Applying Dynamics Randomization Wrapper")
+        env = DynamicsRandomizationWrapper(
+            env,
+            config=asdict(wrappers_config.dynamics_randomization)
+        )
 
     if wrappers_config.force_torque_sensor.enabled:
         print("  - Applying Force Torque Wrapper")
@@ -62,6 +70,14 @@ def apply_wrappers(env, configs):
             contact_torque_threshold=wrappers_config.force_torque_sensor.contact_torque_threshold,
             log_contact_state=wrappers_config.force_torque_sensor.log_contact_state,
             use_contact_sensor=wrappers_config.force_torque_sensor.use_contact_sensor
+        )
+
+    if eval_mode == 'noise':
+        print("  - Applying Fixed Noise Wrapper (Eval Only)")
+        from eval.wandb_eval import FixedNoiseWrapper
+        env = FixedNoiseWrapper(
+            env, 
+            None
         )
 
     if wrappers_config.force_reward.enabled:

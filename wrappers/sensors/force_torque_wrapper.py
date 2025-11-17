@@ -718,24 +718,24 @@ class ForceTorqueWrapper(gym.Wrapper):
             force_torque_obs = self.unwrapped.robot_force_torque.clone()
 
             # Apply per-step observation noise (if configured)
-            if hasattr(self.unwrapped.cfg, 'obs_rand') and hasattr(self.unwrapped.cfg.obs_rand, 'force_torque'):
-                # Generate fresh noise every step
-                force_torque_noise = torch.randn(
-                    (self.unwrapped.num_envs, 6),
-                    dtype=torch.float32,
-                    device=self.unwrapped.device
-                )
+            #if hasattr(self.unwrapped.cfg, 'obs_rand') and hasattr(self.unwrapped.cfg.obs_rand, 'force_torque'):
+            # Generate fresh noise every step
+            force_torque_noise = torch.randn(
+                (self.unwrapped.num_envs, 6),
+                dtype=torch.float32,
+                device=self.unwrapped.device
+            )
 
-                # Scale by config values
-                force_torque_rand = torch.tensor(
-                    self.unwrapped.cfg.obs_rand.force_torque,
-                    dtype=torch.float32,
-                    device=self.unwrapped.device
-                )
-                force_torque_noise = force_torque_noise @ torch.diag(force_torque_rand)
+            # Scale by config values
+            force_torque_rand = torch.tensor(
+                self.unwrapped.cfg.obs_rand.force_torque,
+                dtype=torch.float32,
+                device=self.unwrapped.device
+            )
+            force_torque_noise = force_torque_noise @ torch.diag(force_torque_rand)
 
-                # Add noise to observation
-                force_torque_obs = force_torque_obs + force_torque_noise
+            # Add noise to observation
+            force_torque_obs = force_torque_obs + force_torque_noise
 
             # Apply tanh scaling (if enabled)
             if self.use_tanh_scaling:

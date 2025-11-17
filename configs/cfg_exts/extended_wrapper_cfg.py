@@ -14,7 +14,8 @@ from .wrapper_sub_configs import (
     WandbLoggingConfig, ActionLoggingConfig, ForceRewardConfig,
     FragileObjectConfig, ObsManagerConfig, FactoryMetricsConfig,
     PoseContactLoggingConfig, MisalignmentPenaltyConfig,
-    TwoStageKeypointRewardConfig, CurriculumConfig, ManualControlConfig
+    TwoStageKeypointRewardConfig, CurriculumConfig, ManualControlConfig,
+    DynamicsRandomizationConfig
 )
 
 # Get configclass decorator with version compatibility
@@ -73,6 +74,9 @@ class ExtendedWrapperConfig:
 
     manual_control: ManualControlConfig = field(default_factory=ManualControlConfig)
     """Manual control wrapper configuration"""
+
+    dynamics_randomization: DynamicsRandomizationConfig = field(default_factory=DynamicsRandomizationConfig)
+    """Dynamics randomization wrapper configuration"""
 
     efficient_reset_enabled: bool = field(default=True)
     """Enable efficient environment resetting"""

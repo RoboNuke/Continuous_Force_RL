@@ -29,7 +29,7 @@ from configs.cfg_exts.hybrid_task_cfg import HybridTaskCfg
 from configs.cfg_exts.actor_cfg import ActorConfig
 from configs.cfg_exts.critic_cfg import CriticConfig
 from configs.cfg_exts.wrapper_sub_configs import ActionLoggingConfig, ForceRewardConfig, ForceTorqueSensorConfig, FragileObjectConfig, ObsManagerConfig, ObservationNoiseConfig
-from configs.cfg_exts.wrapper_sub_configs import HybridControlConfig, PoseContactLoggingConfig, CurriculumConfig, ManualControlConfig
+from configs.cfg_exts.wrapper_sub_configs import HybridControlConfig, PoseContactLoggingConfig, CurriculumConfig, ManualControlConfig, DynamicsRandomizationConfig
 # Default section-to-class mapping - single source of truth
 SECTION_MAPPING = {
     'primary': PrimaryConfig,
@@ -54,7 +54,8 @@ SECTION_MAPPING = {
     'hybrid_task': HybridTaskCfg,
     'pose_contact_logging': PoseContactLoggingConfig,
     'spawn_height_curriculum': CurriculumConfig,
-    'manual_control': ManualControlConfig
+    'manual_control': ManualControlConfig,
+    'dynamics_randomization': DynamicsRandomizationConfig
 }
 
 

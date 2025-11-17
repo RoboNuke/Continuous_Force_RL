@@ -179,3 +179,36 @@ class ManualControlConfig:
     action_scale: float = 0.1               # Scale for incremental position/rotation actions
     force_scale: float = 0.1                # Scale for force commands (hybrid control only)
     start_in_manual_mode: bool = True       # Start in manual mode (True) or RL mode (False)
+
+
+@dataclass
+class DynamicsRandomizationConfig:
+    """Dynamics randomization wrapper configuration for domain randomization."""
+    enabled: bool = False
+
+    # Friction randomization (held asset only)
+    randomize_friction: bool = False
+    friction_range: List[float] = field(default_factory=lambda: [0.5, 1.5])
+
+    # Controller gains randomization (separate for pos/rot, same across all dims within type)
+    randomize_gains: bool = False
+    pos_gains_range: List[float] = field(default_factory=lambda: [80.0, 120.0])   # Absolute range for position gains
+    rot_gains_range: List[float] = field(default_factory=lambda: [20.0, 40.0])    # Absolute range for rotation gains
+
+    # Force/torque gains randomization (hybrid control only)
+    randomize_force_gains: bool = False
+    force_gains_range: List[float] = field(default_factory=lambda: [0.08, 0.12])     # Absolute range for force gains
+    torque_gains_range: List[float] = field(default_factory=lambda: [0.0008, 0.0012]) # Absolute range for torque gains
+
+    # Action thresholds randomization (sampled once per env, replicated to all dims)
+    randomize_pos_threshold: bool = False
+    pos_threshold_range: List[float] = field(default_factory=lambda: [0.015, 0.025])
+
+    randomize_rot_threshold: bool = False
+    rot_threshold_range: List[float] = field(default_factory=lambda: [0.08, 0.12])
+
+    randomize_force_threshold: bool = False
+    force_threshold_range: List[float] = field(default_factory=lambda: [8.0, 12.0])
+
+    randomize_torque_bounds: bool = False
+    torque_bounds_range: List[float] = field(default_factory=lambda: [0.4, 0.6])
