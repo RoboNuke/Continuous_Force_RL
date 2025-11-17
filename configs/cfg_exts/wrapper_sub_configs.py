@@ -53,6 +53,12 @@ class ObservationNoiseConfig:
 
 
 @dataclass
+class EEPoseNoiseConfig:
+    """End-effector pose noise wrapper configuration."""
+    enabled: bool = False
+
+
+@dataclass
 class WandbLoggingConfig:
     """Wandb logging wrapper configuration."""
     enabled: bool = True

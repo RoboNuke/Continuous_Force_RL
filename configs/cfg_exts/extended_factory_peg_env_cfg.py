@@ -19,6 +19,9 @@ class ExtendedObsRandCfg:
     fixed_asset_pos: list = [0.001, 0.001, 0.001]
     """Position noise for fixed asset (meters) - default 1mm per axis"""
 
+    ee_pos: list = [0.00025, 0.00025, 0.00025]
+    """Position noise for end-effector (meters) - default 0.25mm per axis"""
+
     force_torque: list = [0.25, 0.25, 0.25, 0.01, 0.01, 0.01]
     """Force-torque sensor noise [Fx, Fy, Fz, Tx, Ty, Tz] in N and Nm - applied per step"""
 

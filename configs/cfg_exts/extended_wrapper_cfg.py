@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from .version_compat import get_isaac_lab_ctrl_imports
 from .wrapper_sub_configs import (
     ForceTorqueSensorConfig, HybridControlConfig, ObservationNoiseConfig,
-    WandbLoggingConfig, ActionLoggingConfig, ForceRewardConfig,
+    EEPoseNoiseConfig, WandbLoggingConfig, ActionLoggingConfig, ForceRewardConfig,
     FragileObjectConfig, ObsManagerConfig, FactoryMetricsConfig,
     PoseContactLoggingConfig, MisalignmentPenaltyConfig,
     TwoStageKeypointRewardConfig, CurriculumConfig, ManualControlConfig,
@@ -41,6 +41,9 @@ class ExtendedWrapperConfig:
 
     observation_noise: ObservationNoiseConfig = field(default_factory=ObservationNoiseConfig)
     """Observation noise wrapper configuration"""
+
+    ee_pose_noise: EEPoseNoiseConfig = field(default_factory=EEPoseNoiseConfig)
+    """End-effector pose noise wrapper configuration"""
 
     wandb_logging: WandbLoggingConfig = field(default_factory=WandbLoggingConfig)
     """Wandb logging wrapper configuration"""

@@ -14,6 +14,7 @@ from wrappers.control.manual_control_wrapper import ManualControlWrapper
 from wrappers.mechanics.two_stage_keypoint_reward_wrapper import TwoStageKeypointRewardWrapper
 from wrappers.mechanics.spawn_height_curriculum_wrapper import SpawnHeightCurriculumWrapper
 from wrappers.mechanics.dynamics_randomization_wrapper import DynamicsRandomizationWrapper
+from wrappers.observations.ee_pose_noise_wrapper import EEPoseNoiseWrapper
 
 from models.SimBa_hybrid_control import HybridControlBlockSimBaActor
 from models.block_simba import BlockSimBaActor, BlockSimBaCritic, make_agent_optimizer
@@ -34,7 +35,7 @@ def set_reward_shaping(env_cfg, agent_cfg):
         agent_cfg.rewards_shaper = RunningStandardScaler(**{"size": 1, "device": env_cfg.sim.device})
 
 
-def apply_wrappers(env, configs, eval_mode='None'):
+def apply_wrappers(env, configs):
     wrappers_config = configs['wrappers']
     if wrappers_config.fragile_objects.enabled:
         print(f"  - Applying Fragile Object Wrapper with break forces: {configs['primary'].break_forces}")
@@ -72,14 +73,6 @@ def apply_wrappers(env, configs, eval_mode='None'):
             use_contact_sensor=wrappers_config.force_torque_sensor.use_contact_sensor
         )
 
-    if eval_mode == 'noise':
-        print("  - Applying Fixed Noise Wrapper (Eval Only)")
-        from eval.wandb_eval import FixedNoiseWrapper
-        env = FixedNoiseWrapper(
-            env, 
-            None
-        )
-
     if wrappers_config.force_reward.enabled:
         print("  - Applying Force Reward Wrapper")
         env = ForceRewardWrapper(
@@ -104,6 +97,10 @@ def apply_wrappers(env, configs, eval_mode='None'):
     if wrappers_config.observation_noise.enabled:
         print("  - Applying Observation Noise Wrapper")
         raise NotImplementedError
+
+    if wrappers_config.ee_pose_noise.enabled:
+        print("  - Applying EE Pose Noise Wrapper")
+        env = EEPoseNoiseWrapper(env)
 
     if wrappers_config.hybrid_control.enabled:
         print("  - Applying Hybrid Force Position Wrapper")
@@ -171,6 +168,7 @@ def apply_wrappers(env, configs, eval_mode='None'):
             logging_frequency=wrappers_config.action_logging.logging_frequency
         )
     return env
+
 def add_wandb_tracking_tags(configs):
     env_cfg = configs['environment']
     wrappers_config = configs['wrappers']
