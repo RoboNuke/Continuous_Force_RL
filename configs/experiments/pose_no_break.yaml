@@ -5,7 +5,7 @@ base_config: "configs/base/PiH_base.yaml"
 
 primary:
   ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/pose_lowPosNoise_noBreak.txt"
-  break_forces: [20000000]  # Break force conditions (-1 = unbreakable)
+  break_forces: [100000]  # Break force conditions (-1 = unbreakable)
 
 # Model configuration for hybrid agent
 model:
