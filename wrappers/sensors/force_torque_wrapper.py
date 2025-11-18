@@ -460,8 +460,8 @@ class ForceTorqueWrapper(gym.Wrapper):
     def _contact_detected_in_range(self):
         # get true state from directly-held contact sensor (not from scene)
         if self._held_fixed_contact_sensor is not None:
-            # Get contact forces in WORLD frame (filtered for peg-hole contact only)
-            fixed_force_w = self._held_fixed_contact_sensor.data.force_matrix_w[:,0,0,:]
+            # Get contact forces in WORLD frame (sum across all filtered collision bodies)
+            fixed_force_w = self._held_fixed_contact_sensor.data.force_matrix_w[:,0,:,:].sum(dim=1)
             # We use ee quat because we want the forces in the force-torque frame for hybrid control
             # The sensing is placed here because the data is from the end of the last step, allowing
             # the next (current) step to decide what do to based on step's starting state 

@@ -18,7 +18,11 @@ from typing import Dict, Any, Tuple, Type, List, Optional
 # Import required config classes
 from configs.cfg_exts.primary_cfg import PrimaryConfig
 from configs.cfg_exts.extended_factory_peg_env_cfg import ExtendedFactoryPegEnvCfg, ExtendedObsRandCfg
+from configs.cfg_exts.extended_factory_gear_env_cfg import ExtendedFactoryGearEnvCfg
+from configs.cfg_exts.extended_factory_nut_env_cfg import ExtendedFactoryNutEnvCfg
 from configs.cfg_exts.extended_peg_insert_cfg import ExtendedFactoryTaskPegInsertCfg
+from configs.cfg_exts.extended_gear_mesh_cfg import ExtendedFactoryTaskGearMeshCfg
+from configs.cfg_exts.extended_nut_thread_cfg import ExtendedFactoryTaskNutThreadCfg
 from configs.cfg_exts.extended_model_cfg import ExtendedModelConfig, ExtendedHybridAgentConfig
 from configs.cfg_exts.extended_wrapper_cfg import ExtendedWrapperConfig
 from configs.cfg_exts.experiment_cfg import ExperimentConfig
@@ -30,12 +34,22 @@ from configs.cfg_exts.actor_cfg import ActorConfig
 from configs.cfg_exts.critic_cfg import CriticConfig
 from configs.cfg_exts.wrapper_sub_configs import ActionLoggingConfig, ForceRewardConfig, ForceTorqueSensorConfig, FragileObjectConfig, ObsManagerConfig, ObservationNoiseConfig
 from configs.cfg_exts.wrapper_sub_configs import HybridControlConfig, PoseContactLoggingConfig, CurriculumConfig, ManualControlConfig, DynamicsRandomizationConfig, EEPoseNoiseConfig
+
+# Task name to environment and task config class mapping
+TASK_ENV_MAPPING = {
+    "Isaac-Factory-PegInsert-Direct-v0": (ExtendedFactoryPegEnvCfg, ExtendedFactoryTaskPegInsertCfg),
+    "Isaac-Factory-PegInsert-Local-v0": (ExtendedFactoryPegEnvCfg, ExtendedFactoryTaskPegInsertCfg),
+    "Isaac-Factory-GearMesh-Direct-v0": (ExtendedFactoryGearEnvCfg, ExtendedFactoryTaskGearMeshCfg),
+    "Isaac-Factory-GearMesh-Local-v0": (ExtendedFactoryGearEnvCfg, ExtendedFactoryTaskGearMeshCfg),
+    "Isaac-Factory-NutThread-Direct-v0": (ExtendedFactoryNutEnvCfg, ExtendedFactoryTaskNutThreadCfg),
+    "Isaac-Factory-NutThread-Local-v0": (ExtendedFactoryNutEnvCfg, ExtendedFactoryTaskNutThreadCfg),
+}
+
 # Default section-to-class mapping - single source of truth
+# Note: 'environment' and 'task' are dynamically set based on task_name
 SECTION_MAPPING = {
     'primary': PrimaryConfig,
-    'environment': ExtendedFactoryPegEnvCfg,
     'obs_rand': ExtendedObsRandCfg,
-    'task': ExtendedFactoryTaskPegInsertCfg,
     'model': ExtendedModelConfig,
     'wrappers': ExtendedWrapperConfig,
     'experiment': ExperimentConfig,
@@ -78,6 +92,30 @@ class ConfigManagerV3:
         """
         self.section_mapping = SECTION_MAPPING.copy()
         self.verbose = verbose
+
+    def _update_task_specific_mappings(self, task_name: str) -> None:
+        """
+        Update section_mapping with task-specific environment and task configs.
+
+        Args:
+            task_name: The task name from experiment config (e.g., 'Isaac-Factory-PegInsert-Direct-v0')
+
+        Raises:
+            ValueError: If task_name is not supported
+        """
+        if task_name not in TASK_ENV_MAPPING:
+            available_tasks = list(TASK_ENV_MAPPING.keys())
+            raise ValueError(
+                f"Unsupported task name: '{task_name}'. "
+                f"Available tasks: {available_tasks}"
+            )
+
+        env_cfg, task_cfg = TASK_ENV_MAPPING[task_name]
+        self.section_mapping['environment'] = env_cfg
+        self.section_mapping['task'] = task_cfg
+
+        if self.verbose:
+            print(f"Task-specific configs set: environment={env_cfg.__name__}, task={task_cfg.__name__}")
 
     # =============================================================================
     # YAML Loading Methods (Feature 1)
@@ -322,6 +360,16 @@ class ConfigManagerV3:
         if self.verbose:
             print(f"Base config overrides from: {base_config_path}")
 
+        # Determine task name and update mappings before processing
+        if 'experiment' not in yaml_data or 'task_name' not in yaml_data['experiment']:
+            raise ValueError(
+                f"Could not determine task name from config '{base_config_path}'. "
+                f"Please ensure 'experiment.task_name' is specified in the YAML file."
+            )
+
+        task_name = yaml_data['experiment']['task_name']
+        self._update_task_specific_mappings(task_name)
+
         # Create config instances
         configs = {}
 
@@ -331,16 +379,15 @@ class ConfigManagerV3:
             if section not in self.section_mapping:
                 raise KeyError(f"Unknown section '{section}' in config file '{base_config_path}'. "
                              f"Available sections: {list(self.section_mapping.keys())}")
-            if section is 'task':
-                print('found task')
+            
             config_class = self.section_mapping[section]
 
             # Create instance with defaults
             config_instance = config_class()
 
             # Apply YAML overrides
-            #if self.verbose:
-            print(f"\t{section}")
+            if self.verbose:
+                print(f"\t{section}")
             self._apply_yaml_overrides(config_instance, yaml_data[section], indent_level=2)
 
             configs[section] = config_instance

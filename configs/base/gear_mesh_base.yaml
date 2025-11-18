@@ -1,25 +1,23 @@
-# Base Factory Configuration V2
+# Base Factory Configuration V2 - Gear Mesh Task
 # Updated for ConfigManagerV2 - No reference syntax, direct values only
-
-# Task name (required for new config system)
 
 # EXPERIMENT CONFIGURATION
 experiment:
-  name: "fPiH_base"
-  tags: ["factory", 'FPiH']
+  name: "fGM_base"
+  tags: ["factory", "gear_mesh"]
   group: "force_force_tests"
   wandb_project: "debug"
   wandb_entity: "hur"
-  task_name: "Isaac-Factory-PegInsert-Direct-v0"
+  task_name: "Isaac-Factory-GearMesh-Direct-v0"
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
   agents_per_break_force: 5 # Number of agents per break force condition
   num_envs_per_agent: 256   # Environments per individual agent
-  break_forces: [10]  # Break force conditions (-1 = unbreakable)
+  break_forces: [100000]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
-  max_steps: 3000064 #25000192
+  max_steps: 25000192
   debug_mode: false
   seed: -1
   ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/voltron_baseline_tracker.txt" #"/home/hunter/ckpt_tracker.txt" #
@@ -28,8 +26,8 @@ primary:
 # ENVIRONMENT OVERRIDES (Direct Isaac Lab FactoryEnvCfg parameters)
 environment:
   task:
-    name: 'peg_insert'
-  # episode_length_s comes from Isaac Lab defaults (10.0s for peg insert)
+    name: 'gear_mesh'
+  # Episode length for gear mesh is 20.0s (vs 10.0s for peg insert)
   # decimation comes from primary config applied automatically
   scene:
     filter_collisions: false
@@ -41,8 +39,6 @@ environment:
     force_action_threshold: [10.0, 10.0, 10.0]
     torque_action_threshold: [0.1, 0.1, 0.1]
     default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
-    #default_task_force_gains: [0.05, 0.05, 0.05, 0.001, 0.001, 0.001]
-    #default_task_prop_gains: [50, 50, 50, 30, 30, 30]
     no_sel_ema: true
 
   hybrid_task:
@@ -119,8 +115,8 @@ model:
 
     # bias on selection parameters
     # positive increases pos selection, negative force
-    # 2.5 - >97% 
-    init_bias: 2.5 
+    # 2.5 - >97%
+    init_bias: 2.5
 
     # adds scale layer if adj has scale_zin
     pre_layer_scale_factor: 0.1
@@ -279,46 +275,15 @@ wrappers:
     enable_force_ratio: false
     force_ratio_reward_weight: 1.0
     #############################################################
-    
+
     enable_contact_reward: False
     contact_reward_weight: 1.0
-
-  # Dynamics randomization for domain randomization
-  dynamics_randomization:
-    enabled: false
-
-    # Friction randomization (held asset only)
-    randomize_friction: false
-    friction_range: [0.5, 1.5]
-
-    # Controller gains randomization (separate for pos/rot)
-    randomize_gains: false
-    pos_gains_range: [80.0, 120.0]
-    rot_gains_range: [20.0, 40.0]
-
-    # Force/torque gains randomization (hybrid control only)
-    randomize_force_gains: false
-    force_gains_range: [0.08, 0.12]
-    torque_gains_range: [0.0008, 0.0012]
-
-    # Action thresholds randomization
-    randomize_pos_threshold: false
-    pos_threshold_range: [0.015, 0.025]
-
-    randomize_rot_threshold: false
-    rot_threshold_range: [0.08, 0.12]
-
-    randomize_force_threshold: false
-    force_threshold_range: [8.0, 12.0]
-
-    randomize_torque_bounds: false
-    torque_bounds_range: [0.4, 0.6]
 
 
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
 agent:
   # Core identification
-  disable_progressbar: true
+  disable_progressbar: false
 
   # Checkpoint and experiment tracking
   track_ckpts: false
@@ -329,7 +294,7 @@ agent:
   # SKRL PPO PARAMETERS (these override SKRL defaults)
   # rollouts and mini_batches are auto-calculated from episode timing
   learning_epochs: 4
-  mini_batches: 150
+  mini_batches: 300
   discount_factor: 0.99
   lambda_: 0.95  # Note: underscore for Python compatibility
   random_timesteps: 0
@@ -338,9 +303,6 @@ agent:
   mixed_precision: false
 
   # CUSTOM LEARNING PARAMETERS (extensions to SKRL)
-  #policy_learning_rate: 1.0e-5
-  #critic_learning_rate: 1.0e-5
-  #value_update_ratio: 2
   policy_learning_rate: 1.0e-5
   critic_learning_rate: 1.0e-5
   value_update_ratio: 2
@@ -362,7 +324,6 @@ agent:
   time_limit_bootstrap: true
 
   supervised_selection_loss_weight: 0.0
-  #checkpoint_interval: 1500
 
   # Reward shaping
   reward_shaper_type: 'const_scale'

@@ -194,11 +194,11 @@ class DynamicsRandomizationConfig:
 
     # Friction randomization (held asset only)
     randomize_friction: bool = False
-    friction_range: List[float] = field(default_factory=lambda: [0.5, 1.5])
+    friction_range: List[float] = field(default_factory=lambda: [0.5, 1.0])
 
     # Controller gains randomization (separate for pos/rot, same across all dims within type)
     randomize_gains: bool = False
-    pos_gains_range: List[float] = field(default_factory=lambda: [80.0, 120.0])   # Absolute range for position gains
+    pos_gains_range: List[float] = field(default_factory=lambda: [400.0, 800.0])   # Absolute range for position gains
     rot_gains_range: List[float] = field(default_factory=lambda: [20.0, 40.0])    # Absolute range for rotation gains
 
     # Force/torque gains randomization (hybrid control only)
@@ -208,7 +208,7 @@ class DynamicsRandomizationConfig:
 
     # Action thresholds randomization (sampled once per env, replicated to all dims)
     randomize_pos_threshold: bool = False
-    pos_threshold_range: List[float] = field(default_factory=lambda: [0.015, 0.025])
+    pos_threshold_range: List[float] = field(default_factory=lambda: [0.016, 0.025])
 
     randomize_rot_threshold: bool = False
     rot_threshold_range: List[float] = field(default_factory=lambda: [0.08, 0.12])

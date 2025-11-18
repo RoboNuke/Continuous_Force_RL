@@ -257,9 +257,9 @@ def main(
     env = AsyncCriticIsaacLabWrapper(env)
     print("[INFO]: Wrappers Applied successfully")
     print("=" * 100)
-    
+
     #print_configs(configs)
-    
+
     print("[INFO]: Step 4 - Creating learning objects")
     # Define memory
     device = configs['environment'].sim.device
