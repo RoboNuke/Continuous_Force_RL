@@ -90,17 +90,12 @@ class MultiSimBaNet(nn.Module):
 
     def forward(self, x):
         # Process each agent through its network
-        #print(x.size())
         outputs = []
         batch_size = int(x.size()[0] // self.num_nets)
-        #print("batch size:", batch_size)
         for i, simba_net in enumerate(self.pride_nets):
-            simba_output = simba_net(x[i*batch_size:(i+1)*batch_size, :])  # (batch_size, out_size)
+            simba_output = simba_net(x[i*batch_size:(i+1)*batch_size, :])
             outputs.append(simba_output)
-            #print("inv out:", simba_output.size())
-        
-        # Stack outputs: (batch_size, num_agents, out_size)
-        #print("final:", torch.cat(outputs,dim=0).size())
+
         return torch.cat(outputs, dim=0)
         
 
@@ -281,7 +276,6 @@ class SimBaActor(GaussianMixin, Model):
         self.sigma_idx = sigma_idx
 
     def act(self, inputs, role):
-        #print("policy act:", inputs, role)
         return GaussianMixin.act(self, inputs, role)
 
     def compute(self, inputs, role):
@@ -299,7 +293,6 @@ class SimBaActor(GaussianMixin, Model):
             for i, log_std in enumerate(self.actor_logstd):
                 logstds.append(log_std.expand_as( action_mean[i*batch_size:(i+1)*batch_size,:] ))
             logstds = torch.cat(logstds,dim=0)
-            #print("log stds size:", logstds.size())
             return action_mean, logstds, {}
             
 
@@ -319,7 +312,6 @@ class SimBaCritic(DeterministicMixin, Model):
         DeterministicMixin.__init__(self, clip_actions)
 
         in_size = self.num_observations
-        #print("state space size:", state_space_size)
 
         if num_agents > 1:
             self.critic = MultiSimBaNet(
@@ -347,9 +339,7 @@ class SimBaCritic(DeterministicMixin, Model):
         
 
     def act(self, inputs, role):
-        #print("critic act:", inputs, role)
         return DeterministicMixin.act(self, inputs, role)
 
     def compute(self, inputs, role):
-        #print("critic compute:", role, inputs['states'].size(), inputs['states'][:,-self.num_observations:].size())
         return self.critic(inputs['states'][:,-self.num_observations:]), {}

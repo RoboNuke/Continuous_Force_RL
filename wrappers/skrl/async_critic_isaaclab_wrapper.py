@@ -75,22 +75,30 @@ class AsyncCriticIsaacLabWrapper(Wrapper):
         observations, reward, terminated, truncated, self._info = self._env.step(actions)
 
         # Process both policy and critic observations together
-        # Create proper per-environment spaces (Isaac Lab incorrectly includes batch dimension)
-        obs_dim = getattr(self._env.unwrapped.cfg, 'observation_space', 0)
-        state_dim = getattr(self._env.unwrapped.cfg, 'state_space', 0)
-
-        env_obs_space = Box(low=-float('inf'), high=float('inf'), shape=(obs_dim,), dtype=np.float32)
-        env_state_space = Box(low=-float('inf'), high=float('inf'), shape=(state_dim,), dtype=np.float32) if state_dim > 0 else None
-
-        if env_state_space is not None:
-            # Create dict of spaces to match observation structure for SKRL
-            spaces = Dict({'policy': env_obs_space, 'critic': env_state_space})
-            self._observations = flatten_tensorized_space(tensorize_space(spaces, observations))
+        # Simply concatenate in [policy, critic] order (NOT alphabetically sorted like SKRL does)
+        # The observations are already correctly shaped [num_envs, features] from wrappers
+        if isinstance(observations, dict) and "policy" in observations and "critic" in observations:
+            # Concatenate in [policy, critic] order to match model expectations
+            # Actor uses first num_observations, critic uses last num_observations
+            self._observations = torch.cat([observations["policy"], observations["critic"]], dim=-1)
+        elif isinstance(observations, dict) and "policy" in observations:
+            # Only policy observations available
+            self._observations = observations["policy"]
         else:
-            # Fallback to just observation space if no state space
-            self._observations = flatten_tensorized_space(
-                tensorize_space(env_obs_space, observations["policy"])
-            )
+            # Fallback to old behavior for compatibility
+            obs_dim = getattr(self._env.unwrapped.cfg, 'observation_space', 0)
+            state_dim = getattr(self._env.unwrapped.cfg, 'state_space', 0)
+
+            env_obs_space = Box(low=-float('inf'), high=float('inf'), shape=(obs_dim,), dtype=np.float32)
+            env_state_space = Box(low=-float('inf'), high=float('inf'), shape=(state_dim,), dtype=np.float32) if state_dim > 0 else None
+
+            if env_state_space is not None:
+                spaces = Dict({'policy': env_obs_space, 'critic': env_state_space})
+                self._observations = flatten_tensorized_space(tensorize_space(spaces, observations))
+            else:
+                self._observations = flatten_tensorized_space(
+                    tensorize_space(env_obs_space, observations["policy"])
+                )
 
         return (
             self._observations,
@@ -111,21 +119,29 @@ class AsyncCriticIsaacLabWrapper(Wrapper):
         observations, self._info = self._env.reset()
 
         # Process both policy and critic observations together
-        # Create proper per-environment spaces (Isaac Lab incorrectly includes batch dimension)
-        obs_dim = getattr(self._env.unwrapped.cfg, 'observation_space', 0)
-        state_dim = getattr(self._env.unwrapped.cfg, 'state_space', 0)
-
-        env_obs_space = Box(low=-float('inf'), high=float('inf'), shape=(obs_dim,), dtype=np.float32)
-        env_state_space = Box(low=-float('inf'), high=float('inf'), shape=(state_dim,), dtype=np.float32) if state_dim > 0 else None
-
-        if env_state_space is not None:
-            # Create dict of spaces to match observation structure for SKRL
-            spaces = Dict({'policy': env_obs_space, 'critic': env_state_space})
-            self._observations = flatten_tensorized_space(tensorize_space(spaces, observations))
+        # Simply concatenate in [policy, critic] order (NOT alphabetically sorted like SKRL does)
+        # The observations are already correctly shaped [num_envs, features] from wrappers
+        if isinstance(observations, dict) and "policy" in observations and "critic" in observations:
+            # Concatenate in [policy, critic] order to match model expectations
+            # Actor uses first num_observations, critic uses last num_observations
+            self._observations = torch.cat([observations["policy"], observations["critic"]], dim=-1)
+        elif isinstance(observations, dict) and "policy" in observations:
+            # Only policy observations available
+            self._observations = observations["policy"]
         else:
-            # Fallback to just observation space if no state space
-            self._observations = flatten_tensorized_space(
-                tensorize_space(env_obs_space, observations["policy"])
-            )
+            # Fallback to old behavior for compatibility
+            obs_dim = getattr(self._env.unwrapped.cfg, 'observation_space', 0)
+            state_dim = getattr(self._env.unwrapped.cfg, 'state_space', 0)
+
+            env_obs_space = Box(low=-float('inf'), high=float('inf'), shape=(obs_dim,), dtype=np.float32)
+            env_state_space = Box(low=-float('inf'), high=float('inf'), shape=(state_dim,), dtype=np.float32) if state_dim > 0 else None
+
+            if env_state_space is not None:
+                spaces = Dict({'policy': env_obs_space, 'critic': env_state_space})
+                self._observations = flatten_tensorized_space(tensorize_space(spaces, observations))
+            else:
+                self._observations = flatten_tensorized_space(
+                    tensorize_space(env_obs_space, observations["policy"])
+                )
 
         return self._observations, self._info

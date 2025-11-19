@@ -21,8 +21,6 @@ class BlockLinear(nn.Module):
 
     def forward(self, x):
         # x: (num_blocks, batch, in_features)
-        #print("X size:", x.size(), self.weight.size(), self.bias.size())
-        #out = torch.einsum("nbi,nio->nbo", x, self.weight) + self.bias[:, None, :]
         out = torch.einsum("nbi,noi->nbo", x, self.weight) + self.bias[:, None, :]
         return out
 
@@ -94,7 +92,6 @@ class BlockResidualBlock(nn.Module):
         out = self.ln(x)
         out = self.relu(self.fc1(out))
         out = self.fc2(out)
-        #print("Block size:", x.size(), out.size())
         return res + out
 
 # -----------------------------
@@ -147,8 +144,6 @@ class BlockSimBa(nn.Module):
                                              activation='tanh', name="force_torque_head")
         else:
             self.fc_out = BlockLinear(num_agents, hidden_dim, act_dim, name="fc_out")
-        #self.tanh = tanh
-        #self.th = nn.Tanh()
     def forward(self, obs, num_envs):
         """
         obs: (num_agents * num_envs, obs_dim)
@@ -254,10 +249,8 @@ class BlockSimBaActor(GaussianMixin, Model):
 
     def compute(self, inputs, role):
         num_envs = inputs['states'].size()[0] // self.num_agents
-        #print("Num envs:", num_envs)
         action_mean = self.actor_mean(inputs['states'][:,:self.num_observations], num_envs)
         if self.sigma_idx > 0:
-            #action_mean[...,:self.sigma_idx] = (action_mean[:,:self.sigma_idx] + 1) / 2.0
             selection_logits  = action_mean[..., :2*self.sigma_idx]
 
             # Process selection logits: reshape to pairs, softmax, extract first prob
@@ -273,7 +266,6 @@ class BlockSimBaActor(GaussianMixin, Model):
         for i, log_std in enumerate(self.actor_logstd):
             logstds.append(log_std.expand_as( action_mean[i*batch_size:(i+1)*batch_size,:] ))
         logstds = torch.cat(logstds,dim=0)
-        #print("log stds size:", logstds.size())
         return action_mean, logstds, {}
     
 
@@ -307,12 +299,10 @@ class BlockSimBaCritic(DeterministicMixin, Model):
         self.num_agents = num_agents
 
     def act(self, inputs, role):
-        #print("critic act:", inputs, role)
         return DeterministicMixin.act(self, inputs, role)
 
     def compute(self, inputs, role):
         num_envs = inputs['states'].size()[0] // self.num_agents
-        #print("critic compute:", role, inputs['states'].size(), inputs['states'][:,-self.num_observations:].size())
         return self.critic(inputs['states'][:,-self.num_observations:], num_envs), {}
 
     

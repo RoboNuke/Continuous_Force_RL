@@ -137,8 +137,7 @@ class ObservationManagerWrapper(gym.Wrapper):
             return obs
         else:
             # Convert other formats to single tensor
-            single_tensor_obs = self._convert_to_single_tensor(obs)
-            return single_tensor_obs
+            return self._convert_to_single_tensor(obs)
 
     def _convert_to_single_tensor(self, obs):
         """Convert factory environment observations to single tensor format."""
