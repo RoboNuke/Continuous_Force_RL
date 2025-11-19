@@ -690,24 +690,22 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
 
         noise_assignments_list = []
         for min_val, max_val, range_name in NOISE_RANGES:
-            # Generate 3D noise using spherical coordinates
-            # Sample uniformly in spherical shell [min_val, max_val]
+            # Generate 2D noise using polar coordinates in x-y plane
+            # Sample uniformly in circular annulus [min_val, max_val]
 
-            # Random azimuthal angle (around z-axis) [0, 2π]
+            # Random angle in x-y plane [0, 2π]
             theta = torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) * 2 * 3.14159265359
 
-            # Random polar angle (from z-axis) [0, π]
-            # Use uniform distribution in cos(phi) to get uniform distribution on sphere
-            cos_phi = torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) * 2 - 1  # [-1, 1]
-            phi = torch.acos(cos_phi)
+            # Random radii within the circular annulus [min_val, max_val]
+            # We square the radii to ensure uniform distribution by area, since area scales with r²
+            # This prevents bias toward the inner edge of the annulus
+            radii_squared = torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) * (max_val**2 - min_val**2) + min_val**2
+            radii = torch.sqrt(radii_squared)
 
-            # Random radii within the spherical shell [min_val, max_val]
-            radii = torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) * (max_val - min_val) + min_val
-
-            # Convert spherical to Cartesian coordinates
-            x_noise = radii * torch.sin(phi) * torch.cos(theta)
-            y_noise = radii * torch.sin(phi) * torch.sin(theta)
-            z_noise = radii * torch.cos(phi)
+            # Convert polar to Cartesian coordinates (x-y plane only, z = 0)
+            x_noise = radii * torch.cos(theta)
+            y_noise = radii * torch.sin(theta)
+            z_noise = torch.zeros(ENVS_PER_NOISE_RANGE, device=env.device)
 
             noise_assignments_list.append(torch.stack([x_noise, y_noise, z_noise], dim=1))
 
