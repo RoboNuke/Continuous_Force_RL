@@ -203,6 +203,7 @@ wrappers:
   # Wandb logging with factory metrics
   wandb_logging:
     enabled: true
+    track_rewards_by_outcome: false
 
   # Enhanced action logging
   action_logging:

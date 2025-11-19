@@ -355,14 +355,17 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
 
         agent_configs = all_configs['agent'].agent_exp_cfgs
 
-        # Extract disable_logging flag from wrappers config
+        # Extract config flags from wrappers config
         disable_logging = False
+        track_rewards_by_outcome = False
         if 'wrappers' in all_configs and hasattr(all_configs['wrappers'], 'wandb_logging'):
             disable_logging = getattr(all_configs['wrappers'].wandb_logging, 'disable_logging', False)
+            track_rewards_by_outcome = getattr(all_configs['wrappers'].wandb_logging, 'track_rewards_by_outcome', False)
 
         self.num_agents = num_agents
         self.num_envs = env.unwrapped.num_envs
         self.device = env.unwrapped.device
+        self.track_rewards_by_outcome = track_rewards_by_outcome
 
         # Validate agent assignment
         if self.num_envs % self.num_agents != 0:
@@ -404,8 +407,10 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
                 'episode_rewards': [],
                 'episode_avg_rewards': [],
                 'completed_count': [],
-                'terminations': [],  
-                'component_rewards': {}  # Will store component reward lists dynamically
+                'terminations': [],
+                'component_rewards': {},  # Will store component reward lists dynamically
+                'component_rewards_success': {},  # Component rewards for successful episodes
+                'component_rewards_failure': {}  # Component rewards for failed episodes
             }
 
         # Component reward tracking
@@ -429,6 +434,15 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         variance = sum((x - mean) ** 2 for x in values_list) / (len(values_list) - 1)
         return variance ** 0.5
 
+    def _find_factory_metrics_wrapper(self):
+        """Find FactoryMetricsWrapper in the wrapper chain."""
+        current = self.env
+        while hasattr(current, 'env'):
+            if hasattr(current, 'ep_succeeded'):  # FactoryMetricsWrapper has this attribute
+                return current
+            current = current.env
+        return None
+
     def _store_completed_episodes(self, completed_mask, is_termination=False):
         """Store completed episode data in agent lists."""
         if not torch.any(completed_mask):
@@ -437,6 +451,11 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
         completed_indices = completed_mask.nonzero(as_tuple=False).squeeze(-1)
         if len(completed_indices.shape) == 0:  # Handle single element case
             completed_indices = completed_indices.unsqueeze(0)
+
+        # Find factory_metrics_wrapper for success tracking
+        factory_metrics_wrapper = None
+        if self.track_rewards_by_outcome:
+            factory_metrics_wrapper = self._find_factory_metrics_wrapper()
 
         # Store completed episodes in agent-specific lists
         for env_idx in completed_indices:
@@ -459,13 +478,30 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             # Add termination tracking - 1.0 if termination, 0.0 if timeout
             self.agent_episode_data[agent_id]['terminations'].append(1.0 if is_termination else 0.0)
 
+            # Determine success/failure for this episode
+            is_success = False
+            if self.track_rewards_by_outcome and is_termination and factory_metrics_wrapper is not None:
+                is_success = factory_metrics_wrapper.ep_succeeded[env_idx].item()
+
             # Store component reward episode sums
             for component_name, accumulated_values in self.current_component_rewards.items():
+                reward_value = accumulated_values[env_idx].item()
+
+                # Overall tracking (existing)
                 if component_name not in self.agent_episode_data[agent_id]['component_rewards']:
                     self.agent_episode_data[agent_id]['component_rewards'][component_name] = []
+                self.agent_episode_data[agent_id]['component_rewards'][component_name].append(reward_value)
 
-                # Store the accumulated sum for this completed episode
-                self.agent_episode_data[agent_id]['component_rewards'][component_name].append(accumulated_values[env_idx].item())
+                # Split by outcome (only if enabled and terminated)
+                if self.track_rewards_by_outcome and is_termination:
+                    if is_success:
+                        if component_name not in self.agent_episode_data[agent_id]['component_rewards_success']:
+                            self.agent_episode_data[agent_id]['component_rewards_success'][component_name] = []
+                        self.agent_episode_data[agent_id]['component_rewards_success'][component_name].append(reward_value)
+                    else:
+                        if component_name not in self.agent_episode_data[agent_id]['component_rewards_failure']:
+                            self.agent_episode_data[agent_id]['component_rewards_failure'][component_name] = []
+                        self.agent_episode_data[agent_id]['component_rewards_failure'][component_name].append(reward_value)
 
     def _send_aggregated_episode_metrics(self):
         """Send aggregated episode metrics for all agents."""
@@ -503,6 +539,20 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
                     agent_metrics[f'Rewards/{component_name}'] = torch.tensor([mean_component], dtype=torch.float32)
                     agent_metrics[f'Rewards/{component_name}_std'] = torch.tensor([std_component], dtype=torch.float32)
 
+            # Add success/failure split metrics
+            if self.track_rewards_by_outcome:
+                # Success rewards
+                for component_name, component_values in agent_data['component_rewards_success'].items():
+                    if component_values:
+                        mean_success = sum(component_values) / len(component_values)
+                        agent_metrics[f'Reward(success)/{component_name}'] = torch.tensor([mean_success], dtype=torch.float32)
+
+                # Failure rewards
+                for component_name, component_values in agent_data['component_rewards_failure'].items():
+                    if component_values:
+                        mean_failure = sum(component_values) / len(component_values)
+                        agent_metrics[f'Reward(failure)/{component_name}'] = torch.tensor([mean_failure], dtype=torch.float32)
+
             # Send directly to the specific agent's tracker
             self.trackers[agent_id].add_metrics(agent_metrics)
 
@@ -515,6 +565,12 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             # Clear component rewards for this agent
             for component_key in agent_data['component_rewards']:
                 agent_data['component_rewards'][component_key].clear()
+            # Clear success/failure tracking
+            if self.track_rewards_by_outcome:
+                for component_key in agent_data['component_rewards_success']:
+                    agent_data['component_rewards_success'][component_key].clear()
+                for component_key in agent_data['component_rewards_failure']:
+                    agent_data['component_rewards_failure'][component_key].clear()
 
     def _split_by_agent(self, metrics: Dict[str, torch.Tensor], tracker_method_name: str):
         """Split metrics by agent based on vector length and call specified tracker method."""

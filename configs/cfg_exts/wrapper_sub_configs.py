@@ -68,6 +68,7 @@ class WandbLoggingConfig:
     wandb_name: Optional[str] = None
     wandb_group: Optional[str] = None
     wandb_tags: List[str] = field(default_factory=list)
+    track_rewards_by_outcome: bool = False  # If True, split component rewards by success/failure
 
 
 @dataclass
