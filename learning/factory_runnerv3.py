@@ -16,6 +16,7 @@ parser.add_argument("--task", type=str, default=None, help="Name of the task (de
 parser.add_argument("--seed", type=int, default=-1, help="Random seed for reproducibility (-1 for random)")
 parser.add_argument("--override", action="append", help="Override config values: key=value")
 parser.add_argument("--manual-control", action="store_true", help="Enable manual control mode with visualization")
+parser.add_argument("--eval_tag", type=str, default=None, help="Evaluation tag for tracking training runs (overrides auto-generated timestamp tag)")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -168,7 +169,7 @@ def main(
     print(configs['experiment'].tags)
 
     # create agent specific configs
-    lUtils.define_agent_configs(configs)
+    lUtils.define_agent_configs(configs, eval_tag=args_cli.eval_tag)
 
     # Should not matter but removes annoying warning message
     configs["environment"].sim.render_interval = configs["primary"].decimation

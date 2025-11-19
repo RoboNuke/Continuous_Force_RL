@@ -198,7 +198,7 @@ def add_wandb_tracking_tags(configs):
         configs['experiment'].tags.append('basic-agent')
 
 
-def define_agent_configs(configs):
+def define_agent_configs(configs, eval_tag=None):
     configs['agent'].write_interval = configs['primary'].rollout_steps(configs['environment'].episode_length_s) #max rollouts
     configs['agent'].checkpoint_interval = configs['agent'].checkpoint_interval_multiplier * configs['agent'].write_interval
 
@@ -241,8 +241,11 @@ def define_agent_configs(configs):
 
             # Generate timestamp tag for evaluation discovery
             from datetime import datetime
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H:%M")
-            experiment_tag = f"{configs['experiment'].group}:{timestamp}"
+            if eval_tag is not None:
+                experiment_tag = eval_tag
+            else:
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H:%M")
+                experiment_tag = f"{configs['experiment'].group}:{timestamp}"
 
             # Add experiment tag to the tags list
             wandb_kwargs["tags"] = wandb_kwargs["tags"] + [experiment_tag]

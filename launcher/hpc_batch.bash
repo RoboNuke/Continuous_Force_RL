@@ -12,6 +12,7 @@
 CONFIG_PATH=$1
 EXPERIMENT_TAG=$2
 OVERRIDES=$3
+EVAL_TAG=$4
 
 echo "=== HPC Batch Script Started ==="
 echo "Job Name: $SLURM_JOB_NAME"
@@ -19,6 +20,7 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Config Path: $CONFIG_PATH"
 echo "Experiment Tag: $EXPERIMENT_TAG"
 echo "Overrides: $OVERRIDES"
+echo "Eval Tag: $EVAL_TAG"
 echo ""
 
 # Create log directory if it doesn't exist
@@ -45,6 +47,11 @@ if [[ -n "$OVERRIDES" ]]; then
     for override in "${OVERRIDE_ARRAY[@]}"; do
         python_cmd="$python_cmd --override $override"
     done
+fi
+
+# Add eval_tag if provided
+if [[ -n "$EVAL_TAG" ]]; then
+    python_cmd="$python_cmd --eval_tag \"$EVAL_TAG\""
 fi
 
 # Add headless flag
