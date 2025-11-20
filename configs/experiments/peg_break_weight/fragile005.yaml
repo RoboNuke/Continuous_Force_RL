@@ -31,4 +31,4 @@ environment:
 experiment:
   name: "pRewComp_fragile005"
   tags: ['fragile_weight_test']
-  group: "pRewComp_fragile005
+  group: "pRewComp_fragile005"
