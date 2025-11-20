@@ -32,7 +32,7 @@ def parse_arguments():
     # Optional arguments
     parser.add_argument("--entity", type=str, default="hur",
                         help="WandB entity (username or team name)")
-    parser.add_argument("--project", type=str, default="Voltron_Baseline",
+    parser.add_argument("--project", type=str, default="Peg_in_Hole",
                         help="WandB project name")
     parser.add_argument("--run_id", type=str, default=None,
                         help="Specific run ID to evaluate (if not provided, evaluates all runs with tag)")
