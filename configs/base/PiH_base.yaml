@@ -149,7 +149,7 @@ wrappers:
   efficient_reset:
     enabled: true
     terminate_on_success: false  # If true, episodes terminate immediately upon success
-    success_bonus: 0.0  # Total reward on success (base env gives +1, wrapper adjusts to this total)
+    success_bonus: 1.0  # Total reward on success (base env gives +1, wrapper adjusts to this total)
     use_remaining_steps_bonus: false  # If true, bonus = max_episode_length - steps_taken (overrides success_bonus)
 
   # Spawn height curriculum learning
@@ -230,7 +230,7 @@ wrappers:
     height_threshold_fraction: 0.9  # Fraction of fixed asset height (engage_threshold)
 
   two_stage_keypoint_reward:
-    enabled: true
+    enabled: false
     xy_threshold: 0.0025
 
   # Force reward system with 8 reward functions

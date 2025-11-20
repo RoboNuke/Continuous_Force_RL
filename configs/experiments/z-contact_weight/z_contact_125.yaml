@@ -1,0 +1,39 @@
+# Hybrid Agent Control Experiment Configuration 
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+
+primary:
+  agents_per_break_force: 5 # Number of agents per break force condition
+  num_envs_per_agent: 256   # Environments per individual agent
+  max_steps: 3000064 #25000192
+  break_forces: [10]  # Break force conditions (-1 = unbreakable)
+  seed: 42
+
+# Model configuration for hybrid agent
+model:
+  use_hybrid_agent: false
+
+# Enable hybrid control wrapper and related systems
+wrappers:
+  fragile_objects:
+    enabled: true
+    peg_break_rew: 0.0
+
+  force_reward:
+    enabled: true
+    enable_contact_reward: true
+    contact_reward_weight: 1.25
+
+environment:
+  # OBSERVATION RANDOMIZATION CONFIGURATION
+  obs_rand:
+    fixed_asset_pos: [0.001, 0.001, 0.001]  # 1mm position noise (default from IsaacLab)
+    ee_pos: [0.00025, 0.00025, 0.00025]
+    force_torque: [1.0, 1.0, 1.0, 0.2, 0.2, 0.2]  # Force (N) and Torque (Nm) noise - applied per step
+    
+# Experiment metadata
+experiment:
+  name: "pRewComp_zCon_125"
+  tags: ['pose_rew_comp_test']
+  group: "pRewComp_zCon_125"
