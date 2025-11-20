@@ -22,7 +22,7 @@ wrappers:
 
   efficient_reset:
     enabled: true
-    terminate_on_success: true  # If true, episodes terminate immediately upon success
+    terminate_on_success: false  # If true, episodes terminate immediately upon success
     success_bonus: 1.0  # Total reward on success (base env gives +1, wrapper adjusts to this total)
     use_remaining_steps_bonus: false
 
