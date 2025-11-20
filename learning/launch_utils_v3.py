@@ -46,9 +46,9 @@ def apply_wrappers(env, configs):
             config=wrappers_config.fragile_objects
         )
 
-    if wrappers_config.efficient_reset_enabled:
-        print("  - Applying Efficient Reset Wrapper")
-        env = EfficientResetWrapper(env)
+    if wrappers_config.efficient_reset.enabled:
+        print(f"  - Applying Efficient Reset Wrapper (terminate_on_success={wrappers_config.efficient_reset.terminate_on_success})")
+        env = EfficientResetWrapper(env, config=wrappers_config.efficient_reset)
 
     if wrappers_config.dynamics_randomization.enabled:
         print("  - Applying Dynamics Randomization Wrapper")

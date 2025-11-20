@@ -219,3 +219,12 @@ class DynamicsRandomizationConfig:
 
     randomize_torque_bounds: bool = False
     torque_bounds_range: List[float] = field(default_factory=lambda: [0.4, 0.6])
+
+
+@dataclass
+class EfficientResetConfig:
+    """Efficient reset wrapper configuration."""
+    enabled: bool = True
+    terminate_on_success: bool = False  # Terminate episodes immediately upon success
+    success_bonus: float = 0.0  # Total reward to give on success (base env gives +1, wrapper adjusts to this total)
+    use_remaining_steps_bonus: bool = False  # If true, bonus = max_episode_length - steps_taken (overrides success_bonus)

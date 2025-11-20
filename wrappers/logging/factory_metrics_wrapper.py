@@ -553,7 +553,8 @@ class FactoryMetricsWrapper(gym.Wrapper):
 
                 # All environments that hit max_steps are completed episodes
                 episode_lengths = getattr(self.unwrapped, 'episode_length_buf', torch.zeros(self.num_envs, device=self.device, dtype=torch.long))
-                max_step_mask = episode_lengths == self.max_episode_length
+                # Use >= (max - 1) to handle 0-indexed episode counting (episodes complete at step 149 for max_length=150)
+                max_step_mask = episode_lengths >= (self.max_episode_length - 1)
                 max_step_env_ids = max_step_mask.nonzero(as_tuple=False).squeeze(-1).tolist()
 
 

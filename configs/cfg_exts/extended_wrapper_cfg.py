@@ -15,7 +15,7 @@ from .wrapper_sub_configs import (
     FragileObjectConfig, ObsManagerConfig, FactoryMetricsConfig,
     PoseContactLoggingConfig, MisalignmentPenaltyConfig,
     TwoStageKeypointRewardConfig, CurriculumConfig, ManualControlConfig,
-    DynamicsRandomizationConfig
+    DynamicsRandomizationConfig, EfficientResetConfig
 )
 
 # Get configclass decorator with version compatibility
@@ -81,8 +81,8 @@ class ExtendedWrapperConfig:
     dynamics_randomization: DynamicsRandomizationConfig = field(default_factory=DynamicsRandomizationConfig)
     """Dynamics randomization wrapper configuration"""
 
-    efficient_reset_enabled: bool = field(default=True)
-    """Enable efficient environment resetting"""
+    efficient_reset: EfficientResetConfig = field(default_factory=EfficientResetConfig)
+    """Efficient reset wrapper configuration"""
 
     def apply_primary_cfg(self, primary_cfg) -> None:
         """

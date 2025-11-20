@@ -22,14 +22,29 @@ class EfficientResetWrapper(gym.Wrapper):
     - Maintains scene state consistency
     """
 
-    def __init__(self, env):
+    def __init__(self, env, config=None):
         """
         Initialize the efficient reset wrapper.
 
         Args:
             env: Base environment to wrap
+            config: EfficientResetConfig instance or dict with configuration parameters
         """
         super().__init__(env)
+
+        # Parse configuration
+        if config is None:
+            self.terminate_on_success = False
+            self.success_bonus = 0.0
+            self.use_remaining_steps_bonus = False
+        elif isinstance(config, dict):
+            self.terminate_on_success = config.get('terminate_on_success', False)
+            self.success_bonus = config.get('success_bonus', 0.0)
+            self.use_remaining_steps_bonus = config.get('use_remaining_steps_bonus', False)
+        else:
+            self.terminate_on_success = getattr(config, 'terminate_on_success', False)
+            self.success_bonus = getattr(config, 'success_bonus', 0.0)
+            self.use_remaining_steps_bonus = getattr(config, 'use_remaining_steps_bonus', False)
 
         # State management
         self.start_state = None
@@ -38,6 +53,10 @@ class EfficientResetWrapper(gym.Wrapper):
         # Store original methods
         self._original_factory_reset_idx = None
         self._directrl_reset_idx = None
+        self._original_get_rewards = None
+
+        # Initialize tracking for success terminations (used for reward bonus)
+        self._curr_success_terminations = None
 
         # Initialize wrapper if environment is ready
         if hasattr(self.unwrapped, 'scene'):
@@ -58,12 +77,26 @@ class EfficientResetWrapper(gym.Wrapper):
 
             # Override with our wrapper method
             self.unwrapped._reset_idx = self._wrapped_reset_idx
-        
+
+
         # Store and override _get_dones method
         if hasattr(self.unwrapped, '_get_dones'):
             self._original_get_dones = self.unwrapped._get_dones
             self.unwrapped._get_dones = self._wrapped_get_dones
 
+        # Store and override _get_rewards method for success bonus
+        if hasattr(self.unwrapped, '_get_rewards'):
+            self._original_get_rewards = self.unwrapped._get_rewards
+            self.unwrapped._get_rewards = self._wrapped_get_rewards
+        
+        # Initialize success termination tracker
+        if hasattr(self.unwrapped, 'num_envs') and hasattr(self.unwrapped, 'device'):
+            self._curr_success_terminations = torch.zeros(
+                self.unwrapped.num_envs,
+                dtype=torch.float32,
+                device=self.unwrapped.device
+            )
+        
         self._wrapper_initialized = True
 
     def _find_directrlenv_reset_method(self):
@@ -105,12 +138,102 @@ class EfficientResetWrapper(gym.Wrapper):
         return self.unwrapped._reset_idx
     
     def _wrapped_get_dones(self):
-        """Make sure that every max_episode_length we reset all envs so we don't overfit."""
+        """Check for termination including success-based termination if enabled."""
+        # Get base termination conditions
         term, time_out = self._original_get_dones()
+
+        # Force periodic full resets to prevent overfitting
         if self.unwrapped.common_step_counter > 1:
-            time_out = torch.ones_like(self.unwrapped.episode_length_buf) * ((self.unwrapped.common_step_counter % self.unwrapped.max_episode_length ) ==0)
+            time_out = torch.ones_like(self.unwrapped.episode_length_buf) * (
+                (self.unwrapped.common_step_counter % self.unwrapped.max_episode_length) == 0
+            )
+
+        # Reset success termination tracker
+        if self._curr_success_terminations is not None:
+            self._curr_success_terminations.zero_()
+
+        # Add success-based termination if enabled
+        if self.terminate_on_success:
+            if hasattr(self.unwrapped, '_get_curr_successes') and hasattr(self.unwrapped, 'cfg_task'):
+                if hasattr(self.unwrapped.cfg_task, 'success_threshold'):
+                    success_threshold = self.unwrapped.cfg_task.success_threshold
+                    # Check rotation for nut_thread task only
+                    check_rot = getattr(self.unwrapped.cfg_task, 'name', '') == "nut_thread"
+                    curr_successes = self.unwrapped._get_curr_successes(success_threshold, check_rot)
+
+                    # Track which environments are terminating due to success (for reward bonus)
+                    # Only mark as success termination if it wasn't already terminated
+                    new_success_terminations = torch.logical_and(curr_successes, torch.logical_not(term))
+                    if self._curr_success_terminations is not None:
+                        self._curr_success_terminations[new_success_terminations] = 1.0
+
+                    # Terminate episodes that have succeeded
+                    term = torch.logical_or(term, curr_successes)
+
         return term, time_out
-    
+
+    def _wrapped_get_rewards(self):
+        """
+        Calculate rewards including success bonus if applicable.
+
+        The base environment already gives +1 reward when success occurs.
+        This wrapper adjusts the reward so the total equals success_bonus.
+        For example, if success_bonus=10 and base gives +1, wrapper adds +9.
+
+        If use_remaining_steps_bonus is enabled, the bonus is calculated as:
+        max_episode_length - current_episode_length, rewarding earlier successes more.
+        """
+        # Get base rewards
+        if self._original_get_rewards:
+            base_rewards = self._original_get_rewards()
+        else:
+            # Fallback if original method doesn't exist
+            base_rewards = torch.zeros(self.unwrapped.num_envs, dtype=torch.float32, device=self.unwrapped.device)
+
+        # Add adjusted success bonus if enabled
+        # Base environment gives +1 on success, so we add (success_bonus - 1) to reach the target
+        if self.terminate_on_success and self._curr_success_terminations is not None:
+            # Determine the bonus amount
+            if self.use_remaining_steps_bonus:
+                # Calculate remaining steps for each environment
+                if hasattr(self.unwrapped, 'episode_length_buf') and hasattr(self.unwrapped, 'max_episode_length'):
+                    current_steps = self.unwrapped.episode_length_buf.float()
+                    max_steps = float(self.unwrapped.max_episode_length)
+                    remaining_steps = max_steps - current_steps
+                    # Bonus is remaining steps (total reward = remaining_steps, adjustment = remaining_steps - 1)
+                    adjustment = remaining_steps - 1.0
+                else:
+                    # Fallback if episode length info not available
+                    adjustment = torch.zeros_like(base_rewards)
+            elif self.success_bonus > 0:
+                # Use fixed success_bonus
+                # Adjustment: success_bonus - 1 (since base env already gives +1)
+                adjustment = self.success_bonus - 1.0
+            else:
+                # No bonus
+                adjustment = 0.0
+
+            # Apply adjustment only to environments that terminated due to success
+            if isinstance(adjustment, torch.Tensor):
+                base_rewards = base_rewards + self._curr_success_terminations * adjustment
+            else:
+                base_rewards = base_rewards + self._curr_success_terminations * adjustment
+
+            # Update component reward to reflect actual bonus contribution
+            if hasattr(self.unwrapped, 'extras') and 'logs_rew_curr_successes' in self.unwrapped.extras:
+                if isinstance(adjustment, torch.Tensor):
+                    self.unwrapped.extras['logs_rew_curr_successes'] = (
+                        self.unwrapped.extras['logs_rew_curr_successes'] +
+                        self._curr_success_terminations * adjustment
+                    )
+                else:
+                    self.unwrapped.extras['logs_rew_curr_successes'] = (
+                        self.unwrapped.extras['logs_rew_curr_successes'] +
+                        self._curr_success_terminations * adjustment
+                    )
+
+        return base_rewards
+
     def _wrapped_reset_idx(self, env_ids):
         """
         Reset specified environments efficiently using state shuffling.

@@ -55,4 +55,8 @@ wrappers:
   fragile_objects:
     enabled: false
 
-  efficient_reset_enabled: false
+  efficient_reset:
+    enabled: false
+    terminate_on_success: false
+    success_bonus: 0.0
+    use_remaining_steps_bonus: false

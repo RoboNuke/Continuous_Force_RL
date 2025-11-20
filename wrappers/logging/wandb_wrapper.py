@@ -410,7 +410,8 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
                 'terminations': [],
                 'component_rewards': {},  # Will store component reward lists dynamically
                 'component_rewards_success': {},  # Component rewards for successful episodes
-                'component_rewards_failure': {}  # Component rewards for failed episodes
+                'component_rewards_failure': {},  # Component rewards for failed episodes
+                'component_rewards_timeout': {}  # Component rewards for timed-out episodes
             }
 
         # Component reward tracking
@@ -478,11 +479,6 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             # Add termination tracking - 1.0 if termination, 0.0 if timeout
             self.agent_episode_data[agent_id]['terminations'].append(1.0 if is_termination else 0.0)
 
-            # Determine success/failure for this episode
-            is_success = False
-            if self.track_rewards_by_outcome and is_termination and factory_metrics_wrapper is not None:
-                is_success = factory_metrics_wrapper.ep_succeeded[env_idx].item()
-
             # Store component reward episode sums
             for component_name, accumulated_values in self.current_component_rewards.items():
                 reward_value = accumulated_values[env_idx].item()
@@ -492,16 +488,29 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
                     self.agent_episode_data[agent_id]['component_rewards'][component_name] = []
                 self.agent_episode_data[agent_id]['component_rewards'][component_name].append(reward_value)
 
-                # Split by outcome (only if enabled and terminated)
-                if self.track_rewards_by_outcome and is_termination:
-                    if is_success:
-                        if component_name not in self.agent_episode_data[agent_id]['component_rewards_success']:
-                            self.agent_episode_data[agent_id]['component_rewards_success'][component_name] = []
-                        self.agent_episode_data[agent_id]['component_rewards_success'][component_name].append(reward_value)
+                # Split by outcome (success/failure/timeout)
+                if self.track_rewards_by_outcome:
+                    if is_termination:
+                        # Episode terminated early - check if success or failure
+                        is_success = False
+                        if factory_metrics_wrapper is not None:
+                            is_success = factory_metrics_wrapper.ep_succeeded[env_idx].item()
+
+                        if is_success:
+                            # Successful termination
+                            if component_name not in self.agent_episode_data[agent_id]['component_rewards_success']:
+                                self.agent_episode_data[agent_id]['component_rewards_success'][component_name] = []
+                            self.agent_episode_data[agent_id]['component_rewards_success'][component_name].append(reward_value)
+                        else:
+                            # Failed termination (peg break, etc.)
+                            if component_name not in self.agent_episode_data[agent_id]['component_rewards_failure']:
+                                self.agent_episode_data[agent_id]['component_rewards_failure'][component_name] = []
+                            self.agent_episode_data[agent_id]['component_rewards_failure'][component_name].append(reward_value)
                     else:
-                        if component_name not in self.agent_episode_data[agent_id]['component_rewards_failure']:
-                            self.agent_episode_data[agent_id]['component_rewards_failure'][component_name] = []
-                        self.agent_episode_data[agent_id]['component_rewards_failure'][component_name].append(reward_value)
+                        # Episode timed out (hit max_episode_length)
+                        if component_name not in self.agent_episode_data[agent_id]['component_rewards_timeout']:
+                            self.agent_episode_data[agent_id]['component_rewards_timeout'][component_name] = []
+                        self.agent_episode_data[agent_id]['component_rewards_timeout'][component_name].append(reward_value)
 
     def _send_aggregated_episode_metrics(self):
         """Send aggregated episode metrics for all agents."""
@@ -539,7 +548,7 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
                     agent_metrics[f'Rewards/{component_name}'] = torch.tensor([mean_component], dtype=torch.float32)
                     agent_metrics[f'Rewards/{component_name}_std'] = torch.tensor([std_component], dtype=torch.float32)
 
-            # Add success/failure split metrics
+            # Add success/failure/timeout split metrics
             if self.track_rewards_by_outcome:
                 # Success rewards
                 for component_name, component_values in agent_data['component_rewards_success'].items():
@@ -553,6 +562,12 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
                         mean_failure = sum(component_values) / len(component_values)
                         agent_metrics[f'Reward(failure)/{component_name}'] = torch.tensor([mean_failure], dtype=torch.float32)
 
+                # Timeout rewards
+                for component_name, component_values in agent_data['component_rewards_timeout'].items():
+                    if component_values:
+                        mean_timeout = sum(component_values) / len(component_values)
+                        agent_metrics[f'Reward(timeout)/{component_name}'] = torch.tensor([mean_timeout], dtype=torch.float32)
+
             # Send directly to the specific agent's tracker
             self.trackers[agent_id].add_metrics(agent_metrics)
 
@@ -565,12 +580,14 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             # Clear component rewards for this agent
             for component_key in agent_data['component_rewards']:
                 agent_data['component_rewards'][component_key].clear()
-            # Clear success/failure tracking
+            # Clear success/failure/timeout tracking
             if self.track_rewards_by_outcome:
                 for component_key in agent_data['component_rewards_success']:
                     agent_data['component_rewards_success'][component_key].clear()
                 for component_key in agent_data['component_rewards_failure']:
                     agent_data['component_rewards_failure'][component_key].clear()
+                for component_key in agent_data['component_rewards_timeout']:
+                    agent_data['component_rewards_timeout'][component_key].clear()
 
     def _split_by_agent(self, metrics: Dict[str, torch.Tensor], tracker_method_name: str):
         """Split metrics by agent based on vector length and call specified tracker method."""
@@ -792,9 +809,9 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
                 # Full reset - all environments hit max_steps
                 # All environments that hit max_steps are completed episodes
                 episode_lengths = getattr(self.unwrapped, 'episode_length_buf', torch.zeros(self.num_envs, device=self.device, dtype=torch.long))
-                max_step_mask = episode_lengths >= self.max_episode_length
-                max_step_env_ids = max_step_mask.nonzero(as_tuple=False).squeeze(-1).tolist()
-
+                # Use >= (max - 1) to handle 0-indexed episode counting (episodes complete at step 149 for max_length=150)
+                max_step_mask = episode_lengths >= (self.max_episode_length - 1)
+                #max_step_env_ids = max_step_mask.nonzero(as_tuple=False).squeeze(-1).tolist()
 
                 if torch.any(max_step_mask):
                     self._store_completed_episodes(max_step_mask, is_termination=False)
@@ -804,7 +821,7 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
                 self._reset_all_tracking_variables()
             else:
                 # Partial reset - these environments terminated
-                env_ids_list = env_ids.tolist() if isinstance(env_ids, torch.Tensor) else env_ids
+                #env_ids_list = env_ids.tolist() if isinstance(env_ids, torch.Tensor) else env_ids
 
                 # Store all environments in env_ids as completed episodes (these are terminations)
                 completed_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
@@ -849,6 +866,14 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             # Clear component rewards for this agent
             for component_key in agent_data['component_rewards']:
                 agent_data['component_rewards'][component_key].clear()
+            # Clear success/failure/timeout tracking
+            if self.track_rewards_by_outcome:
+                for component_key in agent_data.get('component_rewards_success', {}):
+                    agent_data['component_rewards_success'][component_key].clear()
+                for component_key in agent_data.get('component_rewards_failure', {}):
+                    agent_data['component_rewards_failure'][component_key].clear()
+                for component_key in agent_data.get('component_rewards_timeout', {}):
+                    agent_data['component_rewards_timeout'][component_key].clear()
 
     def close(self):
         """Close all wandb runs."""
