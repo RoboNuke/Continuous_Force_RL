@@ -47,6 +47,6 @@ environment:
     
 # Experiment metadata
 experiment:
-  name: "pRewComp_fragile"
+  name: "pRewComp_noSuc_fragile"
   tags: ['pose_rew_comp_test']
-  group: "pRewComp_fragile"
+  group: "pRewComp_noSuc_fragile"
