@@ -24,6 +24,6 @@ wrappers:
     enabled: true
 # Experiment metadata
 experiment:
-  name: "ideal_pose"
-  tags: ['ideal']
-  group: "ideal_pose"
+  name: "ideal_curr_pose"
+  tags: ['ideal_curr','ideal']
+  group: "ideal_curr_pose"

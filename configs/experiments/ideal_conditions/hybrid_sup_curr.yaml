@@ -43,6 +43,6 @@ environment:
     
 # Experiment metadata
 experiment:
-  name: "ideal_LCLoP"
-  tags: ['ideal']
-  group: "ideal_LCLoP"
+  name: "ideal_curr_LCLoP"
+  tags: ['ideal_curr','ideal']
+  group: "ideal_curr_LCLoP"

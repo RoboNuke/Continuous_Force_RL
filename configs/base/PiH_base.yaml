@@ -235,7 +235,7 @@ wrappers:
 
   # Force reward system with 8 reward functions
   force_reward:
-    enabled: false
+    enabled: true
     contact_force_threshold: 1.0 # not used anymore
     contact_window_size: 10
 
