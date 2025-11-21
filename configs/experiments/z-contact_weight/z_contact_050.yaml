@@ -36,4 +36,4 @@ environment:
 experiment:
   name: "pRewComp_zCon_05"
   tags: ['pose_rew_comp_test']
-  group: "pRewComp_zCon_05
+  group: "pRewComp_zCon_05"
