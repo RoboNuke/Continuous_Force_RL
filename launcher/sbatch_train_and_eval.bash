@@ -1,15 +1,15 @@
 #!/bin/bash
 
 # Combined Training + Eval Launch Script for HPC
-# Usage: ./launcher/sbatch_train_and_eval.bash --configs "config1 config2" --experiment_tag "EXP_TAG" [--overrides "key=value"] [--video/--no-video]
-# Or:    ./launcher/sbatch_train_and_eval.bash --folder "folder_name" --experiment_tag "EXP_TAG" [--overrides "key=value"] [--video/--no-video]
+# Usage: ./launcher/sbatch_train_and_eval.bash --configs "config1 config2" --experiment_tag "EXP_TAG" [--overrides "key=value"] [--no-video]
+# Or:    ./launcher/sbatch_train_and_eval.bash --folder "folder_name" --experiment_tag "EXP_TAG" [--overrides "key=value"] [--no-video]
 
 # Default values
 CONFIGS=""
 FOLDER=""
 EXPERIMENT_TAG=""
 OVERRIDES=""
-VIDEO_ENABLED="false"
+VIDEO_ENABLED="true"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -30,18 +30,14 @@ while [[ $# -gt 0 ]]; do
             OVERRIDES="$2"
             shift 2
             ;;
-        --video)
-            VIDEO_ENABLED="true"
-            shift 1
-            ;;
         --no-video)
             VIDEO_ENABLED="false"
             shift 1
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 --configs \"config1 config2\" --experiment_tag EXP_TAG [--overrides \"key=value\"] [--video/--no-video]"
-            echo "   Or: $0 --folder \"folder_name\" --experiment_tag EXP_TAG [--overrides \"key=value\"] [--video/--no-video]"
+            echo "Usage: $0 --configs \"config1 config2\" --experiment_tag EXP_TAG [--overrides \"key=value\"] [--no-video]"
+            echo "   Or: $0 --folder \"folder_name\" --experiment_tag EXP_TAG [--overrides \"key=value\"] [--no-video]"
             exit 1
             ;;
     esac
@@ -50,22 +46,22 @@ done
 # Validate required arguments
 if [[ -n "$CONFIGS" && -n "$FOLDER" ]]; then
     echo "Error: --configs and --folder are mutually exclusive. Use one or the other."
-    echo "Usage: $0 --configs \"config1 config2\" --experiment_tag EXP_TAG [--overrides \"key=value\"] [--video/--no-video]"
-    echo "   Or: $0 --folder \"folder_name\" --experiment_tag EXP_TAG [--overrides \"key=value\"] [--video/--no-video]"
+    echo "Usage: $0 --configs \"config1 config2\" --experiment_tag EXP_TAG [--overrides \"key=value\"] [--no-video]"
+    echo "   Or: $0 --folder \"folder_name\" --experiment_tag EXP_TAG [--overrides \"key=value\"] [--no-video]"
     exit 1
 fi
 
 if [[ -z "$CONFIGS" && -z "$FOLDER" ]]; then
     echo "Error: Either --configs or --folder is required"
-    echo "Usage: $0 --configs \"config1 config2\" --experiment_tag EXP_TAG [--overrides \"key=value\"] [--video/--no-video]"
-    echo "   Or: $0 --folder \"folder_name\" --experiment_tag EXP_TAG [--overrides \"key=value\"] [--video/--no-video]"
+    echo "Usage: $0 --configs \"config1 config2\" --experiment_tag EXP_TAG [--overrides \"key=value\"] [--no-video]"
+    echo "   Or: $0 --folder \"folder_name\" --experiment_tag EXP_TAG [--overrides \"key=value\"] [--no-video]"
     exit 1
 fi
 
 if [[ -z "$EXPERIMENT_TAG" ]]; then
     echo "Error: --experiment_tag is required"
-    echo "Usage: $0 --configs \"config1 config2\" --experiment_tag EXP_TAG [--overrides \"key=value\"] [--video/--no-video]"
-    echo "   Or: $0 --folder \"folder_name\" --experiment_tag EXP_TAG [--overrides \"key=value\"] [--video/--no-video]"
+    echo "Usage: $0 --configs \"config1 config2\" --experiment_tag EXP_TAG [--overrides \"key=value\"] [--no-video]"
+    echo "   Or: $0 --folder \"folder_name\" --experiment_tag EXP_TAG [--overrides \"key=value\"] [--no-video]"
     exit 1
 fi
 
