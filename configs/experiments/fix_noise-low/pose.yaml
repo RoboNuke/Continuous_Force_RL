@@ -1,0 +1,22 @@
+# Hybrid Agent Control Experiment Configuration 
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+
+primary:
+  max_steps: 3000064 #25000192
+
+# Model configuration for hybrid agent
+model:
+  use_hybrid_agent: false
+
+environment:
+  # OBSERVATION RANDOMIZATION CONFIGURATION
+  obs_rand:
+    fixed_asset_pos: [0.001, 0.001, 0.001]  # 1mm position noise (default from IsaacLab)
+    
+# Experiment metadata
+experiment:
+  name: "pose_lowFixedNoise"
+  tags: ['lowFixedNoise','ft_noise','ee_pos_noise']
+  group: "pose_lowFixedNoise"
