@@ -99,6 +99,7 @@ model:
   # Hybrid agent specific parameters
   hybrid_agent:
     ctrl_torque: false  # Match primary.ctrl_torque
+    full_clop: false
     unit_std_init: false
     unit_factor_std_init: 1.0
     pos_init_std: 1.0

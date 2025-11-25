@@ -1,0 +1,43 @@
+# Hybrid Agent Control Experiment Configuration 
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+
+primary:
+  max_steps: 3000064 #25000192
+
+# Model configuration for hybrid agent
+model:
+  use_hybrid_agent: true
+  hybrid_agent:
+    force_init_std: 0.1 # implies a 96% range [-2.5, 2.5] 
+
+# Enable hybrid control wrapper and related systems
+wrappers:
+  # Enable hybrid control wrapper
+  hybrid_control:
+    enabled: true
+    reward_type: "none"
+    use_ground_truth_selection: false
+    
+  pose_contact_logging:
+    enabled: false
+
+agent:
+  supervised_selection_loss_weight: 10.0
+#  policy_learning_rate: 5.0e-4
+#  critic_learning_rate: 1.0e-4
+#  #learning_epochs: 1
+
+environment:
+  # OBSERVATION RANDOMIZATION CONFIGURATION
+  obs_rand:
+    fixed_asset_pos: [0.0, 0.0, 0.0]  # 1mm position noise (default from IsaacLab)
+    ee_pos: [0.0, 0.0, 0.0]
+    force_torque: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # Force (N) and Torque (Nm) noise - applied per step
+    
+# Experiment metadata
+experiment:
+  name: "ideal_LCLoP_sup10x"
+  tags: ['ideal']
+  group: "ideal_LCLoP_sup10x"
