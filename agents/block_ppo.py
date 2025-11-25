@@ -662,6 +662,10 @@ class BlockPPO(PPO):
         self.memory.set_tensor_by_name("returns", self._value_preprocessor(returns, train=True))
         self.memory.set_tensor_by_name("advantages", advantages)
 
+        # Log batch-level advantage metrics (once per update, before minibatch loop)
+        in_contact = self.memory.get_tensor_by_name("in-contact")
+        self._log_batch_advantage_metrics(advantages, in_contact)
+
         # sample mini-batches from memory
         sampled_batches = self.memory.sample_all(names=self._tensors_names, mini_batches=self._mini_batches)
         sample_size = self._rollouts // self._mini_batches
@@ -1518,12 +1522,12 @@ class BlockPPO(PPO):
                     adv_mean_stat = advantages.mean(dim=(0, 2))  # Shape: (num_agents,)
                     if keep_mask is not None:
                         adv_mean_stat[~keep_mask] = float('nan')
-                    stats["Advantage/Mean"] = adv_mean_stat
+                    stats["Advantage/Minibatch_Mean"] = adv_mean_stat
 
                     adv_std_stat = advantages.std(dim=(0, 2))  # Shape: (num_agents,)
                     if keep_mask is not None:
                         adv_std_stat[~keep_mask] = float('nan')
-                    stats["Advantage/Std_Dev"] = adv_std_stat
+                    stats["Advantage/Minibatch_Std"] = adv_std_stat
 
                     # Vectorized skewness calculation
                     adv_mean = advantages.mean(dim=(0, 2), keepdim=True)  # Shape: (1, num_agents, 1)
@@ -1532,7 +1536,7 @@ class BlockPPO(PPO):
                     adv_skew = (adv_centered ** 3).mean(dim=(0, 2)) / (adv_std.squeeze() ** 3)  # Shape: (num_agents,)
                     if keep_mask is not None:
                         adv_skew[~keep_mask] = float('nan')
-                    stats["Advantage/Skew"] = adv_skew
+                    stats["Advantage/Minibatch_Skew"] = adv_skew
 
                 # --- Supervised Selection Loss stats (vectorized) ---
                 if supervised_losses is not None:
@@ -1550,6 +1554,76 @@ class BlockPPO(PPO):
             print(e)
             raise RuntimeError
 
+    def _log_batch_advantage_metrics(self, advantages, in_contact):
+        """Log batch-level advantage metrics including contact-conditioned stats.
+
+        Called once per update before minibatch loop. All metrics are per-agent.
+
+        Args:
+            advantages: Full advantage tensor from memory, shape (memory_size, num_envs, 1)
+            in_contact: Full contact tensor from memory, shape (memory_size, num_envs, force_size)
+        """
+        wrapper = self._get_logging_wrapper()
+        if wrapper is None:
+            return
+
+        with torch.no_grad():
+            # Reshape to (memory_size, num_agents, envs_per_agent)
+            memory_size = advantages.shape[0]
+            adv = advantages.view(memory_size, self.num_agents, self.envs_per_agent)
+            contact = in_contact.view(memory_size, self.num_agents, self.envs_per_agent, -1)
+
+            stats = {}
+
+            # Batch-level stats (per agent)
+            stats['Advantage/Batch_Mean'] = adv.mean(dim=(0, 2))
+            stats['Advantage/Batch_Std'] = adv.std(dim=(0, 2))
+            # Skew calculation
+            adv_mean = adv.mean(dim=(0, 2), keepdim=True)
+            adv_std = adv.std(dim=(0, 2), keepdim=True).clamp(min=1e-8)
+            adv_centered = adv - adv_mean
+            stats['Advantage/Batch_Skew'] = (adv_centered ** 3).mean(dim=(0, 2)) / (adv_std.squeeze() ** 3)
+
+            # Contact masks
+            any_contact = contact.any(dim=-1)  # (memory_size, num_agents, envs_per_agent)
+            no_contact = ~any_contact
+            contact_x = contact[..., 0] > 0.5
+            contact_y = contact[..., 1] > 0.5
+            contact_z = contact[..., 2] > 0.5
+
+            # Helper to compute masked stats per agent
+            def masked_stats(mask, prefix):
+                means = torch.full((self.num_agents,), float('nan'), device=self.device)
+                stds = torch.full((self.num_agents,), float('nan'), device=self.device)
+                skews = torch.full((self.num_agents,), float('nan'), device=self.device)
+
+                for i in range(self.num_agents):
+                    agent_adv = adv[:, i, :]
+                    agent_mask = mask[:, i, :]
+                    masked = agent_adv[agent_mask]
+
+                    if masked.numel() > 1:
+                        m = masked.mean()
+                        s = masked.std().clamp(min=1e-8)
+                        means[i] = m
+                        stds[i] = s
+                        skews[i] = ((masked - m) ** 3).mean() / (s ** 3)
+
+                stats[f'{prefix}_Mean'] = means
+                stats[f'{prefix}_Std'] = stds
+                stats[f'{prefix}_Skew'] = skews
+
+            # Compute all contact-conditioned metrics
+            masked_stats(any_contact, 'Advantage/Any_Contact')
+            masked_stats(no_contact, 'Advantage/No_Contact')
+            masked_stats(contact_x, 'Advantage/Contact_X')
+            masked_stats(~contact_x, 'Advantage/No_Contact_X')
+            masked_stats(contact_y, 'Advantage/Contact_Y')
+            masked_stats(~contact_y, 'Advantage/No_Contact_Y')
+            masked_stats(contact_z, 'Advantage/Contact_Z')
+            masked_stats(~contact_z, 'Advantage/No_Contact_Z')
+
+            wrapper.add_metrics(stats)
 
     def _setup_per_agent_preprocessors(self):
         """Set up per-agent independent preprocessors.
