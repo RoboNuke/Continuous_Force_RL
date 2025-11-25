@@ -5,6 +5,7 @@ from typing import Any, Mapping, Tuple, Union
 from skrl.models.torch import DeterministicMixin, GaussianMixin, Model
 import math
 import torch.nn.functional as F
+from torch.distributions import Normal, Bernoulli, Independent
 
 # -----------------------------
 #  Block Linear Layer
@@ -205,17 +206,21 @@ class BlockSimBaActor(GaussianMixin, Model):
         self.num_agents = num_agents
 
         self.sigma_idx = sigma_idx
-        
+
+        # Compute number of component dimensions (exclude selection terms)
+        # sigma_idx is the count of selection terms, Bernoulli doesn't need std dev
+        num_component_dims = self.num_actions - self.sigma_idx 
+
         self.actor_logstd = nn.ParameterList(
             [
                 nn.Parameter(
-                    torch.ones(1, self.num_actions) * math.log(act_init_std), requires_grad=True
+                    torch.ones(1, num_component_dims) * math.log(act_init_std), requires_grad=True
                 )
                 for _ in range(num_agents)
             ]
         ).to(device)
 
-        print(f"[INFO]: \t\tInit Std Dev:{act_init_std}")
+        print(f"[INFO]: \t\tInit Std Dev:{act_init_std}, num_component_dims:{num_component_dims}")
         for i in range(num_agents):
             self.actor_logstd[i]._agent_id = i
             self.actor_logstd[i]._name=f"logstd_{i}"
@@ -224,50 +229,108 @@ class BlockSimBaActor(GaussianMixin, Model):
             num_agents = self.num_agents,
             obs_dim = self.num_observations,
             hidden_dim = actor_latent,
-            act_dim = self.num_actions + self.sigma_idx,
+            act_dim = self.num_actions,  # No extra outputs - first sigma_idx outputs are selection logits
             device=device,
             num_blocks = actor_n,
             tanh = (self.sigma_idx == 0)
         ).to(device)
 
-        #self.selection_activation = nn.Sigmoid().to(device)
         self.component_activation = nn.Tanh().to(device)
+        if self.sigma_idx > 0:
+            self.selection_activation = nn.Sigmoid().to(device)
 
         with torch.no_grad():
             self.actor_mean.fc_out.weight *= last_layer_scale
             print(f"[INFO]: \t\tScaled model last layer by {last_layer_scale}")
             if sigma_idx > 0:
-                print(f"[INFO]: \t\tSigma Idx={sigma_idx} so last layer bias[:{sigma_idx}] set to -1.1")
-                #self.actor_mean.fc_out.bias[:, :sigma_idx] -= init_sel_bias      
-                # This biases network toward selecting "not force" initially
-                self.actor_mean.fc_out.bias[:, 0:2*sigma_idx:2] -= init_sel_bias  # first of each pair
-                self.actor_mean.fc_out.bias[:, 1:2*sigma_idx:2] += init_sel_bias  # second of each pair
+                print(f"[INFO]: \t\tSigma Idx={sigma_idx} so last layer bias[:{sigma_idx}] -= {init_sel_bias}")
+                # sigma_idx is count of selection terms, single logit per selection
+                self.actor_mean.fc_out.bias[:, :sigma_idx] -= init_sel_bias
 
 
     def act(self, inputs, role):
-        return GaussianMixin.act(self, inputs, role)
+        if self.sigma_idx == 0:
+            return GaussianMixin.act(self, inputs, role)
+
+        # Get mean actions and log_std from compute()
+        mean_actions, log_std, outputs = self.compute(inputs, role)
+
+        # Clamp log_std if configured
+        if self._g_clip_log_std:
+            log_std = torch.clamp(log_std, self._g_log_std_min, self._g_log_std_max)
+
+        # Split into selection probs and component means
+        # sigma_idx is count of selection terms
+        selection_probs = mean_actions[:, :self.sigma_idx]  # Already sigmoid-transformed
+        component_means = mean_actions[:, self.sigma_idx:]
+
+        # Selection: Bernoulli distribution
+        selection_dist = Independent(Bernoulli(probs=selection_probs), 1)
+
+        # Components: Gaussian distribution (only for non-selection dimensions)
+        # log_std has shape (batch, num_components) - no selection std devs needed
+        component_std = log_std.exp()
+        component_dist = Normal(component_means, component_std)
+
+        # Sample
+        selection_samples = selection_dist.sample()
+        component_samples = component_dist.rsample()
+        actions = torch.cat([selection_samples, component_samples], dim=-1)
+
+        # Compute log_prob for taken_actions or sampled actions
+        taken_actions = inputs.get("taken_actions", actions)
+        taken_selections = taken_actions[:, :self.sigma_idx]
+        taken_components = taken_actions[:, self.sigma_idx:]
+
+        # Bernoulli log_prob for selections
+        sel_log_prob = selection_dist.log_prob(taken_selections)  # Shape: (batch,)
+
+        # Gaussian log_prob for components, summed across dimensions
+        comp_log_prob = component_dist.log_prob(taken_components).sum(dim=-1)  # Shape: (batch,)
+
+        # Total log_prob
+        log_prob = sel_log_prob + comp_log_prob
+
+        if log_prob.dim() != actions.dim():
+            log_prob = log_prob.unsqueeze(-1)
+
+        # Store distribution for entropy calculation
+        self._selection_dist = selection_dist
+        self._component_dist = component_dist
+
+        outputs["mean_actions"] = mean_actions
+        return actions, log_prob, outputs
 
     def compute(self, inputs, role):
         num_envs = inputs['states'].size()[0] // self.num_agents
         action_mean = self.actor_mean(inputs['states'][:,:self.num_observations], num_envs)
         if self.sigma_idx > 0:
-            selection_logits  = action_mean[..., :2*self.sigma_idx]
-
-            # Process selection logits: reshape to pairs, softmax, extract first prob
-            selection_logits = selection_logits.view(-1, self.sigma_idx, 2)  # [batch*agents, sigma_idx, 2]
-            selection_probs = F.softmax(selection_logits, dim=-1)[..., 0]  # [batch*agents, sigma_idx]
-
-            components = self.component_activation(action_mean[..., 2*self.sigma_idx:])
-
+            # sigma_idx is count of selection terms
+            selection_logits = action_mean[..., :self.sigma_idx]
+            selection_probs = self.selection_activation(selection_logits)  # Sigmoid
+            components = self.component_activation(action_mean[..., self.sigma_idx:])
             action_mean = torch.cat([selection_probs, components], dim=-1)
-        
+
+        # Build log_std tensor - only for component dimensions (not selections)
         logstds = []
         batch_size = int(action_mean.size()[0] // self.num_agents)
+        num_components = action_mean.size()[1] - self.sigma_idx if self.sigma_idx > 0 else action_mean.size()[1]
         for i, log_std in enumerate(self.actor_logstd):
-            logstds.append(log_std.expand_as( action_mean[i*batch_size:(i+1)*batch_size,:] ))
-        logstds = torch.cat(logstds,dim=0)
+            # log_std has shape (1, num_components), expand to (batch_size, num_components)
+            logstds.append(log_std.expand(batch_size, num_components))
+        logstds = torch.cat(logstds, dim=0)
         return action_mean, logstds, {}
-    
+
+    def get_entropy(self, role=""):
+        if self.sigma_idx == 0:
+            return GaussianMixin.get_entropy(self, role)
+
+        # Combined entropy from both distributions
+        sel_entropy = self._selection_dist.entropy()  # Shape: (batch,)
+        comp_entropy = self._component_dist.entropy().sum(dim=-1)  # Shape: (batch,)
+
+        return (sel_entropy + comp_entropy).unsqueeze(-1)
+
 
 class BlockSimBaCritic(DeterministicMixin, Model):
     def __init__(
