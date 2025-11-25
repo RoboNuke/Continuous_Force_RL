@@ -133,3 +133,6 @@ class ExtendedHybridAgentConfig:
 
     component_head_hidden_dim: int = 128
     """Hidden dimension for separate component head MLPs (pos/rot and force/torque)"""
+
+    full_clop: bool = False
+    """Use full CLoP (soft GMM mixture) instead of LCLoP (hard selection) for log_prob/entropy"""

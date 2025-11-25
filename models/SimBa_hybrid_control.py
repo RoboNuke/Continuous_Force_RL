@@ -137,6 +137,97 @@ class HybridActionGMM(Distribution): #MixtureSameFamily):
     #    log_prob = self.log_prob(samples)
     #    return -(log_prob.exp() * log_prob).mean(dim=0)
 
+class CLoPHybridActionGMM(HybridActionGMM):
+    """
+    CLoP (Continuous Latent over Primitives) variant of the hybrid action distribution.
+
+    Uses soft mixture probabilities for log_prob and entropy calculations:
+    - log_prob: log((1 - sel_prob) * p_pos(x) + sel_prob * p_force(x))
+    - entropy: weighted combination of component entropies
+
+    This differs from HybridActionGMM which uses hard selection based on sampled binary values.
+    """
+    def __init__(
+            self,
+            mixture_distribution: Distribution,
+            component_distribution: Distribution,
+            validate_args: Optional[bool] = None,
+            pos_weight: float = 1.0,
+            rot_weight: float = 1.0,
+            force_weight: float = 1.0,
+            torque_weight: float = 1.0,
+            uniform_rate: float = 0.01,
+            ctrl_torque: bool = False,
+            learn_selection: bool = True
+    ) -> None:
+        super().__init__(mixture_distribution, component_distribution, validate_args,
+                         pos_weight, rot_weight, force_weight, torque_weight,
+                         uniform_rate, ctrl_torque, learn_selection)
+
+    def log_prob(self, action):
+        """
+        Compute log probability using soft GMM mixture.
+
+        For each dimension: p(x) = (1 - sel_prob) * p_pos(x) + sel_prob * p_force(x)
+        Total log_prob = sum(log(p(x))) over all dimensions
+        """
+        batch_size = action.shape[0]
+        pos_rot = action[:, self.force_size:self.force_size+6]  # (batch, 6)
+        force_torque = action[:, self.force_size+6:2*self.force_size+6]  # (batch, force_size)
+
+        # Get continuous selection probabilities from mixture_distribution
+        # mixture_distribution is Independent(Bernoulli(probs=selection_probs))
+        sel_probs = self.mixture_distribution.base_dist.probs  # (batch, force_size)
+
+        # Scale continuous values (same as parent class)
+        pos_scaled = torch.zeros(batch_size, 6, device=action.device)
+        pos_scaled[:, :3] = pos_rot[:, :3] * self.p_w
+        pos_scaled[:, 3:6] = pos_rot[:, 3:6] * self.r_w
+
+        # Force component expects scaled force/torque values
+        force_scaled = torch.zeros(batch_size, 6, device=action.device)
+        force_scaled[:, :self.force_size] = force_torque * self.f_w
+        if self.force_size > 3:
+            force_scaled[:, 3:6] *= self.t_w
+        else:
+            force_scaled[:, 3:6] = pos_scaled[:, 3:6]  # Use pos for rotation
+
+        # Stack position and force into shape (batch, 6, 2) to match component_distribution
+        values = torch.stack([pos_scaled, force_scaled], dim=-1)  # (batch, 6, 2)
+
+        # Get component probabilities (not log probs)
+        comp_log_prob = self.component_distribution.log_prob(values)  # (batch, 6, 2)
+        comp_prob = comp_log_prob.exp()  # (batch, 6, 2)
+
+        # Expand selection probs to match 6 dimensions
+        sel_probs_expanded = torch.zeros(batch_size, 6, device=action.device)
+        sel_probs_expanded[:, :self.force_size] = sel_probs
+
+        # Compute GMM probability for each dimension
+        # p(x) = (1 - sel_prob) * p_pos(x) + sel_prob * p_force(x)
+        mixture_prob = (1 - sel_probs_expanded) * comp_prob[:, :, 0] + sel_probs_expanded * comp_prob[:, :, 1]
+
+        # Log prob is sum of log of mixture probs (add epsilon for numerical stability)
+        log_prob = torch.log(mixture_prob + 1e-8).sum(dim=-1)  # (batch,)
+
+        # Store for entropy calculation
+        self.sel_probs_expanded = sel_probs_expanded
+
+        return log_prob
+
+    def entropy(self):
+        """
+        Compute entropy as weighted combination of component entropies.
+
+        entropy = (1 - sel_prob) * H(pos) + sel_prob * H(force)
+        """
+        raw_entropy = self.component_distribution.entropy()  # (batch, 6, 2)
+
+        # Weighted combination of component entropies
+        entropy = (1 - self.sel_probs_expanded) * raw_entropy[:, :, 0] + \
+                  self.sel_probs_expanded * raw_entropy[:, :, 1]
+
+        return entropy  # (batch, 6)
 
 class HybridGMMMixin(GaussianMixin):
     # note the scales = (control_prop_gain * threshold)
@@ -154,7 +245,8 @@ class HybridGMMMixin(GaussianMixin):
             torque_scale=1.0,
             uniform_rate=0.0,
             ctrl_torque=False,
-            learn_selection = True
+            learn_selection = True,
+            full_CLoP = False
     ) -> None:
         super().__init__(clip_actions, clip_log_std, min_log_std, max_log_std, reduction, role)
         self.force_size = 6 if ctrl_torque else 3
@@ -164,6 +256,7 @@ class HybridGMMMixin(GaussianMixin):
         self.rot_scale = rot_scale
         self.uniform_rate = uniform_rate
         self.learn_sel = learn_selection
+        self.full_CLoP = full_CLoP
         
     def act(
         self, 
@@ -225,16 +318,28 @@ class HybridGMMMixin(GaussianMixin):
         # Create component Gaussians: Normal(loc, scale)
         components = Normal(loc=means, scale=std)  # (batch, 6, 2)
         
-        self._g_distribution = HybridActionGMM(
-            mix_dist, components,
-            force_weight=self.force_scale,
-            torque_weight = self.torque_scale,
-            pos_weight=self.pos_scale,
-            rot_weight = self.rot_scale,
-            ctrl_torque = self.force_size > 3,
-            uniform_rate = self.uniform_rate,
-            learn_selection=self.learn_sel
-        )
+        if self.full_CLoP:
+            self._g_distribution = CLoPHybridActionGMM(
+                mix_dist, components,
+                force_weight=self.force_scale,
+                torque_weight=self.torque_scale,
+                pos_weight=self.pos_scale,
+                rot_weight=self.rot_scale,
+                ctrl_torque=self.force_size > 3,
+                uniform_rate=self.uniform_rate,
+                learn_selection=self.learn_sel
+            )
+        else:
+            self._g_distribution = HybridActionGMM(
+                mix_dist, components,
+                force_weight=self.force_scale,
+                torque_weight=self.torque_scale,
+                pos_weight=self.pos_scale,
+                rot_weight=self.rot_scale,
+                ctrl_torque=self.force_size > 3,
+                uniform_rate=self.uniform_rate,
+                learn_selection=self.learn_sel
+            )
         actions = self._g_distribution.sample()
     
         # clip actions
@@ -350,9 +455,10 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
         torque_scale = hybrid_agent_parameters['torque_scale']
         ctrl_torque = hybrid_agent_parameters['ctrl_torque']
         uniform_rate = hybrid_agent_parameters['uniform_sampling_rate']
-        
+        full_clop = hybrid_agent_parameters['full_clop']
+
         sel_adj_types = hybrid_agent_parameters['selection_adjustment_types']
-        
+
         Model.__init__(self, observation_space, action_space, device)
         HybridGMMMixin.__init__(
             self,
@@ -367,9 +473,11 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
             torque_scale=torque_scale,
             ctrl_torque=ctrl_torque,
             uniform_rate=uniform_rate,
-            learn_selection=learn_selection
+            learn_selection=learn_selection,
+            full_CLoP=full_clop
         )
         print("[INFO]: Clipping Log STD" if clip_log_std else "[INFO]: No Lot STD Clipping")
+        print("[INFO]: Using full CLoP (soft GMM mixture)" if full_clop else "[INFO]: Using LCLoP (hard selection)")
         #self.end_tanh = force_bias_type in ['none', 'bias_sel']
         self.force_size = 6 if ctrl_torque else 3
         print("[INFO]: Controlling Torque" if self.force_size==6 else "[INFO]: Not Controlling Torque")
