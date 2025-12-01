@@ -200,6 +200,8 @@ class BlockPPO(PPO):
             # tensors sampled during training
             self._tensors_names = ["states", "actions", "log_prob", "values", "returns", "advantages", "in-contact"]
 
+        # Buffer to store previous timestep's contact state for proper temporal alignment
+        self._previous_in_contact = None
 
         # create temporary variables needed for storage and computation
         self._current_log_prob = None
@@ -468,35 +470,27 @@ class BlockPPO(PPO):
             #ta = actions
             #print("Wandb Action Pos:", torch.max(ta[:,3:6]).item(), torch.min(ta[:,3:6]).item(), torch.median(ta[:,3:6]).item())
 
-            # Get in-contact state from ForceTorqueWrapper
-            ft_wrapper = self._get_force_torque_wrapper()
-            if ft_wrapper is not None and hasattr(ft_wrapper.unwrapped, 'in_contact'):
-                # Extract first force_size contact flags (no aggregation)
-                # in_contact shape: (num_envs, 6) -> extract (num_envs, force_size)
-                raw_in_contact = ft_wrapper.unwrapped.in_contact[:, :self.force_size]
-
-                # Convert to float if boolean
-                if raw_in_contact.dtype == torch.bool:
-                    in_contact_state = raw_in_contact.float()
-                else:
-                    in_contact_state = raw_in_contact.clone()
-
-                # Validate: fail fast if wrapper returns invalid data
-                if torch.isnan(in_contact_state).any():
-                    raise RuntimeError("ForceTorqueWrapper in_contact tensor contains NaN values!")
-                if torch.isinf(in_contact_state).any():
-                    raise RuntimeError("ForceTorqueWrapper in_contact tensor contains Inf values!")
-                if (in_contact_state < 0.0).any() or (in_contact_state > 1.0).any():
-                    min_val = in_contact_state.min().item()
-                    max_val = in_contact_state.max().item()
-                    raise RuntimeError(f"ForceTorqueWrapper in_contact has invalid values: min={min_val}, max={max_val}")
+            # Get in-contact state from PREVIOUS timestep (temporally aligned with states)
+            if self._previous_in_contact is not None:
+                # Use buffered contact state from previous timestep
+                in_contact_state = self._previous_in_contact.clone()
             else:
-                # Error if wrapper not found - fail fast and loud
-                raise RuntimeError(
-                    "ForceTorqueWrapper not found in environment wrapper chain or in_contact attribute missing. "
-                    "Ensure ForceTorqueWrapper is properly applied to the environment."
-                )
+                # First timestep: initialize with zeros (no contact at start)
+                num_envs = states['policy'].shape[0] if isinstance(states, dict) else states.shape[0]
+                device = states['policy'].device if isinstance(states, dict) else states.device
+                in_contact_state = torch.zeros((num_envs, self.force_size), dtype=torch.float32, device=device)
 
+            # Validate buffered contact state
+            if torch.isnan(in_contact_state).any():
+                raise RuntimeError("Buffered in_contact tensor contains NaN values!")
+            if torch.isinf(in_contact_state).any():
+                raise RuntimeError("Buffered in_contact tensor contains Inf values!")
+            if (in_contact_state < 0.0).any() or (in_contact_state > 1.0).any():
+                min_val = in_contact_state.min().item()
+                max_val = in_contact_state.max().item()
+                raise RuntimeError(f"Buffered in_contact has invalid values: min={min_val}, max={max_val}")
+
+            # Store transition with temporally-aligned contact state
             self.add_sample_to_memory(
                 states=states.clone(),
                 actions=actions.clone(),
@@ -507,7 +501,27 @@ class BlockPPO(PPO):
                 log_prob=self._current_log_prob.clone(),
                 values=values.clone(),
                 **{"in-contact": in_contact_state.clone()}
-            )   
+            )
+
+            # Read CURRENT wrapper contact state and buffer it for NEXT timestep
+            ft_wrapper = self._get_force_torque_wrapper()
+            if ft_wrapper is not None and hasattr(ft_wrapper.unwrapped, 'in_contact'):
+                raw_in_contact = ft_wrapper.unwrapped.in_contact[:, :self.force_size]
+
+                # Convert to float if boolean
+                if raw_in_contact.dtype == torch.bool:
+                    self._previous_in_contact = raw_in_contact.float()
+                else:
+                    self._previous_in_contact = raw_in_contact.clone()
+
+                # Reset contact buffer for environments that terminated or truncated
+                # These environments will provide reset states on the next timestep
+                done_mask = terminated | truncated
+                self._previous_in_contact[done_mask] = 0.0
+            else:
+                raise RuntimeError(
+                    "ForceTorqueWrapper not found in environment wrapper chain or in_contact attribute missing."
+                )   
     
     def post_interaction(self, timestep: int, timesteps: int) -> None:
         """Callback called after the interaction with the environment
