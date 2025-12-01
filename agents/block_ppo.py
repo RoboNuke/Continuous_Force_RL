@@ -516,8 +516,8 @@ class BlockPPO(PPO):
 
                 # Reset contact buffer for environments that terminated or truncated
                 # These environments will provide reset states on the next timestep
-                done_mask = terminated | truncated
-                self._previous_in_contact[done_mask] = 0.0
+                done_mask = (terminated | truncated).squeeze(-1)  # Shape: (num_envs,)
+                self._previous_in_contact[done_mask, :] = 0.0
             else:
                 raise RuntimeError(
                     "ForceTorqueWrapper not found in environment wrapper chain or in_contact attribute missing."
