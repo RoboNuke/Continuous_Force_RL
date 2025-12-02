@@ -1,0 +1,40 @@
+# Force Controller Tuning Configuration
+# For use with test_hybrid_controller.py script
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+
+primary:
+  seed: 42  # Fixed seed for reproducibility
+  num_envs_per_agent: 1  # Single environment for tuning
+  agents_per_break_force: 1
+  break_forces: [-1]  # Unbreakable peg for tuning
+  ctrl_torque: false  # 3DOF force control only
+
+# Enable hybrid control wrapper
+wrappers:
+  hybrid_control:
+    enabled: true
+    reward_type: "none"  # No reward needed for manual control
+    use_ground_truth_selection: false  # We control selection manually
+
+  spawn_height_curriculum:
+    enabled: false  # Start at fixed height
+
+  force_torque:
+    enabled: true
+
+environment:
+  scene:
+    num_envs: 1
+
+  # No observation noise for tuning
+  obs_rand:
+    fixed_asset_pos: [0.0, 0.0, 0.0]
+    ee_pos: [0.0, 0.0, 0.0]
+    force_torque: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+experiment:
+  name: "force_controller_tuning"
+  tags: ["tuning", "hybrid_control"]
+  group: "ctrl_tuning"
