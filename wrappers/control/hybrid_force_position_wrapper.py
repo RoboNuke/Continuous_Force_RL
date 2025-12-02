@@ -149,6 +149,9 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Selection matrix for control (derived from ema_actions)
         self.sel_matrix = torch.zeros((self.num_envs, 6), device=self.device)
 
+        # Task wrench (commanded wrench to robot, stored for external access/plotting)
+        self.task_wrench = torch.zeros((self.num_envs, 6), device=self.device)
+
         # Note: Contact detection (active_force) has been moved to ForceTorqueWrapper
         # Access via self.unwrapped.in_contact instead
 
@@ -163,6 +166,63 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Zero out torque gains if not controlling torques
         if not ctrl_torque:
             self.kp[:, 3:] = 0.0
+
+        # Initialize threshold and bounds as class variables (per-environment tensors)
+        # These are independent of base env to keep wrapper self-contained
+        # Dynamics randomization wrapper can override these tensors
+
+        # Force threshold (hybrid-specific)
+        if self.ctrl_cfg.force_action_threshold is not None:
+            force_thresh_val = self.ctrl_cfg.force_action_threshold
+        elif hasattr(self.unwrapped.cfg.ctrl, 'force_action_threshold'):
+            force_thresh_val = self.unwrapped.cfg.ctrl.force_action_threshold
+        else:
+            raise ValueError(
+                "force_action_threshold must be provided in ctrl_cfg or env cfg.ctrl. "
+                "This is required for hybrid force-position control."
+            )
+        self.force_threshold = torch.tensor(force_thresh_val, device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
+
+        # Torque threshold (if controlling torques)
+        if self.ctrl_torque:
+            if self.ctrl_cfg.torque_action_threshold is not None:
+                torque_thresh_val = self.ctrl_cfg.torque_action_threshold
+            elif hasattr(self.unwrapped.cfg.ctrl, 'torque_action_threshold'):
+                torque_thresh_val = self.unwrapped.cfg.ctrl.torque_action_threshold
+            else:
+                raise ValueError(
+                    "torque_action_threshold must be provided in ctrl_cfg or env cfg.ctrl when ctrl_torque=True"
+                )
+            self.torque_threshold = torch.tensor(torque_thresh_val, device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
+
+        # Bounds: shape (num_envs, 2, 3) where dim 1 is [min_bounds, max_bounds]
+        # Position bounds
+        if self.ctrl_cfg.pos_action_bounds is not None:
+            pos_bounds_val = self.ctrl_cfg.pos_action_bounds
+        elif hasattr(self.unwrapped.cfg.ctrl, 'pos_action_bounds'):
+            pos_bounds_val = self.unwrapped.cfg.ctrl.pos_action_bounds
+        else:
+            raise ValueError("pos_action_bounds must be provided in ctrl_cfg or env cfg.ctrl")
+        self.pos_bounds = torch.tensor([pos_bounds_val[0], pos_bounds_val[1]], device=self.device).unsqueeze(0).repeat(self.num_envs, 1, 1)
+
+        # Force bounds
+        if self.ctrl_cfg.force_action_bounds is not None:
+            force_bounds_val = self.ctrl_cfg.force_action_bounds
+        elif hasattr(self.unwrapped.cfg.ctrl, 'force_action_bounds'):
+            force_bounds_val = self.unwrapped.cfg.ctrl.force_action_bounds
+        else:
+            raise ValueError("force_action_bounds must be provided in ctrl_cfg or env cfg.ctrl")
+        self.force_bounds = torch.tensor([force_bounds_val[0], force_bounds_val[1]], device=self.device).unsqueeze(0).repeat(self.num_envs, 1, 1)
+
+        # Torque bounds (if controlling torques)
+        if self.ctrl_torque:
+            if self.ctrl_cfg.torque_action_bounds is not None:
+                torque_bounds_val = self.ctrl_cfg.torque_action_bounds
+            elif hasattr(self.unwrapped.cfg.ctrl, 'torque_action_bounds'):
+                torque_bounds_val = self.unwrapped.cfg.ctrl.torque_action_bounds
+            else:
+                raise ValueError("torque_action_bounds must be provided in ctrl_cfg or env cfg.ctrl when ctrl_torque=True")
+            self.torque_bounds = torch.tensor([torque_bounds_val[0], torque_bounds_val[1]], device=self.device).unsqueeze(0).repeat(self.num_envs, 1, 1)
 
         # Flag to control wrench logging once per step
         self._should_log_wrenches = False
@@ -497,11 +557,8 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         # Apply bounds constraint
         delta_pos = pos_target - self.unwrapped.fixed_pos_action_frame
-        if self.ctrl_cfg.pos_action_bounds is None:
-            pos_bounds = self.unwrapped.cfg.ctrl.pos_action_bounds
-        else:
-            pos_bounds = self.ctrl_cfg.pos_action_bounds
-        pos_error_clipped = torch.clip(delta_pos, -pos_bounds[0], pos_bounds[1])
+        # Use class variable (per-env tensor shape: num_envs, 2, 3 for [min, max])
+        pos_error_clipped = torch.clip(delta_pos, -self.pos_bounds[:, 0, :], self.pos_bounds[:, 1, :])
         self.unwrapped.ctrl_target_fingertip_midpoint_pos = self.unwrapped.fixed_pos_action_frame + pos_error_clipped
 
         # Log position goal norm
@@ -542,40 +599,23 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # 4. Force target (delta approach as requested)
         force_actions = self.ema_actions[:, self.force_size+6:2*self.force_size+6]
 
-        if self.ctrl_cfg.force_action_threshold is None:
-            force_threshold = self.unwrapped.cfg.ctrl.force_action_threshold
-        else:
-            force_threshold = self.ctrl_cfg.force_action_threshold
-
-        force_delta = force_actions[:, :3] * force_threshold[0]
-
-        if self.ctrl_cfg.force_action_bounds is None:
-            force_bounds = self.unwrapped.cfg.ctrl.force_action_bounds
-        else:
-            force_bounds = self.ctrl_cfg.force_action_bounds
+        # Use class variable (per-env tensor)
+        force_delta = force_actions[:, :3] * self.force_threshold
 
         self.target_force_for_control = torch.zeros((self.num_envs, 6), device=self.device)
         self.target_force_for_control[:, :3] = torch.clip(
             force_delta + self.robot_force_torque[:, :3],
-            -force_bounds[0], force_bounds[0]
+            -self.force_bounds[:, 0, :], self.force_bounds[:, 1, :]
         )
 
         # Handle torque if enabled
         if self.force_size > 3:
-            if self.ctrl_cfg.torque_action_threshold is None:
-                torque_threshold = self.unwrapped.cfg.ctrl.torque_action_threshold
-            else:
-                torque_threshold = self.ctrl_cfg.torque_action_threshold
-
-            if self.ctrl_cfg.torque_action_bounds is None:
-                torque_bounds = self.unwrapped.cfg.ctrl.torque_action_bounds
-            else:
-                torque_bounds = self.ctrl_cfg.torque_action_bounds
-
-            torque_delta = force_actions[:, 3:] * torque_threshold[0] / force_threshold[0]
+            # Use class variables (per-env tensors)
+            # Scale torque by ratio of thresholds (element-wise per environment)
+            torque_delta = force_actions[:, 3:] * self.torque_threshold / self.force_threshold
             self.target_force_for_control[:, 3:] = torch.clip(
                 torque_delta + self.robot_force_torque[:, 3:],
-                -torque_bounds[0], torque_bounds[0]
+                -self.torque_bounds[:, 0, :], self.torque_bounds[:, 1, :]
             )
 
         # Log force goal norm
@@ -725,11 +765,11 @@ class HybridForcePositionWrapper(gym.Wrapper):
     def _get_target_out_of_bounds(self):
         """Check if fingertip target is out of position bounds."""
         delta = self.unwrapped.fingertip_midpoint_pos - self.unwrapped.fixed_pos_action_frame
-        pos_bounds = self.unwrapped.cfg.ctrl.pos_action_bounds
 
+        # Use class variable (per-env tensor)
         out_of_bounds = torch.logical_or(
-            delta <= -pos_bounds[0],
-            delta >= pos_bounds[1]
+            delta <= -self.pos_bounds[:, 0, :],
+            delta >= self.pos_bounds[:, 1, :]
         )
         return out_of_bounds
 
@@ -838,20 +878,20 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         # Combine wrenches using filtered selection matrix
         task_wrench = (1 - self.sel_matrix) * pose_wrench + self.sel_matrix * force_wrench
-        
+
         # Apply bounds constraint to final wrench - prevent motion outside boundaries
         delta_pos = self.unwrapped.fingertip_midpoint_pos - self.unwrapped.fixed_pos_action_frame
-        pos_bounds = self.unwrapped.cfg.ctrl.pos_action_bounds
 
         # Zero wrench components that would drive further out of bounds
+        # Use class variable (per-env tensor)
         for i in range(3):  # x, y, z
             # If at negative bound and wrench would push more negative, zero it
-            at_neg_bound = delta_pos[:, i] <= -pos_bounds[0]
+            at_neg_bound = delta_pos[:, i] <= -self.pos_bounds[:, 0, i]
             neg_wrench = task_wrench[:, i] < 0
             task_wrench[:, i] = torch.where(at_neg_bound & neg_wrench, 0.0, task_wrench[:, i])
 
             # If at positive bound and wrench would push more positive, zero it
-            at_pos_bound = delta_pos[:, i] >= pos_bounds[1]
+            at_pos_bound = delta_pos[:, i] >= self.pos_bounds[:, 1, i]
             pos_wrench = task_wrench[:, i] > 0
             task_wrench[:, i] = torch.where(at_pos_bound & pos_wrench, 0.0, task_wrench[:, i])
 
@@ -869,6 +909,9 @@ class HybridForcePositionWrapper(gym.Wrapper):
             arm_mass_matrix=self.unwrapped.arm_mass_matrix,
             device=self.unwrapped.device
         )
+
+        # Store task wrench for external access (e.g., plotting/debugging)
+        self.task_wrench = task_wrench.clone()
 
         # Set gripper targets
         self.unwrapped.ctrl_target_joint_pos[:, 7:9] = self.unwrapped.ctrl_target_gripper_dof_pos

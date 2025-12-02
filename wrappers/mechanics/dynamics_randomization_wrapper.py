@@ -63,7 +63,6 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         self.randomize_pos_threshold = config.get('randomize_pos_threshold', False)
         self.randomize_rot_threshold = config.get('randomize_rot_threshold', False)
         self.randomize_force_threshold = config.get('randomize_force_threshold', False)
-        self.randomize_torque_bounds = config.get('randomize_torque_bounds', False)
 
         # Store ranges
         self.friction_range = config.get('friction_range', [0.5, 1.5])
@@ -74,7 +73,6 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         self.pos_threshold_range = config.get('pos_threshold_range', [0.015, 0.025])
         self.rot_threshold_range = config.get('rot_threshold_range', [0.08, 0.12])
         self.force_threshold_range = config.get('force_threshold_range', [8.0, 12.0])
-        self.torque_bounds_range = config.get('torque_bounds_range', [0.4, 0.6])
 
         # Initialize per-environment storage tensors
         # Friction (scalar per env)
@@ -90,7 +88,6 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         self.current_pos_threshold = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
         self.current_rot_threshold = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
         self.current_force_threshold = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
-        self.current_torque_bounds = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
 
         # Store original methods
         self._original_reset_idx = None
@@ -105,22 +102,62 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         print(f"  Gains randomization: {self.randomize_gains}")
         print(f"  Force gains randomization: {self.randomize_force_gains}")
         print(f"  Threshold randomization: pos={self.randomize_pos_threshold}, rot={self.randomize_rot_threshold}, "
-              f"force={self.randomize_force_threshold}, torque={self.randomize_torque_bounds}")
+              f"force={self.randomize_force_threshold}")
 
     def _initialize_wrapper(self):
         """Initialize the wrapper after the base environment is set up."""
         if self._wrapper_initialized or not self.enabled:
             return
 
+        # Validate required attributes exist
+        if not hasattr(self.unwrapped, '_reset_idx'):
+            raise RuntimeError("Environment missing required _reset_idx method")
+
+        # Validate friction randomization requirements
+        if self.randomize_friction:
+            if not hasattr(self.unwrapped, '_held_asset'):
+                raise RuntimeError(
+                    "Friction randomization requires _held_asset attribute on environment. "
+                    "Ensure the base environment has this attribute or disable friction randomization."
+                )
+            if not hasattr(self.unwrapped._held_asset, 'root_physx_view'):
+                raise RuntimeError(
+                    "Friction randomization requires PhysX root_physx_view on _held_asset. "
+                    "Ensure asset is properly initialized or disable friction randomization."
+                )
+
+        # Validate gain randomization requirements
+        if self.randomize_gains:
+            if not hasattr(self.unwrapped, 'task_prop_gains'):
+                raise RuntimeError(
+                    "Gain randomization requires task_prop_gains attribute on environment. "
+                    "Ensure the base environment has this attribute or disable gain randomization."
+                )
+
+        # Validate force/torque randomization requirements (needs hybrid wrapper)
+        if self.randomize_force_gains or self.randomize_force_threshold:
+            hybrid_wrapper = self._find_hybrid_wrapper()
+            if hybrid_wrapper is None:
+                enabled_features = []
+                if self.randomize_force_gains:
+                    enabled_features.append("randomize_force_gains")
+                if self.randomize_force_threshold:
+                    enabled_features.append("randomize_force_threshold")
+                raise RuntimeError(
+                    f"Force/torque randomization enabled but HybridForcePositionWrapper not found in wrapper chain.\n"
+                    f"Enabled features: {', '.join(enabled_features)}\n"
+                    f"Either disable these features or add HybridForcePositionWrapper to your wrapper stack."
+                )
+
+        # Initialize all thresholds/bounds as tensors
+        self._initialize_thresholds_bounds_tensors()
+
         # Store and override _reset_idx method
-        if hasattr(self.unwrapped, '_reset_idx'):
-            self._original_reset_idx = self.unwrapped._reset_idx
-            self.unwrapped._reset_idx = self._wrapped_reset_idx
-        else:
-            raise ValueError("Environment missing required _reset_idx method")
+        self._original_reset_idx = self.unwrapped._reset_idx
+        self.unwrapped._reset_idx = self._wrapped_reset_idx
 
         self._wrapper_initialized = True
-        print("[DynamicsRandomizationWrapper] Wrapper initialized and injected into reset chain")
+        print("[DynamicsRandomizationWrapper] Initialized and injected into reset chain")
 
     def _wrapped_reset_idx(self, env_ids):
         """
@@ -213,46 +250,87 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
             self.current_force_threshold[env_ids] = sampled_force_thresh
             self._apply_force_threshold(env_ids)
 
-        if self.randomize_torque_bounds:
-            torque_bounds_min, torque_bounds_max = self.torque_bounds_range
-            sampled_torque_bounds = torch.rand(num_reset_envs, device=self.device) * (torque_bounds_max - torque_bounds_min) + torque_bounds_min
-            self.current_torque_bounds[env_ids] = sampled_torque_bounds
-            self._apply_torque_bounds(env_ids)
-
     def _set_friction_per_env(self, asset, env_ids, friction_values):
         """
-        Set friction for specific environments of an asset.
+        Set friction for specific environments using PhysX API.
 
         Args:
-            asset: Articulation object to modify
-            env_ids: Environment indices to modify
-            friction_values: Friction coefficients for each environment
+            asset: Articulation object (e.g., _held_asset)
+            env_ids: Tensor of environment indices
+            friction_values: Tensor of friction coefficients for each env
         """
-        # Access the physics simulation view to set material properties per environment
-        # This is a low-level operation that modifies the simulation materials directly
-        try:
-            # Get the rigid body view
-            if hasattr(asset, '_body_physx_view'):
-                body_view = asset._body_physx_view
+        if not hasattr(asset, 'root_physx_view'):
+            raise RuntimeError(
+                f"Asset does not have root_physx_view attribute required for per-environment friction setting. "
+                f"Ensure the asset is properly initialized before dynamics randomization."
+            )
 
-                # Set friction for all bodies in the asset for specified environments
-                # Isaac Lab uses set_material_properties for per-environment friction
-                for env_idx, friction in zip(env_ids, friction_values):
-                    # Set both static and dynamic friction to the same value
-                    body_view.set_material_properties(
-                        static_friction=friction.item(),
-                        dynamic_friction=friction.item(),
-                        indices=[env_idx.item()]
-                    )
+        # Get current material properties
+        # Shape: (num_envs, num_properties) where properties = [static_friction, dynamic_friction, restitution]
+        materials = asset.root_physx_view.get_material_properties()
+
+        # Set friction for specified environments
+        materials[env_ids, 0] = friction_values  # Static friction
+        materials[env_ids, 1] = friction_values  # Dynamic friction
+
+        # Apply updated materials
+        asset.root_physx_view.set_material_properties(materials, env_ids)
+
+    def _find_hybrid_wrapper(self):
+        """Search wrapper chain for HybridForcePositionWrapper."""
+        current = self
+        while current is not None:
+            if current.__class__.__name__ == 'HybridForcePositionWrapper':
+                return current
+            if hasattr(current, 'env'):
+                current = current.env
             else:
-                # Fallback: use factory_utils for global setting (not per-env)
-                # This is less ideal but works if per-env setting is not available
-                avg_friction = friction_values.mean().item()
-                factory_utils.set_friction(asset, avg_friction, self.num_envs)
-        except Exception as e:
-            print(f"[WARNING] Failed to set per-env friction: {e}. Using global friction setting.")
-            avg_friction = friction_values.mean().item()
-            factory_utils.set_friction(asset, avg_friction, self.num_envs)
+                break
+        return None
+
+    def _initialize_thresholds_bounds_tensors(self):
+        """
+        Initialize all threshold variables as per-environment tensors.
+        Pulls initial values from cfg and replicates across all environments.
+        Note: Bounds are NOT initialized here - they remain as fixed hard limits in cfg.
+        """
+        # 1. Initialize base env thresholds (if not already tensors)
+        if not hasattr(self.unwrapped, 'pos_threshold'):
+            if hasattr(self.unwrapped.cfg.ctrl, 'pos_action_threshold'):
+                pos_thresh = self.unwrapped.cfg.ctrl.pos_action_threshold
+                self.unwrapped.pos_threshold = torch.tensor(pos_thresh, device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
+            else:
+                raise ValueError("pos_action_threshold not found in cfg.ctrl. Required for position control.")
+
+        if not hasattr(self.unwrapped, 'rot_threshold'):
+            if hasattr(self.unwrapped.cfg.ctrl, 'rot_action_threshold'):
+                rot_thresh = self.unwrapped.cfg.ctrl.rot_action_threshold
+                self.unwrapped.rot_threshold = torch.tensor(rot_thresh, device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
+            else:
+                raise ValueError("rot_action_threshold not found in cfg.ctrl. Required for rotation control.")
+
+        # 2. Find hybrid wrapper in chain (if randomizing force/torque parameters)
+        if self.randomize_force_threshold or self.randomize_force_gains:
+            hybrid_wrapper = self._find_hybrid_wrapper()
+
+            if hybrid_wrapper is not None:
+                # Hybrid wrapper should have already initialized these in its __init__
+                # But if not, we initialize them here from cfg
+
+                if not hasattr(hybrid_wrapper, 'force_threshold'):
+                    if hasattr(self.unwrapped.cfg.ctrl, 'force_action_threshold'):
+                        force_thresh = self.unwrapped.cfg.ctrl.force_action_threshold
+                        hybrid_wrapper.force_threshold = torch.tensor(force_thresh, device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
+                    else:
+                        raise ValueError("force_action_threshold not found in cfg.ctrl. Required for hybrid control.")
+
+                if hasattr(hybrid_wrapper, 'ctrl_torque') and hybrid_wrapper.ctrl_torque:
+                    if not hasattr(hybrid_wrapper, 'torque_threshold'):
+                        if hasattr(self.unwrapped.cfg.ctrl, 'torque_action_threshold'):
+                            torque_thresh = self.unwrapped.cfg.ctrl.torque_action_threshold
+                            hybrid_wrapper.torque_threshold = torch.tensor(torque_thresh, device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
+                        else:
+                            raise ValueError("torque_action_threshold not found in cfg.ctrl. Required for torque control.")
 
     def _apply_controller_gains(self, env_ids):
         """
@@ -280,51 +358,38 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
 
     def _apply_force_gains(self, env_ids):
         """
-        Apply randomized force/torque gains to specified environments.
-
-        Note: This assumes the environment has task_force_gains attribute (hybrid control).
+        Apply randomized force/torque gains to HybridForcePositionWrapper's kp.
         """
-        if hasattr(self.unwrapped, 'task_force_gains'):
-            self.unwrapped.task_force_gains[env_ids] = self.current_force_gains[env_ids]
-        else:
-            print("[WARNING] Environment does not have task_force_gains. Force gain randomization skipped.")
+        hybrid_wrapper = self._find_hybrid_wrapper()
+
+        if hybrid_wrapper is None:
+            raise RuntimeError(
+                "Force gain randomization enabled but HybridForcePositionWrapper not found in wrapper chain. "
+                "Either disable force gain randomization (set randomize_force_gains=False) or ensure "
+                "HybridForcePositionWrapper is in the wrapper stack."
+            )
+
+        # Modify the wrapper's kp attribute (shape: num_envs, 6)
+        hybrid_wrapper.kp[env_ids] = self.current_force_gains[env_ids]
 
     def _apply_pos_threshold(self, env_ids):
-        """Apply randomized position action thresholds."""
-        # The cfg.ctrl attributes are shared across all envs, so we need to store per-env
-        # and apply during action processing if the env supports it
-        # For now, we'll store it and hope the environment uses per-env thresholds
-        # Otherwise, we'd need to modify action processing in the wrapper
-
-        # Check if environment supports per-env thresholds
-        if hasattr(self.unwrapped, 'pos_action_threshold_per_env'):
-            # Replicate scalar to 3 dims
-            self.unwrapped.pos_action_threshold_per_env[env_ids] = self.current_pos_threshold[env_ids].unsqueeze(1).repeat(1, 3)
-        else:
-            # Fallback: modify global config (affects all envs - not ideal)
-            # We'll just store it for now and print a warning
-            print("[WARNING] Environment does not support per-env pos_action_threshold. Using global threshold.")
+        """Apply randomized position thresholds by overwriting base env attribute."""
+        # Replicate scalar to 3 dims and assign directly to base env
+        self.unwrapped.pos_threshold[env_ids] = self.current_pos_threshold[env_ids].unsqueeze(1).repeat(1, 3)
 
     def _apply_rot_threshold(self, env_ids):
-        """Apply randomized rotation action thresholds."""
-        if hasattr(self.unwrapped, 'rot_action_threshold_per_env'):
-            self.unwrapped.rot_action_threshold_per_env[env_ids] = self.current_rot_threshold[env_ids].unsqueeze(1).repeat(1, 3)
-        else:
-            print("[WARNING] Environment does not support per-env rot_action_threshold. Using global threshold.")
+        """Apply randomized rotation thresholds by overwriting base env attribute."""
+        self.unwrapped.rot_threshold[env_ids] = self.current_rot_threshold[env_ids].unsqueeze(1).repeat(1, 3)
 
     def _apply_force_threshold(self, env_ids):
-        """Apply randomized force action thresholds."""
-        if hasattr(self.unwrapped, 'force_action_threshold_per_env'):
-            self.unwrapped.force_action_threshold_per_env[env_ids] = self.current_force_threshold[env_ids].unsqueeze(1).repeat(1, 3)
-        else:
-            print("[WARNING] Environment does not support per-env force_action_threshold. Using global threshold.")
-
-    def _apply_torque_bounds(self, env_ids):
-        """Apply randomized torque action bounds."""
-        if hasattr(self.unwrapped, 'torque_action_bounds_per_env'):
-            self.unwrapped.torque_action_bounds_per_env[env_ids] = self.current_torque_bounds[env_ids].unsqueeze(1).repeat(1, 3)
-        else:
-            print("[WARNING] Environment does not support per-env torque_action_bounds. Using global bounds.")
+        """Apply randomized force thresholds to hybrid wrapper."""
+        hybrid_wrapper = self._find_hybrid_wrapper()
+        if hybrid_wrapper is None:
+            raise RuntimeError(
+                "Force threshold randomization enabled but HybridForcePositionWrapper not found. "
+                "Either disable force_threshold randomization or add HybridForcePositionWrapper to wrapper stack."
+            )
+        hybrid_wrapper.force_threshold[env_ids] = self.current_force_threshold[env_ids].unsqueeze(1).repeat(1, 3)
 
     def step(self, action):
         """Step environment and ensure wrapper is initialized."""
