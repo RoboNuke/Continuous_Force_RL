@@ -217,9 +217,6 @@ class DynamicsRandomizationConfig:
     randomize_force_threshold: bool = False
     force_threshold_range: List[float] = field(default_factory=lambda: [8.0, 12.0])
 
-    randomize_torque_bounds: bool = False
-    torque_bounds_range: List[float] = field(default_factory=lambda: [0.4, 0.6])
-
 
 @dataclass
 class EfficientResetConfig:

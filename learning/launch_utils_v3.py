@@ -50,13 +50,6 @@ def apply_wrappers(env, configs):
         print(f"  - Applying Efficient Reset Wrapper (terminate_on_success={wrappers_config.efficient_reset.terminate_on_success})")
         env = EfficientResetWrapper(env, config=wrappers_config.efficient_reset)
 
-    if wrappers_config.dynamics_randomization.enabled:
-        print("  - Applying Dynamics Randomization Wrapper")
-        env = DynamicsRandomizationWrapper(
-            env,
-            config=asdict(wrappers_config.dynamics_randomization)
-        )
-
     if wrappers_config.force_torque_sensor.enabled:
         print("  - Applying Force Torque Wrapper")
 
@@ -112,6 +105,14 @@ def apply_wrappers(env, configs):
             task_cfg=configs['environment'].hybrid_task,
             num_agents=configs['primary'].total_agents,
             use_ground_truth_selection=wrappers_config.hybrid_control.use_ground_truth_selection
+        )
+
+    # Apply dynamics randomization AFTER hybrid controller so it can find and modify hybrid wrapper's variables
+    if wrappers_config.dynamics_randomization.enabled:
+        print("  - Applying Dynamics Randomization Wrapper")
+        env = DynamicsRandomizationWrapper(
+            env,
+            config=asdict(wrappers_config.dynamics_randomization)
         )
 
     if wrappers_config.manual_control.enabled:

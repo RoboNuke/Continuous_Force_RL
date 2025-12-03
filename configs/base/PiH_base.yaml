@@ -14,8 +14,8 @@ experiment:
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
-  agents_per_break_force: 5 # Number of agents per break force condition
-  num_envs_per_agent: 256   # Environments per individual agent
+  agents_per_break_force: 2 # Number of agents per break force condition
+  num_envs_per_agent: 16   # Environments per individual agent
   break_forces: [10]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
@@ -290,34 +290,31 @@ wrappers:
 
   # Dynamics randomization for domain randomization
   dynamics_randomization:
-    enabled: false
+    enabled: true
 
     # Friction randomization (held asset only)
-    randomize_friction: false
+    randomize_friction: True
     friction_range: [0.5, 1.5]
 
     # Controller gains randomization (separate for pos/rot)
-    randomize_gains: false
+    randomize_gains: True
     pos_gains_range: [80.0, 120.0]
     rot_gains_range: [20.0, 40.0]
 
     # Force/torque gains randomization (hybrid control only)
-    randomize_force_gains: false
+    randomize_force_gains: True
     force_gains_range: [0.08, 0.12]
     torque_gains_range: [0.0008, 0.0012]
 
     # Action thresholds randomization
-    randomize_pos_threshold: false
+    randomize_pos_threshold: True
     pos_threshold_range: [0.015, 0.025]
 
-    randomize_rot_threshold: false
+    randomize_rot_threshold: True
     rot_threshold_range: [0.08, 0.12]
 
-    randomize_force_threshold: false
+    randomize_force_threshold: True
     force_threshold_range: [8.0, 12.0]
-
-    randomize_torque_bounds: false
-    torque_bounds_range: [0.4, 0.6]
 
 
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)

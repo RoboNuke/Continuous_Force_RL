@@ -16,6 +16,7 @@ parser.add_argument("--task", type=str, default=None, help="Name of the task (de
 parser.add_argument("--seed", type=int, default=-1, help="Random seed for reproducibility (-1 for random)")
 parser.add_argument("--override", action="append", help="Override config values: key=value")
 parser.add_argument("--manual-control", action="store_true", help="Enable manual control mode with visualization")
+parser.add_argument("--test_reset", action="store_true", help="Initializes env and then resets it 20 times allowing space for different checks")
 parser.add_argument("--eval_tag", type=str, default=None, help="Evaluation tag for tracking training runs (overrides auto-generated timestamp tag)")
 
 # append AppLauncher cli args
@@ -312,29 +313,223 @@ def main(
     print("[INFO]: Learning objects instanciated")
     print("=" * 100)
 
-    # ===== STEP 5: CREATE AND START TRAINER =====
-    # Trainer uses pre-configured parameters from Step 1
-    print("[INFO]: Step 5 - Creating trainer")
+    # reset test
+    if args_cli.test_reset:
+        # ===== STEP 5: PERFORM SEVERAL RESETS =====
+        print("\n" + "="*80)
+        print("DYNAMICS RANDOMIZATION RESET TEST")
+        print("="*80)
 
-    cfg_trainer = {
-        "timesteps": configs['primary'].total_agents * configs['primary'].max_steps // (configs['primary'].total_num_envs),
-        "headless": True,
-        "close_environment_at_exit": True,
-        "disable_progressbar": configs['agent'].disable_progressbar
-    }
+        # Find dynamics wrapper
+        dynamics_wrapper = None
+        current_env = env
+        while current_env is not None:
+            if current_env.__class__.__name__ == 'DynamicsRandomizationWrapper':
+                dynamics_wrapper = current_env
+                break
+            if hasattr(current_env, 'env'):
+                current_env = current_env.env
+            else:
+                break
 
-    trainer = SequentialTrainer(
-        cfg=cfg_trainer,
-        env=env,
-        agents=agents
-    )
-    print("[INFO]: Trainer created successfully")
-    print("=" * 100)
+        if dynamics_wrapper is None:
+            print("ERROR: DynamicsRandomizationWrapper not found in wrapper chain!")
+            print("Please enable dynamics_randomization in your config.")
+            return
 
-    # Start training
-    print("[INFO]: Step 6 - Starting training...")
-    torch.autograd.set_detect_anomaly(True)
-    trainer.train()
+        print("✓ Found DynamicsRandomizationWrapper")
+
+        # Find hybrid wrapper for force parameters
+        hybrid_wrapper = dynamics_wrapper._find_hybrid_wrapper()
+        has_hybrid = hybrid_wrapper is not None
+        if has_hybrid:
+            print("✓ Found HybridForcePositionWrapper")
+
+        # Initial reset
+        obs, info = env.reset()
+        print(f"\n✓ Initial reset complete ({env.num_envs} environments)")
+
+        # Take a few steps to ensure environment is stable
+        print("\nTaking 5 warmup steps...")
+        for _ in range(5):
+            action = torch.zeros((env.num_envs, env.unwrapped.cfg.action_space), device=device)
+            obs, reward, terminated, truncated, info = env.step(action)
+        print("✓ Warmup complete")
+
+        # Trigger initial dynamics randomization for all environments
+        print("\nTriggering initial dynamics randomization...")
+        all_env_ids = torch.arange(env.num_envs, device=device, dtype=torch.long)
+        env.unwrapped._reset_idx(all_env_ids)
+        print("✓ All environments randomized")
+
+        def get_params_dict():
+            """Get current dynamics parameters from env.unwrapped and wrappers (where they're actually used).
+            All parameters are moved to CPU for consistent comparison."""
+            params = {}
+
+            # Friction - access from actual asset PhysX material properties
+            if hasattr(env.unwrapped, '_held_asset') and hasattr(env.unwrapped._held_asset, 'root_physx_view'):
+                try:
+                    materials = env.unwrapped._held_asset.root_physx_view.get_material_properties()
+                    # Use ellipsis pattern matching base env and dynamics wrapper: materials[..., 0] = static friction
+                    friction = materials[..., 0].clone().float()  # Shape: (num_envs, num_shapes)
+                    # All shapes should have same friction value (broadcast during setting), take first shape
+                    params['friction'] = friction[:, 0].cpu()  # Move to CPU for consistent comparison
+                except Exception as e:
+                    print(f"   ⚠️  Could not read friction from asset: {e}")
+
+            # Controller gains (position and rotation) - from base environment
+            if hasattr(env.unwrapped, 'task_prop_gains'):
+                params['pos_gains'] = env.unwrapped.task_prop_gains[:, 0].clone().float().cpu()  # First pos dim
+                params['rot_gains'] = env.unwrapped.task_prop_gains[:, 3].clone().float().cpu()  # First rot dim
+
+            # Thresholds - from base environment
+            if hasattr(env.unwrapped, 'pos_threshold'):
+                params['pos_threshold'] = env.unwrapped.pos_threshold[:, 0].clone().float().cpu()  # First dim
+            if hasattr(env.unwrapped, 'rot_threshold'):
+                params['rot_threshold'] = env.unwrapped.rot_threshold[:, 0].clone().float().cpu()  # First dim
+
+            # Force parameters - from hybrid wrapper (if present)
+            if has_hybrid:
+                if hasattr(hybrid_wrapper, 'force_threshold'):
+                    params['force_threshold'] = hybrid_wrapper.force_threshold[:, 0].clone().float().cpu()
+                if hasattr(hybrid_wrapper, 'kp'):
+                    params['force_gains'] = hybrid_wrapper.kp[:, 0].clone().float().cpu()  # First force dim
+
+            return params
+
+        def print_stats(params, title):
+            """Print min, max, std for each parameter."""
+            print(f"\n{title}")
+            print("-" * 80)
+            for name, values in params.items():
+                print(f"{name:20s}: min={values.min().item():8.4f}, max={values.max().item():8.4f}, "
+                      f"std={values.std().item():8.4f}, mean={values.mean().item():8.4f}")
+
+        # Perform multiple reset tests
+        num_tests = 10
+        print(f"\nPerforming {num_tests} reset tests...")
+
+        for test_idx in range(num_tests):
+            print(f"\n{'='*80}")
+            print(f"TEST {test_idx + 1}/{num_tests}")
+            print('='*80)
+
+            # Get parameters before reset
+            params_before = get_params_dict()
+            print_stats(params_before, "📊 PARAMETERS BEFORE RESET")
+
+            # Randomly select environments to reset (between 10% and 50%)
+            num_to_reset = torch.randint(
+                low=max(1, env.num_envs // 10),
+                high=max(2, env.num_envs // 2),
+                size=(1,)
+            ).item()
+
+            reset_env_ids = torch.randperm(env.num_envs)[:num_to_reset]
+            reset_env_ids = reset_env_ids.sort()[0]  # Sort for easier verification
+
+            print(f"\n🔄 Resetting {num_to_reset} environments: {reset_env_ids[:10].tolist()}" +
+                  (f"..." if num_to_reset > 10 else ""))
+
+            # Perform reset via the environment's reset mechanism
+            # This will trigger dynamics wrapper's _wrapped_reset_idx
+            env.unwrapped._reset_idx(reset_env_ids)
+
+            # Get parameters after reset
+            params_after = get_params_dict()
+            print_stats(params_after, "📊 PARAMETERS AFTER RESET")
+
+            # Verify that reset env_ids changed
+            print(f"\n🔍 VERIFICATION (checking {num_to_reset} reset environments):")
+            print("-" * 80)
+
+            all_changed = True
+            for param_name, values_before in params_before.items():
+                values_after = params_after[param_name]
+
+                # Check if reset environments changed
+                changed_mask = values_before[reset_env_ids] != values_after[reset_env_ids]
+                num_changed = changed_mask.sum().item()
+                pct_changed = (num_changed / num_to_reset) * 100
+
+                status = "✓" if num_changed == num_to_reset else "✗"
+                print(f"{status} {param_name:20s}: {num_changed}/{num_to_reset} changed ({pct_changed:.1f}%)")
+
+                if num_changed < num_to_reset:
+                    all_changed = False
+                    # Show which ones didn't change
+                    unchanged_ids = reset_env_ids[~changed_mask]
+                    print(f"   ⚠️  Unchanged env_ids: {unchanged_ids[:5].tolist()}" +
+                          (f"..." if len(unchanged_ids) > 5 else ""))
+
+            # Check that non-reset environments stayed the same (use CPU for indexing param tensors)
+            non_reset_mask = torch.ones(env.num_envs, dtype=torch.bool, device='cpu')
+            non_reset_mask[reset_env_ids.cpu()] = False
+            non_reset_ids = torch.where(non_reset_mask)[0]
+
+            if len(non_reset_ids) > 0:
+                print(f"\n🔍 VERIFICATION (checking {len(non_reset_ids)} non-reset environments):")
+                print("-" * 80)
+
+                for param_name, values_before in params_before.items():
+                    values_after = params_after[param_name]
+
+                    # Check if non-reset environments stayed the same
+                    unchanged_mask = values_before[non_reset_ids] == values_after[non_reset_ids]
+                    num_unchanged = unchanged_mask.sum().item()
+                    pct_unchanged = (num_unchanged / len(non_reset_ids)) * 100
+
+                    status = "✓" if num_unchanged == len(non_reset_ids) else "✗"
+                    print(f"{status} {param_name:20s}: {num_unchanged}/{len(non_reset_ids)} unchanged ({pct_unchanged:.1f}%)")
+
+                    if num_unchanged < len(non_reset_ids):
+                        # Show which ones changed (shouldn't happen)
+                        changed_ids = non_reset_ids[~unchanged_mask]
+                        print(f"   ⚠️  Unexpectedly changed env_ids: {changed_ids[:5].tolist()}" +
+                              (f"..." if len(changed_ids) > 5 else ""))
+
+            if all_changed:
+                print(f"\n✅ Test {test_idx + 1} PASSED: All reset environments changed")
+            else:
+                print(f"\n❌ Test {test_idx + 1} FAILED: Some reset environments did not change")
+
+            # Take a few steps between tests
+            for _ in range(3):
+                action = torch.zeros((env.num_envs, env.unwrapped.cfg.action_space), device=device)
+                obs, reward, terminated, truncated, info = env.step(action)
+
+        print(f"\n{'='*80}")
+        print("RESET TEST COMPLETE")
+        print("="*80)
+        return
+
+
+
+    else:
+        # ===== STEP 5: CREATE AND START TRAINER =====
+        # Trainer uses pre-configured parameters from Step 1
+        print("[INFO]: Step 5 - Creating trainer")
+
+        cfg_trainer = {
+            "timesteps": configs['primary'].total_agents * configs['primary'].max_steps // (configs['primary'].total_num_envs),
+            "headless": True,
+            "close_environment_at_exit": True,
+            "disable_progressbar": configs['agent'].disable_progressbar
+        }
+
+        trainer = SequentialTrainer(
+            cfg=cfg_trainer,
+            env=env,
+            agents=agents
+        )
+        print("[INFO]: Trainer created successfully")
+        print("=" * 100)
+
+        # Start training
+        print("[INFO]: Step 6 - Starting training...")
+        torch.autograd.set_detect_anomaly(True)
+        trainer.train()
 
     
 if __name__ == "__main__":

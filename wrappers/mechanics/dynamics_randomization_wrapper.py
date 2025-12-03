@@ -74,30 +74,23 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         self.rot_threshold_range = config.get('rot_threshold_range', [0.08, 0.12])
         self.force_threshold_range = config.get('force_threshold_range', [8.0, 12.0])
 
-        # Initialize per-environment storage tensors
-        # Friction (scalar per env)
-        self.current_friction = torch.ones((self.num_envs,), dtype=torch.float32, device=self.device)
-
-        # Controller gains (6-DOF: 3 pos + 3 rot)
-        self.current_prop_gains = torch.zeros((self.num_envs, 6), dtype=torch.float32, device=self.device)
-
-        # Force/torque gains (6-DOF: 3 force + 3 torque, for hybrid control)
-        self.current_force_gains = torch.zeros((self.num_envs, 6), dtype=torch.float32, device=self.device)
-
-        # Action thresholds (stored as scalars, will be replicated to dims when applied)
-        self.current_pos_threshold = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
-        self.current_rot_threshold = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
-        self.current_force_threshold = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
+        # Initialize per-environment storage tensors (will be properly initialized in _initialize_wrapper)
+        # Use default device/dtype for now, will match target tensors during initialization
+        self.current_friction = None
+        self.current_prop_gains = None
+        self.current_force_gains = None
+        self.current_pos_threshold = None
+        self.current_rot_threshold = None
+        self.current_force_threshold = None
 
         # Store original methods
         self._original_reset_idx = None
         self._wrapper_initialized = False
 
-        # Initialize wrapper if environment is ready
-        if hasattr(self.unwrapped, '_robot'):
-            self._initialize_wrapper()
+        # Note: Initialization is delayed until first reset when environment parameters are ready
+        # Do NOT initialize here - task_prop_gains and other parameters don't exist until first _reset_idx
 
-        print(f"[DynamicsRandomizationWrapper] Initialized")
+        print(f"[DynamicsRandomizationWrapper] Created (initialization deferred until first reset)")
         print(f"  Friction randomization: {self.randomize_friction}")
         print(f"  Gains randomization: {self.randomize_gains}")
         print(f"  Force gains randomization: {self.randomize_force_gains}")
@@ -152,6 +145,9 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         # Initialize all thresholds/bounds as tensors
         self._initialize_thresholds_bounds_tensors()
 
+        # Initialize storage tensors with correct dtype and device
+        self._initialize_storage_tensors()
+
         # Store and override _reset_idx method
         self._original_reset_idx = self.unwrapped._reset_idx
         self.unwrapped._reset_idx = self._wrapped_reset_idx
@@ -166,14 +162,21 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         Randomizes dynamics BEFORE calling original reset so new parameters
         are in place when environment state is initialized.
         """
-        # Convert to tensor if needed
+        # Initialize wrapper on first reset if not already done
+        if not self._wrapper_initialized:
+            self._initialize_wrapper()
+
+        # Convert to tensor if needed and ensure on correct device (GPU for general operations)
         if not isinstance(env_ids, torch.Tensor):
             env_ids = torch.tensor(env_ids, device=self.device, dtype=torch.long)
+        else:
+            # Ensure env_ids are on GPU (test may pass CPU tensors)
+            env_ids = env_ids.to(device=self.device)
 
         # Randomize dynamics for the environments being reset
         self._randomize_dynamics(env_ids)
 
-        # Call original reset
+        # Call original reset (env_ids on GPU, PhysX conversions happen internally)
         if self._original_reset_idx is not None:
             self._original_reset_idx(env_ids)
 
@@ -189,23 +192,30 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         # 1. Randomize friction (held asset only)
         if self.randomize_friction:
             friction_min, friction_max = self.friction_range
-            sampled_friction = torch.rand(num_reset_envs, device=self.device) * (friction_max - friction_min) + friction_min
+            sampled_friction = (
+                torch.rand(num_reset_envs, device=self.current_friction.device)
+                * (friction_max - friction_min) + friction_min
+            )
             self.current_friction[env_ids] = sampled_friction
 
             # Apply friction to held asset
-            # Note: factory_utils.set_friction applies to ALL environments, so we need a workaround
-            # We'll set the material properties directly per environment
             self._set_friction_per_env(self.unwrapped._held_asset, env_ids, sampled_friction)
 
         # 2. Randomize controller gains (position and rotation)
         if self.randomize_gains:
             # Sample position gains (same for all 3 position dims)
             pos_gain_min, pos_gain_max = self.pos_gains_range
-            sampled_pos_gains = torch.rand(num_reset_envs, device=self.device) * (pos_gain_max - pos_gain_min) + pos_gain_min
+            sampled_pos_gains = (
+                torch.rand(num_reset_envs, device=self.current_prop_gains.device)
+                * (pos_gain_max - pos_gain_min) + pos_gain_min
+            )
 
             # Sample rotation gains (same for all 3 rotation dims)
             rot_gain_min, rot_gain_max = self.rot_gains_range
-            sampled_rot_gains = torch.rand(num_reset_envs, device=self.device) * (rot_gain_max - rot_gain_min) + rot_gain_min
+            sampled_rot_gains = (
+                torch.rand(num_reset_envs, device=self.current_prop_gains.device)
+                * (rot_gain_max - rot_gain_min) + rot_gain_min
+            )
 
             # Replicate to all dimensions: [pos_x, pos_y, pos_z, rot_x, rot_y, rot_z]
             self.current_prop_gains[env_ids, 0:3] = sampled_pos_gains.unsqueeze(1).repeat(1, 3)
@@ -218,11 +228,17 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         if self.randomize_force_gains:
             # Sample force gains (same for all 3 force dims)
             force_gain_min, force_gain_max = self.force_gains_range
-            sampled_force_gains = torch.rand(num_reset_envs, device=self.device) * (force_gain_max - force_gain_min) + force_gain_min
+            sampled_force_gains = (
+                torch.rand(num_reset_envs, device=self.current_force_gains.device)
+                * (force_gain_max - force_gain_min) + force_gain_min
+            )
 
             # Sample torque gains (same for all 3 torque dims)
             torque_gain_min, torque_gain_max = self.torque_gains_range
-            sampled_torque_gains = torch.rand(num_reset_envs, device=self.device) * (torque_gain_max - torque_gain_min) + torque_gain_min
+            sampled_torque_gains = (
+                torch.rand(num_reset_envs, device=self.current_force_gains.device)
+                * (torque_gain_max - torque_gain_min) + torque_gain_min
+            )
 
             # Replicate to all dimensions: [force_x, force_y, force_z, torque_x, torque_y, torque_z]
             self.current_force_gains[env_ids, 0:3] = sampled_force_gains.unsqueeze(1).repeat(1, 3)
@@ -234,19 +250,28 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         # 4. Randomize action thresholds
         if self.randomize_pos_threshold:
             pos_thresh_min, pos_thresh_max = self.pos_threshold_range
-            sampled_pos_thresh = torch.rand(num_reset_envs, device=self.device) * (pos_thresh_max - pos_thresh_min) + pos_thresh_min
+            sampled_pos_thresh = (
+                torch.rand(num_reset_envs, device=self.current_pos_threshold.device)
+                * (pos_thresh_max - pos_thresh_min) + pos_thresh_min
+            )
             self.current_pos_threshold[env_ids] = sampled_pos_thresh
             self._apply_pos_threshold(env_ids)
 
         if self.randomize_rot_threshold:
             rot_thresh_min, rot_thresh_max = self.rot_threshold_range
-            sampled_rot_thresh = torch.rand(num_reset_envs, device=self.device) * (rot_thresh_max - rot_thresh_min) + rot_thresh_min
+            sampled_rot_thresh = (
+                torch.rand(num_reset_envs, device=self.current_rot_threshold.device)
+                * (rot_thresh_max - rot_thresh_min) + rot_thresh_min
+            )
             self.current_rot_threshold[env_ids] = sampled_rot_thresh
             self._apply_rot_threshold(env_ids)
 
         if self.randomize_force_threshold:
             force_thresh_min, force_thresh_max = self.force_threshold_range
-            sampled_force_thresh = torch.rand(num_reset_envs, device=self.device) * (force_thresh_max - force_thresh_min) + force_thresh_min
+            sampled_force_thresh = (
+                torch.rand(num_reset_envs, device=self.current_force_threshold.device)
+                * (force_thresh_max - force_thresh_min) + force_thresh_min
+            )
             self.current_force_threshold[env_ids] = sampled_force_thresh
             self._apply_force_threshold(env_ids)
 
@@ -257,7 +282,7 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         Args:
             asset: Articulation object (e.g., _held_asset)
             env_ids: Tensor of environment indices
-            friction_values: Tensor of friction coefficients for each env
+            friction_values: Tensor of friction coefficients for each env (shape: num_reset_envs)
         """
         if not hasattr(asset, 'root_physx_view'):
             raise RuntimeError(
@@ -266,15 +291,21 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
             )
 
         # Get current material properties
-        # Shape: (num_envs, num_properties) where properties = [static_friction, dynamic_friction, restitution]
+        # Shape: (num_envs, num_shapes, num_properties) where last dim = [static, dynamic, restitution]
         materials = asset.root_physx_view.get_material_properties()
 
-        # Set friction for specified environments
-        materials[env_ids, 0] = friction_values  # Static friction
-        materials[env_ids, 1] = friction_values  # Dynamic friction
+        # Move tensors to match materials device (PhysX materials are on CPU)
+        mat_device = materials.device
+        env_ids_mat = env_ids.to(mat_device)
+        friction_mat = friction_values.to(mat_device)
 
-        # Apply updated materials
-        asset.root_physx_view.set_material_properties(materials, env_ids)
+        # Set friction for specified environments (matching factory_utils.set_friction pattern)
+        # Use ellipsis to broadcast across shape dimension: friction_values shape (num_reset_envs,) -> (num_reset_envs, num_shapes)
+        materials[env_ids_mat, ..., 0] = friction_mat.unsqueeze(-1)  # Static friction
+        materials[env_ids_mat, ..., 1] = friction_mat.unsqueeze(-1)  # Dynamic friction
+
+        # Apply updated materials (env_ids must be on CPU per factory_utils pattern)
+        asset.root_physx_view.set_material_properties(materials, env_ids_mat)
 
     def _find_hybrid_wrapper(self):
         """Search wrapper chain for HybridForcePositionWrapper."""
@@ -287,6 +318,55 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
             else:
                 break
         return None
+
+    def _initialize_storage_tensors(self):
+        """Initialize storage tensors with correct device to match target tensors.
+        Always use float32 dtype since we sample from uniform distribution (float32)."""
+
+        # Friction: Match materials tensor device (CPU for PhysX), always use float32
+        if self.randomize_friction:
+            materials = self.unwrapped._held_asset.root_physx_view.get_material_properties()
+            self.current_friction = torch.ones((self.num_envs,), dtype=torch.float32, device=materials.device)
+
+        # Controller gains: Match task_prop_gains device, use float32
+        if self.randomize_gains:
+            self.current_prop_gains = torch.zeros(
+                (self.num_envs, 6),
+                dtype=torch.float32,
+                device=self.unwrapped.task_prop_gains.device
+            )
+
+        # Position threshold: Match base env pos_threshold device, use float32
+        if self.randomize_pos_threshold:
+            self.current_pos_threshold = torch.zeros(
+                (self.num_envs,),
+                dtype=torch.float32,
+                device=self.unwrapped.pos_threshold.device
+            )
+
+        # Rotation threshold: Match base env rot_threshold device, use float32
+        if self.randomize_rot_threshold:
+            self.current_rot_threshold = torch.zeros(
+                (self.num_envs,),
+                dtype=torch.float32,
+                device=self.unwrapped.rot_threshold.device
+            )
+
+        # Force/torque gains and threshold: Match hybrid wrapper device, use float32
+        hybrid_wrapper = self._find_hybrid_wrapper()
+        if self.randomize_force_gains and hybrid_wrapper is not None:
+            self.current_force_gains = torch.zeros(
+                (self.num_envs, 6),
+                dtype=torch.float32,
+                device=hybrid_wrapper.kp.device
+            )
+
+        if self.randomize_force_threshold and hybrid_wrapper is not None:
+            self.current_force_threshold = torch.zeros(
+                (self.num_envs,),
+                dtype=torch.float32,
+                device=hybrid_wrapper.force_threshold.device
+            )
 
     def _initialize_thresholds_bounds_tensors(self):
         """
@@ -338,11 +418,12 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
 
         Directly sets task_prop_gains and recalculates task_deriv_gains.
         """
-        # Set proportional gains
-        self.unwrapped.task_prop_gains[env_ids] = self.current_prop_gains[env_ids]
+        # Set proportional gains (convert dtype to match target if needed)
+        self.unwrapped.task_prop_gains[env_ids] = self.current_prop_gains[env_ids].to(
+            dtype=self.unwrapped.task_prop_gains.dtype
+        )
 
         # Recalculate derivative gains as 2 * sqrt(prop_gains)
-        # Using factory_utils or manual calculation
         rot_deriv_scale = 1.0  # Default scaling for rotation derivative gains
         if hasattr(self.unwrapped.cfg.ctrl, 'default_rot_deriv_scale'):
             rot_deriv_scale = self.unwrapped.cfg.ctrl.default_rot_deriv_scale
@@ -354,7 +435,9 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         if rot_deriv_scale != 1.0:
             deriv_gains[:, 3:6] *= rot_deriv_scale
 
-        self.unwrapped.task_deriv_gains[env_ids] = deriv_gains
+        self.unwrapped.task_deriv_gains[env_ids] = deriv_gains.to(
+            dtype=self.unwrapped.task_deriv_gains.dtype
+        )
 
     def _apply_force_gains(self, env_ids):
         """
@@ -369,17 +452,19 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
                 "HybridForcePositionWrapper is in the wrapper stack."
             )
 
-        # Modify the wrapper's kp attribute (shape: num_envs, 6)
-        hybrid_wrapper.kp[env_ids] = self.current_force_gains[env_ids]
+        # Modify the wrapper's kp attribute (convert dtype to match target if needed)
+        hybrid_wrapper.kp[env_ids] = self.current_force_gains[env_ids].to(dtype=hybrid_wrapper.kp.dtype)
 
     def _apply_pos_threshold(self, env_ids):
         """Apply randomized position thresholds by overwriting base env attribute."""
-        # Replicate scalar to 3 dims and assign directly to base env
-        self.unwrapped.pos_threshold[env_ids] = self.current_pos_threshold[env_ids].unsqueeze(1).repeat(1, 3)
+        # Replicate scalar to 3 dims and assign directly to base env (convert dtype if needed)
+        thresh = self.current_pos_threshold[env_ids].unsqueeze(1).repeat(1, 3)
+        self.unwrapped.pos_threshold[env_ids] = thresh.to(dtype=self.unwrapped.pos_threshold.dtype)
 
     def _apply_rot_threshold(self, env_ids):
         """Apply randomized rotation thresholds by overwriting base env attribute."""
-        self.unwrapped.rot_threshold[env_ids] = self.current_rot_threshold[env_ids].unsqueeze(1).repeat(1, 3)
+        thresh = self.current_rot_threshold[env_ids].unsqueeze(1).repeat(1, 3)
+        self.unwrapped.rot_threshold[env_ids] = thresh.to(dtype=self.unwrapped.rot_threshold.dtype)
 
     def _apply_force_threshold(self, env_ids):
         """Apply randomized force thresholds to hybrid wrapper."""
@@ -389,7 +474,8 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
                 "Force threshold randomization enabled but HybridForcePositionWrapper not found. "
                 "Either disable force_threshold randomization or add HybridForcePositionWrapper to wrapper stack."
             )
-        hybrid_wrapper.force_threshold[env_ids] = self.current_force_threshold[env_ids].unsqueeze(1).repeat(1, 3)
+        thresh = self.current_force_threshold[env_ids].unsqueeze(1).repeat(1, 3)
+        hybrid_wrapper.force_threshold[env_ids] = thresh.to(dtype=hybrid_wrapper.force_threshold.dtype)
 
     def step(self, action):
         """Step environment and ensure wrapper is initialized."""
