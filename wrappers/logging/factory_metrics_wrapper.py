@@ -25,7 +25,7 @@ class FactoryMetricsWrapper(gym.Wrapper):
     - Simple step-by-step collection following WandbWrapper pattern
     """
 
-    def __init__(self, env, num_agents=1, publish_to_wandb=True):
+    def __init__(self, env, num_agents=1, publish_to_wandb=True, engagement_reward_scale=1.0, success_reward_scale=1.0):
         """
         Initialize factory metrics wrapper.
 
@@ -33,6 +33,8 @@ class FactoryMetricsWrapper(gym.Wrapper):
             env: Base environment to wrap (must have GenericWandbLoggingWrapper in chain if publish_to_wandb=True)
             num_agents: Number of agents for static assignment
             publish_to_wandb: Whether to publish metrics to WandB (default: True)
+            engagement_reward_scale: Scale factor for engagement rewards (default: 1.0)
+            success_reward_scale: Scale factor for success rewards (default: 1.0)
         """
         super().__init__(env)
 
@@ -93,8 +95,8 @@ class FactoryMetricsWrapper(gym.Wrapper):
         self._first_reset = True
 
         # Configurable reward scalers for engagement and success (default 1.0 for backward compatibility)
-        self.engagement_reward_scale = config.get('engagement_reward_scale', 1.0)
-        self.success_reward_scale = config.get('success_reward_scale', 1.0)
+        self.engagement_reward_scale = engagement_reward_scale
+        self.success_reward_scale = success_reward_scale
 
         # Override the base environment's _update_rew_buf to use our version
         # This ensures per-environment reward components instead of averaged scalars
