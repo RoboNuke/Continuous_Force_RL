@@ -18,6 +18,8 @@ model:
 
 # Enable hybrid control wrapper and related systems
 wrappers:
+  dynamics_randomization:
+    enabled: false
   # Enable hybrid control wrapper
   hybrid_control:
     enabled: true

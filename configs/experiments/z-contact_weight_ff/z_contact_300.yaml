@@ -36,6 +36,8 @@ wrappers:
   factory_metrics:
     engagement_reward_scale: 3.05 
     success_reward_scale: 3.05 
+  dynamics_randomization:
+    enabled: false
 
 environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
