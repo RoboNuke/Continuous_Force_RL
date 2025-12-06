@@ -302,27 +302,28 @@ wrappers:
 
     # Friction randomization (held asset only)
     randomize_friction: True
-    friction_range: [0.5, 1.5]
+    friction_range: [0.5, 1.0]
 
     # Controller gains randomization (separate for pos/rot)
     randomize_gains: True
-    pos_gains_range: [80.0, 120.0]
-    rot_gains_range: [20.0, 40.0]
+    #pos_gains_range: [80.0, 120.0]
+    pos_gains_range: [400.0, 800.0]
+    rot_gains_range: [29.0, 30.0]    # Don't actually want to randomize
 
     # Force/torque gains randomization (hybrid control only)
     randomize_force_gains: True
-    force_gains_range: [0.08, 0.12]
-    torque_gains_range: [0.0008, 0.0012]
+    force_gains_range: [0.1, 0.5]
+    torque_gains_range: [0.001, 0.001]      # Don't Want to Randomize
 
     # Action thresholds randomization
     randomize_pos_threshold: True
-    pos_threshold_range: [0.015, 0.025]
+    pos_threshold_range: [0.016, 0.025]
 
-    randomize_rot_threshold: True
+    randomize_rot_threshold: False
     rot_threshold_range: [0.08, 0.12]
 
     randomize_force_threshold: True
-    force_threshold_range: [8.0, 12.0]
+    force_threshold_range: [40.0, 60.0]
 
 
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
