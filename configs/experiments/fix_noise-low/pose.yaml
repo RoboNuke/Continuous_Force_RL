@@ -13,6 +13,26 @@ primary:
 model:
   use_hybrid_agent: false
 
+wrappers:  # Dynamics randomization for domain randomization
+  dynamics_randomization:
+    enabled: true
+
+    # Friction randomization (held asset only)
+    randomize_friction: True
+
+    # Controller gains randomization (separate for pos/rot)
+    randomize_gains: True
+
+    # Force/torque gains randomization (hybrid control only)
+    randomize_force_gains: false
+
+    # Action thresholds randomization
+    randomize_pos_threshold: True
+
+    randomize_rot_threshold: False
+
+    randomize_force_threshold: false
+
 environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
