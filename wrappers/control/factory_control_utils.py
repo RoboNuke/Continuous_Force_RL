@@ -79,12 +79,42 @@ def compute_force_task_wrench(
     ctrl_target_force,
     task_gains,
     task_deriv_gains,
-    device
+    device,
+    # PID control parameters (optional)
+    task_integ_gains=None,
+    force_integral_error=None,
+    enable_derivative=False,
+    enable_integral=False,
 ):
-    """Compute task-space wrench for force control."""
+    """Compute task-space wrench for force control with optional PID.
+
+    Args:
+        cfg: Environment configuration
+        dof_pos: Joint positions
+        eef_force: End-effector force/torque measurements
+        fingertip_midpoint_linvel: Fingertip linear velocity
+        fingertip_midpoint_angvel: Fingertip angular velocity
+        ctrl_target_force: Target force/torque
+        task_gains: Proportional gains (Kp)
+        task_deriv_gains: Derivative gains (Kd) - derived from Kp as 2*sqrt(Kp)
+        device: Torch device
+        task_integ_gains: Integral gains (Ki) - optional, required if enable_integral=True
+        force_integral_error: Accumulated integral error - optional, required if enable_integral=True
+        enable_derivative: Enable D term (velocity damping)
+        enable_integral: Enable I term
+    """
+    # Proportional term (always active)
     force_wrench = task_gains * (ctrl_target_force - eef_force)
-    force_wrench[ :, 0:3 ] += task_deriv_gains[:, 0:3] * (0.0 - fingertip_midpoint_linvel)
-    force_wrench[ :, 3:6 ] += task_deriv_gains[:, 3:6] * (0.0 - fingertip_midpoint_angvel)
+
+    # Derivative term (velocity damping) - optional
+    if enable_derivative:
+        force_wrench[:, 0:3] += task_deriv_gains[:, 0:3] * (0.0 - fingertip_midpoint_linvel)
+        force_wrench[:, 3:6] += task_deriv_gains[:, 3:6] * (0.0 - fingertip_midpoint_angvel)
+
+    # Integral term - optional
+    if enable_integral and task_integ_gains is not None and force_integral_error is not None:
+        force_wrench += task_integ_gains * force_integral_error
+
     return force_wrench
 
 

@@ -37,6 +37,14 @@ def set_reward_shaping(env_cfg, agent_cfg):
 
 def apply_wrappers(env, configs):
     wrappers_config = configs['wrappers']
+
+    # Validate wrapper combinations
+    if wrappers_config.hybrid_control.enabled and wrappers_config.pose_contact_logging.enabled:
+        raise ValueError(
+            "Cannot enable both hybrid_control and pose_contact_logging wrappers. "
+            "Only one contact tracking wrapper can be active at a time."
+        )
+
     if wrappers_config.fragile_objects.enabled:
         print(f"  - Applying Fragile Object Wrapper with break forces: {configs['primary'].break_forces}")
         env = FragileObjectWrapper(

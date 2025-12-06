@@ -40,13 +40,31 @@ class ExtendedCtrlCfg(CtrlCfg):
     """Torque action bounds [tx, ty, tz] in Newton-meters"""
 
     force_action_threshold: List[float] = None
-    """Force action threshold for goal calculation [fx, fy, fz]"""
+    """Force action threshold for goal calculation [fx, fy, fz] (used in delta mode)"""
 
     torque_action_threshold: List[float] = None
-    """Torque action threshold for goal calculation [tx, ty, tz]"""
+    """Torque action threshold for goal calculation [tx, ty, tz] (used in delta mode)"""
 
     default_task_force_gains: List[float] = None
     """Force task gains [fx, fy, fz, tx, ty, tz] for hybrid control"""
+
+    use_delta_force: bool = False
+    """If True, force target = action * threshold + current_force (delta mode).
+    If False, force target = action * bounds (absolute mode). Default: False (absolute)."""
+
+    # Force PID control flags
+    enable_force_derivative: bool = False
+    """Enable derivative (D) term in force control. D gains derived from Kp (2*sqrt(Kp))."""
+
+    enable_force_integral: bool = False
+    """Enable integral (I) term in force control."""
+
+    # Integral-specific parameters
+    default_task_force_integ_gains: List[float] = None
+    """Force integral gains [fx_ki, fy_ki, fz_ki, tx_ki, ty_ki, tz_ki]. Required if enable_force_integral=True."""
+
+    force_integral_clamp: float = 50.0
+    """Anti-windup clamp for integral term (symmetric bounds)."""
 
     def __post_init__(self):
         """Post-initialization to set defaults for our custom parameters."""
@@ -74,3 +92,10 @@ class ExtendedCtrlCfg(CtrlCfg):
 
         if self.default_task_force_gains is None:
             self.default_task_force_gains = [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
+
+        # Validate integral config
+        if self.enable_force_integral and self.default_task_force_integ_gains is None:
+            raise ValueError(
+                "enable_force_integral=True but default_task_force_integ_gains not set. "
+                "Please provide integral gains, e.g., [0.01, 0.01, 0.01, 0.001, 0.001, 0.001]"
+            )

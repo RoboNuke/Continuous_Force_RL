@@ -425,6 +425,9 @@ class ForceTorqueWrapper(gym.Wrapper):
             joint_forces = self._robot_av.get_measured_joint_forces()
             if joint_forces.shape[1] > 8:  # Ensure joint 8 exists
                 force_torque_data = joint_forces[:, 8, :]
+                # Negate to convert from reaction force (surface on robot)
+                # to action force (robot on surface)
+                force_torque_data = -force_torque_data
                 self.unwrapped.robot_force_torque = force_torque_data
                 # Also set as force_torque attribute for factory obs_dict creation
                 self.unwrapped.force_torque = force_torque_data

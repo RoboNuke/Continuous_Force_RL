@@ -92,6 +92,10 @@ class FactoryMetricsWrapper(gym.Wrapper):
         # Flag to prevent publishing on first reset (all zeros)
         self._first_reset = True
 
+        # Configurable reward scalers for engagement and success (default 1.0 for backward compatibility)
+        self.engagement_reward_scale = config.get('engagement_reward_scale', 1.0)
+        self.success_reward_scale = config.get('success_reward_scale', 1.0)
+
         # Override the base environment's _update_rew_buf to use our version
         # This ensures per-environment reward components instead of averaged scalars
         if hasattr(self.unwrapped, '_update_rew_buf'):
@@ -208,13 +212,10 @@ class FactoryMetricsWrapper(gym.Wrapper):
 
     def _update_rew_buf_for_env(self, env, curr_successes):
         """Compute reward at current timestep."""
-        # First, get base rewards from previous wrappers (e.g., HybridForcePositionWrapper)
-        # This ensures we don't overwrite rewards added by other wrappers in the chain
-        if self._original_update_rew_buf is not None:
-            rew_buf = self._original_update_rew_buf(curr_successes)
-        else:
-            # Fallback: start with zero rewards if no original method exists
-            rew_buf = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+        # Calculate base rewards from scratch (no double-counting)
+        # Note: HybridControl now wraps _get_rewards instead of _update_rew_buf,
+        # so _original_update_rew_buf points directly to BaseEnv (if it exists)
+        rew_buf = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
 
         rew_dict = {}
 
@@ -239,19 +240,23 @@ class FactoryMetricsWrapper(gym.Wrapper):
         )
         rew_dict["curr_successes"] = curr_successes.clone().float()
 
-        # Add factory-specific reward components to the base rewards
-        rew_buf += (
+        # Calculate factory reward components with configurable scalers
+        rew_buf = (
             rew_dict["kp_coarse"]
             + rew_dict["kp_baseline"]
             + rew_dict["kp_fine"]
             - rew_dict["action_penalty"] * env.cfg_task.action_penalty_scale
             - rew_dict["action_grad_penalty"] * env.cfg_task.action_grad_penalty_scale
-            + rew_dict["curr_engaged"]
-            + rew_dict["curr_successes"]
+            + rew_dict["curr_engaged"] * self.engagement_reward_scale
+            + rew_dict["curr_successes"] * self.success_reward_scale
         )
 
         for rew_name, rew in rew_dict.items():
             env.extras[f"logs_rew_{rew_name}"] = rew
+
+        # Override logged values for scaled rewards to reflect actual contribution
+        env.extras["logs_rew_curr_engaged"] = rew_dict["curr_engaged"] * self.engagement_reward_scale
+        env.extras["logs_rew_curr_successes"] = rew_dict["curr_successes"] * self.success_reward_scale
 
         return rew_buf
     

@@ -6,6 +6,10 @@ from typing import List, Optional
 class FactoryMetricsConfig:
     enabled: bool = False
     publish_to_wandb: bool = True
+    engagement_reward_scale: float = 1.0
+    """Scale factor for engagement rewards. Default 1.0 preserves original behavior."""
+    success_reward_scale: float = 1.0
+    """Scale factor for success rewards. Default 1.0 preserves original behavior."""
 
 @dataclass
 class ObsManagerConfig:

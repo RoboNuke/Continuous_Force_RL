@@ -118,6 +118,12 @@ class HybridForcePositionWrapper(gym.Wrapper):
         self.no_sel_ema = self.ctrl_cfg.no_sel_ema
         self.target_init_mode = self.ctrl_cfg.target_init_mode
         self.use_ground_truth_selection = use_ground_truth_selection
+        self.use_delta_force = getattr(self.ctrl_cfg, 'use_delta_force', False)
+
+        # PID force control flags
+        self.enable_force_derivative = getattr(self.ctrl_cfg, 'enable_force_derivative', False)
+        self.enable_force_integral = getattr(self.ctrl_cfg, 'enable_force_integral', False)
+        self.force_integral_clamp = getattr(self.ctrl_cfg, 'force_integral_clamp', 50.0)
 
         # Update action space to include selection matrix + position + force
         original_action_space = 6  # Original position + rotation actions
@@ -152,6 +158,12 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Task wrench (commanded wrench to robot, stored for external access/plotting)
         self.task_wrench = torch.zeros((self.num_envs, 6), device=self.device)
 
+        # Integral state for force control (accumulates force error)
+        self.force_integral_error = torch.zeros((self.num_envs, 6), device=self.device)
+
+        # Track previous contact state for integral reset on contact change
+        self._prev_contact_state = None
+
         # Note: Contact detection (active_force) has been moved to ForceTorqueWrapper
         # Access via self.unwrapped.in_contact instead
 
@@ -166,6 +178,23 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Zero out torque gains if not controlling torques
         if not ctrl_torque:
             self.kp[:, 3:] = 0.0
+
+        # Initialize integral gains if enabled
+        if self.enable_force_integral:
+            if self.ctrl_cfg.default_task_force_integ_gains is None:
+                raise ValueError(
+                    "enable_force_integral=True but default_task_force_integ_gains not set in ctrl_cfg. "
+                    "Please provide integral gains, e.g., [0.01, 0.01, 0.01, 0.001, 0.001, 0.001]"
+                )
+            self.ki = torch.tensor(
+                self.ctrl_cfg.default_task_force_integ_gains,
+                device=self.device
+            ).unsqueeze(0).repeat(self.num_envs, 1)
+            # Zero out torque integral gains if not controlling torques
+            if not ctrl_torque:
+                self.ki[:, 3:] = 0.0
+        else:
+            self.ki = None
 
         # Initialize threshold and bounds as class variables (per-environment tensors)
         # These are independent of base env to keep wrapper self-contained
@@ -350,9 +379,9 @@ class HybridForcePositionWrapper(gym.Wrapper):
             self._original_apply_action = self.unwrapped._apply_action
             self.unwrapped._apply_action = self._wrapped_apply_action
 
-        if hasattr(self.unwrapped, '_update_rew_buf') and self.reward_type != "base":
-            self._original_update_rew_buf = self.unwrapped._update_rew_buf
-            self.unwrapped._update_rew_buf = self._wrapped_update_rew_buf
+        if hasattr(self.unwrapped, '_get_rewards') and self.reward_type != "base":
+            self._original_get_rewards = self.unwrapped._get_rewards
+            self.unwrapped._get_rewards = self._wrapped_get_rewards
 
         if hasattr(self.unwrapped, '_reset_idx'):
             self._original_reset_idx = self.unwrapped._reset_idx
@@ -368,6 +397,16 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
     def _wrapped_pre_physics_step(self, action):
         """Process actions through EMA->compute targets->control flow (Isaac Lab style)."""
+        # Check for contact change from previous step and reset integral if needed
+        # This compares prev contact (stored before last physics step) with current contact (after last physics step)
+        if self.enable_force_integral and self._prev_contact_state is not None and hasattr(self.unwrapped, 'in_contact'):
+            curr_contact = self.unwrapped.in_contact[:, :self.force_size]
+            self._reset_integral_on_contact_change(self._prev_contact_state, curr_contact)
+
+        # Store current contact state for next step's comparison
+        if self.enable_force_integral and hasattr(self.unwrapped, 'in_contact'):
+            self._prev_contact_state = self.unwrapped.in_contact[:, :self.force_size].clone()
+
         # Handle reset environments first
         env_ids = self.unwrapped.reset_buf.nonzero(as_tuple=False).squeeze(-1)
         if len(env_ids) > 0:
@@ -420,12 +459,27 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Reset EMA actions to zeros (Isaac Lab approach)
         self.ema_actions[env_ids] = 0.0
 
+        # Reset integral state on environment reset
+        self.force_integral_error[env_ids] = 0.0
+
         # Reset per-step tracking states
         if self._first_step_set:
             # Reset to current state values for reset environments
             self._prev_step_pos[env_ids] = self.unwrapped.fingertip_midpoint_pos[env_ids]
             self._prev_step_vel[env_ids] = self.unwrapped.fingertip_midpoint_linvel[env_ids]
             self._prev_step_force[env_ids] = self.robot_force_torque[env_ids, :3]
+
+    def _reset_integral_on_contact_change(self, prev_contact, curr_contact):
+        """Reset integral when contact state changes (anti-windup protection)."""
+        if not self.enable_force_integral:
+            return
+
+        # Check each axis for contact state change
+        contact_changed = prev_contact != curr_contact
+        # Reset any env where any axis changed contact state
+        env_changed = contact_changed.any(dim=1)
+        if env_changed.any():
+            self.force_integral_error[env_changed] = 0.0
 
     def _apply_ema_to_actions(self, action):
         """Apply EMA to actions, with special handling for selection terms."""
@@ -596,26 +650,49 @@ class HybridForcePositionWrapper(gym.Wrapper):
             roll=target_euler_xyz[:, 0], pitch=target_euler_xyz[:, 1], yaw=target_euler_xyz[:, 2]
         )
 
-        # 4. Force target (delta approach as requested)
+        # 4. Force target computation
+        # Two modes controlled by use_delta_force config:
+        # - Delta mode (use_delta_force=True): target = action * threshold + current_force
+        # - Absolute mode (use_delta_force=False): target = action * bounds
         force_actions = self.ema_actions[:, self.force_size+6:2*self.force_size+6]
 
-        # Use class variable (per-env tensor)
-        force_delta = force_actions[:, :3] * self.force_threshold
-
         self.target_force_for_control = torch.zeros((self.num_envs, 6), device=self.device)
-        self.target_force_for_control[:, :3] = torch.clip(
-            force_delta + self.robot_force_torque[:, :3],
-            -self.force_bounds, self.force_bounds
-        )
+
+        if self.use_delta_force:
+            # Delta mode: target relative to current measured force
+            force_delta = force_actions[:, :3] * self.force_threshold
+            self.target_force_for_control[:, :3] = torch.clip(
+                force_delta + self.robot_force_torque[:, :3],
+                -self.force_bounds, self.force_bounds
+            )
+        else:
+            # Absolute mode: action directly specifies target force
+            # action=0 → target=0N, action=±1 → target=±force_bounds
+            self.target_force_for_control[:, :3] = force_actions[:, :3] * self.force_bounds
 
         # Handle torque if enabled
         if self.force_size > 3:
-            # Use class variables (per-env tensors)
-            # Scale torque by ratio of thresholds (element-wise per environment)
-            torque_delta = force_actions[:, 3:] * self.torque_threshold / self.force_threshold
-            self.target_force_for_control[:, 3:] = torch.clip(
-                torque_delta + self.robot_force_torque[:, 3:],
-                -self.torque_bounds, self.torque_bounds
+            if self.use_delta_force:
+                # Delta mode for torque
+                torque_delta = force_actions[:, 3:] * self.torque_threshold / self.force_threshold
+                self.target_force_for_control[:, 3:] = torch.clip(
+                    torque_delta + self.robot_force_torque[:, 3:],
+                    -self.torque_bounds, self.torque_bounds
+                )
+            else:
+                # Absolute mode for torque
+                self.target_force_for_control[:, 3:] = force_actions[:, 3:] * self.torque_bounds
+
+        # 5. Update integral state if enabled (for PID force control)
+        if self.enable_force_integral:
+            force_error = self.target_force_for_control - self.robot_force_torque
+            # Accumulate error (will be scaled by Ki in wrench computation)
+            self.force_integral_error += force_error
+            # Anti-windup clamping
+            self.force_integral_error = torch.clamp(
+                self.force_integral_error,
+                -self.force_integral_clamp,
+                self.force_integral_clamp
             )
 
         # Log force goal norm
@@ -811,17 +888,22 @@ class HybridForcePositionWrapper(gym.Wrapper):
             device=self.unwrapped.device
         )
 
-        # Compute force wrench using filtered targets
+        # Compute force wrench using filtered targets (with optional PID control)
         force_wrench = compute_force_task_wrench(
             cfg=self.unwrapped.cfg,
             dof_pos=self.unwrapped.joint_pos,
             eef_force=self.robot_force_torque,
-            fingertip_midpoint_linvel=self.unwrapped.fingertip_midpoint_linvel, #self.unwrapped.ee_linvel_fd,
-            fingertip_midpoint_angvel=self.unwrapped.fingertip_midpoint_angvel, #self.unwrapped.ee_angvel_fd,
+            fingertip_midpoint_linvel=self.unwrapped.fingertip_midpoint_linvel,
+            fingertip_midpoint_angvel=self.unwrapped.fingertip_midpoint_angvel,
             ctrl_target_force=self.target_force_for_control,
             task_gains=self.kp,
             task_deriv_gains=self.unwrapped.task_deriv_gains,
-            device=self.unwrapped.device
+            device=self.unwrapped.device,
+            # PID control parameters
+            task_integ_gains=self.ki if self.enable_force_integral else None,
+            force_integral_error=self.force_integral_error if self.enable_force_integral else None,
+            enable_derivative=self.enable_force_derivative,
+            enable_integral=self.enable_force_integral,
         )
 
         # Log active wrench magnitudes based on control mode, aggregated per agent
@@ -921,26 +1003,26 @@ class HybridForcePositionWrapper(gym.Wrapper):
         self.unwrapped._robot.set_joint_position_target(self.unwrapped.ctrl_target_joint_pos)
         self.unwrapped._robot.set_joint_effort_target(self.unwrapped.joint_torque)
 
-    def _wrapped_update_rew_buf(self, curr_successes):
-        """Update reward buffer with hybrid control rewards."""
-        # Get base rewards
-        rew_buf = self._original_update_rew_buf(curr_successes) if self._original_update_rew_buf else torch.zeros_like(curr_successes).float()
+    def _wrapped_get_rewards(self):
+        """Get rewards with hybrid control rewards added."""
+        # Get base rewards from original method
+        base_rewards = self._original_get_rewards() if self._original_get_rewards else torch.zeros(self.num_envs, device=self.device)
 
         # Add hybrid control specific rewards
         if self.reward_type == "simp":
-            rew_buf += self._simple_force_reward()
+            base_rewards += self._simple_force_reward()
         elif self.reward_type == "dirs":
-            rew_buf += self._directional_force_reward()
+            base_rewards += self._directional_force_reward()
         elif self.reward_type == "delta":
-            rew_buf += self._delta_selection_reward()
+            base_rewards += self._delta_selection_reward()
         elif self.reward_type == "pos_simp":
-            rew_buf += self._position_simple_reward()
+            base_rewards += self._position_simple_reward()
         elif self.reward_type == "wrench_norm":
-            rew_buf += self._low_wrench_reward()
+            base_rewards += self._low_wrench_reward()
         elif self.reward_type == "force_z":
-            rew_buf += self._force_z_reward()
+            base_rewards += self._force_z_reward()
 
-        return rew_buf
+        return base_rewards
 
     def _simple_force_reward(self):
         """Simple force activity reward."""
