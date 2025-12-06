@@ -38,6 +38,9 @@ wrappers:
   factory_metrics:
     engagement_reward_scale: 2.55 
     success_reward_scale: 2.55    
+    
+  pose_contact_logging:
+    enabled: false
 
 environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION

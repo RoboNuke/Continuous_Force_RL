@@ -38,6 +38,9 @@ wrappers:
     success_reward_scale: 4.55 
   dynamics_randomization:
     enabled: false
+    
+  pose_contact_logging:
+    enabled: false
 
 environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
