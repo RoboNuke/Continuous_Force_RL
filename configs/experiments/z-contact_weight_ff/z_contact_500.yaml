@@ -33,6 +33,10 @@ wrappers:
     enable_contact_reward: true
     contact_reward_weight: 5.0
 
+  factory_metrics:
+    engagement_reward_scale: 5.05 
+    success_reward_scale: 5.05 
+
 environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:

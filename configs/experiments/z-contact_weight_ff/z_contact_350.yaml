@@ -31,7 +31,11 @@ wrappers:
   force_reward:
     enabled: true
     enable_contact_reward: true
-    contact_reward_weight: 2.0
+    contact_reward_weight: 3.5
+
+  factory_metrics:
+    engagement_reward_scale: 3.55 
+    success_reward_scale: 3.55 
 
 environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
@@ -42,6 +46,6 @@ environment:
     
 # Experiment metadata
 experiment:
-  name: "ff_zCon_20"
+  name: "ff_zCon_35"
   tags: []
-  group: "ff_zCon_20"
+  group: "ff_zCon_35"
