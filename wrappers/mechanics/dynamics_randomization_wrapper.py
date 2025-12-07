@@ -58,6 +58,7 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
 
         # Store config flags
         self.randomize_friction = config.get('randomize_friction', False)
+        self.randomize_held_mass = config.get('randomize_held_mass', False)
         self.randomize_gains = config.get('randomize_gains', False)
         self.randomize_force_gains = config.get('randomize_force_gains', False)
         self.randomize_pos_threshold = config.get('randomize_pos_threshold', False)
@@ -66,6 +67,7 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
 
         # Store ranges
         self.friction_range = config.get('friction_range', [0.5, 1.5])
+        self.held_mass_range = config.get('held_mass_range', [0.5, 2.0])
         self.pos_gains_range = config.get('pos_gains_range', [80.0, 120.0])
         self.rot_gains_range = config.get('rot_gains_range', [20.0, 40.0])
         self.force_gains_range = config.get('force_gains_range', [0.08, 0.12])
@@ -77,6 +79,7 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         # Initialize per-environment storage tensors (will be properly initialized in _initialize_wrapper)
         # Use default device/dtype for now, will match target tensors during initialization
         self.current_friction = None
+        self.current_held_mass = None
         self.current_prop_gains = None
         self.current_force_gains = None
         self.current_pos_threshold = None
@@ -92,6 +95,7 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
 
         print(f"[DynamicsRandomizationWrapper] Created (initialization deferred until first reset)")
         print(f"  Friction randomization: {self.randomize_friction}")
+        print(f"  Mass randomization: {self.randomize_held_mass}")
         print(f"  Gains randomization: {self.randomize_gains}")
         print(f"  Force gains randomization: {self.randomize_force_gains}")
         print(f"  Threshold randomization: pos={self.randomize_pos_threshold}, rot={self.randomize_rot_threshold}, "
@@ -117,6 +121,19 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
                 raise RuntimeError(
                     "Friction randomization requires PhysX root_physx_view on _held_asset. "
                     "Ensure asset is properly initialized or disable friction randomization."
+                )
+
+        # Validate mass randomization requirements
+        if self.randomize_held_mass:
+            if not hasattr(self.unwrapped, '_held_asset'):
+                raise RuntimeError(
+                    "Mass randomization requires _held_asset attribute on environment. "
+                    "Ensure the base environment has this attribute or disable mass randomization."
+                )
+            if not hasattr(self.unwrapped._held_asset, 'root_physx_view'):
+                raise RuntimeError(
+                    "Mass randomization requires PhysX root_physx_view on _held_asset. "
+                    "Ensure asset is properly initialized or disable mass randomization."
                 )
 
         # Validate gain randomization requirements
@@ -201,7 +218,19 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
             # Apply friction to held asset
             self._set_friction_per_env(self.unwrapped._held_asset, env_ids, sampled_friction)
 
-        # 2. Randomize controller gains (position and rotation)
+        # 2. Randomize held asset mass (scale factors)
+        if self.randomize_held_mass:
+            mass_scale_min, mass_scale_max = self.held_mass_range
+            sampled_mass_scales = (
+                torch.rand(num_reset_envs, device=self.current_held_mass.device)
+                * (mass_scale_max - mass_scale_min) + mass_scale_min
+            )
+            self.current_held_mass[env_ids] = sampled_mass_scales
+
+            # Apply mass scale to held asset
+            self._set_mass_per_env(self.unwrapped._held_asset, env_ids, sampled_mass_scales)
+
+        # 3. Randomize controller gains (position and rotation)
         if self.randomize_gains:
             # Sample position gains (same for all 3 position dims)
             pos_gain_min, pos_gain_max = self.pos_gains_range
@@ -224,7 +253,7 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
             # Apply gains to environment
             self._apply_controller_gains(env_ids)
 
-        # 3. Randomize force/torque gains (hybrid control only)
+        # 4. Randomize force/torque gains (hybrid control only)
         if self.randomize_force_gains:
             # Sample force gains (same for all 3 force dims)
             force_gain_min, force_gain_max = self.force_gains_range
@@ -247,7 +276,7 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
             # Apply force gains to environment
             self._apply_force_gains(env_ids)
 
-        # 4. Randomize action thresholds
+        # 5. Randomize action thresholds
         if self.randomize_pos_threshold:
             pos_thresh_min, pos_thresh_max = self.pos_threshold_range
             sampled_pos_thresh = (
@@ -307,6 +336,52 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         # Apply updated materials (env_ids must be on CPU per factory_utils pattern)
         asset.root_physx_view.set_material_properties(materials, env_ids_mat)
 
+    def _set_mass_per_env(self, asset, env_ids, mass_scale_factors):
+        """
+        Set mass for specific environments using scale factors with automatic inertia recomputation.
+
+        Args:
+            asset: Articulation object (e.g., _held_asset)
+            env_ids: Tensor of environment indices
+            mass_scale_factors: Tensor of mass scale factors for each env (shape: num_reset_envs)
+        """
+        if not hasattr(asset, 'root_physx_view'):
+            raise RuntimeError(
+                f"Asset does not have root_physx_view attribute required for per-environment mass setting. "
+                f"Ensure the asset is properly initialized before dynamics randomization."
+            )
+
+        # Get current mass and inertia properties (CPU tensors)
+        # Shape: (num_envs, num_bodies)
+        masses = asset.root_physx_view.get_masses()
+        # Shape: (num_envs, num_bodies, 9) - 3x3 inertia tensor flattened
+        inertias = asset.root_physx_view.get_inertias()
+
+        # Move tensors to match PhysX device (CPU)
+        physx_device = masses.device
+        env_ids_cpu = env_ids.to(physx_device)
+        mass_scales_cpu = mass_scale_factors.to(physx_device)
+
+        # Get default masses and inertias for resetting environments
+        default_masses = asset.data.default_mass  # (num_envs, num_bodies)
+        default_inertias = asset.data.default_inertia  # (num_envs, num_bodies, 9)
+
+        # Apply scale factors to all bodies of specified environments
+        # Broadcast mass scale across body dimension: (num_reset_envs,) -> (num_reset_envs, num_bodies)
+        new_masses = default_masses[env_ids_cpu] * mass_scales_cpu.unsqueeze(-1)
+        masses[env_ids_cpu] = new_masses
+
+        # Recompute inertias (scale by mass ratio assuming uniform density)
+        # For uniform density, inertia scales linearly with mass
+        # Broadcast across body and inertia dimensions: (num_reset_envs,) -> (num_reset_envs, num_bodies, 9)
+        mass_ratios = mass_scales_cpu.unsqueeze(-1).unsqueeze(-1)
+        new_inertias = default_inertias[env_ids_cpu] * mass_ratios
+        inertias[env_ids_cpu] = new_inertias
+
+        # Apply updated masses and inertias to PhysX (env_ids must be on CPU)
+        asset.root_physx_view.set_masses(masses, env_ids_cpu)
+        asset.root_physx_view.set_inertias(inertias, env_ids_cpu)
+
     def _find_hybrid_wrapper(self):
         """Search wrapper chain for HybridForcePositionWrapper."""
         current = self
@@ -327,6 +402,11 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         if self.randomize_friction:
             materials = self.unwrapped._held_asset.root_physx_view.get_material_properties()
             self.current_friction = torch.ones((self.num_envs,), dtype=torch.float32, device=materials.device)
+
+        # Mass: Match masses tensor device (CPU for PhysX), always use float32
+        if self.randomize_held_mass:
+            masses = self.unwrapped._held_asset.root_physx_view.get_masses()
+            self.current_held_mass = torch.ones((self.num_envs,), dtype=torch.float32, device=masses.device)
 
         # Controller gains: Match task_prop_gains device, use float32
         if self.randomize_gains:
@@ -491,11 +571,17 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         if not self.enabled:
             return {}
 
-        stats = {
-            'mean_friction': self.current_friction.mean().item(),
-            'mean_pos_gain': self.current_prop_gains[:, 0].mean().item(),
-            'mean_rot_gain': self.current_prop_gains[:, 3].mean().item(),
-        }
+        stats = {}
+
+        if self.randomize_friction:
+            stats['mean_friction'] = self.current_friction.mean().item()
+
+        if self.randomize_held_mass:
+            stats['mean_held_mass_scale'] = self.current_held_mass.mean().item()
+
+        if self.randomize_gains:
+            stats['mean_pos_gain'] = self.current_prop_gains[:, 0].mean().item()
+            stats['mean_rot_gain'] = self.current_prop_gains[:, 3].mean().item()
 
         if self.randomize_force_gains:
             stats['mean_force_gain'] = self.current_force_gains[:, 0].mean().item()

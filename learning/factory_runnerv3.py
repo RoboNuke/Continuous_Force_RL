@@ -364,37 +364,62 @@ def main(
 
         def get_params_dict():
             """Get current dynamics parameters from env.unwrapped and wrappers (where they're actually used).
+            Only collects parameters that are enabled in the dynamics randomization config.
             All parameters are moved to CPU for consistent comparison."""
             params = {}
 
             # Friction - access from actual asset PhysX material properties
-            if hasattr(env.unwrapped, '_held_asset') and hasattr(env.unwrapped._held_asset, 'root_physx_view'):
-                try:
-                    materials = env.unwrapped._held_asset.root_physx_view.get_material_properties()
-                    # Use ellipsis pattern matching base env and dynamics wrapper: materials[..., 0] = static friction
-                    friction = materials[..., 0].clone().float()  # Shape: (num_envs, num_shapes)
-                    # All shapes should have same friction value (broadcast during setting), take first shape
-                    params['friction'] = friction[:, 0].cpu()  # Move to CPU for consistent comparison
-                except Exception as e:
-                    print(f"   ⚠️  Could not read friction from asset: {e}")
+            if dynamics_wrapper.randomize_friction:
+                if hasattr(env.unwrapped, '_held_asset') and hasattr(env.unwrapped._held_asset, 'root_physx_view'):
+                    try:
+                        materials = env.unwrapped._held_asset.root_physx_view.get_material_properties()
+                        # Use ellipsis pattern matching base env and dynamics wrapper: materials[..., 0] = static friction
+                        friction = materials[..., 0].clone().float()  # Shape: (num_envs, num_shapes)
+                        # All shapes should have same friction value (broadcast during setting), take first shape
+                        params['friction'] = friction[:, 0].cpu()  # Move to CPU for consistent comparison
+                    except Exception as e:
+                        print(f"   ⚠️  Could not read friction from asset: {e}")
+
+            # Mass - access from actual asset PhysX mass properties (as scale factor)
+            if dynamics_wrapper.randomize_held_mass:
+                if hasattr(env.unwrapped, '_held_asset') and hasattr(env.unwrapped._held_asset, 'root_physx_view'):
+                    try:
+                        masses = env.unwrapped._held_asset.root_physx_view.get_masses()
+                        default_masses = env.unwrapped._held_asset.data.default_mass
+                        # masses shape: (num_envs, num_bodies), default_masses shape: (num_envs, num_bodies)
+                        # Sum across all bodies to get total mass per environment
+                        total_mass = masses.sum(dim=1).clone().float()
+                        total_default_mass = default_masses.sum(dim=1).clone().float()
+                        # Compute scale factor: current_mass / default_mass
+                        mass_scale = total_mass / total_default_mass
+                        params['held_mass_scale'] = mass_scale.cpu()  # Move to CPU for consistent comparison
+                    except Exception as e:
+                        print(f"   ⚠️  Could not read mass from asset: {e}")
 
             # Controller gains (position and rotation) - from base environment
-            if hasattr(env.unwrapped, 'task_prop_gains'):
-                params['pos_gains'] = env.unwrapped.task_prop_gains[:, 0].clone().float().cpu()  # First pos dim
-                params['rot_gains'] = env.unwrapped.task_prop_gains[:, 3].clone().float().cpu()  # First rot dim
+            if dynamics_wrapper.randomize_gains:
+                if hasattr(env.unwrapped, 'task_prop_gains'):
+                    params['pos_gains'] = env.unwrapped.task_prop_gains[:, 0].clone().float().cpu()  # First pos dim
+                    params['rot_gains'] = env.unwrapped.task_prop_gains[:, 3].clone().float().cpu()  # First rot dim
 
             # Thresholds - from base environment
-            if hasattr(env.unwrapped, 'pos_threshold'):
-                params['pos_threshold'] = env.unwrapped.pos_threshold[:, 0].clone().float().cpu()  # First dim
-            if hasattr(env.unwrapped, 'rot_threshold'):
-                params['rot_threshold'] = env.unwrapped.rot_threshold[:, 0].clone().float().cpu()  # First dim
+            if dynamics_wrapper.randomize_pos_threshold:
+                if hasattr(env.unwrapped, 'pos_threshold'):
+                    params['pos_threshold'] = env.unwrapped.pos_threshold[:, 0].clone().float().cpu()  # First dim
+
+            if dynamics_wrapper.randomize_rot_threshold:
+                if hasattr(env.unwrapped, 'rot_threshold'):
+                    params['rot_threshold'] = env.unwrapped.rot_threshold[:, 0].clone().float().cpu()  # First dim
 
             # Force parameters - from hybrid wrapper (if present)
             if has_hybrid:
-                if hasattr(hybrid_wrapper, 'force_threshold'):
-                    params['force_threshold'] = hybrid_wrapper.force_threshold[:, 0].clone().float().cpu()
-                if hasattr(hybrid_wrapper, 'kp'):
-                    params['force_gains'] = hybrid_wrapper.kp[:, 0].clone().float().cpu()  # First force dim
+                if dynamics_wrapper.randomize_force_threshold:
+                    if hasattr(hybrid_wrapper, 'force_threshold'):
+                        params['force_threshold'] = hybrid_wrapper.force_threshold[:, 0].clone().float().cpu()
+
+                if dynamics_wrapper.randomize_force_gains:
+                    if hasattr(hybrid_wrapper, 'kp'):
+                        params['force_gains'] = hybrid_wrapper.kp[:, 0].clone().float().cpu()  # First force dim
 
             return params
 
@@ -409,6 +434,12 @@ def main(
         # Perform multiple reset tests
         num_tests = 10
         print(f"\nPerforming {num_tests} reset tests...")
+
+        # Initialize aggregation tracking
+        total_reset_envs = 0
+        total_non_reset_envs = 0
+        param_reset_success = {}  # Track how many times each param correctly changed
+        param_non_reset_success = {}  # Track how many times each param correctly stayed same
 
         for test_idx in range(num_tests):
             print(f"\n{'='*80}")
@@ -440,37 +471,30 @@ def main(
             params_after = get_params_dict()
             print_stats(params_after, "📊 PARAMETERS AFTER RESET")
 
-            # Verify that reset env_ids changed
-            print(f"\n🔍 VERIFICATION (checking {num_to_reset} reset environments):")
-            print("-" * 80)
+            # Aggregate verification results (don't print individual test results)
+            total_reset_envs += num_to_reset
 
-            all_changed = True
+            # Track reset environment changes
             for param_name, values_before in params_before.items():
                 values_after = params_after[param_name]
+
+                # Initialize tracking for new parameters
+                if param_name not in param_reset_success:
+                    param_reset_success[param_name] = 0
+                    param_non_reset_success[param_name] = 0
 
                 # Check if reset environments changed
                 changed_mask = values_before[reset_env_ids] != values_after[reset_env_ids]
                 num_changed = changed_mask.sum().item()
-                pct_changed = (num_changed / num_to_reset) * 100
+                param_reset_success[param_name] += num_changed
 
-                status = "✓" if num_changed == num_to_reset else "✗"
-                print(f"{status} {param_name:20s}: {num_changed}/{num_to_reset} changed ({pct_changed:.1f}%)")
-
-                if num_changed < num_to_reset:
-                    all_changed = False
-                    # Show which ones didn't change
-                    unchanged_ids = reset_env_ids[~changed_mask]
-                    print(f"   ⚠️  Unchanged env_ids: {unchanged_ids[:5].tolist()}" +
-                          (f"..." if len(unchanged_ids) > 5 else ""))
-
-            # Check that non-reset environments stayed the same (use CPU for indexing param tensors)
+            # Track non-reset environments staying the same
             non_reset_mask = torch.ones(env.num_envs, dtype=torch.bool, device='cpu')
             non_reset_mask[reset_env_ids.cpu()] = False
             non_reset_ids = torch.where(non_reset_mask)[0]
 
             if len(non_reset_ids) > 0:
-                print(f"\n🔍 VERIFICATION (checking {len(non_reset_ids)} non-reset environments):")
-                print("-" * 80)
+                total_non_reset_envs += len(non_reset_ids)
 
                 for param_name, values_before in params_before.items():
                     values_after = params_after[param_name]
@@ -478,29 +502,55 @@ def main(
                     # Check if non-reset environments stayed the same
                     unchanged_mask = values_before[non_reset_ids] == values_after[non_reset_ids]
                     num_unchanged = unchanged_mask.sum().item()
-                    pct_unchanged = (num_unchanged / len(non_reset_ids)) * 100
+                    param_non_reset_success[param_name] += num_unchanged
 
-                    status = "✓" if num_unchanged == len(non_reset_ids) else "✗"
-                    print(f"{status} {param_name:20s}: {num_unchanged}/{len(non_reset_ids)} unchanged ({pct_unchanged:.1f}%)")
-
-                    if num_unchanged < len(non_reset_ids):
-                        # Show which ones changed (shouldn't happen)
-                        changed_ids = non_reset_ids[~unchanged_mask]
-                        print(f"   ⚠️  Unexpectedly changed env_ids: {changed_ids[:5].tolist()}" +
-                              (f"..." if len(changed_ids) > 5 else ""))
-
-            if all_changed:
-                print(f"\n✅ Test {test_idx + 1} PASSED: All reset environments changed")
-            else:
-                print(f"\n❌ Test {test_idx + 1} FAILED: Some reset environments did not change")
+            print(f"✓ Test {test_idx + 1} complete (reset {num_to_reset} envs, kept {len(non_reset_ids)} envs)")
 
             # Take a few steps between tests
             for _ in range(3):
                 action = torch.zeros((env.num_envs, env.unwrapped.cfg.action_space), device=device)
                 obs, reward, terminated, truncated, info = env.step(action)
 
+        # Print aggregated summary
         print(f"\n{'='*80}")
-        print("RESET TEST COMPLETE")
+        print("AGGREGATED TEST RESULTS")
+        print("="*80)
+
+        print(f"\nTotal tests: {num_tests}")
+        print(f"Total reset environments: {total_reset_envs}")
+        print(f"Total non-reset environments: {total_non_reset_envs}")
+
+        print(f"\n🔍 RESET ENVIRONMENTS (should change):")
+        print("-" * 80)
+        all_reset_passed = True
+        for param_name in sorted(param_reset_success.keys()):
+            num_success = param_reset_success[param_name]
+            pct_success = (num_success / total_reset_envs) * 100 if total_reset_envs > 0 else 0
+            status = "✓" if num_success == total_reset_envs else "✗"
+            print(f"{status} {param_name:20s}: {num_success}/{total_reset_envs} changed ({pct_success:.1f}%)")
+            if num_success < total_reset_envs:
+                all_reset_passed = False
+
+        print(f"\n🔍 NON-RESET ENVIRONMENTS (should stay same):")
+        print("-" * 80)
+        all_non_reset_passed = True
+        for param_name in sorted(param_non_reset_success.keys()):
+            num_success = param_non_reset_success[param_name]
+            pct_success = (num_success / total_non_reset_envs) * 100 if total_non_reset_envs > 0 else 0
+            status = "✓" if num_success == total_non_reset_envs else "✗"
+            print(f"{status} {param_name:20s}: {num_success}/{total_non_reset_envs} unchanged ({pct_success:.1f}%)")
+            if num_success < total_non_reset_envs:
+                all_non_reset_passed = False
+
+        print(f"\n{'='*80}")
+        if all_reset_passed and all_non_reset_passed:
+            print("✅ ALL TESTS PASSED")
+        else:
+            print("❌ SOME TESTS FAILED")
+            if not all_reset_passed:
+                print("   - Some reset environments did not change")
+            if not all_non_reset_passed:
+                print("   - Some non-reset environments unexpectedly changed")
         print("="*80)
         return
 
