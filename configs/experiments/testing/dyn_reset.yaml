@@ -1,0 +1,101 @@
+# Hybrid Agent Control Experiment Configuration 
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+#base_config: "configs/base/nut_thread_base.yaml"
+#base_config: "configs/base/gear_mesh_base.yaml"
+
+primary:
+  agents_per_break_force: 2 # Number of agents per break force condition
+  num_envs_per_agent: 16   # Environments per individual agent
+  break_forces: [100000]  # Break force conditions (-1 = unbreakable)
+
+# Model configuration for hybrid agent
+model:
+  use_hybrid_agent: false
+
+# Enable hybrid control wrapper and related systems
+wrappers:
+
+  force_reward:
+    enabled: false
+    enable_contact_reward: true
+    
+  hybrid_control:
+    enabled: true
+    reward_type: "none"
+
+  # Factory-specific metrics tracking
+  factory_metrics:
+    enabled: true
+    publish_to_wandb: false
+    engagement_reward_scale: 1.0  # Scale for engagement rewards (default 1.0 = no change)
+    success_reward_scale: 1.0     # Scale for success rewards (default 1.0 = no change)
+    # num_agents is computed from primary config automatically
+
+  # Wandb logging with factory metrics
+  wandb_logging:
+    enabled: false
+    track_rewards_by_outcome: false
+    
+  pose_contact_logging:
+    enabled: false
+
+  two_stage_keypoint_reward:
+    enabled: false
+  
+  dynamics_randomization:
+    enabled: true
+
+    randomize_held_mass: True
+    held_mass_range: [0.5, 2.0]  # Scale factors
+
+    # Friction randomization (held asset only)
+    randomize_friction: True
+    friction_range: [0.5, 1.0]
+
+    # Controller gains randomization (separate for pos/rot)
+    randomize_gains: false
+    #pos_gains_range: [80.0, 120.0]
+    pos_gains_range: [400.0, 800.0]
+    rot_gains_range: [1.0, 30.0]    # Don't actually want to randomize
+
+    # Force/torque gains randomization (hybrid control only)
+    randomize_force_gains: false
+    force_gains_range: [0.1, 0.5]
+    torque_gains_range: [0.001, 0.001]      # Don't Want to Randomize
+
+    # Action thresholds randomization
+    randomize_pos_threshold: false
+    pos_threshold_range: [0.016, 0.025]
+
+    randomize_rot_threshold: false
+    rot_threshold_range: [0.08, 0.12]
+
+    randomize_force_threshold: false
+    force_threshold_range: [40.0, 60.0]
+
+
+environment:
+  # OBSERVATION RANDOMIZATION CONFIGURATION
+  obs_rand:
+    fixed_asset_pos: [0.001, 0.001, 0.001]  # 1mm position noise (default from IsaacLab)
+    ee_pos: [0.0025, 0.0025, 0.0025]
+    force_torque: [1.0, 1.0, 1.0, 0.2, 0.2, 0.2]  # Force (N) and Torque (Nm) noise - applied per step
+    
+#agent:
+#  policy_learning_rate: 5.0e-4
+#  critic_learning_rate: 1.0e-4
+#  #learning_epochs: 1
+
+agent:
+  # Core identification
+  disable_progressbar: false
+  learning_epochs: 1
+  value_update_ratio: 1
+
+# Experiment metadata
+experiment:
+  name: "pose_forgeNoise_trueRew"
+  tags: ['pos_noise','low_pos_noise']
+  group: "pose_forgeNoise_trueRew"

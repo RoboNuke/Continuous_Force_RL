@@ -221,6 +221,10 @@ class DynamicsRandomizationConfig:
     randomize_force_threshold: bool = False
     force_threshold_range: List[float] = field(default_factory=lambda: [8.0, 12.0])
 
+    # Mass randomization (held asset only, scale factors)
+    randomize_held_mass: bool = False
+    held_mass_range: List[float] = field(default_factory=lambda: [0.5, 2.0])  # Scale factors for mass randomization
+
 
 @dataclass
 class EfficientResetConfig:

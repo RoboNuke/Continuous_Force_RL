@@ -74,7 +74,7 @@ environment:
 
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
-    fixed_asset_pos: [0.001, 0.001, 0.001]  # 1mm position noise (default from IsaacLab)
+    fixed_asset_pos: [0.0025, 0.0025, 0.0025]  # 2.5mm default from FORGE
     ee_pos: [0.00025, 0.00025, 0.00025]
     force_torque: [1.0, 1.0, 1.0, 0.2, 0.2, 0.2]  # Force (N) and Torque (Nm) noise - applied per step
 
@@ -293,36 +293,39 @@ wrappers:
     force_ratio_reward_weight: 1.0
     #############################################################
     
-    enable_contact_reward: True
-    contact_reward_weight: 0.75
+    enable_contact_reward: true
+    contact_reward_weight: 1.0
 
   # Dynamics randomization for domain randomization
   dynamics_randomization:
-    enabled: true
+    enabled: false
+
+    randomize_held_mass: false
+    held_mass_range: [0.5, 2.0]  # Scale factors
 
     # Friction randomization (held asset only)
-    randomize_friction: True
+    randomize_friction: false
     friction_range: [0.5, 1.0]
 
     # Controller gains randomization (separate for pos/rot)
-    randomize_gains: True
+    randomize_gains: false
     #pos_gains_range: [80.0, 120.0]
     pos_gains_range: [400.0, 800.0]
     rot_gains_range: [29.0, 30.0]    # Don't actually want to randomize
 
     # Force/torque gains randomization (hybrid control only)
-    randomize_force_gains: True
+    randomize_force_gains: false
     force_gains_range: [0.1, 0.5]
     torque_gains_range: [0.001, 0.001]      # Don't Want to Randomize
 
     # Action thresholds randomization
-    randomize_pos_threshold: True
+    randomize_pos_threshold: false
     pos_threshold_range: [0.016, 0.025]
 
-    randomize_rot_threshold: False
+    randomize_rot_threshold: false
     rot_threshold_range: [0.08, 0.12]
 
-    randomize_force_threshold: True
+    randomize_force_threshold: false
     force_threshold_range: [40.0, 60.0]
 
 

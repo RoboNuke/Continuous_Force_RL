@@ -28,7 +28,7 @@ environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
     fixed_asset_pos: [0.001, 0.001, 0.001]  # 1mm position noise (default from IsaacLab)
-    ee_pos: [0.00025, 0.00025, 0.00025]
+    ee_pos: [0.0025, 0.0025, 0.0025]
     force_torque: [1.0, 1.0, 1.0, 0.2, 0.2, 0.2]  # Force (N) and Torque (Nm) noise - applied per step
     
 #agent:
