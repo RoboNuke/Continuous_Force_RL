@@ -51,6 +51,6 @@ environment:
     
 # Experiment metadata
 experiment:
-  name: "ff_zCon_25"
+  name: "ff_zCon_15"
   tags: []
-  group: "ff_zCon_25"
+  group: "ff_zCon_15"
