@@ -60,16 +60,8 @@ python_cmd="$python_cmd --headless"
 echo "Executing command:"
 echo "$python_cmd"
 echo ""
-echo "Starting Python training (PID will be assigned by shell)..."
-echo "Note: SIGTERM from SLURM will be delivered directly to Python process"
-echo ""
 
-# Execute the training directly in foreground
-# When SLURM sends SIGTERM, it will reach both bash and Python
-# Python's signal handler will catch it and perform cleanup
-eval $python_cmd
-EXIT_CODE=$?
-
-echo ""
-echo "=== HPC Batch Script Completed (exit code: $EXIT_CODE) ==="
-exit $EXIT_CODE
+# Use exec to replace bash process with Python process
+# This ensures SLURM's SIGTERM goes directly to Python (no forwarding needed)
+# Python's signal handler will handle cleanup on SIGTERM
+exec $python_cmd
