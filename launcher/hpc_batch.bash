@@ -61,8 +61,30 @@ echo "Executing command:"
 echo "$python_cmd"
 echo ""
 
-# Execute the training
-eval $python_cmd
+# Function to forward signals to Python subprocess
+cleanup() {
+    echo ""
+    echo "=== HPC Batch Script received signal, forwarding to Python process ==="
+    if [ -n "$PYTHON_PID" ] && kill -0 $PYTHON_PID 2>/dev/null; then
+        # Forward signal to Python process
+        kill -TERM $PYTHON_PID
+        # Wait for Python process to finish cleanup
+        wait $PYTHON_PID
+    fi
+    exit $?
+}
+
+# Trap SIGTERM and SIGINT to forward to Python subprocess
+trap cleanup SIGTERM SIGINT
+
+# Execute the training in background to capture PID
+eval $python_cmd &
+PYTHON_PID=$!
+
+# Wait for Python process to complete
+wait $PYTHON_PID
+EXIT_CODE=$?
 
 echo ""
-echo "=== HPC Batch Script Completed ==="
+echo "=== HPC Batch Script Completed (exit code: $EXIT_CODE) ==="
+exit $EXIT_CODE

@@ -351,7 +351,7 @@ class SimpleEpisodeTracker:
             import time
 
             # Give wandb a moment to release file handles
-            time.sleep(0.5)
+            #time.sleep(0.5)
 
             try:
                 if os.path.exists(self.run_dir):
