@@ -25,13 +25,14 @@ wrappers:
   pose_contact_logging:
     enabled: false
   
+  
   dynamics_randomization:
     enabled: true
 
     randomize_gains: true
     #pos_gains_range: [80.0, 120.0]
-    pos_gains_range: [400.0, 800.0]
-    rot_gains_range: [29.0, 30.0]    # Don't actually want to randomize
+    pos_gains_range: [50.0, 150.0]
+    rot_gains_range: [30.0, 30.0]    # Don't actually want to randomize
 
 agent:
   supervised_selection_loss_weight: 1.0
