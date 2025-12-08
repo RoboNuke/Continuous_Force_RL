@@ -2,7 +2,7 @@
 #SBATCH -J LAUNCHER_JOB		        # job name (will be overridden by sbatch -J)
 #SBATCH -A virl-grp	                # sponsored account name
 #SBATCH -p tiamat,gpu,dgxh,dgx2     # partition names
-#SBATCH --time=0-08:59:59           # time limit: 1 day, 23 hours, 59 minutes
+#SBATCH --time=0-00:00:59           # time limit: 1 day, 23 hours, 59 minutes
 #SBATCH --gres=gpu:1                # number of GPUs to request
 #SBATCH --mem=32G                   # request 32 gigabytes memory
 #SBATCH -c 12                       # number of cores/threads per task
@@ -60,29 +60,14 @@ python_cmd="$python_cmd --headless"
 echo "Executing command:"
 echo "$python_cmd"
 echo ""
+echo "Starting Python training (PID will be assigned by shell)..."
+echo "Note: SIGTERM from SLURM will be delivered directly to Python process"
+echo ""
 
-# Function to forward signals to Python subprocess
-cleanup() {
-    echo ""
-    echo "=== HPC Batch Script received signal, forwarding to Python process ==="
-    if [ -n "$PYTHON_PID" ] && kill -0 $PYTHON_PID 2>/dev/null; then
-        # Forward signal to Python process
-        kill -TERM $PYTHON_PID
-        # Wait for Python process to finish cleanup
-        wait $PYTHON_PID
-    fi
-    exit $?
-}
-
-# Trap SIGTERM and SIGINT to forward to Python subprocess
-trap cleanup SIGTERM SIGINT
-
-# Execute the training in background to capture PID
-eval $python_cmd &
-PYTHON_PID=$!
-
-# Wait for Python process to complete
-wait $PYTHON_PID
+# Execute the training directly in foreground
+# When SLURM sends SIGTERM, it will reach both bash and Python
+# Python's signal handler will catch it and perform cleanup
+eval $python_cmd
 EXIT_CODE=$?
 
 echo ""
