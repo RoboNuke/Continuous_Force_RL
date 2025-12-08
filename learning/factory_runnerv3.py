@@ -1,5 +1,7 @@
 import argparse
 import sys
+import signal
+import os
 
 try:
     from isaaclab.app import AppLauncher
@@ -48,6 +50,9 @@ print("\n\n\n Calling App Launcher \n\n\n\n")
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
+
+# Store simulation app reference for cleanup handler
+_simulation_app = simulation_app
 
 print("\n\n\nApp Launched\n\n\n")
 
@@ -112,6 +117,11 @@ from wrappers.sensors.factory_env_with_sensors import create_sensor_enabled_fact
 
 print("\n\nImports complete\n\n")
 
+# Global references for cleanup handler
+_wandb_wrapper = None
+_simulation_app = None
+_cleanup_completed = False
+
 def print_configs(configs):
     print("Full configuration:")
     for k, v in configs.items():
@@ -143,6 +153,53 @@ def print_configs(configs):
                     else:
                         print(f"\t\t\t{att2}({ty2.__name__})")
     print("=" * 100)
+
+def cleanup_wandb(signum=None, frame=None):
+    """Cleanup handler: sync wandb and delete local files.
+
+    Args:
+        signum: Signal number if called from signal handler
+        frame: Stack frame if called from signal handler
+    """
+    global _wandb_wrapper, _simulation_app, _cleanup_completed
+
+    # Prevent multiple cleanup calls
+    if _cleanup_completed:
+        return
+    _cleanup_completed = True
+
+    if _wandb_wrapper is not None:
+        print("\n" + "="*80)
+        print("[INFO]: WandB Cleanup Starting...")
+        print("="*80)
+        print("[INFO]:   - Syncing data to cloud")
+        print("[INFO]:   - Deleting local run directories")
+
+        try:
+            _wandb_wrapper.close(delete_local_files=True)
+            print("[INFO]: WandB cleanup complete")
+        except Exception as e:
+            print(f"[ERROR]: WandB cleanup failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+        print("="*80)
+
+    if signum is not None:
+        # Called from signal handler - need to shutdown simulation and exit
+        signal_names = {signal.SIGTERM: "SIGTERM", signal.SIGINT: "SIGINT"}
+        print(f"[INFO]: Exiting due to signal {signal_names.get(signum, signum)}")
+
+        # Close simulation app before exiting
+        if _simulation_app is not None:
+            print("[INFO]: Closing simulation app...")
+            try:
+                _simulation_app.close()
+            except Exception as e:
+                print(f"[WARNING]: Error closing simulation app: {e}")
+
+        # Force exit (bypasses all exit hooks)
+        os._exit(0)
 
 def main(
     args_cli
@@ -258,6 +315,26 @@ def main(
     print("  - Applying async critic isaac lab wrapper (derived from SKRL isaaclab wrapper)")
     env = AsyncCriticIsaacLabWrapper(env)
     print("[INFO]: Wrappers Applied successfully")
+    print("=" * 100)
+
+    # Store wandb wrapper reference for cleanup
+    global _wandb_wrapper
+    current = env
+    while current is not None:
+        if current.__class__.__name__ == 'GenericWandbLoggingWrapper':
+            _wandb_wrapper = current
+            break
+        current = getattr(current, 'env', None)
+
+    if _wandb_wrapper is None:
+        print("[WARNING]: GenericWandbLoggingWrapper not found - cleanup will not work")
+    else:
+        print(f"[INFO]: Found wandb wrapper with {len(_wandb_wrapper.trackers)} tracker(s)")
+
+    # Register signal handlers for graceful cleanup
+    signal.signal(signal.SIGTERM, cleanup_wandb)
+    signal.signal(signal.SIGINT, cleanup_wandb)
+    print("[INFO]: Signal handlers registered (SIGTERM, SIGINT)")
     print("=" * 100)
 
     #print_configs(configs)
@@ -581,7 +658,11 @@ def main(
         torch.autograd.set_detect_anomaly(True)
         trainer.train()
 
-    
+        # Explicit cleanup after successful training
+        print("\n[INFO]: Training completed successfully")
+        cleanup_wandb()
+
+
 if __name__ == "__main__":
     # run the main function
 

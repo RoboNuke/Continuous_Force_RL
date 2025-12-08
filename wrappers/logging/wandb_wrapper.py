@@ -62,6 +62,9 @@ class SimpleEpisodeTracker:
 
             )
 
+            # Store run directory path for cleanup
+            self.run_dir = self.run.dir
+
             # Upload config YAML files to WandB
             print(f"  Uploading config files to WandB...")
             self.upload_config_files()
@@ -323,10 +326,31 @@ class SimpleEpisodeTracker:
         # Clear accumulated data
         self.accumulated_metrics.clear()
 
-    def close(self):
-        """Close wandb run."""
+    def close(self, delete_local_files=True):
+        """Close wandb run and optionally delete local files.
+
+        Args:
+            delete_local_files: If True, delete local run directory after syncing (default: True)
+        """
         if hasattr(self, 'run') and self.run is not None:
-            self.run.finish()
+            try:
+                # Finish run (syncs data to cloud)
+                if not self.run._is_finished:
+                    self.run.finish()
+            except Exception as e:
+                print(f"[WARNING]: Error finishing wandb run: {e}")
+            finally:
+                self.run = None  # Prevent double-finish
+
+        # Delete local files after finishing
+        if delete_local_files and hasattr(self, 'run_dir'):
+            import shutil
+            import os
+            try:
+                if os.path.exists(self.run_dir):
+                    shutil.rmtree(self.run_dir, ignore_errors=True)
+            except Exception as e:
+                print(f"[WARNING]: Could not delete {self.run_dir}: {e}")
 
 
 class GenericWandbLoggingWrapper(gym.Wrapper):
@@ -875,7 +899,24 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
                 for component_key in agent_data.get('component_rewards_timeout', {}):
                     agent_data['component_rewards_timeout'][component_key].clear()
 
-    def close(self):
-        """Close all wandb runs."""
-        for tracker in self.trackers:
-            tracker.close()
+    def close(self, delete_local_files=True):
+        """Close all wandb runs and optionally delete local files.
+
+        Args:
+            delete_local_files: If True, delete local run directories after syncing (default: True)
+        """
+        import traceback
+
+        print(f"[INFO]: Closing {len(self.trackers)} wandb tracker(s)...")
+
+        for i, tracker in enumerate(self.trackers):
+            try:
+                print(f"[INFO]:   - Closing tracker {i+1}/{len(self.trackers)}... ", end="", flush=True)
+                tracker.close(delete_local_files=delete_local_files)
+                print("✓")
+            except Exception as e:
+                print(f"✗ Failed: {e}")
+                traceback.print_exc()
+                # Continue to next tracker even if this one fails
+
+        print("[INFO]: All wandb trackers closed")
