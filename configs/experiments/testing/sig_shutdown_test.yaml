@@ -6,9 +6,9 @@ base_config: "configs/base/PiH_base.yaml"
 #base_config: "configs/base/gear_mesh_base.yaml"
 
 primary:
-  agents_per_break_force: 2 # Number of agents per break force condition
-  num_envs_per_agent: 256   # Environments per individual agent
-  max_steps: 768000 #38400
+  agents_per_break_force: 3 # Number of agents per break force condition
+  num_envs_per_agent: 64   # Environments per individual agent
+  max_steps: 1152000 #768000 #38400
   break_forces: [10]  # Break force conditions (-1 = unbreakable)
   seed: 42
 

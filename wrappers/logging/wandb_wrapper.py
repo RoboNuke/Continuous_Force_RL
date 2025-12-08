@@ -63,7 +63,9 @@ class SimpleEpisodeTracker:
             )
 
             # Store run directory path for cleanup
-            self.run_dir = self.run.dir
+            # run.dir points to the files/ subdirectory, we want the parent (the actual run directory)
+            import os
+            self.run_dir = os.path.dirname(self.run.dir)
 
             # Upload config YAML files to WandB
             print(f"  Uploading config files to WandB...")
@@ -346,11 +348,23 @@ class SimpleEpisodeTracker:
         if delete_local_files and hasattr(self, 'run_dir'):
             import shutil
             import os
+            import time
+
+            # Give wandb a moment to release file handles
+            time.sleep(0.5)
+
             try:
                 if os.path.exists(self.run_dir):
-                    shutil.rmtree(self.run_dir, ignore_errors=True)
+                    print(f"      Deleting {self.run_dir}...", end="", flush=True)
+                    shutil.rmtree(self.run_dir)
+                    print(" ✓")
+                else:
+                    print(f"      Run directory not found: {self.run_dir}")
             except Exception as e:
+                print(f" ✗")
                 print(f"[WARNING]: Could not delete {self.run_dir}: {e}")
+                import traceback
+                traceback.print_exc()
 
 
 class GenericWandbLoggingWrapper(gym.Wrapper):
