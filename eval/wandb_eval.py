@@ -51,6 +51,8 @@ def parse_arguments():
                         help="Evaluation mode: 'performance' (100 envs, videos), 'noise' (500 envs, noise analysis), or 'rotation' (500 envs, rotation analysis)")
     parser.add_argument("--no_wandb", action="store_true", default=False,
                         help="Disable WandB logging and save results locally for debugging")
+    parser.add_argument("--debug_project", action="store_true", default=False,
+                        help="Log results to 'debug' project instead of original run (for testing)")
 
     # Append AppLauncher args
     AppLauncher.add_app_launcher_args(parser)
@@ -168,7 +170,7 @@ NOISE_RANGES = [
     (0.001, 0.0025, "1mm-2.5mm"),   # 1-2.5mm
     (0.0025, 0.005, "2.5mm-5mm"),   # 2.5-5mm
     (0.005, 0.0075, "5mm-7.5mm"),   # 5-7.5mm
-    (0.0075, 0.01, "7.5mm-10mm")    # 7.5-10mm
+    #(0.0075, 0.01, "7.5mm-10mm")    # 7.5-10mm
 ]
 
 # Number of environments per noise range
@@ -848,34 +850,43 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
         print(f"    (WandB logging disabled with --no_wandb flag)")
     else:
         # Normal mode: Log to WandB
-        print(f"  Logging results to WandB run {run.id} at step {step}...")
+        if args.debug_project:
+            # Debug mode: Use existing debug run (already initialized in main loop)
+            print(f"  [DEBUG MODE] Logging to debug run at step {step}...")
+        else:
+            # Production mode: Resume original run
+            print(f"  Logging results to WandB run {run.id} at step {step}...")
+
+            try:
+                # Resume the WandB run
+                wandb.init(project=run.project, id=run.id, resume="must")
+            except Exception as e:
+                raise RuntimeError(f"Failed to resume WandB run {run.id}: {e}")
+
+        # Add media based on eval mode (works for both debug and production)
+        media_uploaded = False
+        if args.eval_mode == "performance":
+            # Add video if available
+            if args.enable_video and media_path is not None and os.path.exists(media_path):
+                caption = f"Evaluation at step {step}"
+                metrics_to_log['Eval/Checkpoint Videos'] = wandb.Video(media_path, caption=caption)
+                media_uploaded = True
+        elif args.eval_mode == "noise":
+            # Add noise visualization image
+            if media_path is not None and os.path.exists(media_path):
+                caption = f"Noise Evaluation at step {step}"
+                metrics_to_log['eval_media/noise_images'] = wandb.Image(media_path, caption=caption)
+                media_uploaded = True
+        elif args.eval_mode == "rotation":
+            # Add rotation visualization image
+            if media_path is not None and os.path.exists(media_path):
+                caption = f"Rotation Evaluation at step {step}"
+                metrics_to_log['eval_media/rotation_images'] = wandb.Image(media_path, caption=caption)
+                media_uploaded = True
 
         try:
-            # Resume the WandB run
-            wandb.init(project=run.project, id=run.id, resume="must")
-
-            # Add media based on eval mode
-            media_uploaded = False
-            if args.eval_mode == "performance":
-                # Add video if available
-                if args.enable_video and media_path is not None and os.path.exists(media_path):
-                    caption = f"Evaluation at step {step}"
-                    metrics_to_log['Eval/Checkpoint Videos'] = wandb.Video(media_path, caption=caption)
-                    media_uploaded = True
-            elif args.eval_mode == "noise":
-                # Add noise visualization image
-                if media_path is not None and os.path.exists(media_path):
-                    caption = f"Noise Evaluation at step {step}"
-                    metrics_to_log['eval_media/noise_images'] = wandb.Image(media_path, caption=caption)
-                    media_uploaded = True
-            elif args.eval_mode == "rotation":
-                # Add rotation visualization image
-                if media_path is not None and os.path.exists(media_path):
-                    caption = f"Rotation Evaluation at step {step}"
-                    metrics_to_log['eval_media/rotation_images'] = wandb.Image(media_path, caption=caption)
-                    media_uploaded = True
-
-            wandb.log(metrics_to_log)
+            # Log metrics with step number
+            wandb.log(metrics_to_log, step=step)
 
             # Print status
             if media_uploaded:
@@ -891,8 +902,9 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
         except Exception as e:
             raise RuntimeError(f"Failed to log metrics to WandB for {run.id} at step {step}: {e}")
         finally:
-            # Always finish the run
-            wandb.finish()
+            # Only finish run in production mode (debug mode finishes after all checkpoints)
+            if not args.debug_project:
+                wandb.finish()
 
 
 # ===== EVALUATION FUNCTIONS =====
@@ -957,8 +969,11 @@ def run_basic_evaluation(
 
     # Force tracking [num_envs]
     episode_max_force = torch.zeros(num_envs, dtype=torch.float32, device=device)
-    episode_sum_force = torch.zeros(num_envs, dtype=torch.float32, device=device)
-    episode_force_steps = torch.zeros(num_envs, dtype=torch.long, device=device)
+    episode_sum_force_in_contact = torch.zeros(num_envs, dtype=torch.float32, device=device)
+    episode_contact_steps = torch.zeros(num_envs, dtype=torch.long, device=device)
+
+    # Energy tracking [num_envs]
+    episode_energy = torch.zeros(num_envs, dtype=torch.float32, device=device)
 
     # Contact metrics [num_envs, 3] for X/Y/Z axes
     contact_force_counts = torch.zeros((num_envs, 3), dtype=torch.long, device=device)
@@ -1162,29 +1177,70 @@ def run_basic_evaluation(
                 # Increment engagement length for currently engaged active environments
                 episode_engagement_lengths[curr_engaged & active_mask] += 1
 
-        # Update smoothness and force metrics from info dict
-        if 'smoothness' in info:
-            smoothness_info = info['smoothness']
+        # Calculate SSV directly from environment velocity data
+        if hasattr(env.unwrapped, 'fingertip_midpoint_linvel'):
+            # Get end-effector linear velocity (real velocity from simulation) [num_envs, 3]
+            ee_vel = env.unwrapped.fingertip_midpoint_linvel
+            # Calculate velocity magnitude (L2 norm) for each environment [num_envs]
+            velocity_norm = torch.linalg.norm(ee_vel, dim=1)
+            # Accumulate for active environments
+            episode_ssv[active_mask] += velocity_norm[active_mask]
 
-            # Sum squared velocity from info
-            if 'ssv' in smoothness_info:
-                # ssv is cumulative per episode, so just copy the current value
-                episode_ssv = smoothness_info['ssv'].clone()
+            # Debug on first step
+            if step_count == 0 and show_progress:
+                print(f"    [DEBUG] Step 0 - EE velocity norm: min={velocity_norm.min().item():.6f}, max={velocity_norm.max().item():.6f}, mean={velocity_norm.mean().item():.6f}")
+        else:
+            if step_count == 0 and show_progress:
+                print(f"    [DEBUG] WARNING: fingertip_midpoint_linvel not found on env.unwrapped")
 
-            # Sum squared joint velocity from info
-            if 'ssjv' in smoothness_info:
-                # ssjv is cumulative per episode, so just copy the current value
-                episode_ssjv = smoothness_info['ssjv'].clone()
+        # Calculate SSJV directly from environment joint velocity data
+        if hasattr(env.unwrapped, 'joint_vel'):
+            # Get joint velocities [num_envs, num_joints]
+            joint_vel = env.unwrapped.joint_vel
+            # Calculate norm of squared velocities for each environment
+            ssjv_step = torch.linalg.norm(joint_vel * joint_vel, dim=1)
+            # Accumulate for active environments
+            episode_ssjv[active_mask] += ssjv_step[active_mask]
 
-            # Force metrics from info
-            if 'max_force' in smoothness_info:
-                episode_max_force = smoothness_info['max_force'].clone()
+            # Debug on first step
+            if step_count == 0 and show_progress:
+                print(f"    [DEBUG] Step 0 - SSJV step: min={ssjv_step.min().item():.6f}, max={ssjv_step.max().item():.6f}, mean={ssjv_step.mean().item():.6f}")
+        else:
+            if step_count == 0 and show_progress:
+                print(f"    [DEBUG] WARNING: joint_vel not found on env.unwrapped")
 
-            if 'sum_force' in smoothness_info:
-                # Calculate average from sum
-                episode_sum_force = smoothness_info['sum_force'].clone()
-                # Count steps for averaging (use episode length as proxy)
-                episode_force_steps = episode_lengths.clone()
+        # Force metrics - only accumulate when in contact
+        if hasattr(env.unwrapped, 'robot_force_torque') and hasattr(env.unwrapped, 'in_contact'):
+            # Get current force magnitude [num_envs]
+            force_magnitude = torch.linalg.norm(env.unwrapped.robot_force_torque[:, :3], dim=1)
+
+            # Check if any axis is in contact [num_envs]
+            any_contact = env.unwrapped.in_contact.any(dim=1)
+
+            # Only accumulate for environments that are: in contact AND active
+            in_contact_and_active = any_contact & active_mask
+
+            if in_contact_and_active.any():
+                episode_sum_force_in_contact[in_contact_and_active] += force_magnitude[in_contact_and_active]
+                episode_contact_steps[in_contact_and_active] += 1
+
+            # Max force tracked across ALL steps (not just contact)
+            episode_max_force[active_mask] = torch.max(
+                episode_max_force[active_mask],
+                force_magnitude[active_mask]
+            )
+
+        # Energy metric: |joint_vel × joint_torque| for arm joints only (indices 0:7)
+        if hasattr(env.unwrapped, 'joint_vel') and hasattr(env.unwrapped, 'joint_torque'):
+            # Get arm joint data only (exclude gripper joints 7-8)
+            arm_joint_vel = env.unwrapped.joint_vel[:, :7]  # [num_envs, 7]
+            arm_joint_torque = env.unwrapped.joint_torque[:, :7]  # [num_envs, 7]
+
+            # Sum of absolute values across all arm joints
+            energy_step = torch.sum(torch.abs(arm_joint_vel * arm_joint_torque), dim=1)  # [num_envs]
+
+            # Accumulate for active environments
+            episode_energy[active_mask] += energy_step[active_mask]
 
         # Accumulate contact metrics from to_log for active environments
         if hasattr(env.unwrapped, 'extras') and 'to_log' in env.unwrapped.extras:
@@ -1241,22 +1297,23 @@ def run_basic_evaluation(
     progress_bar.close()
     print(f"    Completed {num_envs} episodes in {step_count} steps")
 
+    # Debug: Print final SSV/SSJV values
+    if show_progress:
+        print(f"    [DEBUG] Final SSV values: min={episode_ssv.min().item():.6f}, max={episode_ssv.max().item():.6f}, mean={episode_ssv.mean().item():.6f}")
+        print(f"    [DEBUG] Final SSJV values: min={episode_ssjv.min().item():.6f}, max={episode_ssjv.max().item():.6f}, mean={episode_ssjv.mean().item():.6f}")
+
     # Compute aggregated metrics from raw data
     print("  Computing aggregated metrics...")
     metrics = _compute_aggregated_metrics(
         episode_lengths=episode_lengths,
-        episode_rewards=episode_rewards,
         episode_terminated=episode_terminated,
         episode_succeeded=episode_succeeded,
-        episode_success_times=episode_success_times,
-        episode_engaged=episode_engaged,
-        episode_engagement_times=episode_engagement_times,
-        episode_engagement_lengths=episode_engagement_lengths,
         episode_ssv=episode_ssv,
         episode_ssjv=episode_ssjv,
         episode_max_force=episode_max_force,
-        episode_sum_force=episode_sum_force,
-        episode_force_steps=episode_force_steps,
+        episode_sum_force_in_contact=episode_sum_force_in_contact,
+        episode_contact_steps=episode_contact_steps,
+        episode_energy=episode_energy,
         contact_force_counts=contact_force_counts,
         contact_pos_counts=contact_pos_counts,
         no_contact_force_counts=no_contact_force_counts,
@@ -1283,22 +1340,21 @@ def run_basic_evaluation(
     else:
         # Even without video, include per-environment data for noise evaluation
         rollout_data = {
-            'episode_lengths': episode_lengths,      # [num_envs]
-            'episode_rewards': episode_rewards,      # [num_envs]
-            'episode_terminated': episode_terminated,  # [num_envs]
-            'episode_succeeded': episode_succeeded,    # [num_envs]
-            'episode_success_times': episode_success_times,  # [num_envs]
-            'episode_engaged': episode_engaged,        # [num_envs]
-            'episode_engagement_times': episode_engagement_times,  # [num_envs]
-            'episode_engagement_lengths': episode_engagement_lengths,  # [num_envs]
-            'episode_ssv': episode_ssv,  # [num_envs]
-            'episode_ssjv': episode_ssjv,  # [num_envs]
-            'episode_max_force': episode_max_force,  # [num_envs]
-            'episode_sum_force': episode_sum_force,  # [num_envs]
-            'episode_force_steps': episode_force_steps,  # [num_envs]
-            'termination_step': termination_step,  # [num_envs]
-            'truncation_step': truncation_step,    # [num_envs]
-            'success_step': success_step,          # [num_envs]
+            'episode_lengths': episode_lengths,
+            'episode_terminated': episode_terminated,
+            'episode_succeeded': episode_succeeded,
+            'episode_ssv': episode_ssv,
+            'episode_ssjv': episode_ssjv,
+            'episode_max_force': episode_max_force,
+            'episode_sum_force_in_contact': episode_sum_force_in_contact,
+            'episode_contact_steps': episode_contact_steps,
+            'episode_energy': episode_energy,
+            'contact_force_counts': contact_force_counts,
+            'contact_pos_counts': contact_pos_counts,
+            'no_contact_force_counts': no_contact_force_counts,
+            'no_contact_pos_counts': no_contact_pos_counts,
+            'termination_step': termination_step,
+            'truncation_step': truncation_step,
         }
 
     return metrics, rollout_data
@@ -1306,18 +1362,14 @@ def run_basic_evaluation(
 
 def _compute_aggregated_metrics(
     episode_lengths: torch.Tensor,
-    episode_rewards: torch.Tensor,
     episode_terminated: torch.Tensor,
     episode_succeeded: torch.Tensor,
-    episode_success_times: torch.Tensor,
-    episode_engaged: torch.Tensor,
-    episode_engagement_times: torch.Tensor,
-    episode_engagement_lengths: torch.Tensor,
     episode_ssv: torch.Tensor,
     episode_ssjv: torch.Tensor,
     episode_max_force: torch.Tensor,
-    episode_sum_force: torch.Tensor,
-    episode_force_steps: torch.Tensor,
+    episode_sum_force_in_contact: torch.Tensor,
+    episode_contact_steps: torch.Tensor,
+    episode_energy: torch.Tensor,
     contact_force_counts: torch.Tensor,
     contact_pos_counts: torch.Tensor,
     no_contact_force_counts: torch.Tensor,
@@ -1328,51 +1380,47 @@ def _compute_aggregated_metrics(
 
     Args:
         episode_lengths: Episode lengths [num_envs]
-        episode_rewards: Episode total rewards [num_envs]
         episode_terminated: Whether episode terminated (vs truncated) [num_envs]
         episode_succeeded: Whether episode succeeded [num_envs]
-        episode_success_times: Step at which success occurred [num_envs]
-        episode_engaged: Whether episode engaged [num_envs]
-        episode_engagement_times: Step at which engagement occurred [num_envs]
-        episode_engagement_lengths: Total engagement length [num_envs]
         episode_ssv: Sum squared velocity [num_envs]
         episode_ssjv: Sum squared joint velocity [num_envs]
         episode_max_force: Maximum force magnitude [num_envs]
-        episode_sum_force: Sum of force magnitudes [num_envs]
-        episode_force_steps: Number of steps with force data [num_envs]
+        episode_sum_force_in_contact: Sum of force magnitudes when in contact [num_envs]
+        episode_contact_steps: Number of steps with contact [num_envs]
+        episode_energy: Energy used (arm joints only) [num_envs]
         contact_force_counts: Contact+Force counts [num_envs, 3]
         contact_pos_counts: Contact+Pos counts [num_envs, 3]
         no_contact_force_counts: NoContact+Force counts [num_envs, 3]
         no_contact_pos_counts: NoContact+Pos counts [num_envs, 3]
 
     Returns:
-        Dictionary of aggregated metrics
+        Dictionary of aggregated metrics (38 total)
     """
     metrics = {}
     num_envs = episode_lengths.shape[0]
 
-    # Basic episode metrics
+    # ===== Core Episode Metrics (10 total) =====
+    metrics['total_episodes'] = num_envs
+
+    # Mutually exclusive categories by final outcome:
+    # 1. Successful completions: Succeeded AND did NOT break (may have truncated due to staying in success)
+    # 2. Breaks: Terminated (broke object), regardless of whether succeeded first
+    # 3. Failed timeouts: Truncated without success and without breaking
+
+    successful_completions = episode_succeeded & ~episode_terminated
+    breaks = episode_terminated
+    failed_timeouts = ~episode_terminated & ~episode_succeeded
+
+    metrics['num_successful_completions'] = successful_completions.sum().item()
+    metrics['num_breaks'] = breaks.sum().item()
+    metrics['num_failed_timeouts'] = failed_timeouts.sum().item()
+
+    # Verify they sum to total (sanity check)
+    total_check = metrics['num_successful_completions'] + metrics['num_breaks'] + metrics['num_failed_timeouts']
+    if total_check != num_envs:
+        print(f"WARNING: Episode counts don't sum correctly! {total_check} != {num_envs}")
+
     metrics['episode_length'] = episode_lengths.float().mean().item()
-    metrics['total_reward'] = episode_rewards.mean().item() 
-    metrics['total_reward_std'] = episode_rewards.std().item()
-    metrics['termination_rate'] = episode_terminated.float().mean().item()
-
-    # Success metrics
-    metrics['success_rate'] = episode_succeeded.float().mean().item()
-    # Success time only from successful episodes
-    if episode_succeeded.any():
-        metrics['success_time'] = episode_success_times[episode_succeeded].float().mean().item()
-    else:
-        metrics['success_time'] = 0.0
-
-    # Engagement metrics
-    metrics['engagement_rate'] = episode_engaged.float().mean().item()
-    if episode_engaged.any():
-        metrics['engagement_time'] = episode_engagement_times[episode_engaged].float().mean().item()
-        metrics['engagement_length'] = episode_engagement_lengths[episode_engaged].float().mean().item()
-    else:
-        metrics['engagement_time'] = 0.0
-        metrics['engagement_length'] = 0.0
 
     # Smoothness metrics
     metrics['ssv'] = episode_ssv.mean().item()
@@ -1380,45 +1428,59 @@ def _compute_aggregated_metrics(
 
     # Force metrics
     metrics['max_force'] = episode_max_force.max().item()
-    # Average force across all episodes
-    if episode_force_steps.sum() > 0:
-        metrics['avg_force'] = episode_sum_force.sum().item() / episode_force_steps.sum().item()
+    if episode_contact_steps.sum() > 0:
+        metrics['avg_force_in_contact'] = (
+            episode_sum_force_in_contact.sum().item() /
+            episode_contact_steps.sum().item()
+        )
     else:
-        metrics['avg_force'] = 0.0
+        metrics['avg_force_in_contact'] = 0.0
 
-    # Contact metrics per axis - only publish if there's actual contact data
-    # Check if any contact data was collected (sum of all counts > 0)
-    total_contact_data = (contact_force_counts.sum() + contact_pos_counts.sum() +
-                          no_contact_force_counts.sum() + no_contact_pos_counts.sum()).item()
+    # Energy metric
+    metrics['energy'] = episode_energy.mean().item()
 
-    if total_contact_data > 0:
-        axis_names = ['X', 'Y', 'Z']
-        for axis_idx, axis in enumerate(axis_names):
-            # Sum across all environments for total counts
-            contact_force = contact_force_counts[:, axis_idx].sum().item()
-            contact_pos = contact_pos_counts[:, axis_idx].sum().item()
-            no_contact_force = no_contact_force_counts[:, axis_idx].sum().item()
-            no_contact_pos = no_contact_pos_counts[:, axis_idx].sum().item()
+    # ===== Contact-Control Metrics (28 total) =====
+    # Raw counts per axis (12) + accuracy metrics (16)
+    axis_names = ['x', 'y', 'z']
+    for axis_idx, axis in enumerate(axis_names):
+        # Sum across all environments for total counts
+        fc_contact = contact_force_counts[:, axis_idx].sum().item()
+        fc_no_contact = no_contact_force_counts[:, axis_idx].sum().item()
+        pc_contact = contact_pos_counts[:, axis_idx].sum().item()
+        pc_no_contact = no_contact_pos_counts[:, axis_idx].sum().item()
 
-            # Raw counts
-            metrics[f'contact_force_{axis}'] = contact_force
-            metrics[f'contact_pos_{axis}'] = contact_pos
-            metrics[f'no_contact_force_{axis}'] = no_contact_force
-            metrics[f'no_contact_pos_{axis}'] = no_contact_pos
+        # Raw counts (12 metrics: 4 per axis × 3 axes)
+        metrics[f'force_control_contact_{axis}'] = fc_contact
+        metrics[f'force_control_no_contact_{axis}'] = fc_no_contact
+        metrics[f'pos_control_contact_{axis}'] = pc_contact
+        metrics[f'pos_control_no_contact_{axis}'] = pc_no_contact
 
-            # Precision: Contact+Force / (Contact+Force + NoContact+Force)
-            denominator_precision = contact_force + no_contact_force
-            if denominator_precision > 0:
-                metrics[f'precision_{axis}'] = contact_force / denominator_precision
-            else:
-                metrics[f'precision_{axis}'] = 0.0
+        # Force control accuracy: force_control_contact / (force_control_contact + force_control_no_contact)
+        fc_total = fc_contact + fc_no_contact
+        if fc_total > 0:
+            metrics[f'force_control_accuracy_{axis}'] = fc_contact / fc_total
+        else:
+            metrics[f'force_control_accuracy_{axis}'] = 0.0
 
-            # Recall: Contact+Force / (Contact+Force + Contact+Pos)
-            denominator_recall = contact_force + contact_pos
-            if denominator_recall > 0:
-                metrics[f'recall_{axis}'] = contact_force / denominator_recall
-            else:
-                metrics[f'recall_{axis}'] = 0.0
+        # Position control accuracy: pos_control_no_contact / (pos_control_no_contact + pos_control_contact)
+        pc_total = pc_contact + pc_no_contact
+        if pc_total > 0:
+            metrics[f'pos_control_accuracy_{axis}'] = pc_no_contact / pc_total
+        else:
+            metrics[f'pos_control_accuracy_{axis}'] = 0.0
+
+    # Total accuracy metrics (averaged across axes)
+    force_accuracies = [
+        metrics[f'force_control_accuracy_{axis}']
+        for axis in axis_names
+    ]
+    pos_accuracies = [
+        metrics[f'pos_control_accuracy_{axis}']
+        for axis in axis_names
+    ]
+
+    metrics['force_control_accuracy_total'] = sum(force_accuracies) / 3.0
+    metrics['pos_control_accuracy_total'] = sum(pos_accuracies) / 3.0
 
     return metrics
 
@@ -1566,74 +1628,50 @@ def _compute_range_metrics(
     range_name: str
 ) -> Dict[str, float]:
     """
-    Compute metrics for a specific noise range from per-environment data.
+    Compute metrics for a specific noise/rotation range from per-environment data.
 
     Args:
         rollout_data: Per-environment data from run_basic_evaluation
         start_idx: Start environment index for this range
         end_idx: End environment index for this range
-        range_name: Name of the noise range (for logging)
+        range_name: Name of the noise/rotation range (for logging)
 
     Returns:
-        Dictionary of metrics for this range
+        Dictionary of metrics for this range (same 38 metrics as main aggregation)
     """
     print(f"    Computing metrics for range {range_name} (envs {start_idx}-{end_idx})")
 
     # Extract per-environment data for this range
     episode_lengths = rollout_data['episode_lengths'][start_idx:end_idx]
-    episode_rewards = rollout_data['episode_rewards'][start_idx:end_idx]
     episode_terminated = rollout_data['episode_terminated'][start_idx:end_idx]
     episode_succeeded = rollout_data['episode_succeeded'][start_idx:end_idx]
-    episode_success_times = rollout_data['episode_success_times'][start_idx:end_idx]
-    episode_engaged = rollout_data['episode_engaged'][start_idx:end_idx]
-    episode_engagement_times = rollout_data['episode_engagement_times'][start_idx:end_idx]
-    episode_engagement_lengths = rollout_data['episode_engagement_lengths'][start_idx:end_idx]
     episode_ssv = rollout_data['episode_ssv'][start_idx:end_idx]
     episode_ssjv = rollout_data['episode_ssjv'][start_idx:end_idx]
     episode_max_force = rollout_data['episode_max_force'][start_idx:end_idx]
-    episode_sum_force = rollout_data['episode_sum_force'][start_idx:end_idx]
-    episode_force_steps = rollout_data['episode_force_steps'][start_idx:end_idx]
+    episode_sum_force_in_contact = rollout_data['episode_sum_force_in_contact'][start_idx:end_idx]
+    episode_contact_steps = rollout_data['episode_contact_steps'][start_idx:end_idx]
+    episode_energy = rollout_data['episode_energy'][start_idx:end_idx]
+    contact_force_counts = rollout_data['contact_force_counts'][start_idx:end_idx]
+    contact_pos_counts = rollout_data['contact_pos_counts'][start_idx:end_idx]
+    no_contact_force_counts = rollout_data['no_contact_force_counts'][start_idx:end_idx]
+    no_contact_pos_counts = rollout_data['no_contact_pos_counts'][start_idx:end_idx]
 
-    # Reuse the existing aggregation function
-    # Note: Contact metrics are not available per-range in the current implementation
-    # We would need to pass contact tensors through rollout_data to support this
-    range_metrics = {}
-    num_envs = episode_lengths.shape[0]
-
-    # Basic episode metrics
-    range_metrics['episode_length'] = episode_lengths.float().mean().item()
-    range_metrics['total_reward'] = episode_rewards.mean().item()
-    range_metrics['total_reward_std'] = episode_rewards.std().item()
-    range_metrics['termination_rate'] = episode_terminated.float().mean().item()
-
-    # Success metrics
-    range_metrics['success_rate'] = episode_succeeded.float().mean().item()
-    if episode_succeeded.any():
-        range_metrics['success_time'] = episode_success_times[episode_succeeded].float().mean().item()
-    else:
-        range_metrics['success_time'] = 0.0
-
-    # Engagement metrics
-    range_metrics['engagement_rate'] = episode_engaged.float().mean().item()
-    if episode_engaged.any():
-        range_metrics['engagement_time'] = episode_engagement_times[episode_engaged].float().mean().item()
-        range_metrics['engagement_length'] = episode_engagement_lengths[episode_engaged].float().mean().item()
-    else:
-        range_metrics['engagement_time'] = 0.0
-        range_metrics['engagement_length'] = 0.0
-
-    # Smoothness metrics
-    range_metrics['ssv'] = episode_ssv.mean().item()
-    range_metrics['ssjv'] = episode_ssjv.mean().item()
-
-    # Force metrics
-    range_metrics['max_force'] = episode_max_force.max().item()
-    if episode_force_steps.sum() > 0:
-        range_metrics['avg_force'] = episode_sum_force.sum().item() / episode_force_steps.sum().item()
-    else:
-        range_metrics['avg_force'] = 0.0
-
-    return range_metrics
+    # Reuse the main aggregation function for consistency
+    return _compute_aggregated_metrics(
+        episode_lengths=episode_lengths,
+        episode_terminated=episode_terminated,
+        episode_succeeded=episode_succeeded,
+        episode_ssv=episode_ssv,
+        episode_ssjv=episode_ssjv,
+        episode_max_force=episode_max_force,
+        episode_sum_force_in_contact=episode_sum_force_in_contact,
+        episode_contact_steps=episode_contact_steps,
+        episode_energy=episode_energy,
+        contact_force_counts=contact_force_counts,
+        contact_pos_counts=contact_pos_counts,
+        no_contact_force_counts=no_contact_force_counts,
+        no_contact_pos_counts=no_contact_pos_counts,
+    )
 
 
 def _create_checkpoint_gif(images: torch.Tensor, values: torch.Tensor, cumulative_rewards: torch.Tensor,
@@ -2293,6 +2331,8 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
                     policy_hz=policy_hz,
                     output_path=media_path
                 )
+            else:
+                media_path = None
 
             # Add Eval/ prefix to all metrics for WandB namespacing
             eval_metrics = {f"Eval/{key}": value for key, value in metrics.items()}
@@ -2312,15 +2352,16 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
                 eval_seed=args.eval_seed
             )
 
-            # Generate noise visualization
-            fd, media_path = tempfile.mkstemp(suffix=".png", prefix=f"noise_eval_step_{step}_")
-            os.close(fd)
-
-            media_path = generate_noise_visualization(
-                rollout_data=rollout_data,
-                step=step,
-                output_path=media_path
-            )
+            # Visualization disabled - keep function for potential future use
+            # fd, media_path = tempfile.mkstemp(suffix=".png", prefix=f"noise_eval_step_{step}_")
+            # os.close(fd)
+            #
+            # media_path = generate_noise_visualization(
+            #     rollout_data=rollout_data,
+            #     step=step,
+            #     output_path=media_path
+            # )
+            media_path = None
 
         elif args.eval_mode == "rotation":
             # Run rotation evaluation (no video)
@@ -2337,15 +2378,16 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
                 eval_seed=args.eval_seed
             )
 
-            # Generate rotation visualization
-            fd, media_path = tempfile.mkstemp(suffix=".png", prefix=f"rotation_eval_step_{step}_")
-            os.close(fd)
-
-            media_path = generate_rotation_visualization(
-                rollout_data=rollout_data,
-                step=step,
-                output_path=media_path
-            )
+            # Visualization disabled - keep function for potential future use
+            # fd, media_path = tempfile.mkstemp(suffix=".png", prefix=f"rotation_eval_step_{step}_")
+            # os.close(fd)
+            #
+            # media_path = generate_rotation_visualization(
+            #     rollout_data=rollout_data,
+            #     step=step,
+            #     output_path=media_path
+            # )
+            media_path = None
 
         else:
             raise RuntimeError(f"Unknown eval_mode: {args.eval_mode}")
@@ -2421,6 +2463,33 @@ def main():
             # Get checkpoint steps for this run
             checkpoint_steps = get_checkpoint_steps(run, args_cli)
 
+            # Initialize debug run once for all checkpoints (if debug_project mode)
+            debug_run_initialized = False
+            if args_cli.debug_project and not args_cli.no_wandb:
+                try:
+                    run_name = f"eval_{args_cli.eval_mode}_{run.name}"
+                    print(f"\n[DEBUG MODE] Initializing debug run: {run_name}")
+                    wandb.init(
+                        project="debug",
+                        entity=args_cli.entity,
+                        name=run_name,
+                        tags=[f"eval_{args_cli.eval_mode}", f"original_run:{run.id}"],
+                        config={
+                            "original_run_id": run.id,
+                            "original_project": run.project,
+                            "original_run_name": run.name,
+                            "eval_mode": args_cli.eval_mode,
+                            "eval_seed": args_cli.eval_seed,
+                            "num_checkpoints": len(checkpoint_steps),
+                        }
+                    )
+                    debug_run_initialized = True
+                    print(f"  Debug run initialized in 'debug' project")
+                except Exception as e:
+                    print(f"  WARNING: Failed to initialize debug run: {e}")
+                    print(f"  Continuing without WandB logging...")
+                    args_cli.no_wandb = True
+
             # Evaluate each checkpoint
             for step_idx, step in enumerate(checkpoint_steps):
                 print(f"\nCheckpoint {step_idx + 1}/{len(checkpoint_steps)}: step {step}")
@@ -2440,6 +2509,11 @@ def main():
                     import traceback
                     traceback.print_exc()
                     continue
+
+            # Finish debug run after all checkpoints (if debug_project mode)
+            if debug_run_initialized:
+                print(f"\n[DEBUG MODE] Finishing debug run")
+                wandb.finish()
 
         print(f"\n{'=' * 80}")
         print("Evaluation complete!")
