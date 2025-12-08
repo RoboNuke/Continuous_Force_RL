@@ -20,7 +20,7 @@ wrappers:
   hybrid_control:
     enabled: true
     reward_type: "none"
-    use_ground_truth_selection: false
+    use_ground_truth_selection: true
     
   pose_contact_logging:
     enabled: false
@@ -38,6 +38,6 @@ environment:
     
 # Experiment metadata
 experiment:
-  name: "LCLoP_baseSet"
+  name: "ff_baseSet"
   tags: ['medFixedNoise','ft_noise','ee_pos_noise','base_set']
-  group: "LCLoP_baseSet"
+  group: "ff_baseSet"
