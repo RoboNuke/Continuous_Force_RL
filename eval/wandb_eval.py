@@ -192,6 +192,83 @@ ENVS_PER_ROTATION_ANGLE = 100
 ROTATION_MODE_TOTAL_ENVS = len(ROTATION_ANGLES_DEG) * ENVS_PER_ROTATION_ANGLE
 
 
+# ===== METRIC CATEGORIES =====
+
+# Core metrics (10 total)
+CORE_METRICS = [
+    'total_episodes',
+    'num_successful_completions',
+    'num_breaks',
+    'num_failed_timeouts',
+    'episode_length',
+    'ssv',
+    'ssjv',
+    'max_force',
+    'avg_force_in_contact',
+    'energy',
+]
+
+# Contact-control metrics (20 total)
+CONTACT_METRICS = [
+    # Per-axis raw counts (12)
+    'force_control_contact_x',
+    'force_control_no_contact_x',
+    'pos_control_contact_x',
+    'pos_control_no_contact_x',
+    'force_control_contact_y',
+    'force_control_no_contact_y',
+    'pos_control_contact_y',
+    'pos_control_no_contact_y',
+    'force_control_contact_z',
+    'force_control_no_contact_z',
+    'pos_control_contact_z',
+    'pos_control_no_contact_z',
+    # Per-axis accuracy (6)
+    'force_control_accuracy_x',
+    'pos_control_accuracy_x',
+    'force_control_accuracy_y',
+    'pos_control_accuracy_y',
+    'force_control_accuracy_z',
+    'pos_control_accuracy_z',
+    # Total accuracy (2)
+    'force_control_accuracy_total',
+    'pos_control_accuracy_total',
+]
+
+
+def prefix_metrics_by_category(
+    metrics: Dict[str, float],
+    core_prefix: str,
+    contact_prefix: str
+) -> Dict[str, float]:
+    """
+    Prefix metrics based on their category (core vs contact).
+
+    Args:
+        metrics: Dictionary of metric name -> value
+        core_prefix: Prefix for core metrics (e.g., "Eval_Core")
+        contact_prefix: Prefix for contact metrics (e.g., "Eval_Contact")
+
+    Returns:
+        Dictionary with prefixed metric names
+
+    Raises:
+        RuntimeError: If a metric is not in either category
+    """
+    prefixed = {}
+    for key, value in metrics.items():
+        if key in CORE_METRICS:
+            prefixed[f"{core_prefix}/{key}"] = value
+        elif key in CONTACT_METRICS:
+            prefixed[f"{contact_prefix}/{key}"] = value
+        else:
+            raise RuntimeError(
+                f"Metric '{key}' not found in CORE_METRICS or CONTACT_METRICS. "
+                f"Please add it to the appropriate category list."
+            )
+    return prefixed
+
+
 # ===== WRAPPERS =====
 
 class Img2InfoWrapper(gym.Wrapper):
@@ -1538,9 +1615,13 @@ def run_noise_evaluation(
             range_name=range_name
         )
 
-        # Add to split metrics with prefix
-        for key, value in range_metrics.items():
-            split_metrics[f"Eval({range_name})/{key}"] = value
+        # Add to split metrics with category-based prefixes
+        prefixed_range_metrics = prefix_metrics_by_category(
+            range_metrics,
+            core_prefix=f"Noise_Eval({range_name})_Core",
+            contact_prefix=f"Noise_Eval({range_name})_Contact"
+        )
+        split_metrics.update(prefixed_range_metrics)
 
     # Prepare rollout data for visualization
     rollout_data_for_viz = {
@@ -1606,9 +1687,13 @@ def run_rotation_evaluation(
             range_name=f"{angle_deg}deg"
         )
 
-        # Add to split metrics with prefix
-        for key, value in angle_metrics.items():
-            split_metrics[f"Eval({angle_deg}deg)/{key}"] = value
+        # Add to split metrics with category-based prefixes
+        prefixed_angle_metrics = prefix_metrics_by_category(
+            angle_metrics,
+            core_prefix=f"Rot_Eval({angle_deg}deg)_Core",
+            contact_prefix=f"Rot_Eval({angle_deg}deg)_Contact"
+        )
+        split_metrics.update(prefixed_angle_metrics)
 
     # Prepare rollout data for visualization
     rollout_data_for_viz = {
@@ -2334,8 +2419,12 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
             else:
                 media_path = None
 
-            # Add Eval/ prefix to all metrics for WandB namespacing
-            eval_metrics = {f"Eval/{key}": value for key, value in metrics.items()}
+            # Add category-based prefixes for WandB namespacing
+            eval_metrics = prefix_metrics_by_category(
+                metrics,
+                core_prefix="Eval_Core",
+                contact_prefix="Eval_Contact"
+            )
 
         elif args.eval_mode == "noise":
             # Run noise evaluation (no video)
@@ -2396,21 +2485,25 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
 
         # Print summary (different for each mode)
         if args.eval_mode == "performance":
-            # Access metrics from the dict (they have Eval/ prefix already)
-            success_rate = eval_metrics.get('Eval/success_rate', 0.0)
-            mean_reward = eval_metrics.get('Eval/total_reward', 0.0)
-            print(f"    Success rate: {success_rate:.2%}")
-            print(f"    Mean reward: {mean_reward:.2f}")
+            # Compute success rate from actual metrics
+            total = eval_metrics.get('Eval_Core/total_episodes', 0)
+            successes = eval_metrics.get('Eval_Core/num_successful_completions', 0)
+            success_rate = successes / total if total > 0 else 0.0
+            print(f"    Success rate: {success_rate:.2%} ({successes}/{total})")
         elif args.eval_mode == "noise":
             # Print summary for each noise range
             for min_val, max_val, range_name in NOISE_RANGES:
-                success_rate = eval_metrics.get(f'Eval({range_name})/success_rate', 0.0)
-                print(f"    {range_name}: {success_rate:.2%}")
+                total = eval_metrics.get(f'Noise_Eval({range_name})_Core/total_episodes', 0)
+                successes = eval_metrics.get(f'Noise_Eval({range_name})_Core/num_successful_completions', 0)
+                success_rate = successes / total if total > 0 else 0.0
+                print(f"    {range_name}: {success_rate:.2%} ({successes}/{total})")
         elif args.eval_mode == "rotation":
             # Print summary for each rotation angle
             for angle_deg in ROTATION_ANGLES_DEG:
-                success_rate = eval_metrics.get(f'Eval({angle_deg}deg)/success_rate', 0.0)
-                print(f"    {angle_deg}deg: {success_rate:.2%}")
+                total = eval_metrics.get(f'Rot_Eval({angle_deg}deg)_Core/total_episodes', 0)
+                successes = eval_metrics.get(f'Rot_Eval({angle_deg}deg)_Core/num_successful_completions', 0)
+                success_rate = successes / total if total > 0 else 0.0
+                print(f"    {angle_deg}deg: {success_rate:.2%} ({successes}/{total})")
 
         return eval_metrics, media_path
 

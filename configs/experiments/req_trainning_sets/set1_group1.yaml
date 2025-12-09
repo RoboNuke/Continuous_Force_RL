@@ -1,0 +1,33 @@
+base: 
+  pose: "pose_baseSet:2025-12-07_18:55"
+  basic_hybrid: "basicHybrid_baseSet:2025-12-07_18:55"
+  ff_hybrid: "ff_baseSet:2025-12-07_18:55"
+  LCLoP: "LCLoP_baseSet:2025-12-07_18:55"
+
+fragile:
+  5N:
+    pose: "pose_fragileSet05:2025-12-08_01:24"
+    basic_hybrid: "basicHybrid_fragileSet05:2025-12-08_01:33"
+    ff_hybrid: "ff_fragileSet05:2025-12-07_18:56"
+    LCLoP: "LCLoP_fragileSet05:2025-12-07_18:56"
+
+  15N:
+    pose: "pose_fragileSet15:2025-12-07_18:56"
+    basic_hybrid: "basicHybrid_fragileSet15:2025-12-07_18:56"
+    ff_hybrid: "ff_fragileSet15:2025-12-07_18:56"
+    LCLoP: "LCLoP_fragileSet15:2025-12-07_18:56"
+
+  20N:
+    pose: "pose_fragileSet20:2025-12-07_21:41"
+    basic_hybrid: "basicHybrid_fragileSet20:2025-12-07_21:43"
+    ff_hybrid: "ff_fragileSet20:2025-12-07_18:56"
+    LCLoP: "LCLoP_fragileSet20:2025-12-07_19:55"
+
+full_noise:
+  pose: "pose_fullNoiseSet:2025-12-08_00:50"
+  basic_hybrid: "basicHybrid_fullNoiseSet:2025-12-08_01:23"
+  ff_hybrid: "ff_fullNoiseSet:2025-12-07_23:33"
+  LCLoP: "LCLoP_fullNoiseSet:2025-12-08_00:20"
+
+
+
