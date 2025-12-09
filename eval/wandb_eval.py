@@ -47,8 +47,8 @@ def parse_arguments():
     parser.add_argument("--show_progress", action="store_true", default=True,
                         help="Show progress bar during evaluation rollout")
     parser.add_argument("--eval_mode", type=str, required=True,
-                        choices=["performance", "noise", "rotation"],
-                        help="Evaluation mode: 'performance' (100 envs, videos), 'noise' (500 envs, noise analysis), or 'rotation' (500 envs, rotation analysis)")
+                        choices=["performance", "noise", "rotation", "gain", "dynamics"],
+                        help="Evaluation mode: 'performance' (100 envs, videos), 'noise' (500 envs, noise analysis), 'rotation' (500 envs, rotation analysis), 'gain' (500 envs, gain robustness), or 'dynamics' (1200 envs, friction/mass robustness)")
     parser.add_argument("--no_wandb", action="store_true", default=False,
                         help="Disable WandB logging and save results locally for debugging")
     parser.add_argument("--debug_project", action="store_true", default=False,
@@ -190,6 +190,35 @@ ENVS_PER_ROTATION_ANGLE = 100
 
 # Total environments for rotation mode
 ROTATION_MODE_TOTAL_ENVS = len(ROTATION_ANGLES_DEG) * ENVS_PER_ROTATION_ANGLE
+
+
+# ===== GAIN EVALUATION CONSTANTS =====
+
+# Define gain multipliers for gain robustness evaluation
+# These multiply the default proportional gains [100, 100, 100, 30, 30, 30]
+GAIN_MULTIPLIERS = [0.5, 0.75, 1.0, 1.25, 1.5]
+
+# Number of environments per gain multiplier
+ENVS_PER_GAIN_MULTIPLIER = 100
+
+# Total environments for gain mode
+GAIN_MODE_TOTAL_ENVS = len(GAIN_MULTIPLIERS) * ENVS_PER_GAIN_MULTIPLIER
+
+
+# ===== DYNAMICS EVALUATION CONSTANTS =====
+
+# Define friction multipliers for dynamics robustness evaluation
+DYNAMICS_FRICTION_MULTIPLIERS = [0.5, 0.75, 1.0]
+
+# Define mass multipliers for dynamics robustness evaluation
+DYNAMICS_MASS_MULTIPLIERS = [0.5, 1.0, 1.5, 2.0]
+
+# Number of environments per friction/mass combination
+ENVS_PER_DYNAMICS_COMBO = 100
+
+# Total environments for dynamics mode (friction-major ordering)
+# 3 friction × 4 mass × 100 envs = 1200 total
+DYNAMICS_MODE_TOTAL_ENVS = len(DYNAMICS_FRICTION_MULTIPLIERS) * len(DYNAMICS_MASS_MULTIPLIERS) * ENVS_PER_DYNAMICS_COMBO
 
 
 # ===== METRIC CATEGORIES =====
@@ -405,6 +434,158 @@ class FixedAssetRotationWrapper(gym.Wrapper):
         return observations, info
 
 
+class FixedGainWrapper(gym.Wrapper):
+    """
+    Wrapper to apply fixed gain multipliers to controller gains.
+    Used for gain robustness evaluation.
+
+    Multiplies the default proportional gains by a predetermined multiplier,
+    then computes derivative gains via critical damping: kd = 2 * sqrt(kp).
+    All 6 axes (linear xyz + rotational xyz) receive the same multiplier.
+    """
+    def __init__(self, env, gain_multipliers: torch.Tensor):
+        """
+        Initialize the fixed gain wrapper.
+
+        Args:
+            env: Base environment to wrap
+            gain_multipliers: [num_envs] tensor with gain multiplier for each environment
+        """
+        super().__init__(env)
+        self.gain_multipliers = gain_multipliers  # [num_envs]
+        # CRITICAL: Store a CLONE of default_gains because the base env's _set_gains
+        # creates an alias between task_prop_gains and default_gains. Without cloning,
+        # our modifications to task_prop_gains would corrupt default_gains.
+        self.original_default_gains = self.unwrapped.default_gains.clone()
+        self._init_wrapper()
+
+    def _init_wrapper(self):
+        """Monkey-patch _reset_idx to apply custom gains after reset."""
+        if hasattr(self.unwrapped, '_reset_idx'):
+            self._original_reset_idx = self.unwrapped._reset_idx
+            self.unwrapped._reset_idx = self._wrapped_reset_idx
+        else:
+            raise RuntimeError(
+                "FixedGainWrapper requires unwrapped environment to have _reset_idx method. "
+                "Ensure the base environment is a FactoryEnv or compatible class."
+            )
+
+    def _wrapped_reset_idx(self, env_ids):
+        """Reset environment and override gains with predetermined multipliers."""
+        # Let the base environment complete its reset (which sets default gains)
+        self._original_reset_idx(env_ids)
+
+        # Compute scaled proportional gains: original_default_gains * multiplier
+        # gain_multipliers is [num_envs], original_default_gains is [num_envs, 6]
+        # Expand multipliers to [len(env_ids), 1] for broadcasting
+        multipliers = self.gain_multipliers[env_ids].unsqueeze(1)  # [len(env_ids), 1]
+
+        # Get the ORIGINAL default gains for these environments (not the corrupted ones)
+        default_gains = self.original_default_gains[env_ids]  # [len(env_ids), 6]
+
+        # Apply multiplier to all 6 axes equally
+        scaled_prop_gains = default_gains * multipliers  # [len(env_ids), 6]
+
+        # Set proportional gains
+        self.unwrapped.task_prop_gains[env_ids] = scaled_prop_gains.to(
+            dtype=self.unwrapped.task_prop_gains.dtype
+        )
+
+        # Compute derivative gains via critical damping: kd = 2 * sqrt(kp)
+        deriv_gains = 2.0 * torch.sqrt(scaled_prop_gains)
+
+        # Set derivative gains
+        self.unwrapped.task_deriv_gains[env_ids] = deriv_gains.to(
+            dtype=self.unwrapped.task_deriv_gains.dtype
+        )
+
+
+class FixedDynamicsWrapper(gym.Wrapper):
+    """
+    Wrapper to apply fixed friction and mass multipliers to the held object.
+    Used for dynamics robustness evaluation.
+
+    Multiplies the held object's friction and mass by predetermined multipliers.
+    Inertia is scaled linearly with mass (assuming uniform density).
+    Applied BEFORE reset to ensure PhysX has correct values during simulation setup.
+    """
+    def __init__(self, env, friction_multipliers: torch.Tensor, mass_multipliers: torch.Tensor):
+        """
+        Initialize the fixed dynamics wrapper.
+
+        Args:
+            env: Base environment to wrap
+            friction_multipliers: [num_envs] tensor with friction multiplier for each environment
+            mass_multipliers: [num_envs] tensor with mass multiplier for each environment
+        """
+        super().__init__(env)
+        self.friction_multipliers = friction_multipliers  # [num_envs]
+        self.mass_multipliers = mass_multipliers          # [num_envs]
+
+        # Store original values (clone to prevent aliasing issues)
+        held_asset = self.unwrapped._held_asset
+
+        # Friction: from material properties [num_envs, num_shapes, 3] where 3 = [static, dynamic, restitution]
+        materials = held_asset.root_physx_view.get_material_properties()
+        self.original_static_friction = materials[..., 0].clone()  # [num_envs, num_shapes]
+        self.materials_device = materials.device  # PhysX uses CPU
+
+        # Mass/inertia: from default data
+        self.original_mass = held_asset.data.default_mass.clone()  # [num_envs, num_bodies]
+        self.original_inertia = held_asset.data.default_inertia.clone()  # [num_envs, num_bodies, 9]
+
+        self._init_wrapper()
+
+    def _init_wrapper(self):
+        """Monkey-patch _reset_idx to apply custom dynamics before reset."""
+        if hasattr(self.unwrapped, '_reset_idx'):
+            self._original_reset_idx = self.unwrapped._reset_idx
+            self.unwrapped._reset_idx = self._wrapped_reset_idx
+        else:
+            raise RuntimeError(
+                "FixedDynamicsWrapper requires unwrapped environment to have _reset_idx method. "
+                "Ensure the base environment is a FactoryEnv or compatible class."
+            )
+
+    def _wrapped_reset_idx(self, env_ids):
+        """Apply dynamics changes BEFORE reset, then perform reset."""
+        # Apply friction/mass before reset
+        self._apply_dynamics(env_ids)
+
+        # Let the base environment complete its reset
+        self._original_reset_idx(env_ids)
+
+    def _apply_dynamics(self, env_ids):
+        """Apply friction and mass multipliers to the held asset."""
+        held_asset = self.unwrapped._held_asset
+
+        # Move env_ids to materials device (PhysX is on CPU)
+        env_ids_cpu = env_ids.to(self.materials_device)
+
+        # 1. Apply friction
+        materials = held_asset.root_physx_view.get_material_properties()
+        fric_mults = self.friction_multipliers[env_ids].to(self.materials_device).unsqueeze(-1)  # [len(env_ids), 1]
+        orig_fric = self.original_static_friction[env_ids_cpu]  # [len(env_ids), num_shapes]
+        new_fric = orig_fric * fric_mults
+        materials[env_ids_cpu, ..., 0] = new_fric  # Static friction
+        materials[env_ids_cpu, ..., 1] = new_fric  # Dynamic friction
+        held_asset.root_physx_view.set_material_properties(materials, env_ids_cpu)
+
+        # 2. Apply mass with inertia recomputation
+        masses = held_asset.root_physx_view.get_masses()
+        inertias = held_asset.root_physx_view.get_inertias()
+        mass_mults = self.mass_multipliers[env_ids].to(masses.device)
+
+        new_masses = self.original_mass[env_ids_cpu] * mass_mults.unsqueeze(-1)
+        masses[env_ids_cpu] = new_masses
+
+        new_inertias = self.original_inertia[env_ids_cpu] * mass_mults.unsqueeze(-1).unsqueeze(-1)
+        inertias[env_ids_cpu] = new_inertias
+
+        held_asset.root_physx_view.set_masses(masses, env_ids_cpu)
+        held_asset.root_physx_view.set_inertias(inertias, env_ids_cpu)
+
+
 # ===== WANDB QUERY FUNCTIONS =====
 
 def query_runs_by_tag(tag: str, entity: str, project: str, run_id: Optional[str] = None) -> List[wandb.Run]:
@@ -618,7 +799,7 @@ def download_checkpoint_pair(run: wandb.Run, step: int) -> Tuple[str, str]:
 
 # ===== ENVIRONMENT SETUP =====
 
-def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) -> Tuple[Any, Any, int, float, Optional[torch.Tensor], Optional[torch.Tensor]]:
+def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) -> Tuple[Any, Any, int, float, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
     """
     Create environment and agent once for all evaluations.
 
@@ -627,7 +808,7 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
         args: Command-line arguments
 
     Returns:
-        Tuple of (env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments)
+        Tuple of (env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, gain_assignments, friction_assignments, mass_assignments)
         noise_assignments is None except for noise mode ([num_envs, 2] tensor)
         rotation_assignments is None except for rotation mode ([num_envs, 5] tensor)
 
@@ -672,6 +853,10 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
         num_envs_per_agent = NOISE_MODE_TOTAL_ENVS
     elif args.eval_mode == "rotation":
         num_envs_per_agent = ROTATION_MODE_TOTAL_ENVS
+    elif args.eval_mode == "gain":
+        num_envs_per_agent = GAIN_MODE_TOTAL_ENVS
+    elif args.eval_mode == "dynamics":
+        num_envs_per_agent = DYNAMICS_MODE_TOTAL_ENVS
     else:
         raise RuntimeError(f"Unknown eval_mode: {args.eval_mode}")
 
@@ -832,6 +1017,52 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
         print("  - FixedAssetRotationWrapper for rotation mode")
         env = FixedAssetRotationWrapper(env, rotation_assignments)
 
+    # Generate gain multiplier assignments for gain mode
+    gain_assignments = None
+    if args.eval_mode == "gain":
+        print("  Generating gain multiplier assignments for gain mode...")
+
+        gain_assignments_list = []
+        for multiplier in GAIN_MULTIPLIERS:
+            # Create tensor of same multiplier for ENVS_PER_GAIN_MULTIPLIER environments
+            multiplier_tensor = torch.full(
+                (ENVS_PER_GAIN_MULTIPLIER,),
+                multiplier,
+                device=env.device,
+                dtype=torch.float32
+            )
+            gain_assignments_list.append(multiplier_tensor)
+
+        gain_assignments = torch.cat(gain_assignments_list, dim=0)  # [GAIN_MODE_TOTAL_ENVS]
+        print(f"    Generated {gain_assignments.shape[0]} gain assignments ({len(GAIN_MULTIPLIERS)} multipliers × {ENVS_PER_GAIN_MULTIPLIER} envs)")
+
+        # Apply FixedGainWrapper
+        print("  - FixedGainWrapper for gain mode")
+        env = FixedGainWrapper(env, gain_assignments)
+
+    # Generate friction/mass assignments for dynamics mode
+    friction_assignments = None
+    mass_assignments = None
+    if args.eval_mode == "dynamics":
+        print("  Generating friction/mass assignments for dynamics mode...")
+
+        # Friction-major ordering: for each friction, iterate all masses
+        friction_list = []
+        mass_list = []
+        for fric_mult in DYNAMICS_FRICTION_MULTIPLIERS:
+            for mass_mult in DYNAMICS_MASS_MULTIPLIERS:
+                friction_list.extend([fric_mult] * ENVS_PER_DYNAMICS_COMBO)
+                mass_list.extend([mass_mult] * ENVS_PER_DYNAMICS_COMBO)
+
+        friction_assignments = torch.tensor(friction_list, device=env.device, dtype=torch.float32)
+        mass_assignments = torch.tensor(mass_list, device=env.device, dtype=torch.float32)
+        print(f"    Generated {friction_assignments.shape[0]} dynamics assignments "
+              f"({len(DYNAMICS_FRICTION_MULTIPLIERS)} friction × {len(DYNAMICS_MASS_MULTIPLIERS)} mass × {ENVS_PER_DYNAMICS_COMBO} envs)")
+
+        # Apply FixedDynamicsWrapper
+        print("  - FixedDynamicsWrapper for dynamics mode")
+        env = FixedDynamicsWrapper(env, friction_assignments, mass_assignments)
+
     # Add image capture wrapper for video (only in performance mode)
     if args.enable_video and args.eval_mode == "performance":
         print("  - Img2InfoWrapper for video capture")
@@ -867,7 +1098,7 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
     print(f"  Created BlockPPO agent with {configs['primary'].total_agents} agents")
     print("  Setup complete!")
 
-    return env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments
+    return env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, gain_assignments, friction_assignments, mass_assignments
 
 
 # ===== WANDB LOGGING =====
@@ -918,6 +1149,10 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
                 local_media_path = f"./eval_results/noise_step_{step}{ext}"
             elif args.eval_mode == "rotation":
                 local_media_path = f"./eval_results/rotation_step_{step}{ext}"
+            elif args.eval_mode == "gain":
+                local_media_path = f"./eval_results/gain_step_{step}{ext}"
+            elif args.eval_mode == "dynamics":
+                local_media_path = f"./eval_results/dynamics_step_{step}{ext}"
             else:
                 local_media_path = f"./eval_results/eval_step_{step}{ext}"
 
@@ -1706,6 +1941,156 @@ def run_rotation_evaluation(
     return split_metrics, rollout_data_for_viz
 
 
+def run_gain_evaluation(
+    env: Any,
+    agent: Any,
+    configs: Dict[str, Any],
+    max_rollout_steps: int,
+    gain_assignments: torch.Tensor,
+    show_progress: bool = False,
+    eval_seed: int = None
+) -> Tuple[Dict[str, float], Dict[str, Any]]:
+    """
+    Run gain robustness evaluation with 500 environments across 5 gain multipliers.
+
+    Args:
+        env: Environment instance (wrapped with metrics wrappers and FixedGainWrapper)
+        agent: Agent instance with loaded checkpoint
+        configs: Configuration dictionary
+        max_rollout_steps: Maximum steps per episode
+        gain_assignments: [500] tensor with gain multiplier for each environment
+        show_progress: Whether to show progress bar
+        eval_seed: Seed for deterministic evaluation
+
+    Returns:
+        Tuple of (metrics_dict, rollout_data_dict)
+            - metrics_dict: Aggregated metrics split by gain multiplier
+            - rollout_data_dict: Contains success/failure data per environment
+    """
+    print("  Running gain robustness evaluation...")
+
+    # Run basic evaluation (no video)
+    metrics, rollout_data = run_basic_evaluation(
+        env=env,
+        agent=agent,
+        configs=configs,
+        max_rollout_steps=max_rollout_steps,
+        enable_video=False,  # No video in gain mode
+        show_progress=show_progress,
+        eval_seed=eval_seed
+    )
+
+    # Split metrics by gain multiplier
+    split_metrics = {}
+    for mult_idx, multiplier in enumerate(GAIN_MULTIPLIERS):
+        start_idx = mult_idx * ENVS_PER_GAIN_MULTIPLIER
+        end_idx = start_idx + ENVS_PER_GAIN_MULTIPLIER
+
+        # Extract data for this gain multiplier
+        mult_metrics = _compute_range_metrics(
+            rollout_data=rollout_data,
+            start_idx=start_idx,
+            end_idx=end_idx,
+            range_name=f"{multiplier}x"
+        )
+
+        # Add to split metrics with category-based prefixes
+        prefixed_mult_metrics = prefix_metrics_by_category(
+            mult_metrics,
+            core_prefix=f"Gain_Eval({multiplier}x)_Core",
+            contact_prefix=f"Gain_Eval({multiplier}x)_Contact"
+        )
+        split_metrics.update(prefixed_mult_metrics)
+
+    # Prepare rollout data (no visualization for gain mode)
+    rollout_data_for_return = {
+        'gain_assignments': gain_assignments,  # [500]
+        'episode_succeeded': rollout_data['episode_succeeded'],  # [500]
+        'termination_step': rollout_data['termination_step'],  # [500]
+        'truncation_step': rollout_data['truncation_step'],    # [500]
+    }
+
+    return split_metrics, rollout_data_for_return
+
+
+def run_dynamics_evaluation(
+    env: Any,
+    agent: Any,
+    configs: Dict[str, Any],
+    max_rollout_steps: int,
+    friction_assignments: torch.Tensor,
+    mass_assignments: torch.Tensor,
+    show_progress: bool = False,
+    eval_seed: int = None
+) -> Tuple[Dict[str, float], Dict[str, Any]]:
+    """
+    Run dynamics robustness evaluation with 1200 environments across 12 friction/mass combinations.
+
+    Args:
+        env: Environment instance (wrapped with metrics wrappers and FixedDynamicsWrapper)
+        agent: Agent instance with loaded checkpoint
+        configs: Configuration dictionary
+        max_rollout_steps: Maximum steps per episode
+        friction_assignments: [1200] tensor with friction multiplier for each environment
+        mass_assignments: [1200] tensor with mass multiplier for each environment
+        show_progress: Whether to show progress bar
+        eval_seed: Seed for deterministic evaluation
+
+    Returns:
+        Tuple of (metrics_dict, rollout_data_dict)
+            - metrics_dict: Aggregated metrics split by friction/mass combination
+            - rollout_data_dict: Contains success/failure data per environment
+    """
+    print("  Running dynamics robustness evaluation...")
+
+    # Run basic evaluation (no video)
+    metrics, rollout_data = run_basic_evaluation(
+        env=env,
+        agent=agent,
+        configs=configs,
+        max_rollout_steps=max_rollout_steps,
+        enable_video=False,  # No video in dynamics mode
+        show_progress=show_progress,
+        eval_seed=eval_seed
+    )
+
+    # Split metrics by friction/mass combination (friction-major ordering)
+    split_metrics = {}
+    combo_idx = 0
+    for fric_mult in DYNAMICS_FRICTION_MULTIPLIERS:
+        for mass_mult in DYNAMICS_MASS_MULTIPLIERS:
+            start_idx = combo_idx * ENVS_PER_DYNAMICS_COMBO
+            end_idx = start_idx + ENVS_PER_DYNAMICS_COMBO
+
+            # Extract data for this friction/mass combination
+            combo_metrics = _compute_range_metrics(
+                rollout_data=rollout_data,
+                start_idx=start_idx,
+                end_idx=end_idx,
+                range_name=f"fric={fric_mult}x,mass={mass_mult}x"
+            )
+
+            # Add to split metrics with category-based prefixes
+            prefixed_combo_metrics = prefix_metrics_by_category(
+                combo_metrics,
+                core_prefix=f"Dyn_Eval(fric={fric_mult}x,mass={mass_mult}x)_Core",
+                contact_prefix=f"Dyn_Eval(fric={fric_mult}x,mass={mass_mult}x)_Contact"
+            )
+            split_metrics.update(prefixed_combo_metrics)
+            combo_idx += 1
+
+    # Prepare rollout data (no visualization for dynamics mode)
+    rollout_data_for_return = {
+        'friction_assignments': friction_assignments,  # [1200]
+        'mass_assignments': mass_assignments,          # [1200]
+        'episode_succeeded': rollout_data['episode_succeeded'],  # [1200]
+        'termination_step': rollout_data['termination_step'],    # [1200]
+        'truncation_step': rollout_data['truncation_step'],      # [1200]
+    }
+
+    return split_metrics, rollout_data_for_return
+
+
 def _compute_range_metrics(
     rollout_data: Dict[str, torch.Tensor],
     start_idx: int,
@@ -1713,7 +2098,7 @@ def _compute_range_metrics(
     range_name: str
 ) -> Dict[str, float]:
     """
-    Compute metrics for a specific noise/rotation range from per-environment data.
+    Compute metrics for a specific noise/rotation/gain range from per-environment data.
 
     Args:
         rollout_data: Per-environment data from run_basic_evaluation
@@ -2237,7 +2622,10 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
                        configs: Dict[str, Any], args: argparse.Namespace,
                        max_rollout_steps: int, policy_hz: float,
                        noise_assignments: Optional[torch.Tensor] = None,
-                       rotation_assignments: Optional[torch.Tensor] = None) -> Tuple[Dict[str, float], Optional[str]]:
+                       rotation_assignments: Optional[torch.Tensor] = None,
+                       gain_assignments: Optional[torch.Tensor] = None,
+                       friction_assignments: Optional[torch.Tensor] = None,
+                       mass_assignments: Optional[torch.Tensor] = None) -> Tuple[Dict[str, float], Optional[str]]:
     """
     Evaluate a single checkpoint.
 
@@ -2478,6 +2866,43 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
             # )
             media_path = None
 
+        elif args.eval_mode == "gain":
+            # Run gain evaluation (no video)
+            if gain_assignments is None:
+                raise RuntimeError("gain_assignments is None in gain mode evaluation")
+
+            eval_metrics, rollout_data = run_gain_evaluation(
+                env=env,
+                agent=agent,
+                configs=configs,
+                max_rollout_steps=max_rollout_steps,
+                gain_assignments=gain_assignments,
+                show_progress=args.show_progress,
+                eval_seed=args.eval_seed
+            )
+
+            # No visualization for gain mode
+            media_path = None
+
+        elif args.eval_mode == "dynamics":
+            # Run dynamics evaluation (no video)
+            if friction_assignments is None or mass_assignments is None:
+                raise RuntimeError("friction_assignments or mass_assignments is None in dynamics mode evaluation")
+
+            eval_metrics, rollout_data = run_dynamics_evaluation(
+                env=env,
+                agent=agent,
+                configs=configs,
+                max_rollout_steps=max_rollout_steps,
+                friction_assignments=friction_assignments,
+                mass_assignments=mass_assignments,
+                show_progress=args.show_progress,
+                eval_seed=args.eval_seed
+            )
+
+            # No visualization for dynamics mode
+            media_path = None
+
         else:
             raise RuntimeError(f"Unknown eval_mode: {args.eval_mode}")
 
@@ -2504,6 +2929,22 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
                 successes = eval_metrics.get(f'Rot_Eval({angle_deg}deg)_Core/num_successful_completions', 0)
                 success_rate = successes / total if total > 0 else 0.0
                 print(f"    {angle_deg}deg: {success_rate:.2%} ({successes}/{total})")
+        elif args.eval_mode == "gain":
+            # Print summary for each gain multiplier
+            for multiplier in GAIN_MULTIPLIERS:
+                total = eval_metrics.get(f'Gain_Eval({multiplier}x)_Core/total_episodes', 0)
+                successes = eval_metrics.get(f'Gain_Eval({multiplier}x)_Core/num_successful_completions', 0)
+                success_rate = successes / total if total > 0 else 0.0
+                print(f"    {multiplier}x: {success_rate:.2%} ({successes}/{total})")
+        elif args.eval_mode == "dynamics":
+            # Print summary for each friction/mass combination
+            for fric_mult in DYNAMICS_FRICTION_MULTIPLIERS:
+                for mass_mult in DYNAMICS_MASS_MULTIPLIERS:
+                    combo_name = f"fric={fric_mult}x,mass={mass_mult}x"
+                    total = eval_metrics.get(f'Dyn_Eval({combo_name})_Core/total_episodes', 0)
+                    successes = eval_metrics.get(f'Dyn_Eval({combo_name})_Core/num_successful_completions', 0)
+                    success_rate = successes / total if total > 0 else 0.0
+                    print(f"    ({combo_name}): {success_rate:.2%} ({successes}/{total})")
 
         return eval_metrics, media_path
 
@@ -2535,7 +2976,7 @@ def main():
 
         # Setup environment once
         print("\nSetting up environment...")
-        env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments = setup_environment_once(configs, args_cli)
+        env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, gain_assignments, friction_assignments, mass_assignments = setup_environment_once(configs, args_cli)
 
         print(f"\nEnvironment configured:")
         if args_cli.eval_mode == "performance":
@@ -2544,6 +2985,10 @@ def main():
             print(f"  - Environments per agent: {NOISE_MODE_TOTAL_ENVS} (noise mode: {len(NOISE_RANGES)} ranges × {ENVS_PER_NOISE_RANGE} envs)")
         elif args_cli.eval_mode == "rotation":
             print(f"  - Environments per agent: {ROTATION_MODE_TOTAL_ENVS} (rotation mode: {len(ROTATION_ANGLES_DEG)} angles × {ENVS_PER_ROTATION_ANGLE} envs)")
+        elif args_cli.eval_mode == "gain":
+            print(f"  - Environments per agent: {GAIN_MODE_TOTAL_ENVS} (gain mode: {len(GAIN_MULTIPLIERS)} multipliers × {ENVS_PER_GAIN_MULTIPLIER} envs)")
+        elif args_cli.eval_mode == "dynamics":
+            print(f"  - Environments per agent: {DYNAMICS_MODE_TOTAL_ENVS} (dynamics mode: {len(DYNAMICS_FRICTION_MULTIPLIERS)} friction × {len(DYNAMICS_MASS_MULTIPLIERS)} mass × {ENVS_PER_DYNAMICS_COMBO} envs)")
         print(f"  - Max rollout steps: {max_rollout_steps}")
         print(f"  - Policy Hz: {policy_hz}")
 
@@ -2591,7 +3036,8 @@ def main():
                     # Evaluate this checkpoint
                     metrics, media_path = evaluate_checkpoint(
                         run, step, env, agent, configs, args_cli,
-                        max_rollout_steps, policy_hz, noise_assignments, rotation_assignments
+                        max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, gain_assignments,
+                        friction_assignments, mass_assignments
                     )
 
                     # Log results to WandB
