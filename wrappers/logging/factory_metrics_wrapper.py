@@ -234,6 +234,8 @@ class FactoryMetricsWrapper(gym.Wrapper):
         # a2, b2 = 300, 0
         rew_dict["kp_fine"] = squashing_fn(env.keypoint_dist, a2, b2)
 
+        #print(f"Squishing Terms - Baseline:({a0},{b0})\tCoarse:({a1},{b1})\tFine:({a2},{b2})")
+
         # Action penalties.
         rew_dict["action_penalty"] = torch.norm(env.actions, p=2, dim=-1)
         rew_dict["action_grad_penalty"] = torch.norm(env.actions - env.prev_actions, p=2, dim=-1)
