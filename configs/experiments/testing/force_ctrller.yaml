@@ -35,14 +35,54 @@ wrappers:
 environment:
   scene:
     num_envs: 1
+
+  sim:
+    physx:
+      solver_type: 1
+      max_position_iteration_count: &pos_iter 32  # Important to avoid interpenetration.
+      max_velocity_iteration_count: &vel_iter 8
+      bounce_threshold_velocity: 0.2
+      friction_offset_threshold: 0.01
+      friction_correlation_distance: 0.00625
+      #gpu_max_rigid_contact_count: 2**23
+      #gpu_max_rigid_patch_count: 2**23
+      gpu_max_num_partitions: 1
+  
+  robot:
+    spawn:
+      rigid_props:
+        solver_position_iteration_count: &robot_pos_iter 192
+        solver_velocity_iteration_count: &robot_vel_iter 8
+        linear_damping: &lin_damp 0.0
+
+      articulation_props:
+        solver_position_iteration_count: *robot_pos_iter
+        solver_velocity_iteration_count: *robot_vel_iter
+
+  task:
+    fixed_asset:
+      spawn:
+        rigid_props:
+          solver_position_iteration_count: *pos_iter
+          solver_velocity_iteration_count: *vel_iter
+          linear_damping: *lin_damp
+    
+    held_asset:
+      spawn:
+        rigid_props:
+          solver_position_iteration_count: *pos_iter
+          solver_velocity_iteration_count: *vel_iter
+          linear_damping: *lin_damp
+
     
   ctrl:
     force_action_bounds: [50.0, 50.0, 50.0]
     torque_action_bounds: [0.5, 0.5, 0.5]
     force_action_threshold: [10.0, 10.0, 10.0]
     torque_action_threshold: [0.1, 0.1, 0.1]
-    default_task_prop_gains: [100, 100, 100, 30, 30, 30]
-    default_task_force_gains: [0.5, 0.5, 0.5, 0.001, 0.001, 0.001]
+    
+    default_task_prop_gains: [600, 600, 600, 30, 30, 30]
+    default_task_force_gains: [2.0, 2.0, 2.0, 0.001, 0.001, 0.001]
 
     #default_task_force_gains: [0.8, 0.8, 0.8, 0.001, 0.001, 0.001]
     #default_task_prop_gains: [250, 250, 250, 30, 30, 30]

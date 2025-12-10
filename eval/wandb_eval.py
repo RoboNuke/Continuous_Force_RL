@@ -53,6 +53,8 @@ def parse_arguments():
                         help="Disable WandB logging and save results locally for debugging")
     parser.add_argument("--debug_project", action="store_true", default=False,
                         help="Log results to 'debug' project instead of original run (for testing)")
+    parser.add_argument("--report_to_base_run", action="store_true", default=False,
+                        help="Log results to the original training run instead of creating a new eval run")
 
     # Append AppLauncher args
     AppLauncher.add_app_launcher_args(parser)
@@ -1161,21 +1163,22 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
 
         print(f"    (WandB logging disabled with --no_wandb flag)")
     else:
-        # Normal mode: Log to WandB
-        if args.debug_project:
-            # Debug mode: Use existing debug run (already initialized in main loop)
-            print(f"  [DEBUG MODE] Logging to debug run at step {step}...")
-        else:
-            # Production mode: Resume original run
-            print(f"  Logging results to WandB run {run.id} at step {step}...")
-
+        # WandB mode: Log to appropriate run
+        if args.report_to_base_run:
+            # Legacy mode: Resume original run per checkpoint
+            print(f"  [REPORT_TO_BASE_RUN] Logging to original run {run.id} at step {step}...")
             try:
-                # Resume the WandB run
                 wandb.init(project=run.project, id=run.id, resume="must")
             except Exception as e:
                 raise RuntimeError(f"Failed to resume WandB run {run.id}: {e}")
+        elif args.debug_project:
+            # Debug mode: Use existing debug run (already initialized in main loop)
+            print(f"  [DEBUG MODE] Logging to debug run at step {step}...")
+        else:
+            # Default mode: Use existing eval run (already initialized in main loop)
+            print(f"  Logging to eval run at step {step}...")
 
-        # Add media based on eval mode (works for both debug and production)
+        # Add media based on eval mode
         media_uploaded = False
         if args.eval_mode == "performance":
             # Add video if available
@@ -1214,8 +1217,8 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
         except Exception as e:
             raise RuntimeError(f"Failed to log metrics to WandB for {run.id} at step {step}: {e}")
         finally:
-            # Only finish run in production mode (debug mode finishes after all checkpoints)
-            if not args.debug_project:
+            # Only finish run in report_to_base_run mode (other modes finish after all checkpoints)
+            if args.report_to_base_run:
                 wandb.finish()
 
 
@@ -3001,30 +3004,48 @@ def main():
             # Get checkpoint steps for this run
             checkpoint_steps = get_checkpoint_steps(run, args_cli)
 
-            # Initialize debug run once for all checkpoints (if debug_project mode)
-            debug_run_initialized = False
-            if args_cli.debug_project and not args_cli.no_wandb:
+            # Initialize WandB eval run once for all checkpoints (if applicable)
+            # Modes: default (new eval run), debug_project (debug project), report_to_base_run (per-checkpoint), no_wandb (none)
+            eval_run_initialized = False
+            if not args_cli.no_wandb and not args_cli.report_to_base_run:
                 try:
-                    run_name = f"eval_{args_cli.eval_mode}_{run.name}"
-                    print(f"\n[DEBUG MODE] Initializing debug run: {run_name}")
+                    # Determine project and naming based on mode
+                    if args_cli.debug_project:
+                        # Debug mode: Use "debug" project
+                        target_project = "debug"
+                        eval_run_name = f"Eval_{args_cli.eval_mode}_{run.name}"
+                        eval_group_name = f"Eval_{args_cli.eval_mode}_{run.group}" if run.group else None
+                        print(f"\n[DEBUG MODE] Initializing eval run in 'debug' project: {eval_run_name}")
+                    else:
+                        # Default mode: Use same project as original run
+                        target_project = run.project
+                        eval_run_name = f"Eval_{args_cli.eval_mode}_{run.name}"
+                        eval_group_name = f"Eval_{args_cli.eval_mode}_{run.group}" if run.group else None
+                        print(f"\nInitializing eval run: {eval_run_name}")
+                        print(f"  Project: {target_project}")
+                        if eval_group_name:
+                            print(f"  Group: {eval_group_name}")
+
                     wandb.init(
-                        project="debug",
+                        project=target_project,
                         entity=args_cli.entity,
-                        name=run_name,
-                        tags=[f"eval_{args_cli.eval_mode}", f"original_run:{run.id}"],
+                        name=eval_run_name,
+                        group=eval_group_name,
+                        tags=[f"eval_{args_cli.eval_mode}", f"source_run:{run.id}"],
                         config={
-                            "original_run_id": run.id,
-                            "original_project": run.project,
-                            "original_run_name": run.name,
+                            "source_run_id": run.id,
+                            "source_run_name": run.name,
+                            "source_run_group": run.group,
+                            "source_project": run.project,
                             "eval_mode": args_cli.eval_mode,
                             "eval_seed": args_cli.eval_seed,
                             "num_checkpoints": len(checkpoint_steps),
                         }
                     )
-                    debug_run_initialized = True
-                    print(f"  Debug run initialized in 'debug' project")
+                    eval_run_initialized = True
+                    print(f"  Eval run initialized successfully")
                 except Exception as e:
-                    print(f"  WARNING: Failed to initialize debug run: {e}")
+                    print(f"  WARNING: Failed to initialize eval run: {e}")
                     print(f"  Continuing without WandB logging...")
                     args_cli.no_wandb = True
 
@@ -3049,9 +3070,9 @@ def main():
                     traceback.print_exc()
                     continue
 
-            # Finish debug run after all checkpoints (if debug_project mode)
-            if debug_run_initialized:
-                print(f"\n[DEBUG MODE] Finishing debug run")
+            # Finish eval run after all checkpoints (if we initialized one)
+            if eval_run_initialized:
+                print(f"\nFinishing eval run")
                 wandb.finish()
 
         print(f"\n{'=' * 80}")

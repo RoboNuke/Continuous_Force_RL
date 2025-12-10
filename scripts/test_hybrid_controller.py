@@ -25,7 +25,7 @@ except ImportError:
 # Parse arguments before launching Isaac Sim
 parser = argparse.ArgumentParser(description="Test hybrid force-position controller")
 parser.add_argument("--config", type=str,
-                    default="configs/experiments/ctrl_tuning/force_ctrller.yaml",
+                    default="configs/experiments/testing/force_ctrller.yaml",
                     help="Path to configuration file")
 parser.add_argument("--radius", type=float, default=0.006,
                     help="Circle radius in meters (default: 0.006 = 6mm)")
@@ -33,9 +33,13 @@ parser.add_argument("--force_z", type=float, default=5.0,
                     help="Target downward force magnitude in Newtons (default: 5.0, internally negated)")
 parser.add_argument("--loops", type=int, default=2,
                     help="Number of loops around the hole (default: 2)")
-parser.add_argument("--speed", type=float, default=0.5,
+parser.add_argument("--speed", type=float, default=5.0,
                     help="Angular velocity in radians per second (default: 0.5)")
 parser.add_argument("--override", action="append", help="Override config values: key=value")
+parser.add_argument("--prefix", type=str, required=True,
+                    help="Prefix for output folder and filenames")
+parser.add_argument("--no-display", action="store_true",
+                    help="Skip interactive plot display (just save files)")
 
 # Add Isaac Sim launcher arguments
 AppLauncher.add_app_launcher_args(parser)
@@ -60,6 +64,7 @@ settings = carb.settings.get_settings()
 settings.set("/physics/disableContactProcessing", False)
 
 # Now import everything else (after Isaac Sim is launched)
+import os
 import torch
 import random
 import numpy as np
@@ -339,7 +344,8 @@ def print_progress_bar(current_degrees, total_degrees, bar_length=40):
     print(f"\r  Progress: [{bar}] {current_degrees:.1f}°/{total_degrees:.1f}° ({progress*100:.1f}%)", end="", flush=True)
 
 
-def run_trajectory_test(env, configs, hybrid_wrapper, radius, target_force_z, num_loops, speed):
+def run_trajectory_test(env, configs, hybrid_wrapper, radius, target_force_z, num_loops, speed,
+                        stationary_save_path=None):
     """
     Run the circular trajectory test and collect data.
 
@@ -620,7 +626,7 @@ def run_trajectory_test(env, configs, hybrid_wrapper, radius, target_force_z, nu
     print(f"  Max Force Z:  {np.max(stationary_forces):.3f} N")
 
     # Plot stationary phase results
-    plot_stationary_phase(stationary_data, target_force_z)
+    plot_stationary_phase(stationary_data, target_force_z, save_path=stationary_save_path)
 
     # # Restore original gains for circle traversal
     env.unwrapped.task_prop_gains = original_prop_gains
@@ -689,7 +695,7 @@ def run_trajectory_test(env, configs, hybrid_wrapper, radius, target_force_z, nu
     return data
 
 
-def plot_stationary_phase(data, target_force_z):
+def plot_stationary_phase(data, target_force_z, save_path=None):
     """Generate plots for the stationary force control test phase."""
     time = np.array(data['time'])
     measured_force = np.array(data['measured_force_z'])
@@ -766,11 +772,12 @@ def plot_stationary_phase(data, target_force_z):
     ax4.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    print("\n[INFO]: Displaying stationary phase plots...")
-    plt.show()
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"\n[INFO]: Saved stationary phase plot to {save_path}")
 
 
-def plot_results(data, target_force_z):
+def plot_results(data, target_force_z, save_path=None):
     """Generate plots of the test results."""
     time = np.array(data['time'])
     measured_force = np.array(data['measured_force_z'])
@@ -881,8 +888,9 @@ def plot_results(data, target_force_z):
     plt.tight_layout()
     plt.suptitle('Hybrid Force Controller Tuning Test', fontsize=14, y=1.02)
 
-    print("\n[INFO]: Displaying plots...")
-    plt.show()
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"\n[INFO]: Saved circle trajectory plot to {save_path}")
 
 
 def main():
@@ -898,6 +906,18 @@ def main():
         headless=args_cli.headless
     )
 
+    # Create output directory
+    force_gain_x = hybrid_wrapper.kp[0, 0].item()
+    force_gain_label = int(force_gain_x * 100)  # e.g., 0.1 -> 10 for cleaner filenames
+    output_dir = f"scripts/test_hybrid_results/{args_cli.prefix}_{force_gain_label}"
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"\n[INFO]: Output directory: {output_dir}")
+    print(f"[INFO]: Force gain X: {force_gain_x} (label: {force_gain_label})")
+
+    # Define save paths
+    stationary_save_path = f"{output_dir}/{args_cli.prefix}_{force_gain_label}_still.png"
+    circle_save_path = f"{output_dir}/{args_cli.prefix}_{force_gain_label}_circle.png"
+
     try:
         # Run the trajectory test
         data = run_trajectory_test(
@@ -907,11 +927,17 @@ def main():
             radius=args_cli.radius,
             target_force_z=args_cli.force_z,
             num_loops=args_cli.loops,
-            speed=args_cli.speed
+            speed=args_cli.speed,
+            stationary_save_path=stationary_save_path
         )
 
         # Plot results
-        plot_results(data, args_cli.force_z)
+        plot_results(data, args_cli.force_z, save_path=circle_save_path)
+
+        # Display both plots at end (unless --no-display)
+        if not args_cli.no_display:
+            print("\n[INFO]: Displaying plots...")
+            plt.show()
 
     finally:
         print("\n[INFO]: Closing environment...")
