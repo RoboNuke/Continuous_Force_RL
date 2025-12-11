@@ -335,7 +335,7 @@ wrappers:
     #############################################################
     
     enable_contact_reward: true
-    contact_reward_weight: 1.0
+    contact_reward_weight: 2.0
 
   # Dynamics randomization for domain randomization
   dynamics_randomization:
