@@ -4,10 +4,11 @@ YAML-based WandB Eval Launcher
 Reads a training sets YAML and launches eval jobs based on group mappings.
 
 Usage:
-    python launcher/sbatch_yaml_eval.py <yaml_file> [--video/--no-video]
+    python launcher/sbatch_yaml_eval.py <yaml_file> [--video/--no-video] [--job_per_run]
 
 Example:
     python launcher/sbatch_yaml_eval.py configs/experiments/req_trainning_sets/set1_group1.yaml --video
+    python launcher/sbatch_yaml_eval.py configs/experiments/req_trainning_sets/set1_group1.yaml --job_per_run
 """
 
 import argparse
@@ -15,6 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import wandb
 import yaml
 
 # ============================================================
@@ -22,11 +24,18 @@ import yaml
 # Modify this dictionary to change which eval modes run for each group
 # ============================================================
 GROUP_EVAL_MAPPING = {
-    "base": ["performance", "noise", "rotation"],
+    "base": ["performance", "noise", "dynamics"],
     "fragile": ["performance"],
     "full_noise": ["performance", "noise"],
 }
 # ============================================================
+
+
+def get_run_ids_by_tag(tag: str) -> list[str]:
+    """Query WandB for run IDs matching the given tag."""
+    api = wandb.Api(timeout=60)
+    runs = api.runs("hur/Peg_in_Hole", filters={"tags": {"$in": [tag]}})
+    return [r.id for r in runs]
 
 
 def extract_leaf_tags(data: dict | str) -> list[str]:
@@ -73,6 +82,12 @@ def main():
         default=False,
         help="Disable video recording for evals (default)"
     )
+    parser.add_argument(
+        "--job_per_run",
+        action="store_true",
+        default=False,
+        help="Launch one job per run ID instead of per tag"
+    )
 
     args = parser.parse_args()
 
@@ -100,14 +115,20 @@ def main():
     print("=== YAML Eval Launcher ===")
     print(f"Config: {yaml_path}")
     print(f"Video: {video_enabled}")
+    print(f"Job per run: {args.job_per_run}")
     print()
 
     # Get the directory where this script lives (to find sbatch_wandb_eval.bash)
     script_dir = Path(__file__).parent
     wandb_eval_script = script_dir / "sbatch_wandb_eval.bash"
+    wandb_eval_by_run_script = script_dir / "sbatch_wandb_eval_by_run.bash"
 
     if not wandb_eval_script.exists():
         print(f"Error: sbatch_wandb_eval.bash not found at {wandb_eval_script}")
+        sys.exit(1)
+
+    if args.job_per_run and not wandb_eval_by_run_script.exists():
+        print(f"Error: sbatch_wandb_eval_by_run.bash not found at {wandb_eval_by_run_script}")
         sys.exit(1)
 
     # Process each top-level group
@@ -136,26 +157,56 @@ def main():
         print(f"  Eval modes: {eval_modes_str}")
         print(f"  Tags ({len(tags)}): {tags_str[:80]}{'...' if len(tags_str) > 80 else ''}")
 
-        # Build command
-        cmd = [
-            str(wandb_eval_script),
-            "--tags", tags_str,
-            "--eval_modes", eval_modes_str,
-        ]
+        if args.job_per_run:
+            # Launch one job per (tag, eval_mode, run_id) combination
+            for tag in tags:
+                run_ids = get_run_ids_by_tag(tag)
+                if not run_ids:
+                    print(f"    Warning: No runs found for tag '{tag}'")
+                    continue
 
-        if video_enabled:
-            cmd.append("--video")
+                print(f"    Tag '{tag}' -> {len(run_ids)} runs: {run_ids}")
+
+                for eval_mode in eval_modes:
+                    for run_id in run_ids:
+                        cmd = [
+                            str(wandb_eval_by_run_script),
+                            "--run_ids", run_id,
+                            "--tag", tag,
+                            "--eval_mode", eval_mode,
+                        ]
+                        if video_enabled:
+                            cmd.append("--video")
+                        else:
+                            cmd.append("--no-video")
+
+                        print(f"    Running: {wandb_eval_by_run_script.name} --run_ids {run_id} --tag {tag} --eval_mode {eval_mode}")
+
+                        result = subprocess.run(cmd, capture_output=False)
+
+                        if result.returncode != 0:
+                            print(f"    Error: sbatch_wandb_eval_by_run.bash failed with return code {result.returncode}")
+                            sys.exit(1)
         else:
-            cmd.append("--no-video")
+            # Original behavior: launch sbatch_wandb_eval.bash with all tags
+            cmd = [
+                str(wandb_eval_script),
+                "--tags", tags_str,
+                "--eval_modes", eval_modes_str,
+            ]
 
-        print(f"  Running: {wandb_eval_script.name} --tags \"...\" --eval_modes \"{eval_modes_str}\"")
+            if video_enabled:
+                cmd.append("--video")
+            else:
+                cmd.append("--no-video")
 
-        # Execute command
-        result = subprocess.run(cmd, capture_output=False)
+            print(f"  Running: {wandb_eval_script.name} --tags \"...\" --eval_modes \"{eval_modes_str}\"")
 
-        if result.returncode != 0:
-            print(f"  Error: sbatch_wandb_eval.bash failed with return code {result.returncode}")
-            sys.exit(1)
+            result = subprocess.run(cmd, capture_output=False)
+
+            if result.returncode != 0:
+                print(f"  Error: sbatch_wandb_eval.bash failed with return code {result.returncode}")
+                sys.exit(1)
 
         print()
 
