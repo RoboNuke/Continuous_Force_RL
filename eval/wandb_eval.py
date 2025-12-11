@@ -3010,17 +3010,20 @@ def main():
             if not args_cli.no_wandb and not args_cli.report_to_base_run:
                 try:
                     # Determine project and naming based on mode
+                    # Build tags: eval-specific tags + all original run tags
+                    eval_tags = [f"eval_{args_cli.eval_mode}", f"source_run:{run.id}"] + list(run.tags)
+
                     if args_cli.debug_project:
                         # Debug mode: Use "debug" project
                         target_project = "debug"
                         eval_run_name = f"Eval_{args_cli.eval_mode}_{run.name}"
-                        eval_group_name = f"Eval_{args_cli.eval_mode}_{run.group}" if run.group else None
+                        eval_group_name = f"Eval_{args_cli.eval_mode}_{run.group}_{args_cli.tag}" if run.group else None
                         print(f"\n[DEBUG MODE] Initializing eval run in 'debug' project: {eval_run_name}")
                     else:
                         # Default mode: Use same project as original run
                         target_project = run.project
                         eval_run_name = f"Eval_{args_cli.eval_mode}_{run.name}"
-                        eval_group_name = f"Eval_{args_cli.eval_mode}_{run.group}" if run.group else None
+                        eval_group_name = f"Eval_{args_cli.eval_mode}_{run.group}_{args_cli.tag}" if run.group else None
                         print(f"\nInitializing eval run: {eval_run_name}")
                         print(f"  Project: {target_project}")
                         if eval_group_name:
@@ -3031,7 +3034,7 @@ def main():
                         entity=args_cli.entity,
                         name=eval_run_name,
                         group=eval_group_name,
-                        tags=[f"eval_{args_cli.eval_mode}", f"source_run:{run.id}"],
+                        tags=eval_tags,
                         config={
                             "source_run_id": run.id,
                             "source_run_name": run.name,
