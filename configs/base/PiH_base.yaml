@@ -80,8 +80,8 @@ environment:
     torque_action_threshold: [0.1, 0.1, 0.1]
 
     #default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
-    default_task_prop_gains: [600, 600, 600, 30, 30, 30]
-    default_task_force_gains: [2.0, 2.0, 2.0, 0.001, 0.001, 0.001]
+    default_task_prop_gains: [100, 100, 100, 30, 30, 30]
+    default_task_force_gains: [0.5, 0.5, 0.5, 0.001, 0.001, 0.001]
 
     no_sel_ema: true
     use_delta_force: false  # false=absolute (action*bounds), true=delta (action*threshold+current)
