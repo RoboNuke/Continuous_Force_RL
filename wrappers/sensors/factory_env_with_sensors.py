@@ -17,6 +17,107 @@ except ImportError:
         raise ImportError("Could not import ContactSensor from Isaac Lab. Please ensure Isaac Lab is installed.")
 
 
+# Debug flag - set to True to enable detailed prim path verification
+DEBUG_PRIM_PATHS = True
+
+
+def _verify_prim_paths(env, sensor_cfg):
+    """
+    Verify that contact sensor prim paths exist in the scene.
+
+    This function traverses the USD stage after scene setup to verify that:
+    1. The expected HeldAsset and FixedAsset prims exist
+    2. The child prims referenced by the contact sensor config exist
+    3. The prims have the expected physics properties
+
+    Args:
+        env: The factory environment instance
+        sensor_cfg: The ContactSensorCfg with prim_path and filter_prim_paths_expr
+    """
+    if not DEBUG_PRIM_PATHS:
+        return
+
+    try:
+        from pxr import Usd, UsdPhysics
+        import omni.usd
+
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            print("[DEBUG PRIM] Warning: Could not get USD stage")
+            return
+
+        print("\n" + "="*80)
+        print("[DEBUG PRIM] Contact Sensor Prim Path Verification")
+        print("="*80)
+
+        # Print sensor config
+        prim_path_pattern = sensor_cfg.prim_path
+        filter_patterns = sensor_cfg.filter_prim_paths_expr
+
+        print(f"[DEBUG PRIM] Sensor prim_path pattern: {prim_path_pattern}")
+        print(f"[DEBUG PRIM] Sensor filter patterns: {filter_patterns}")
+
+        # Try to find matching prims for env_0
+        test_prim_path = prim_path_pattern.replace("env_.*", "env_0")
+        test_filter_path = filter_patterns[0].replace("env_.*", "env_0") if filter_patterns else None
+
+        print(f"\n[DEBUG PRIM] Testing concrete paths for env_0:")
+        print(f"  HeldAsset prim path: {test_prim_path}")
+
+        held_prim = stage.GetPrimAtPath(test_prim_path)
+        if held_prim.IsValid():
+            print(f"  ✓ HeldAsset prim EXISTS")
+            print(f"    Type: {held_prim.GetTypeName()}")
+            has_rigid = held_prim.HasAPI(UsdPhysics.RigidBodyAPI)
+            has_collision = held_prim.HasAPI(UsdPhysics.CollisionAPI)
+            print(f"    RigidBodyAPI: {has_rigid}, CollisionAPI: {has_collision}")
+
+            # List children
+            children = held_prim.GetChildren()
+            if children:
+                print(f"    Children ({len(children)}):")
+                for child in children[:5]:  # Limit to first 5
+                    print(f"      - {child.GetPath()} ({child.GetTypeName()})")
+        else:
+            print(f"  ✗ HeldAsset prim NOT FOUND at: {test_prim_path}")
+            # Try to find what IS at HeldAsset
+            parent_path = "/World/envs/env_0/HeldAsset"
+            parent_prim = stage.GetPrimAtPath(parent_path)
+            if parent_prim.IsValid():
+                print(f"    HeldAsset parent exists. Children:")
+                for child in parent_prim.GetChildren():
+                    print(f"      - {child.GetPath()} ({child.GetTypeName()})")
+
+        if test_filter_path:
+            print(f"\n  FixedAsset prim path: {test_filter_path}")
+            fixed_prim = stage.GetPrimAtPath(test_filter_path)
+            if fixed_prim.IsValid():
+                print(f"  ✓ FixedAsset prim EXISTS")
+                print(f"    Type: {fixed_prim.GetTypeName()}")
+                has_rigid = fixed_prim.HasAPI(UsdPhysics.RigidBodyAPI)
+                has_collision = fixed_prim.HasAPI(UsdPhysics.CollisionAPI)
+                print(f"    RigidBodyAPI: {has_rigid}, CollisionAPI: {has_collision}")
+            else:
+                print(f"  ✗ FixedAsset prim NOT FOUND at: {test_filter_path}")
+                # Try to find what IS at FixedAsset
+                parent_path = "/World/envs/env_0/FixedAsset"
+                parent_prim = stage.GetPrimAtPath(parent_path)
+                if parent_prim.IsValid():
+                    print(f"    FixedAsset parent exists. Children:")
+                    for child in parent_prim.GetChildren():
+                        child_children = child.GetChildren()
+                        print(f"      - {child.GetPath()} ({child.GetTypeName()})")
+                        for cc in child_children[:3]:
+                            print(f"        - {cc.GetPath()} ({cc.GetTypeName()})")
+
+        print("="*80 + "\n")
+
+    except Exception as e:
+        print(f"[DEBUG PRIM] Error during prim verification: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 def create_sensor_enabled_factory_env(base_env_class):
     """
     Creates a factory environment subclass with contact sensor support.
@@ -56,44 +157,6 @@ def create_sensor_enabled_factory_env(base_env_class):
             class _setup_scene method. This ensures the sensor is properly
             initialized before scene cloning occurs.
             """
-            """
-            # DEBUG: Print what's actually in the scene
-            print("\n" + "="*100)
-            print("Scene articulations:", list(self.scene.articulations.keys()))
-            print("Looking for contact sensor at:", self.cfg_task.held_fixed_contact_sensor.prim_path)
-
-            if hasattr(self, '_held_asset'):
-                print("\nHELD ASSET:")
-                if hasattr(self._held_asset, 'prim_paths'):
-                    print("  prim_paths:", self._held_asset.prim_paths)
-                if hasattr(self._held_asset, 'cfg') and hasattr(self._held_asset.cfg, 'prim_path'):
-                    print("  cfg.prim_path:", self._held_asset.cfg.prim_path)
-                print("  body_names:", self._held_asset.body_names if hasattr(self._held_asset, 'body_names') else "N/A")
-                print("  num_bodies:", self._held_asset.num_bodies if hasattr(self._held_asset, 'num_bodies') else "N/A")
-                if hasattr(self._held_asset, 'cfg') and hasattr(self._held_asset.cfg, 'spawn'):
-                    spawn_cfg = self._held_asset.cfg.spawn
-                    print("  spawn config type:", type(spawn_cfg).__name__)
-                    if hasattr(spawn_cfg, 'activate_contact_sensors'):
-                        print("  activate_contact_sensors:", spawn_cfg.activate_contact_sensors)
-
-            if hasattr(self, '_fixed_asset'):
-                print("\nFIXED ASSET:")
-                if hasattr(self._fixed_asset, 'prim_paths'):
-                    print("  prim_paths:", self._fixed_asset.prim_paths)
-                if hasattr(self._fixed_asset, 'cfg') and hasattr(self._fixed_asset.cfg, 'prim_path'):
-                    print("  cfg.prim_path:", self._fixed_asset.cfg.prim_path)
-                print("  body_names:", self._fixed_asset.body_names if hasattr(self._fixed_asset, 'body_names') else "N/A")
-                print("  num_bodies:", self._fixed_asset.num_bodies if hasattr(self._fixed_asset, 'num_bodies') else "N/A")
-                if hasattr(self._fixed_asset, 'cfg') and hasattr(self._fixed_asset.cfg, 'spawn'):
-                    spawn_cfg = self._fixed_asset.cfg.spawn
-                    print("  spawn config type:", type(spawn_cfg).__name__)
-                    if hasattr(spawn_cfg, 'activate_contact_sensors'):
-                        print("  activate_contact_sensors:", spawn_cfg.activate_contact_sensors)
-
-            print("="*100 + "\n")
-
-            """
-
             # Validate that contact sensor config exists
             if not hasattr(self.cfg_task, 'held_fixed_contact_sensor'):
                 raise ValueError(
@@ -113,6 +176,9 @@ def create_sensor_enabled_factory_env(base_env_class):
             # Delegate to base class for standard factory environment setup
             # This will create articulations, clone environments, and complete scene setup
             super()._setup_scene()
+
+            # Verify prim paths after scene setup
+            _verify_prim_paths(self, self.cfg_task.held_fixed_contact_sensor)
 
 
     # Set a descriptive name for the dynamic class

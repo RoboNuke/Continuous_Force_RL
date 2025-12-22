@@ -53,6 +53,12 @@ environment:
         
   task:
     name: 'peg_insert'
+
+    # Asset variant selection (optional - defaults to IsaacLab built-in assets)
+    # Set both fields to use custom peg/hole assets from manifest
+    asset_variant: null          # e.g., "forge_8mm", "custom_10mm"
+    asset_manifest_path: null    # e.g., "/path/to/assets/peg_hole/manifest.json"
+
     fixed_asset:
       spawn:
         rigid_props:

@@ -179,7 +179,7 @@ class BlockPPO(PPO):
         self._setup_per_agent_preprocessors()
 
         ## VALIDATE WRAPPER INTEGRATION FOR LOGGING ##
-        self._validate_wrapper_integration()
+        # self._validate_wrapper_integration()  # Disabled - wandb logging is optional
 
         # create tensors in memory
         if self.memory is not None:
@@ -670,7 +670,6 @@ class BlockPPO(PPO):
             num_agents=self.num_agents,
             envs_per_agent=self.envs_per_agent
         )
-
 
         self.memory.set_tensor_by_name("values", self._value_preprocessor(values, train=True))
         self.memory.set_tensor_by_name("returns", self._value_preprocessor(returns, train=True))
