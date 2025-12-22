@@ -91,8 +91,20 @@ class TrajectoryEvalWrapper(gym.Wrapper):
         # Track which environments terminated (for break detection)
         self.episode_terminated = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
+        # Per-environment trajectory metadata (captured at reset)
+        self.initial_peg_pos = torch.zeros((self.num_envs, 3), device=self.device)
+        self.initial_peg_quat = torch.zeros((self.num_envs, 4), device=self.device)
+        self.hole_pos = torch.zeros((self.num_envs, 3), device=self.device)
+        self.hole_quat = torch.zeros((self.num_envs, 4), device=self.device)
+
         # Find and cache the hybrid controller wrapper (has sel_matrix and target_force_for_control)
+        # May be None if not using hybrid control
         self._hybrid_wrapper = self._find_hybrid_wrapper()
+        self.has_hybrid_wrapper = self._hybrid_wrapper is not None
+        if self.has_hybrid_wrapper:
+            print("[TrajectoryEvalWrapper] Found HybridForcePositionWrapper")
+        else:
+            print("[TrajectoryEvalWrapper] No HybridForcePositionWrapper found - control_selection and force_error will be None")
 
         # Setup sim-step capture by patching _apply_action
         self._original_apply_action = self.unwrapped._apply_action
@@ -101,13 +113,17 @@ class TrajectoryEvalWrapper(gym.Wrapper):
         print("[TrajectoryEvalWrapper] Initialized")
 
     def _find_hybrid_wrapper(self):
-        """Find the HybridForcePositionWrapper in the chain (cached once at init)."""
+        """Find the HybridForcePositionWrapper in the chain (cached once at init).
+
+        Returns:
+            HybridForcePositionWrapper if found, None otherwise
+        """
         current = self.env
         while hasattr(current, 'env'):
             if isinstance(current, HybridForcePositionWrapper):
                 return current
             current = current.env
-        raise AttributeError("HybridForcePositionWrapper not found in wrapper chain")
+        return None
 
     def _get_phase_label(self, phase_idx: int) -> str:
         """Convert phase index to label string."""
@@ -209,22 +225,27 @@ class TrajectoryEvalWrapper(gym.Wrapper):
         data = {
             'contact_force': self.unwrapped.robot_force_torque[:, :3].clone(),
             'contact_state': self.unwrapped.in_contact[:, :3].clone(),
-            'control_selection': self._hybrid_wrapper.sel_matrix[:, :3].clone(),
             'velocity': self.unwrapped.fingertip_midpoint_linvel.clone(),
         }
 
-        # Compute tracking errors
+        # Hybrid wrapper data (None if not available)
+        if self.has_hybrid_wrapper:
+            data['control_selection'] = self._hybrid_wrapper.sel_matrix[:, :3].clone()
+            force_error = (
+                self._hybrid_wrapper.target_force_for_control[:, :3] -
+                self.unwrapped.robot_force_torque[:, :3]
+            )
+            data['force_error'] = force_error.clone()
+        else:
+            data['control_selection'] = None
+            data['force_error'] = None
+
+        # Compute position tracking error (always available)
         position_error = (
             self.unwrapped.ctrl_target_fingertip_midpoint_pos -
             self.unwrapped.fingertip_midpoint_pos
         )
-        force_error = (
-            self._hybrid_wrapper.target_force_for_control[:, :3] -
-            self.unwrapped.robot_force_torque[:, :3]
-        )
-
         data['position_error'] = position_error.clone()
-        data['force_error'] = force_error.clone()
 
         return data
 
@@ -261,17 +282,10 @@ class TrajectoryEvalWrapper(gym.Wrapper):
         Returns:
             Dictionary of policy-step data
         """
-        # Raw control probability (first 3 elements of action)
-        control_probability = action[:, :3].clone()
-
-        # Compute tracking errors
+        # Compute position tracking error (always available)
         position_error = (
             self.unwrapped.ctrl_target_fingertip_midpoint_pos -
             self.unwrapped.fingertip_midpoint_pos
-        )
-        force_error = (
-            self._hybrid_wrapper.target_force_for_control[:, :3] -
-            self.unwrapped.robot_force_torque[:, :3]
         )
 
         # Collect reward components
@@ -282,14 +296,26 @@ class TrajectoryEvalWrapper(gym.Wrapper):
             'phase': self.current_phase.clone(),
             'contact_force': self.unwrapped.robot_force_torque[:, :3].clone(),
             'contact_state': self.unwrapped.in_contact[:, :3].clone(),
-            'control_selection': self._hybrid_wrapper.sel_matrix[:, :3].clone(),
-            'control_probability': control_probability,
             'velocity': self.unwrapped.fingertip_midpoint_linvel.clone(),
             'terminated': terminated.clone(),
             'position_error': position_error.clone(),
-            'force_error': force_error.clone(),
             'rewards': rewards,
         }
+
+        # Hybrid wrapper data (None if not available)
+        if self.has_hybrid_wrapper:
+            # Raw control probability (first 3 elements of action for hybrid control)
+            data['control_probability'] = action[:, :3].clone()
+            data['control_selection'] = self._hybrid_wrapper.sel_matrix[:, :3].clone()
+            force_error = (
+                self._hybrid_wrapper.target_force_for_control[:, :3] -
+                self.unwrapped.robot_force_torque[:, :3]
+            )
+            data['force_error'] = force_error.clone()
+        else:
+            data['control_probability'] = None
+            data['control_selection'] = None
+            data['force_error'] = None
 
         return data
 
@@ -351,17 +377,26 @@ class TrajectoryEvalWrapper(gym.Wrapper):
             step_data = {
                 'step': self.policy_step_count[env_id].item(),
                 'phase': self._get_phase_label(self.current_phase[env_id].item()),
+                'peg_pos': self.unwrapped.held_base_pos[env_id].cpu().tolist(),
                 'contact_force': policy_data['contact_force'][env_id].cpu().tolist(),
                 'contact_state': policy_data['contact_state'][env_id].cpu().tolist(),
-                'control_selection': policy_data['control_selection'][env_id].cpu().tolist(),
-                'control_probability': policy_data['control_probability'][env_id].cpu().tolist(),
                 'velocity': policy_data['velocity'][env_id].cpu().tolist(),
                 'terminated': policy_data['terminated'][env_id].item(),
                 'position_error': policy_data['position_error'][env_id].cpu().tolist(),
-                'force_error': policy_data['force_error'][env_id].cpu().tolist(),
                 'rewards': {k: v[env_id].item() if isinstance(v, torch.Tensor) else v
                           for k, v in policy_data['rewards'].items()},
             }
+
+            # Add hybrid wrapper data (None if not available)
+            if policy_data['control_selection'] is not None:
+                step_data['control_selection'] = policy_data['control_selection'][env_id].cpu().tolist()
+                step_data['control_probability'] = policy_data['control_probability'][env_id].cpu().tolist()
+                step_data['force_error'] = policy_data['force_error'][env_id].cpu().tolist()
+            else:
+                step_data['control_selection'] = None
+                step_data['control_probability'] = None
+                step_data['force_error'] = None
+
             self.trajectory_data[env_id].append(step_data)
 
             # If this env just completed with a break, save sim-step buffer
@@ -383,6 +418,14 @@ class TrajectoryEvalWrapper(gym.Wrapper):
         # Reset policy step counts
         self.policy_step_count.zero_()
 
+        # Capture initial poses after reset
+        # Peg tip position and orientation
+        self.initial_peg_pos = self.unwrapped.held_base_pos.clone()
+        self.initial_peg_quat = self.unwrapped.held_base_quat.clone()
+        # Hole position and orientation
+        self.hole_pos = self.unwrapped.fixed_pos.clone()
+        self.hole_quat = self.unwrapped.fixed_quat.clone()
+
         # Clear trajectory data
         self.trajectory_data = {env_id: [] for env_id in range(self.num_envs)}
 
@@ -401,7 +444,7 @@ class TrajectoryEvalWrapper(gym.Wrapper):
 
     def get_trajectory_data(self) -> Dict[str, Any]:
         """
-        Get all collected trajectory data including outcomes.
+        Get all collected trajectory data including outcomes and metadata.
 
         Outcome logic (matches wandb_eval.py lines 1765-1771):
         - Success: episode_succeeded & ~episode_terminated
@@ -409,7 +452,7 @@ class TrajectoryEvalWrapper(gym.Wrapper):
         - Timeout: ~episode_terminated & ~episode_succeeded
 
         Returns:
-            Dictionary with per-environment trajectory data and outcomes
+            Dictionary with per-environment trajectory data, outcomes, and metadata
         """
         result = {}
         for env_id in range(self.num_envs):
@@ -428,6 +471,11 @@ class TrajectoryEvalWrapper(gym.Wrapper):
                 'policy_steps': self.trajectory_data[env_id],
                 'break_sim_steps': self.break_sim_data[env_id],
                 'outcome': outcome,
+                # Trajectory metadata
+                'initial_peg_pos': self.initial_peg_pos[env_id].cpu().tolist(),
+                'initial_peg_quat': self.initial_peg_quat[env_id].cpu().tolist(),
+                'hole_pos': self.hole_pos[env_id].cpu().tolist(),
+                'hole_quat': self.hole_quat[env_id].cpu().tolist(),
             }
         return result
 

@@ -98,6 +98,15 @@ def create_test_environment(config_path, overrides=None, headless=True):
     config_manager = ConfigManagerV3()
     configs = config_manager.process_config(config_path, overrides)
 
+    # Apply asset variant if specified (must happen after all config overrides)
+    task_cfg = configs['environment'].task
+    if hasattr(task_cfg, 'apply_asset_variant_if_specified'):
+        print(f"[INFO]: Checking asset variant...")
+        print(f"  asset_variant: {getattr(task_cfg, 'asset_variant', None)}")
+        print(f"  asset_manifest_path: {getattr(task_cfg, 'asset_manifest_path', None)}")
+        if task_cfg.apply_asset_variant_if_specified():
+            print("[INFO]: Asset variant applied successfully")
+
     # Set seed for reproducibility
     if configs['primary'].seed == -1:
         configs['primary'].seed = random.randint(0, 10000)
@@ -362,6 +371,18 @@ def run_trajectory_test(env, configs, hybrid_wrapper, radius, target_force_z, nu
     print("\n[INFO]: Resetting environment...")
     obs, info = env.reset()
 
+    # Get asset dimensions from config
+    task_cfg = configs['environment'].task
+    peg_height = task_cfg.held_asset_cfg.height
+    peg_diameter = task_cfg.held_asset_cfg.diameter
+    hole_height = task_cfg.fixed_asset_cfg.height
+    hole_diameter = task_cfg.fixed_asset_cfg.diameter
+    hole_base_height = getattr(task_cfg.fixed_asset_cfg, 'base_height', 0.0)
+
+    print("\n[INFO]: Asset Dimensions from Config:")
+    print(f"  Peg:  height={peg_height*1000:.2f}mm, diameter={peg_diameter*1000:.2f}mm")
+    print(f"  Hole: height={hole_height*1000:.2f}mm, diameter={hole_diameter*1000:.2f}mm, base_height={hole_base_height*1000:.2f}mm")
+
     # Debug: Print all relevant coordinate frames
     print("\n[DEBUG]: Coordinate Frame Analysis:")
     print(f"  fixed_pos (hole origin):        {env.unwrapped.fixed_pos[0].cpu().numpy()}")
@@ -369,9 +390,22 @@ def run_trajectory_test(env, configs, hybrid_wrapper, radius, target_force_z, nu
     print(f"  fixed_pos_action_frame:         {env.unwrapped.fixed_pos_action_frame[0].cpu().numpy()}")
     print(f"  scene.env_origins:              {env.unwrapped.scene.env_origins[0].cpu().numpy()}")
 
-    # Get hole surface position (top of the hole, not the origin)
-    hole_surface_pos = env.unwrapped.fixed_pos_obs_frame[0].cpu().numpy()
-    print(f"\n[INFO]: Hole surface position: x={hole_surface_pos[0]:.4f}, y={hole_surface_pos[1]:.4f}, z={hole_surface_pos[2]:.4f}")
+    # Calculate hole surface position using config dimensions
+    # hole_surface_z = hole_origin_z + hole_height
+    hole_origin = env.unwrapped.fixed_pos[0].cpu().numpy()
+    hole_surface_z = hole_origin[2] + hole_height
+    hole_surface_pos = np.array([hole_origin[0], hole_origin[1], hole_surface_z])
+
+    # Verify against environment's calculation
+    env_hole_surface = env.unwrapped.fixed_pos_obs_frame[0].cpu().numpy()
+    z_diff = abs(hole_surface_z - env_hole_surface[2])
+    if z_diff > 0.001:  # 1mm tolerance
+        print(f"\n[WARNING]: Hole surface Z mismatch!")
+        print(f"  Config-based:  z={hole_surface_z:.4f} (origin={hole_origin[2]:.4f} + height={hole_height:.4f})")
+        print(f"  Env-computed:  z={env_hole_surface[2]:.4f}")
+        print(f"  Difference:    {z_diff*1000:.2f}mm")
+
+    print(f"\n[INFO]: Hole surface position (config-based): x={hole_surface_pos[0]:.4f}, y={hole_surface_pos[1]:.4f}, z={hole_surface_pos[2]:.4f}")
 
     # Get peg tip position (bottom of peg)
     peg_tip_pos = env.unwrapped.held_base_pos[0].cpu().numpy()
@@ -382,6 +416,11 @@ def run_trajectory_test(env, configs, hybrid_wrapper, radius, target_force_z, nu
     fingertip_to_peg_tip_offset = peg_tip_pos - fingertip_pos
     print(f"[INFO]: Fingertip position: x={fingertip_pos[0]:.4f}, y={fingertip_pos[1]:.4f}, z={fingertip_pos[2]:.4f}")
     print(f"[INFO]: Fingertip to peg tip offset: dx={fingertip_to_peg_tip_offset[0]*1000:.2f}mm, dy={fingertip_to_peg_tip_offset[1]*1000:.2f}mm, dz={fingertip_to_peg_tip_offset[2]*1000:.2f}mm")
+
+    # Verify peg height: the Z offset from fingertip to peg tip should approximately equal -peg_height
+    # (peg tip is below fingertip by roughly the peg height, though gripper offset also contributes)
+    measured_peg_extent = abs(fingertip_to_peg_tip_offset[2])
+    print(f"[INFO]: Peg Z extent (fingertip to tip): {measured_peg_extent*1000:.2f}mm (config peg height: {peg_height*1000:.2f}mm)")
 
     # Check position bounds
     if hasattr(env, 'pos_bounds'):
@@ -422,7 +461,12 @@ def run_trajectory_test(env, configs, hybrid_wrapper, radius, target_force_z, nu
         'target_x': [],
         'target_y': [],
         'angle': [],
-        'hole_surface_z': hole_surface_pos[2]  # Store for plotting
+        'hole_surface_z': hole_surface_pos[2],  # Store for plotting
+        # Asset dimensions from config
+        'peg_height': peg_height,
+        'peg_diameter': peg_diameter,
+        'hole_height': hole_height,
+        'hole_diameter': hole_diameter,
     }
 
     # =========================================
@@ -590,7 +634,10 @@ def run_trajectory_test(env, configs, hybrid_wrapper, radius, target_force_z, nu
         'target_force_z': [],
         'commanded_wrench_z': [],
         'position_z': [],
-        'hole_surface_z': hole_surface_pos[2]
+        'hole_surface_z': hole_surface_pos[2],
+        # Asset dimensions from config
+        'peg_height': peg_height,
+        'hole_height': hole_height,
     }
 
     # Get current position to hold

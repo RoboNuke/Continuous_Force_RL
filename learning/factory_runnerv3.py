@@ -43,6 +43,8 @@ args_cli.video = False
 args_cli.enable_cameras = args_cli.manual_control
 args_cli.headless = not args_cli.manual_control
 
+print(f"[DEBUG] manual_control={args_cli.manual_control}, headless={args_cli.headless}, enable_cameras={args_cli.enable_cameras}")
+
 # clear out sys.argv for Hydra
 sys.argv = [sys.argv[0]] + hydra_args
 
@@ -116,6 +118,116 @@ except ImportError:
 from wrappers.sensors.factory_env_with_sensors import create_sensor_enabled_factory_env
 
 print("\n\nImports complete\n\n")
+
+
+def debug_print_usd_hierarchy(env):
+    """
+    Print the entire USD prim hierarchy for key assets in the scene.
+    Shows every prim and what APIs/properties are attached to them.
+    """
+    from pxr import Usd, UsdGeom, UsdPhysics
+    import omni.usd
+
+    print("\n" + "=" * 100)
+    print("USD PRIM HIERARCHY DEBUG")
+    print("=" * 100)
+
+    # Get the USD stage
+    stage = omni.usd.get_context().get_stage()
+    if not stage:
+        print("ERROR: Could not get USD stage")
+        return
+
+    def get_prim_info(prim):
+        """Get detailed info about a prim's APIs and properties."""
+        info_parts = []
+
+        # Check for physics APIs (with safe hasattr checks for version compatibility)
+        if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            info_parts.append("RigidBody")
+        if prim.HasAPI(UsdPhysics.CollisionAPI):
+            info_parts.append("Collision")
+        if prim.HasAPI(UsdPhysics.MassAPI):
+            mass_api = UsdPhysics.MassAPI(prim)
+            mass_attr = mass_api.GetMassAttr()
+            if mass_attr and mass_attr.HasValue():
+                info_parts.append(f"Mass={mass_attr.Get():.4f}")
+            else:
+                info_parts.append("Mass")
+        if hasattr(UsdPhysics, 'ArticulationRootAPI') and prim.HasAPI(UsdPhysics.ArticulationRootAPI):
+            info_parts.append("ArticulationRoot")
+        if hasattr(UsdPhysics, 'MaterialAPI') and prim.HasAPI(UsdPhysics.MaterialAPI):
+            info_parts.append("PhysMaterial")
+
+        # Check if it's a joint by type name
+        type_name = prim.GetTypeName()
+        if "Joint" in type_name:
+            info_parts.append(f"Joint({type_name})")
+
+        # Check for geometry
+        if prim.IsA(UsdGeom.Mesh):
+            mesh = UsdGeom.Mesh(prim)
+            points = mesh.GetPointsAttr().Get()
+            if points:
+                info_parts.append(f"Mesh({len(points)} verts)")
+        elif prim.IsA(UsdGeom.Xform):
+            info_parts.append("Xform")
+        elif prim.IsA(UsdGeom.Scope):
+            info_parts.append("Scope")
+
+        return info_parts
+
+    def print_prim_tree(prim, indent=0):
+        """Recursively print prim and its children."""
+        prim_type = prim.GetTypeName() or "Prim"
+        info = get_prim_info(prim)
+        info_str = f" [{', '.join(info)}]" if info else ""
+
+        prefix = "  " * indent
+        print(f"{prefix}{prim.GetPath()} - {prim_type}{info_str}")
+
+        for child in prim.GetChildren():
+            print_prim_tree(child, indent + 1)
+
+    # Print hierarchy for env_0 assets
+    env_path = "/World/envs/env_0"
+    env_prim = stage.GetPrimAtPath(env_path)
+
+    if not env_prim or not env_prim.IsValid():
+        print(f"ERROR: Could not find prim at {env_path}")
+        return
+
+    # Key asset paths to inspect
+    asset_names = ["HeldAsset", "FixedAsset", "Robot", "Table"]
+
+    for asset_name in asset_names:
+        asset_path = f"{env_path}/{asset_name}"
+        asset_prim = stage.GetPrimAtPath(asset_path)
+
+        if asset_prim and asset_prim.IsValid():
+            print(f"\n{'─' * 80}")
+            print(f"ASSET: {asset_name}")
+            print(f"{'─' * 80}")
+            print_prim_tree(asset_prim)
+        else:
+            print(f"\n[SKIP] {asset_name} - not found at {asset_path}")
+
+    # Also print any contact sensors if present
+    print(f"\n{'─' * 80}")
+    print("CONTACT SENSORS (if any)")
+    print(f"{'─' * 80}")
+
+    for prim in stage.Traverse():
+        prim_path = str(prim.GetPath())
+        if "contact" in prim_path.lower() or "sensor" in prim_path.lower():
+            if "env_0" in prim_path:
+                info = get_prim_info(prim)
+                info_str = f" [{', '.join(info)}]" if info else ""
+                print(f"  {prim.GetPath()} - {prim.GetTypeName()}{info_str}")
+
+    print("\n" + "=" * 100)
+    print("END USD HIERARCHY DEBUG")
+    print("=" * 100 + "\n")
 
 # Global references for cleanup handler
 _wandb_wrapper = None
@@ -269,6 +381,18 @@ def main(
 
     print("[INFO]: Ckpt Path:", configs['primary'].ckpt_tracker_path)
     print("[INFO]: Configuration fully loaded")
+
+    # Debug: Asset variant configuration
+    task_cfg = configs['environment'].task
+    print("[DEBUG]: Asset Variant Config:")
+    print(f"  asset_variant: {getattr(task_cfg, 'asset_variant', None)}")
+    print(f"  asset_manifest_path: {getattr(task_cfg, 'asset_manifest_path', None)}")
+
+    # Apply asset variant if specified (must happen after all config overrides)
+    if hasattr(task_cfg, 'apply_asset_variant_if_specified'):
+        if task_cfg.apply_asset_variant_if_specified():
+            print("[INFO]: Asset variant applied successfully")
+
     print("=" * 100)
     # ===== STEP 2: CREATE ENVIRONMENT =====
     # Environment creation using fully configured objects from Step 1
@@ -286,6 +410,10 @@ def main(
     # Create environment directly
     env = EnvClass(cfg=configs['environment'], render_mode=None)
     print("[INFO]: Environment created successfully")
+
+    # Debug: Print USD prim hierarchy
+    #if configs['primary'].debug_mode:
+    debug_print_usd_hierarchy(env)
 
     # Enable camera light and set viewport camera for manual control mode
     if args_cli.manual_control:
@@ -312,8 +440,21 @@ def main(
     print("=" * 100)
     print("[INFO]: Step 3 - Applying wrapper stack")
     env = lUtils.apply_wrappers(env, configs)
+
+    # Apply physics debug wrapper if debug_mode is enabled
+    if configs['primary'].debug_mode:
+        from wrappers.debug.physics_debug_wrapper import PhysicsDebugWrapper
+        print("  - Applying physics debug wrapper (NaN/explosion monitoring)")
+        env = PhysicsDebugWrapper(
+            env,
+            check_every_n_steps=1,
+            print_obs_on_nan=True,
+            raise_on_nan=True,  # Will stop training on NaN to catch issues immediately
+            verbose=True
+        )
     print("  - Applying async critic isaac lab wrapper (derived from SKRL isaaclab wrapper)")
     env = AsyncCriticIsaacLabWrapper(env)
+
     print("[INFO]: Wrappers Applied successfully")
     print("=" * 100)
 

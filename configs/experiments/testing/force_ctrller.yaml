@@ -19,6 +19,9 @@ wrappers:
     use_ground_truth_selection: false  # We control selection manually
     
 
+  manual_control:
+    enabled: true
+
   factory_metrics:
     enabled: true
     publish_to_wandb: false
@@ -60,6 +63,8 @@ environment:
         solver_velocity_iteration_count: *robot_vel_iter
 
   task:
+    #asset_variant: "arch_short_small"
+    asset_manifest_path: "/home/hunter/Continuous_Force_RL/assets/peg_hole/manifest.json"
     fixed_asset:
       spawn:
         rigid_props:
