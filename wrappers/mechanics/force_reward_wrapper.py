@@ -172,6 +172,10 @@ class ForceRewardWrapper(gym.Wrapper):
         self.enable_contact_rew = self.config.get('enable_contact_reward', False)
         self.contact_rew_weight = self.config.get('contact_reward_weight', 1.0)
 
+        # squared velocity 
+        self.enable_square_vel = self.config.get('enable_square_vel', False)
+        self.square_vel_weight = self.config.get('square_vel_weight', 1.0)
+
     def _init_state_management(self):
         """Initialize per-environment state variables for reward calculations."""
         # Contact detection state
@@ -368,6 +372,12 @@ class ForceRewardWrapper(gym.Wrapper):
             contact_rew = self._calculate_contact_reward()
             total_force_reward += contact_rew * self.contact_rew_weight
             self.unwrapped.extras['logs_rew_contact_rew'] = total_force_reward
+
+        if self.enable_square_vel:
+            square_vel_rew = self._calculate_square_vel_reward()
+            total_force_reward += square_vel_rew * self.square_vel_weight
+            self.unwrapped.extras['logs_rew_square_vel_rew'] = square_vel_rew
+
         # Return combined rewards
         return base_rewards + total_force_reward
 
@@ -600,3 +610,19 @@ class ForceRewardWrapper(gym.Wrapper):
         reward = torch.where(torch.any(self.in_contact, dim=-1),ratio, torch.zeros_like(ratio))
 
         return reward
+    
+    def _calculate_square_vel_reward(self) -> torch.Tensor:                                                                                                                                                  
+      """                                                                                                                                                                                                  
+      Calculate squared velocity reward.                                                                                                                                                                   
+                                                                                                                                                                                                           
+      r = -(v_x^2 + v_y^2 + v_z^2) for each env                                                                                                                                                            
+      Negative because we want to penalize high velocities.                                                                                                                                                
+      """                                                                                                                                                                                                  
+      # Get end-effector velocity                                                                                                                                                                          
+      ee_vel = self.unwrapped.fingertip_midpoint_linvel  # [num_envs, 3]                                                                                                                                   
+                                                                                                                                                                                                           
+      # Sum of squared components per env                                                                                                                                                                  
+      square_vel_sum = torch.sum(ee_vel ** 2, dim=1)  # [num_envs]                                                                                                                                         
+                                                                                                                                                                                                           
+      return -square_vel_sum  # Negative as penalty  
+

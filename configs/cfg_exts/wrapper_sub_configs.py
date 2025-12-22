@@ -138,6 +138,10 @@ class ForceRewardConfig:
     enable_contact_reward: bool = False
     contact_reward_weight: float = 1.0
 
+    # Square Velocity Reward
+    enable_square_vel: bool = False
+    square_vel_weight: float = 1.0
+
 
 
 
