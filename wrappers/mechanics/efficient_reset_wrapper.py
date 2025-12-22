@@ -142,6 +142,12 @@ class EfficientResetWrapper(gym.Wrapper):
         # Get base termination conditions
         term, time_out = self._original_get_dones()
 
+        # Sanitize incorrect base semantics: if terminated == time_out,
+        # the upstream is using wrong semantics (timeout in terminated).
+        # Reset terminated to False - timeout should only be in truncated.
+        if torch.equal(term, time_out):
+            term = torch.zeros_like(term)
+
         # Force periodic full resets to prevent overfitting
         if self.unwrapped.common_step_counter > 1:
             time_out = torch.ones_like(self.unwrapped.episode_length_buf) * (

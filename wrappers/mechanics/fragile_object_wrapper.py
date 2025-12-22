@@ -167,11 +167,17 @@ class FragileObjectWrapper(gym.Wrapper):
             terminated = torch.zeros(self.num_envs, dtype=torch.bool, device=self.unwrapped.device)
             time_out = torch.zeros(self.num_envs, dtype=torch.bool, device=self.unwrapped.device)
 
+        # Sanitize incorrect base semantics: if terminated == time_out,
+        # the upstream is using wrong semantics (timeout in terminated).
+        # Reset terminated to False - timeout should only be in truncated.
+        if torch.equal(terminated, time_out):
+            terminated = torch.zeros_like(terminated)
+
         # Check for force violations if objects are fragile
         if self.fragile and self._has_force_torque_data():
             force_magnitude = torch.linalg.norm(self.unwrapped.robot_force_torque[:, :3], axis=1)
             force_violations = force_magnitude >= self.break_force
-            terminated = force_violations #torch.logical_or(terminated, force_violations)
+            terminated = torch.logical_or(terminated, force_violations)
 
         return terminated, time_out
 
