@@ -47,14 +47,16 @@ def parse_arguments():
     parser.add_argument("--show_progress", action="store_true", default=True,
                         help="Show progress bar during evaluation rollout")
     parser.add_argument("--eval_mode", type=str, required=True,
-                        choices=["performance", "noise", "rotation", "gain", "dynamics"],
-                        help="Evaluation mode: 'performance' (100 envs, videos), 'noise' (500 envs, noise analysis), 'rotation' (500 envs, rotation analysis), 'gain' (500 envs, gain robustness), or 'dynamics' (1200 envs, friction/mass robustness)")
+                        choices=["performance", "noise", "rotation", "gain", "dynamics", "trajectory"],
+                        help="Evaluation mode: 'performance' (100 envs, videos), 'noise' (500 envs, noise analysis), 'rotation' (500 envs, rotation analysis), 'gain' (500 envs, gain robustness), 'dynamics' (1200 envs, friction/mass robustness), or 'trajectory' (100 envs, detailed trajectory data)")
     parser.add_argument("--no_wandb", action="store_true", default=False,
                         help="Disable WandB logging and save results locally for debugging")
     parser.add_argument("--debug_project", action="store_true", default=False,
                         help="Log results to 'debug' project instead of original run (for testing)")
     parser.add_argument("--report_to_base_run", action="store_true", default=False,
                         help="Log results to the original training run instead of creating a new eval run")
+    parser.add_argument("--traj_output_dir", type=str, default="./traj_eval_results",
+                        help="Output directory for trajectory evaluation .pkl files (only used with --eval_mode trajectory)")
 
     # Append AppLauncher args
     AppLauncher.add_app_launcher_args(parser)
@@ -221,6 +223,17 @@ ENVS_PER_DYNAMICS_COMBO = 100
 # Total environments for dynamics mode (friction-major ordering)
 # 3 friction × 4 mass × 100 envs = 1200 total
 DYNAMICS_MODE_TOTAL_ENVS = len(DYNAMICS_FRICTION_MULTIPLIERS) * len(DYNAMICS_MASS_MULTIPLIERS) * ENVS_PER_DYNAMICS_COMBO
+
+
+# ===== TRAJECTORY EVALUATION CONSTANTS =====
+
+# Import trajectory evaluation module
+from eval.traj_eval import (
+    TrajectoryEvalWrapper,
+    run_trajectory_evaluation,
+    save_trajectory_data,
+    TRAJECTORY_MODE_TOTAL_ENVS,
+)
 
 
 # ===== METRIC CATEGORIES =====
@@ -859,6 +872,8 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
         num_envs_per_agent = GAIN_MODE_TOTAL_ENVS
     elif args.eval_mode == "dynamics":
         num_envs_per_agent = DYNAMICS_MODE_TOTAL_ENVS
+    elif args.eval_mode == "trajectory":
+        num_envs_per_agent = TRAJECTORY_MODE_TOTAL_ENVS
     else:
         raise RuntimeError(f"Unknown eval_mode: {args.eval_mode}")
 
@@ -1065,6 +1080,11 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
         print("  - FixedDynamicsWrapper for dynamics mode")
         env = FixedDynamicsWrapper(env, friction_assignments, mass_assignments)
 
+    # Apply TrajectoryEvalWrapper for trajectory mode
+    if args.eval_mode == "trajectory":
+        print("  - TrajectoryEvalWrapper for trajectory mode")
+        env = TrajectoryEvalWrapper(env)
+
     # Add image capture wrapper for video (only in performance mode)
     if args.enable_video and args.eval_mode == "performance":
         print("  - Img2InfoWrapper for video capture")
@@ -1155,6 +1175,8 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
                 local_media_path = f"./eval_results/gain_step_{step}{ext}"
             elif args.eval_mode == "dynamics":
                 local_media_path = f"./eval_results/dynamics_step_{step}{ext}"
+            elif args.eval_mode == "trajectory":
+                local_media_path = f"./eval_results/traj_step_{step}{ext}"
             else:
                 local_media_path = f"./eval_results/eval_step_{step}{ext}"
 
@@ -1198,6 +1220,14 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
                 caption = f"Rotation Evaluation at step {step}"
                 metrics_to_log['eval_media/rotation_images'] = wandb.Image(media_path, caption=caption)
                 media_uploaded = True
+        elif args.eval_mode == "trajectory":
+            # Trajectory data is saved locally to --traj_output_dir, not uploaded to wandb
+            # Keeping wandb upload code commented out for potential future use:
+            # if media_path is not None and os.path.exists(media_path):
+            #     # Save file to wandb files
+            #     wandb.save(media_path, base_path=os.path.dirname(media_path), policy="now")
+            #     media_uploaded = True
+            pass  # Trajectory .pkl files are saved locally, not to wandb
 
         try:
             # Log metrics with step number
@@ -1211,6 +1241,10 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
                     print(f"    Logged metrics and noise visualization for step {step}")
                 elif args.eval_mode == "rotation":
                     print(f"    Logged metrics and rotation visualization for step {step}")
+                # elif args.eval_mode == "trajectory":
+                #     print(f"    Logged metrics and trajectory data file for step {step}")
+            elif args.eval_mode == "trajectory":
+                print(f"    Logged metrics for step {step} (trajectory data saved locally)")
             else:
                 print(f"    Logged metrics for step {step}")
 
@@ -2906,6 +2940,30 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
             # No visualization for dynamics mode
             media_path = None
 
+        elif args.eval_mode == "trajectory":
+            # Run trajectory evaluation
+            trajectory_data = run_trajectory_evaluation(
+                env=env,
+                agent=agent,
+                configs=configs,
+                max_rollout_steps=max_rollout_steps,
+                show_progress=args.show_progress,
+                eval_seed=args.eval_seed
+            )
+
+            # Save trajectory data to .pkl file in specified output directory
+            os.makedirs(args.traj_output_dir, exist_ok=True)
+            media_path = os.path.join(args.traj_output_dir, f"traj_{step}.pkl")
+            save_trajectory_data(trajectory_data, media_path)
+            print(f"    Saved trajectory data to: {media_path}")
+
+            # Minimal eval_metrics for trajectory mode (data is in the .pkl file)
+            eval_metrics = {
+                "Traj_Eval/total_rollouts": trajectory_data["metadata"]["total_rollouts"],
+                "Traj_Eval/total_policy_steps": trajectory_data["metadata"]["total_policy_steps"],
+                "Traj_Eval/total_breaks": trajectory_data["metadata"]["total_breaks"],
+            }
+
         else:
             raise RuntimeError(f"Unknown eval_mode: {args.eval_mode}")
 
@@ -2948,6 +3006,12 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
                     successes = eval_metrics.get(f'Dyn_Eval({combo_name})_Core/num_successful_completions', 0)
                     success_rate = successes / total if total > 0 else 0.0
                     print(f"    ({combo_name}): {success_rate:.2%} ({successes}/{total})")
+        elif args.eval_mode == "trajectory":
+            # Print summary for trajectory mode
+            total_rollouts = eval_metrics.get('Traj_Eval/total_rollouts', 0)
+            total_steps = eval_metrics.get('Traj_Eval/total_policy_steps', 0)
+            total_breaks = eval_metrics.get('Traj_Eval/total_breaks', 0)
+            print(f"    Rollouts: {total_rollouts}, Policy steps: {total_steps}, Breaks: {total_breaks}")
 
         return eval_metrics, media_path
 
@@ -2992,6 +3056,8 @@ def main():
             print(f"  - Environments per agent: {GAIN_MODE_TOTAL_ENVS} (gain mode: {len(GAIN_MULTIPLIERS)} multipliers × {ENVS_PER_GAIN_MULTIPLIER} envs)")
         elif args_cli.eval_mode == "dynamics":
             print(f"  - Environments per agent: {DYNAMICS_MODE_TOTAL_ENVS} (dynamics mode: {len(DYNAMICS_FRICTION_MULTIPLIERS)} friction × {len(DYNAMICS_MASS_MULTIPLIERS)} mass × {ENVS_PER_DYNAMICS_COMBO} envs)")
+        elif args_cli.eval_mode == "trajectory":
+            print(f"  - Environments per agent: {TRAJECTORY_MODE_TOTAL_ENVS} (trajectory mode: detailed trajectory capture)")
         print(f"  - Max rollout steps: {max_rollout_steps}")
         print(f"  - Policy Hz: {policy_hz}")
 
