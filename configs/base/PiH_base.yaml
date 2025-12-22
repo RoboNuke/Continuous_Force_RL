@@ -343,6 +343,9 @@ wrappers:
     enable_contact_reward: true
     contact_reward_weight: 2.0
 
+    enable_square_vel: False
+    square_vel_weight: 1000.0
+
   # Dynamics randomization for domain randomization
   dynamics_randomization:
     enabled: false

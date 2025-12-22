@@ -371,7 +371,7 @@ class ForceRewardWrapper(gym.Wrapper):
         if self.enable_contact_rew:
             contact_rew = self._calculate_contact_reward()
             total_force_reward += contact_rew * self.contact_rew_weight
-            self.unwrapped.extras['logs_rew_contact_rew'] = total_force_reward
+            self.unwrapped.extras['logs_rew_contact_rew'] = contact_rew
 
         if self.enable_square_vel:
             square_vel_rew = self._calculate_square_vel_reward()
@@ -612,17 +612,15 @@ class ForceRewardWrapper(gym.Wrapper):
         return reward
     
     def _calculate_square_vel_reward(self) -> torch.Tensor:                                                                                                                                                  
-      """                                                                                                                                                                                                  
-      Calculate squared velocity reward.                                                                                                                                                                   
-                                                                                                                                                                                                           
-      r = -(v_x^2 + v_y^2 + v_z^2) for each env                                                                                                                                                            
-      Negative because we want to penalize high velocities.                                                                                                                                                
-      """                                                                                                                                                                                                  
-      # Get end-effector velocity                                                                                                                                                                          
-      ee_vel = self.unwrapped.fingertip_midpoint_linvel  # [num_envs, 3]                                                                                                                                   
-                                                                                                                                                                                                           
-      # Sum of squared components per env                                                                                                                                                                  
-      square_vel_sum = torch.sum(ee_vel ** 2, dim=1)  # [num_envs]                                                                                                                                         
-                                                                                                                                                                                                           
-      return -square_vel_sum  # Negative as penalty  
+        """                                                                                                                                                                                                  
+        Calculate squared velocity reward.                                                                                                                                                                   
+                                                                                                                                                                                                            
+        r = -(v_x^2 + v_y^2 + v_z^2) for each env                                                                                                                                                            
+        Negative because we want to penalize high velocities.                                                                                                                                                
+        """                                                                                                                                                                                                  
+        # Get end-effector velocity                                                                                                                                                                          
+        ee_vel = self.unwrapped.fingertip_midpoint_linvel  # [num_envs, 3]                                                                                                                                                                                  
+        # Sum of squared components per env                                                                                                                                                                  
+        square_vel_sum = torch.sum(ee_vel ** 2, dim=1)  # [num_envs]                                                                                                                                                                    
+        return -square_vel_sum  # Negative as penalty  
 
