@@ -459,6 +459,27 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Reset EMA actions to zeros (Isaac Lab approach)
         self.ema_actions[env_ids] = 0.0
 
+        ##########################################################################
+        # TEMPORARY: Match base factory position action back-calculation bug
+        #
+        # Base factory back-calculates position actions during reset:
+        #   actions = (fingertip_pos - fixed_pos_action_frame) / pos_action_bounds
+        # But _apply_action uses pos_threshold for scaling:
+        #   pos_actions = actions * pos_threshold
+        #
+        # Since pos_action_bounds=[0.05,0.05,0.05] and pos_threshold=[0.02,0.02,0.02],
+        # the first step moves target AWAY from hole by 0.4x the initial displacement.
+        #
+        # Copy base env's back-calculated position actions to match this behavior.
+        # Remove this block to revert to zero-initialization (true no-op on first step).
+        ##########################################################################
+        if hasattr(self.unwrapped, 'actions') and len(env_ids) > 0:
+            self.ema_actions[env_ids, self.force_size:self.force_size+3] = \
+                self.unwrapped.actions[env_ids, 0:3].clone()
+        ##########################################################################
+        # END TEMPORARY: Base factory position back-calculation match
+        ##########################################################################
+
         # Reset integral state on environment reset
         self.force_integral_error[env_ids] = 0.0
 
