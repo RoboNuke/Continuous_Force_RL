@@ -639,6 +639,15 @@ def query_runs_by_tag(tag: str, entity: str, project: str, run_id: Optional[str]
             if len(runs_list) == 0:
                 raise RuntimeError(f"No runs found with tag: {tag}")
 
+            # Filter out evaluation runs (those with "Eval_" in the name)
+            original_count = len(runs_list)
+            runs_list = [r for r in runs_list if "Eval_" not in r.name]
+            if original_count != len(runs_list):
+                print(f"  Filtered out {original_count - len(runs_list)} evaluation run(s)")
+
+            if len(runs_list) == 0:
+                raise RuntimeError(f"No training runs found with tag: {tag} (all runs were evaluation runs)")
+
             # Filter by run_id if specified
             if run_id is not None:
                 runs_list = [r for r in runs_list if r.id == run_id]
@@ -1176,7 +1185,8 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
             elif args.eval_mode == "dynamics":
                 local_media_path = f"./eval_results/dynamics_step_{step}{ext}"
             elif args.eval_mode == "trajectory":
-                local_media_path = f"./eval_results/traj_step_{step}{ext}"
+                os.makedirs(f"./eval_results/{run.id}", exist_ok=True)
+                local_media_path = f"./eval_results/{run.id}/traj_step_{step}{ext}"
             else:
                 local_media_path = f"./eval_results/eval_step_{step}{ext}"
 
@@ -2951,9 +2961,10 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
                 eval_seed=args.eval_seed
             )
 
-            # Save trajectory data to .pkl file in specified output directory
-            os.makedirs(args.traj_output_dir, exist_ok=True)
-            media_path = os.path.join(args.traj_output_dir, f"traj_{step}.pkl")
+            # Save trajectory data to .pkl file in run-specific subdirectory
+            run_output_dir = os.path.join(args.traj_output_dir, run.id)
+            os.makedirs(run_output_dir, exist_ok=True)
+            media_path = os.path.join(run_output_dir, f"traj_{step}.pkl")
             save_trajectory_data(trajectory_data, media_path)
             print(f"    Saved trajectory data to: {media_path}")
 
@@ -3072,8 +3083,9 @@ def main():
 
             # Initialize WandB eval run once for all checkpoints (if applicable)
             # Modes: default (new eval run), debug_project (debug project), report_to_base_run (per-checkpoint), no_wandb (none)
+            # Trajectory mode saves locally only, no wandb run needed
             eval_run_initialized = False
-            if not args_cli.no_wandb and not args_cli.report_to_base_run:
+            if not args_cli.no_wandb and not args_cli.report_to_base_run and args_cli.eval_mode != "trajectory":
                 try:
                     # Determine project and naming based on mode
                     # Build tags: eval-specific tags + all original run tags
@@ -3130,8 +3142,9 @@ def main():
                         friction_assignments, mass_assignments
                     )
 
-                    # Log results to WandB
-                    log_results_to_wandb(run, step, metrics, media_path, args_cli)
+                    # Log results to WandB (skip for trajectory mode which saves locally only)
+                    if args_cli.eval_mode != "trajectory":
+                        log_results_to_wandb(run, step, metrics, media_path, args_cli)
 
                 except Exception as e:
                     print(f"  ERROR: Failed to evaluate checkpoint at step {step}: {e}")
