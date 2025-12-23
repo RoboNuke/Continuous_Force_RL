@@ -324,59 +324,59 @@ class ForceRewardWrapper(gym.Wrapper):
         if self.enable_force_magnitude_reward:
             force_mag_reward = self._calculate_force_magnitude_reward()
             total_force_reward += force_mag_reward * self.force_magnitude_reward_weight
-            self.unwrapped.extras['logs_rew_force_magnitude'] = force_mag_reward
+            self.unwrapped.extras['logs_rew_force_magnitude'] = force_mag_reward * self.force_magnitude_reward_weight
 
         # 2. Alignment Award (contact only)
         if self.enable_alignment_award:
             alignment_reward = self._calculate_alignment_award()
             total_force_reward += alignment_reward * self.alignment_award_reward_weight
-            self.unwrapped.extras['logs_rew_alignment_award'] = alignment_reward
+            self.unwrapped.extras['logs_rew_alignment_award'] = alignment_reward * self.alignment_award_reward_weight
 
         # 3. Force Action Error (always active)
         if self.enable_force_action_error:
             action_error_reward = self._calculate_force_action_error()
             total_force_reward += action_error_reward * self.force_action_error_reward_weight
-            self.unwrapped.extras['logs_rew_force_action_error'] = action_error_reward
+            self.unwrapped.extras['logs_rew_force_action_error'] = action_error_reward * self.force_action_error_reward_weight
 
         # 4. Contact Consistency (contact only)
         if self.enable_contact_consistency:
             consistency_reward = self._calculate_contact_consistency()
             total_force_reward += consistency_reward * self.contact_consistency_reward_weight
-            self.unwrapped.extras['logs_rew_contact_consistency'] = consistency_reward
+            self.unwrapped.extras['logs_rew_contact_consistency'] = consistency_reward * self.contact_consistency_reward_weight
 
         # 5. Oscillation Penalty (always active)
         if self.enable_oscillation_penalty:
             oscillation_reward = self._calculate_oscillation_penalty()
             total_force_reward += oscillation_reward * self.oscillation_penalty_reward_weight
-            self.unwrapped.extras['logs_rew_oscillation_penalty'] = oscillation_reward
+            self.unwrapped.extras['logs_rew_oscillation_penalty'] = oscillation_reward * self.oscillation_penalty_reward_weight
 
         # 6. Contact Transition Reward (on transitions)
         if self.enable_contact_transition_reward:
             transition_reward = self._calculate_contact_transition_reward()
             total_force_reward += transition_reward * self.contact_transition_reward_weight
-            self.unwrapped.extras['logs_rew_contact_transition'] = transition_reward
+            self.unwrapped.extras['logs_rew_contact_transition'] = transition_reward * self.contact_transition_reward_weight
 
         # 7. Efficiency (always active)
         if self.enable_efficiency:
             efficiency_reward = self._calculate_efficiency()
             total_force_reward += efficiency_reward * self.efficiency_reward_weight
-            self.unwrapped.extras['logs_rew_efficiency'] = efficiency_reward
+            self.unwrapped.extras['logs_rew_efficiency'] = efficiency_reward * self.efficiency_reward_weight
 
         # 8. Force Ratio (contact only)
         if self.enable_force_ratio:
             ratio_reward = self._calculate_force_ratio()
             total_force_reward += ratio_reward * self.force_ratio_reward_weight
-            self.unwrapped.extras['logs_rew_force_ratio'] = ratio_reward
+            self.unwrapped.extras['logs_rew_force_ratio'] = ratio_reward * self.force_ratio_reward_weight
 
         if self.enable_contact_rew:
             contact_rew = self._calculate_contact_reward()
             total_force_reward += contact_rew * self.contact_rew_weight
-            self.unwrapped.extras['logs_rew_contact_rew'] = contact_rew
+            self.unwrapped.extras['logs_rew_contact_rew'] = contact_rew * self.contact_rew_weight
 
         if self.enable_square_vel:
             square_vel_rew = self._calculate_square_vel_reward()
             total_force_reward += square_vel_rew * self.square_vel_weight
-            self.unwrapped.extras['logs_rew_square_vel_rew'] = square_vel_rew
+            self.unwrapped.extras['logs_rew_square_vel_rew'] = square_vel_rew * self.square_vel_weight
 
         # Return combined rewards
         return base_rewards + total_force_reward

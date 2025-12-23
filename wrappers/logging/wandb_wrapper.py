@@ -517,9 +517,10 @@ class GenericWandbLoggingWrapper(gym.Wrapper):
             # Add termination tracking - 1.0 if termination, 0.0 if timeout
             self.agent_episode_data[agent_id]['terminations'].append(1.0 if is_termination else 0.0)
 
-            # Store component reward episode sums
+            # Store component reward STEP AVERAGES (episode sum / episode length)
             for component_name, accumulated_values in self.current_component_rewards.items():
-                reward_value = accumulated_values[env_idx].item()
+                episode_sum = accumulated_values[env_idx].item()
+                reward_value = episode_sum / episode_length if episode_length > 0 else 0.0
 
                 # Overall tracking (existing)
                 if component_name not in self.agent_episode_data[agent_id]['component_rewards']:

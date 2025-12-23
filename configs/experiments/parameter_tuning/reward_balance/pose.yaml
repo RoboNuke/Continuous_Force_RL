@@ -18,14 +18,13 @@ environment:
     fixed_asset_pos: [0.0025, 0.0025, 0.0025]  
 
 wrappers:
-
   fragile_objects:
-    peg_break_rew: -10.0
+    peg_break_rew: -15.0
 
   factory_metrics:
-    engagement_reward_scale: 10.0  # Scale for engagement rewards (default 1.0 = no change)
+    engagement_reward_scale: 60.0  # Scale for engagement rewards (default 1.0 = no change)
     success_reward_scale: 40.0
-    timeout_penalty: -30.0
+    timeout_penalty: -20.0
   
   force_reward:
     enable_contact_reward: false
@@ -35,6 +34,6 @@ wrappers:
     square_vel_weight: 10.0
 # Experiment metadata
 experiment:
-  name: "pose_rewBalance3"
+  name: "pose_rewBalance4"
   tags: ['medFixedNoise','ft_noise','ee_pos_noise']
-  group: "pose_rewBalance3"
+  group: "pose_rewBalance4"
