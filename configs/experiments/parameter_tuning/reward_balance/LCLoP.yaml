@@ -26,7 +26,7 @@ wrappers:
     enabled: false
 
   fragile_objects:
-    peg_break_rew: 0.0
+    peg_break_rew: -10.0
 
   factory_metrics:
     engagement_reward_scale: 10.0  # Scale for engagement rewards (default 1.0 = no change)
@@ -53,6 +53,6 @@ environment:
     
 # Experiment metadata
 experiment:
-  name: "LCLoP_rewBalance2"
+  name: "LCLoP_rewBalance3"
   tags: ['medFixedNoise','ft_noise','ee_pos_noise']
-  group: "LCLoP_rewBalance2"
+  group: "LCLoP_rewBalance3"
