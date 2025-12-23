@@ -10,14 +10,21 @@ primary:
 
 # Model configuration for hybrid agent
 model:
-  use_hybrid_agent: false
+  use_hybrid_agent: true
+  hybrid_agent:
+    force_init_std: 0.1 # implies a 96% range [-2.5, 2.5] 
 
-environment:
-  # OBSERVATION RANDOMIZATION CONFIGURATION
-  obs_rand:
-    fixed_asset_pos: [0.0025, 0.0025, 0.0025]  
-
+# Enable hybrid control wrapper and related systems
 wrappers:
+  # Enable hybrid control wrapper
+  hybrid_control:
+    enabled: true
+    reward_type: "none"
+    use_ground_truth_selection: false
+    
+  pose_contact_logging:
+    enabled: false
+
   fragile_objects:
     peg_break_rew: -15.0
 
@@ -34,9 +41,19 @@ wrappers:
     square_vel_weight: 10.0
 
 agent:
-  rewards_shaper_scale: 0.25 #0.1
+  supervised_selection_loss_weight: 1.0
+#  policy_learning_rate: 5.0e-4
+#  critic_learning_rate: 1.0e-4
+#  #learning_epochs: 1
+  rewards_shaper_scale: 0.00625 #0.1
+
+environment:
+  # OBSERVATION RANDOMIZATION CONFIGURATION
+  obs_rand:
+    fixed_asset_pos: [0.0025, 0.0025, 0.0025]  
+    
 # Experiment metadata
 experiment:
-  name: "pose_rewBalance5_025"
+  name: "LCLoP_rewBalance5_super"
   tags: ['medFixedNoise','ft_noise','ee_pos_noise']
-  group: "pose_rewBalance5_025"
+  group: "LCLoP_rewBalance5_super"

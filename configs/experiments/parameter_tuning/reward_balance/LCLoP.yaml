@@ -45,6 +45,7 @@ agent:
 #  policy_learning_rate: 5.0e-4
 #  critic_learning_rate: 1.0e-4
 #  #learning_epochs: 1
+  rewards_shaper_scale: 0.25 #0.1
 
 environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
@@ -53,6 +54,6 @@ environment:
     
 # Experiment metadata
 experiment:
-  name: "LCLoP_rewBalance4"
+  name: "LCLoP_rewBalance5_025"
   tags: ['medFixedNoise','ft_noise','ee_pos_noise']
-  group: "LCLoP_rewBalance4"
+  group: "LCLoP_rewBalance5_025"

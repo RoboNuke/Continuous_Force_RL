@@ -34,9 +34,9 @@ wrappers:
     square_vel_weight: 10.0
 
 agent:
-  rewards_shaper_scale: 0.25 #0.1
+  rewards_shaper_scale: 0.00625 #0.1
 # Experiment metadata
 experiment:
-  name: "pose_rewBalance5_025"
+  name: "pose_rewBalance5_super"
   tags: ['medFixedNoise','ft_noise','ee_pos_noise']
-  group: "pose_rewBalance5_025"
+  group: "pose_rewBalance5_super"
