@@ -35,6 +35,6 @@ wrappers:
     square_vel_weight: 10.0
 # Experiment metadata
 experiment:
-  name: "pose_rewBalance1"
+  name: "pose_rewBalance2"
   tags: ['medFixedNoise','ft_noise','ee_pos_noise']
-  group: "pose_rewBalance1"
+  group: "pose_rewBalance2"
