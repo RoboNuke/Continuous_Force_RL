@@ -10,6 +10,8 @@ class FactoryMetricsConfig:
     """Scale factor for engagement rewards. Default 1.0 preserves original behavior."""
     success_reward_scale: float = 1.0
     """Scale factor for success rewards. Default 1.0 preserves original behavior."""
+    timeout_penalty: float = 0.0
+    """Penalty applied when episode times out (reaches max steps). Default 0.0 (no penalty)."""
 
 @dataclass
 class ObsManagerConfig:

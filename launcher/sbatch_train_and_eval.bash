@@ -178,7 +178,8 @@ echo ""
 
 # Submit evaluation jobs
 echo "=== Submitting Evaluation Jobs ==="
-EVAL_MODES=("performance" "noise" "rotation")
+#EVAL_MODES=("performance" "noise" "rotation")
+EVAL_MODES=("performance")
 TOTAL_EVAL_JOBS=0
 
 # Iterate through each training job

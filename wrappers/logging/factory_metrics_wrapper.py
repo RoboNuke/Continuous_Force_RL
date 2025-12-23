@@ -25,7 +25,7 @@ class FactoryMetricsWrapper(gym.Wrapper):
     - Simple step-by-step collection following WandbWrapper pattern
     """
 
-    def __init__(self, env, num_agents=1, publish_to_wandb=True, engagement_reward_scale=1.0, success_reward_scale=1.0):
+    def __init__(self, env, num_agents=1, publish_to_wandb=True, engagement_reward_scale=1.0, success_reward_scale=1.0, timeout_penalty=0.0):
         """
         Initialize factory metrics wrapper.
 
@@ -35,6 +35,7 @@ class FactoryMetricsWrapper(gym.Wrapper):
             publish_to_wandb: Whether to publish metrics to WandB (default: True)
             engagement_reward_scale: Scale factor for engagement rewards (default: 1.0)
             success_reward_scale: Scale factor for success rewards (default: 1.0)
+            timeout_penalty: Penalty applied when episode times out (default: 0.0)
         """
         super().__init__(env)
 
@@ -97,6 +98,7 @@ class FactoryMetricsWrapper(gym.Wrapper):
         # Configurable reward scalers for engagement and success (default 1.0 for backward compatibility)
         self.engagement_reward_scale = engagement_reward_scale
         self.success_reward_scale = success_reward_scale
+        self.timeout_penalty = timeout_penalty
 
         # Override the base environment's _update_rew_buf to use our version
         # This ensures per-environment reward components instead of averaged scalars
@@ -254,6 +256,12 @@ class FactoryMetricsWrapper(gym.Wrapper):
             + rew_dict["curr_engaged"] * self.engagement_reward_scale
             + rew_dict["curr_successes"] * self.success_reward_scale
         )
+
+        # Apply timeout penalty only when max steps reached (not early termination)
+        if self.timeout_penalty != 0.0 and hasattr(env, 'episode_length_buf'):
+            timeout_mask = env.episode_length_buf >= (self.max_episode_length - 1)
+            rew_dict["timeout_penalty"] = timeout_mask.float() * self.timeout_penalty
+            rew_buf = rew_buf + rew_dict["timeout_penalty"]
 
         for rew_name, rew in rew_dict.items():
             env.extras[f"logs_rew_{rew_name}"] = rew

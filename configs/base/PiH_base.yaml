@@ -257,6 +257,7 @@ wrappers:
     publish_to_wandb: true
     engagement_reward_scale: 1.0  # Scale for engagement rewards (default 1.0 = no change)
     success_reward_scale: 1.0     # Scale for success rewards (default 1.0 = no change)
+    timeout_penalty: 0.0          # Penalty applied on timeout (max steps reached, default 0.0 = no penalty)
     # num_agents is computed from primary config automatically
 
   # Wandb logging with factory metrics

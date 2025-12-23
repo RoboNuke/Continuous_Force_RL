@@ -147,7 +147,8 @@ def apply_wrappers(env, configs):
             num_agents=configs['primary'].total_agents,
             publish_to_wandb=wrappers_config.factory_metrics.publish_to_wandb,
             engagement_reward_scale=wrappers_config.factory_metrics.engagement_reward_scale,
-            success_reward_scale=wrappers_config.factory_metrics.success_reward_scale
+            success_reward_scale=wrappers_config.factory_metrics.success_reward_scale,
+            timeout_penalty=wrappers_config.factory_metrics.timeout_penalty
         )
 
     # Apply curriculum wrapper AFTER FactoryMetricsWrapper so it can read published metrics
