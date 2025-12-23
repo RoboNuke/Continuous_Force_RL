@@ -20,7 +20,7 @@ environment:
 wrappers:
 
   fragile_objects:
-    peg_break_rew: 0.0
+    peg_break_rew: -10.0
 
   factory_metrics:
     engagement_reward_scale: 10.0  # Scale for engagement rewards (default 1.0 = no change)
@@ -35,6 +35,6 @@ wrappers:
     square_vel_weight: 10.0
 # Experiment metadata
 experiment:
-  name: "pose_rewBalance2"
+  name: "pose_rewBalance3"
   tags: ['medFixedNoise','ft_noise','ee_pos_noise']
-  group: "pose_rewBalance2"
+  group: "pose_rewBalance3"
