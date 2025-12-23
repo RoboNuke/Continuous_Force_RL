@@ -26,12 +26,12 @@ wrappers:
     enabled: false
 
   fragile_objects:
-    peg_break_rew: -10.0
+    peg_break_rew: 0.0
 
   factory_metrics:
     engagement_reward_scale: 10.0  # Scale for engagement rewards (default 1.0 = no change)
-    success_reward_scale: 10.0
-    timeout_penalty: -115.0
+    success_reward_scale: 40.0
+    timeout_penalty: -30.0
   
   force_reward:
     enable_contact_reward: false
