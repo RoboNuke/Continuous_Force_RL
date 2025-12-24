@@ -384,7 +384,7 @@ wrappers:
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
 agent:
   # Core identification
-  disable_progressbar: false
+  disable_progressbar: true
 
   # Checkpoint and experiment tracking
   track_ckpts: false
@@ -394,7 +394,7 @@ agent:
 
   # SKRL PPO PARAMETERS (these override SKRL defaults)
   # rollouts and mini_batches are auto-calculated from episode timing
-  learning_epochs: 1 #4
+  learning_epochs: 4
   mini_batches: 150
   discount_factor: 0.99
   lambda_: 0.95  # Note: underscore for Python compatibility
@@ -409,7 +409,7 @@ agent:
   #value_update_ratio: 2
   policy_learning_rate: 1.0e-5
   critic_learning_rate: 1.0e-5
-  value_update_ratio: 1 #2
+  value_update_ratio: 2
 
   # Optimizer parameters
   optimizer_betas: [0.999, 0.999]
