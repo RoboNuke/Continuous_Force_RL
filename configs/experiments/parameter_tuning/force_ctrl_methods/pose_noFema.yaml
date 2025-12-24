@@ -38,6 +38,6 @@ wrappers:
     
 # Experiment metadata
 experiment:
-  name: "pose_noFema"
+  name: "pose_noFema2"
   tags: ['medFixedNoise','ft_noise','ee_pos_noise']
-  group: "pose_noFema"
+  group: "pose_noFema2"

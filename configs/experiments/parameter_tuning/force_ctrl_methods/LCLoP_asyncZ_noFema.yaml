@@ -56,6 +56,6 @@ environment:
     
 # Experiment metadata
 experiment:
-  name: "LCLoP_asyncZ_noFema"
+  name: "LCLoP_asyncZ_noFema2"
   tags: ['medFixedNoise','ft_noise','ee_pos_noise']
-  group: "LCLoP_asyncZ_noFema"
+  group: "LCLoP_asyncZ_noFema2"

@@ -38,6 +38,6 @@ wrappers:
     
 # Experiment metadata
 experiment:
-  name: "pose_asyncZ_noFema"
+  name: "pose_asyncZ_noFema2"
   tags: ['medFixedNoise','ft_noise','ee_pos_noise']
-  group: "pose_asyncZ_noFema"
+  group: "pose_asyncZ_noFema2"
