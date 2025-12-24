@@ -51,7 +51,14 @@ class ExtendedCtrlCfg(CtrlCfg):
     use_delta_force: bool = False
     """If True, force target = action * threshold + current_force (delta mode).
     If False, force target = action * bounds (absolute mode). Default: False (absolute)."""
+    
+    async_z_force_bounds: bool = False
+    """If True, target force will be applied only on the range [0,-force_action_bounds], 
+    preventing positive z-force commands"""
 
+    apply_ema_force: bool = True
+    """When true ema is applied to pose and force commands, when false only to pose"""
+    
     # Force PID control flags
     enable_force_derivative: bool = False
     """Enable derivative (D) term in force control. D gains derived from Kp (2*sqrt(Kp))."""

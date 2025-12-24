@@ -80,9 +80,10 @@ environment:
 
   # These parameters will be applied to the ExtendedCtrlCfg
   ctrl:
-    force_action_bounds: [50.0, 50.0, 50.0]
+    async_z_force_bounds: false
+    force_action_bounds: [20.0, 20.0, 20.0] #[50.0, 50.0, 50.0]
     torque_action_bounds: [0.5, 0.5, 0.5]
-    force_action_threshold: [10.0, 10.0, 10.0]
+    force_action_threshold: [5.0, 5.0, 5.0] #[10.0, 10.0, 10.0]
     torque_action_threshold: [0.1, 0.1, 0.1]
 
     #default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
@@ -383,7 +384,7 @@ wrappers:
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
 agent:
   # Core identification
-  disable_progressbar: true
+  disable_progressbar: false
 
   # Checkpoint and experiment tracking
   track_ckpts: false
@@ -393,7 +394,7 @@ agent:
 
   # SKRL PPO PARAMETERS (these override SKRL defaults)
   # rollouts and mini_batches are auto-calculated from episode timing
-  learning_epochs: 4
+  learning_epochs: 1 #4
   mini_batches: 150
   discount_factor: 0.99
   lambda_: 0.95  # Note: underscore for Python compatibility
@@ -408,7 +409,7 @@ agent:
   #value_update_ratio: 2
   policy_learning_rate: 1.0e-5
   critic_learning_rate: 1.0e-5
-  value_update_ratio: 2
+  value_update_ratio: 1 #2
 
   # Optimizer parameters
   optimizer_betas: [0.999, 0.999]

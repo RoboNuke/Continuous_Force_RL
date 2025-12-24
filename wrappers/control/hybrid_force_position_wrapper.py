@@ -119,6 +119,8 @@ class HybridForcePositionWrapper(gym.Wrapper):
         self.target_init_mode = self.ctrl_cfg.target_init_mode
         self.use_ground_truth_selection = use_ground_truth_selection
         self.use_delta_force = getattr(self.ctrl_cfg, 'use_delta_force', False)
+        self.async_z_bounds = self.ctrl_cfg.async_z_force_bounds
+        self.apply_ema_force = self.ctrl_cfg.apply_ema_force
 
         # PID force control flags
         self.enable_force_derivative = getattr(self.ctrl_cfg, 'enable_force_derivative', False)
@@ -516,12 +518,21 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         # Position, rotation, and force actions (combined into one operation)
         # All use the same EMA factor, so we can apply it in one go
-        pose_force_start = self.force_size
-        pose_force_end = 2 * self.force_size + 6
+        if self.apply_ema_force:
+            # apply ema to both force and pose commands
+            pose_force_start = self.force_size
+            pose_force_end = 2 * self.force_size + 6
+        else:
+            # apply ema to only pose commands
+            pose_force_start = self.force_size
+            pose_force_end = self.force_size + 6
+            self.ema_actions[:, pose_force_end:] = action[:, pose_force_end:]
+
         self.ema_actions[:, pose_force_start:pose_force_end] = (
             self.ema_factor * action[:, pose_force_start:pose_force_end] +
             (1 - self.ema_factor) * self.ema_actions[:, pose_force_start:pose_force_end]
         )
+
 
         # Log raw network outputs
         if hasattr(self.unwrapped, 'extras'):
@@ -640,6 +651,10 @@ class HybridForcePositionWrapper(gym.Wrapper):
         if hasattr(self.unwrapped, 'extras'):
             pos_goal_norm = torch.norm(self.unwrapped.ctrl_target_fingertip_midpoint_pos, p=2, dim=-1)
             self.unwrapped.extras['to_log']['Control Target / Pos Goal Norm'] = pos_goal_norm
+            pos_goal = self.unwrapped.ctrl_target_fingertip_midpoint_pos
+            self.unwrapped.extras['to_log']['Control Target / Pos X Goal'] = torch.abs(pos_goal[:, 0])
+            self.unwrapped.extras['to_log']['Control Target / Pos Y Goal'] = torch.abs(pos_goal[:, 1])
+            self.unwrapped.extras['to_log']['Control Target / Pos Z Goal'] = torch.abs(pos_goal[:, 2])
 
         # 3. Rotation target (Isaac Lab style)
         rot_actions = self.ema_actions[:, self.force_size+3:self.force_size+6]
@@ -690,6 +705,11 @@ class HybridForcePositionWrapper(gym.Wrapper):
             # Absolute mode: action directly specifies target force
             # action=0 → target=0N, action=±1 → target=±force_bounds
             self.target_force_for_control[:, :3] = force_actions[:, :3] * self.force_bounds
+        
+        # makes it so that z control commands cannot be positive
+        if self.async_z_bounds:
+            self.target_force_for_control[:,2] = (self.target_force_for_control[:,2] - self.force_bounds[:, 2])/2.0
+
 
         # Handle torque if enabled
         if self.force_size > 3:
@@ -720,6 +740,10 @@ class HybridForcePositionWrapper(gym.Wrapper):
         if hasattr(self.unwrapped, 'extras'):
             force_goal_norm = torch.norm(self.target_force_for_control[:, :3], p=2, dim=-1)
             self.unwrapped.extras['to_log']['Control Target / Force Goal Norm'] = force_goal_norm
+            force_goal = self.target_force_for_control[:, :3]
+            self.unwrapped.extras['to_log']['Control Target / Force X Goal'] = torch.abs(force_goal[:, 0])
+            self.unwrapped.extras['to_log']['Control Target / Force Y Goal'] = torch.abs(force_goal[:, 1])
+            self.unwrapped.extras['to_log']['Control Target / Force Z Goal'] = torch.abs(force_goal[:, 2])
 
     def _log_action_effect_metrics(self):
         """Log per-step changes in position, velocity, and force attributed to current control mode."""
