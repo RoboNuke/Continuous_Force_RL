@@ -81,9 +81,9 @@ environment:
   # These parameters will be applied to the ExtendedCtrlCfg
   ctrl:
     async_z_force_bounds: false
-    force_action_bounds: [20.0, 20.0, 20.0] #[50.0, 50.0, 50.0]
+    force_action_bounds: [50.0, 50.0, 50.0] #[20.0, 20.0, 20.0] #
     torque_action_bounds: [0.5, 0.5, 0.5]
-    force_action_threshold: [2.0, 2.0, 2.0] #[10.0, 10.0, 10.0]
+    force_action_threshold: [10.0, 10.0, 10.0] #[2.0, 2.0, 2.0] #
     torque_action_threshold: [0.1, 0.1, 0.1]
 
     #default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
@@ -417,7 +417,7 @@ agent:
   optimizer_weight_decay: 0
 
   # Loss and clipping
-  use_huber_value_loss: true
+  use_huber_value_loss: false
   grad_norm_clip: 0.5
   ratio_clip: 0.2
   clip_predicted_values: false

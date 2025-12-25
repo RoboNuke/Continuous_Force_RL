@@ -38,6 +38,6 @@ wrappers:
     
 # Experiment metadata
 experiment:
-  name: "pose_asyncZ2_lowGain"
+  name: "pose_asyncZ2_noHuber"
   tags: ['medFixedNoise','ft_noise','ee_pos_noise']
-  group: "pose_asyncZ2_lowGain"
+  group: "pose_asyncZ2_noHuber"
