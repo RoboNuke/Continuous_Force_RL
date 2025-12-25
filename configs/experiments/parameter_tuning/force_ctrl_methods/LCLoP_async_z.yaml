@@ -56,6 +56,6 @@ environment:
     
 # Experiment metadata
 experiment:
-  name: "LCLoP_asyncZ2"
+  name: "LCLoP_asyncZ2_lowGain"
   tags: ['medFixedNoise','ft_noise','ee_pos_noise']
-  group: "LCLoP_asyncZ2"
+  group: "LCLoP_asyncZ2_lowGain"
