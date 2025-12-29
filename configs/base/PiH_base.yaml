@@ -80,10 +80,11 @@ environment:
 
   # These parameters will be applied to the ExtendedCtrlCfg
   ctrl:
-    async_z_force_bounds: false
-    force_action_bounds: [50.0, 50.0, 50.0] #[20.0, 20.0, 20.0] #
+    apply_ema_force: true
+    async_z_force_bounds: true
+    force_action_bounds: [20.0, 20.0, 20.0] #
     torque_action_bounds: [0.5, 0.5, 0.5]
-    force_action_threshold: [10.0, 10.0, 10.0] #[2.0, 2.0, 2.0] #
+    force_action_threshold: [2.0, 2.0, 2.0] #
     torque_action_threshold: [0.1, 0.1, 0.1]
 
     #default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
@@ -197,7 +198,7 @@ wrappers:
   # Fragile object behavior
   fragile_objects:
     enabled: true
-    peg_break_rew: 0.0 #-0.4 #-1.0
+    peg_break_rew: -15.0
     # break_force and num_agents are computed from primary config automatically
 
   # Efficient environment resetting
@@ -256,9 +257,9 @@ wrappers:
   factory_metrics:
     enabled: true
     publish_to_wandb: true
-    engagement_reward_scale: 1.0  # Scale for engagement rewards (default 1.0 = no change)
-    success_reward_scale: 1.0     # Scale for success rewards (default 1.0 = no change)
-    timeout_penalty: 0.0          # Penalty applied on timeout (max steps reached, default 0.0 = no penalty)
+    engagement_reward_scale: 60.0  # Scale for engagement rewards (default 1.0 = no change)
+    success_reward_scale: 40.0
+    timeout_penalty: -20.0 # Penalty applied on timeout (max steps reached, default 0.0 = no penalty)
     # num_agents is computed from primary config automatically
 
   # Wandb logging with factory metrics
@@ -342,7 +343,7 @@ wrappers:
     force_ratio_reward_weight: 1.0
     #############################################################
     
-    enable_contact_reward: true
+    enable_contact_reward: false
     contact_reward_weight: 2.0
 
     enable_square_vel: False
@@ -417,7 +418,7 @@ agent:
   optimizer_weight_decay: 0
 
   # Loss and clipping
-  use_huber_value_loss: false
+  use_huber_value_loss: true
   grad_norm_clip: 0.5
   ratio_clip: 0.2
   clip_predicted_values: false
