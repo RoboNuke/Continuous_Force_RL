@@ -236,6 +236,26 @@ from eval.traj_eval import (
 )
 
 
+# ===== PARALLEL MODE DETECTION =====
+
+def is_parallel_mode(args: argparse.Namespace) -> bool:
+    """
+    Determine if parallel evaluation mode should be used.
+
+    Returns True for ALL cases EXCEPT performance mode with video enabled,
+    which has memory constraints due to video frame capture for multiple agents.
+
+    Args:
+        args: Command-line arguments namespace
+
+    Returns:
+        True if parallel mode should be used, False for sequential mode
+    """
+    if args.eval_mode == "performance" and args.enable_video:
+        return False
+    return True
+
+
 # ===== METRIC CATEGORIES =====
 
 # Core metrics (10 total)
@@ -821,20 +841,155 @@ def download_checkpoint_pair(run: wandb.Run, step: int) -> Tuple[str, str]:
         )
 
 
+def load_checkpoints_parallel(
+    runs: List[wandb.Run],
+    step: int,
+    env: Any,
+    agent: Any,
+) -> List[str]:
+    """
+    Download and load checkpoints from all runs into their respective agent slots.
+
+    Args:
+        runs: List of WandB run objects
+        step: Checkpoint step number
+        env: Environment instance
+        agent: Agent instance with num_agents = len(runs)
+
+    Returns:
+        List of download directories (for cleanup after evaluation)
+
+    Raises:
+        RuntimeError: If any checkpoint fails to load (fail fast)
+    """
+    from models.SimBa import SimBaNet
+    from models.block_simba import pack_agents_into_block
+    from agents.block_ppo import PerAgentPreprocessorWrapper
+    from skrl.resources.preprocessors.torch import RunningStandardScaler
+
+    print(f"  Loading {len(runs)} checkpoints in parallel for step {step}...")
+
+    # Download all checkpoints first
+    checkpoint_pairs = []
+    download_dirs = []
+    for run_idx, run in enumerate(runs):
+        print(f"    Downloading checkpoint for run {run_idx}: {run.id}")
+        policy_path, critic_path = download_checkpoint_pair(run, step)
+        checkpoint_pairs.append((policy_path, critic_path))
+        # Track download directory for cleanup
+        download_dirs.append(os.path.dirname(os.path.dirname(policy_path)))
+
+    # Initialize per-agent preprocessor lists if not already present
+    if not hasattr(agent, '_per_agent_state_preprocessors'):
+        agent._per_agent_state_preprocessors = [None] * agent.num_agents
+    if not hasattr(agent, '_per_agent_value_preprocessors'):
+        agent._per_agent_value_preprocessors = [None] * agent.num_agents
+
+    # Load each checkpoint into its agent slot
+    for agent_idx, (run, (policy_path, critic_path)) in enumerate(zip(runs, checkpoint_pairs)):
+        print(f"    Loading run {run.id} into agent slot {agent_idx}...")
+
+        # Load checkpoint files
+        policy_checkpoint = torch.load(policy_path, map_location=env.unwrapped.device, weights_only=False)
+        critic_checkpoint = torch.load(critic_path, map_location=env.unwrapped.device, weights_only=False)
+
+        # Validate checkpoint contents
+        if 'net_state_dict' not in policy_checkpoint:
+            raise RuntimeError(f"Policy checkpoint for run {run.id} missing 'net_state_dict'")
+        if 'net_state_dict' not in critic_checkpoint:
+            raise RuntimeError(f"Critic checkpoint for run {run.id} missing 'net_state_dict'")
+        if 'state_preprocessor' not in policy_checkpoint:
+            raise RuntimeError(f"Policy checkpoint for run {run.id} missing 'state_preprocessor'")
+        if 'value_preprocessor' not in critic_checkpoint:
+            raise RuntimeError(f"Critic checkpoint for run {run.id} missing 'value_preprocessor'")
+        if 'log_std' not in policy_checkpoint:
+            raise RuntimeError(f"Policy checkpoint for run {run.id} missing 'log_std'")
+
+        # Create single-agent SimBaNet for policy
+        policy_agent = SimBaNet(
+            n=len(agent.policy.actor_mean.resblocks),
+            in_size=agent.policy.actor_mean.obs_dim,
+            out_size=agent.policy.actor_mean.act_dim,
+            latent_size=agent.policy.actor_mean.hidden_dim,
+            device=agent.device,
+            tan_out=agent.policy.actor_mean.use_tanh
+        )
+        policy_agent.load_state_dict(policy_checkpoint['net_state_dict'])
+
+        # Create single-agent SimBaNet for critic
+        critic_agent = SimBaNet(
+            n=len(agent.value.critic.resblocks),
+            in_size=agent.value.critic.obs_dim,
+            out_size=agent.value.critic.act_dim,
+            latent_size=agent.value.critic.hidden_dim,
+            device=agent.device,
+            tan_out=agent.value.critic.use_tanh
+        )
+        critic_agent.load_state_dict(critic_checkpoint['net_state_dict'])
+
+        # Pack into block models at this agent's index
+        pack_agents_into_block(agent.policy.actor_mean, {agent_idx: policy_agent})
+        pack_agents_into_block(agent.value.critic, {agent_idx: critic_agent})
+
+        # Load log_std
+        agent.policy.actor_logstd[agent_idx].data.copy_(policy_checkpoint['log_std'].data)
+
+        # Load state preprocessor for this agent
+        obs_size = policy_checkpoint['state_preprocessor']['running_mean'].shape[0]
+        if agent._per_agent_state_preprocessors[agent_idx] is None:
+            agent._per_agent_state_preprocessors[agent_idx] = RunningStandardScaler(
+                size=obs_size, device=agent.device
+            )
+        agent._per_agent_state_preprocessors[agent_idx].load_state_dict(
+            policy_checkpoint['state_preprocessor']
+        )
+
+        # Load value preprocessor for this agent
+        if agent._per_agent_value_preprocessors[agent_idx] is None:
+            agent._per_agent_value_preprocessors[agent_idx] = RunningStandardScaler(
+                size=1, device=agent.device
+            )
+        agent._per_agent_value_preprocessors[agent_idx].load_state_dict(
+            critic_checkpoint['value_preprocessor']
+        )
+
+        print(f"      Loaded run {run.id} -> agent {agent_idx}")
+
+    # Wrap preprocessors for SKRL compatibility
+    agent._state_preprocessor = PerAgentPreprocessorWrapper(agent, agent._per_agent_state_preprocessors)
+    agent._value_preprocessor = PerAgentPreprocessorWrapper(agent, agent._per_agent_value_preprocessors)
+
+    # Set agent to eval mode
+    agent.set_running_mode("eval")
+    print(f"  All {len(runs)} checkpoints loaded successfully!")
+
+    return download_dirs
+
+
 # ===== ENVIRONMENT SETUP =====
 
-def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) -> Tuple[Any, Any, int, float, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+def setup_environment_once(
+    configs: Dict[str, Any],
+    args: argparse.Namespace,
+    num_runs: int = 1,
+    parallel_mode: bool = False
+) -> Tuple[Any, Any, int, float, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], int]:
     """
     Create environment and agent once for all evaluations.
 
     Args:
         configs: Configuration dictionary from WandB
         args: Command-line arguments
+        num_runs: Number of WandB runs to evaluate (used in parallel mode)
+        parallel_mode: If True, create num_runs agents to evaluate all runs simultaneously
 
     Returns:
-        Tuple of (env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, gain_assignments, friction_assignments, mass_assignments)
-        noise_assignments is None except for noise mode ([num_envs, 2] tensor)
-        rotation_assignments is None except for rotation mode ([num_envs, 5] tensor)
+        Tuple of (env, agent, max_rollout_steps, policy_hz, noise_assignments,
+                  rotation_assignments, gain_assignments, friction_assignments,
+                  mass_assignments, envs_per_agent)
+        - noise_assignments is None except for noise mode ([num_envs, 3] tensor)
+        - rotation_assignments is None except for rotation mode ([num_envs, 5] tensor)
+        - envs_per_agent: Number of environments per agent (for metrics splitting)
 
     Raises:
         RuntimeError: If environment or agent creation fails
@@ -855,18 +1010,26 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
     # For now, we assume configs has the same structure as from ConfigManagerV3
     # This may need adjustment based on actual WandB run.config structure
 
-    # Force 1 agent (evaluate one run at a time)
-    # NOTE: Unlike block_eval_script which forces 2 agents, we force 1 agent here
+    # Configure agent count based on parallel mode
     original_break_forces = configs['primary'].break_forces
     original_agents_per_break_force = configs['primary'].agents_per_break_force
 
-    configs['primary'].agents_per_break_force = 1
+    if parallel_mode:
+        # Parallel mode: one agent per run
+        configs['primary'].agents_per_break_force = num_runs
+        print(f"  PARALLEL MODE: {num_runs} agents (one per run)")
+    else:
+        # Sequential mode: force 1 agent
+        configs['primary'].agents_per_break_force = 1
+        print(f"  SEQUENTIAL MODE: 1 agent")
+
+    # Use a single break force (all agents use same training conditions)
     if isinstance(original_break_forces, list) and len(original_break_forces) > 0:
         configs['primary'].break_forces = [original_break_forces[0]]
     else:
         configs['primary'].break_forces = [original_break_forces]
 
-    print(f"  Forced 1 agent: break_forces={configs['primary'].break_forces}, agents_per_break_force={configs['primary'].agents_per_break_force}")
+    print(f"    break_forces={configs['primary'].break_forces}, agents_per_break_force={configs['primary'].agents_per_break_force}")
     print(f"    (original: break_forces={original_break_forces}, agents_per_break_force={original_agents_per_break_force})")
     print(f"    total_agents property now returns: {configs['primary'].total_agents}")
 
@@ -978,7 +1141,8 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
     if args.eval_mode == "noise":
         print("  Generating noise assignments for noise mode...")
 
-        noise_assignments_list = []
+        # Generate base noise assignments for one agent
+        base_noise_assignments_list = []
         for min_val, max_val, range_name in NOISE_RANGES:
             # Generate 2D noise using polar coordinates in x-y plane
             # Sample uniformly in circular annulus [min_val, max_val]
@@ -997,14 +1161,22 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
             y_noise = radii * torch.sin(theta)
             z_noise = torch.zeros(ENVS_PER_NOISE_RANGE, device=env.device)
 
-            noise_assignments_list.append(torch.stack([x_noise, y_noise, z_noise], dim=1))
+            base_noise_assignments_list.append(torch.stack([x_noise, y_noise, z_noise], dim=1))
 
-        noise_assignments = torch.cat(noise_assignments_list, dim=0)  # [NOISE_MODE_TOTAL_ENVS, 3]
-        print(f"    Generated {noise_assignments.shape[0]} noise assignments ({len(NOISE_RANGES)} ranges × {ENVS_PER_NOISE_RANGE} envs)")
+        base_noise_assignments = torch.cat(base_noise_assignments_list, dim=0)  # [NOISE_MODE_TOTAL_ENVS, 3]
+
+        # Replicate for all agents in parallel mode
+        if parallel_mode:
+            noise_assignments = base_noise_assignments.repeat(num_runs, 1)
+            print(f"    Generated {noise_assignments.shape[0]} noise assignments "
+                  f"({len(NOISE_RANGES)} ranges × {ENVS_PER_NOISE_RANGE} envs × {num_runs} agents)")
+        else:
+            noise_assignments = base_noise_assignments
+            print(f"    Generated {noise_assignments.shape[0]} noise assignments "
+                  f"({len(NOISE_RANGES)} ranges × {ENVS_PER_NOISE_RANGE} envs)")
 
         # Apply FixedNoiseWrapper
-        print("  - Added noise_assignments to FixedNoiseWrapper for noise mode")
-        #env.unwrapped.noise_assignments = noise_assignments
+        print("  - FixedNoiseWrapper for noise mode")
         env = FixedNoiseWrapper(env, noise_assignments)
 
     # Generate rotation assignments for rotation mode
@@ -1012,7 +1184,8 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
     if args.eval_mode == "rotation":
         print("  Generating rotation assignments for rotation mode...")
 
-        rotation_assignments_list = []
+        # Generate base rotation assignments for one agent
+        base_rotation_assignments_list = []
         for angle_deg in ROTATION_ANGLES_DEG:
             # Convert angle to radians
             angle_rad = torch.tensor(angle_deg * 3.14159265359 / 180.0, device=env.device)
@@ -1032,12 +1205,21 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
 
                 # Store: [angle_rad, axis_x, axis_y, axis_z, direction]
                 # Note: axis_z is always 0 for xy-plane rotation
-                rotation_assignments_list.append(
+                base_rotation_assignments_list.append(
                     torch.tensor([angle_rad, axis_x.item(), axis_y.item(), 0.0, direction], device=env.device)
                 )
 
-        rotation_assignments = torch.stack(rotation_assignments_list, dim=0)  # [ROTATION_MODE_TOTAL_ENVS, 5]
-        print(f"    Generated {rotation_assignments.shape[0]} rotation assignments ({len(ROTATION_ANGLES_DEG)} angles × {ENVS_PER_ROTATION_ANGLE} envs)")
+        base_rotation_assignments = torch.stack(base_rotation_assignments_list, dim=0)  # [ROTATION_MODE_TOTAL_ENVS, 5]
+
+        # Replicate for all agents in parallel mode
+        if parallel_mode:
+            rotation_assignments = base_rotation_assignments.repeat(num_runs, 1)
+            print(f"    Generated {rotation_assignments.shape[0]} rotation assignments "
+                  f"({len(ROTATION_ANGLES_DEG)} angles × {ENVS_PER_ROTATION_ANGLE} envs × {num_runs} agents)")
+        else:
+            rotation_assignments = base_rotation_assignments
+            print(f"    Generated {rotation_assignments.shape[0]} rotation assignments "
+                  f"({len(ROTATION_ANGLES_DEG)} angles × {ENVS_PER_ROTATION_ANGLE} envs)")
 
         # Apply FixedAssetRotationWrapper
         print("  - FixedAssetRotationWrapper for rotation mode")
@@ -1048,7 +1230,8 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
     if args.eval_mode == "gain":
         print("  Generating gain multiplier assignments for gain mode...")
 
-        gain_assignments_list = []
+        # Generate base gain assignments for one agent
+        base_gain_assignments_list = []
         for multiplier in GAIN_MULTIPLIERS:
             # Create tensor of same multiplier for ENVS_PER_GAIN_MULTIPLIER environments
             multiplier_tensor = torch.full(
@@ -1057,10 +1240,19 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
                 device=env.device,
                 dtype=torch.float32
             )
-            gain_assignments_list.append(multiplier_tensor)
+            base_gain_assignments_list.append(multiplier_tensor)
 
-        gain_assignments = torch.cat(gain_assignments_list, dim=0)  # [GAIN_MODE_TOTAL_ENVS]
-        print(f"    Generated {gain_assignments.shape[0]} gain assignments ({len(GAIN_MULTIPLIERS)} multipliers × {ENVS_PER_GAIN_MULTIPLIER} envs)")
+        base_gain_assignments = torch.cat(base_gain_assignments_list, dim=0)  # [GAIN_MODE_TOTAL_ENVS]
+
+        # Replicate for all agents in parallel mode
+        if parallel_mode:
+            gain_assignments = base_gain_assignments.repeat(num_runs)
+            print(f"    Generated {gain_assignments.shape[0]} gain assignments "
+                  f"({len(GAIN_MULTIPLIERS)} multipliers × {ENVS_PER_GAIN_MULTIPLIER} envs × {num_runs} agents)")
+        else:
+            gain_assignments = base_gain_assignments
+            print(f"    Generated {gain_assignments.shape[0]} gain assignments "
+                  f"({len(GAIN_MULTIPLIERS)} multipliers × {ENVS_PER_GAIN_MULTIPLIER} envs)")
 
         # Apply FixedGainWrapper
         print("  - FixedGainWrapper for gain mode")
@@ -1072,18 +1264,31 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
     if args.eval_mode == "dynamics":
         print("  Generating friction/mass assignments for dynamics mode...")
 
+        # Generate base dynamics assignments for one agent
         # Friction-major ordering: for each friction, iterate all masses
-        friction_list = []
-        mass_list = []
+        base_friction_list = []
+        base_mass_list = []
         for fric_mult in DYNAMICS_FRICTION_MULTIPLIERS:
             for mass_mult in DYNAMICS_MASS_MULTIPLIERS:
-                friction_list.extend([fric_mult] * ENVS_PER_DYNAMICS_COMBO)
-                mass_list.extend([mass_mult] * ENVS_PER_DYNAMICS_COMBO)
+                base_friction_list.extend([fric_mult] * ENVS_PER_DYNAMICS_COMBO)
+                base_mass_list.extend([mass_mult] * ENVS_PER_DYNAMICS_COMBO)
 
-        friction_assignments = torch.tensor(friction_list, device=env.device, dtype=torch.float32)
-        mass_assignments = torch.tensor(mass_list, device=env.device, dtype=torch.float32)
-        print(f"    Generated {friction_assignments.shape[0]} dynamics assignments "
-              f"({len(DYNAMICS_FRICTION_MULTIPLIERS)} friction × {len(DYNAMICS_MASS_MULTIPLIERS)} mass × {ENVS_PER_DYNAMICS_COMBO} envs)")
+        base_friction_assignments = torch.tensor(base_friction_list, device=env.device, dtype=torch.float32)
+        base_mass_assignments = torch.tensor(base_mass_list, device=env.device, dtype=torch.float32)
+
+        # Replicate for all agents in parallel mode
+        if parallel_mode:
+            friction_assignments = base_friction_assignments.repeat(num_runs)
+            mass_assignments = base_mass_assignments.repeat(num_runs)
+            print(f"    Generated {friction_assignments.shape[0]} dynamics assignments "
+                  f"({len(DYNAMICS_FRICTION_MULTIPLIERS)} friction × {len(DYNAMICS_MASS_MULTIPLIERS)} mass × "
+                  f"{ENVS_PER_DYNAMICS_COMBO} envs × {num_runs} agents)")
+        else:
+            friction_assignments = base_friction_assignments
+            mass_assignments = base_mass_assignments
+            print(f"    Generated {friction_assignments.shape[0]} dynamics assignments "
+                  f"({len(DYNAMICS_FRICTION_MULTIPLIERS)} friction × {len(DYNAMICS_MASS_MULTIPLIERS)} mass × "
+                  f"{ENVS_PER_DYNAMICS_COMBO} envs)")
 
         # Apply FixedDynamicsWrapper
         print("  - FixedDynamicsWrapper for dynamics mode")
@@ -1129,7 +1334,7 @@ def setup_environment_once(configs: Dict[str, Any], args: argparse.Namespace) ->
     print(f"  Created BlockPPO agent with {configs['primary'].total_agents} agents")
     print("  Setup complete!")
 
-    return env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, gain_assignments, friction_assignments, mass_assignments
+    return env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, gain_assignments, friction_assignments, mass_assignments, num_envs_per_agent
 
 
 # ===== WANDB LOGGING =====
@@ -2191,6 +2396,157 @@ def _compute_range_metrics(
     )
 
 
+def split_rollout_data_by_agent(
+    rollout_data: Dict[str, torch.Tensor],
+    num_agents: int,
+    envs_per_agent: int
+) -> List[Dict[str, torch.Tensor]]:
+    """
+    Split rollout data by agent for parallel evaluation.
+
+    The environment partitions environments as:
+        agent_0: envs [0, envs_per_agent)
+        agent_1: envs [envs_per_agent, 2*envs_per_agent)
+        ...
+
+    Args:
+        rollout_data: Dictionary with tensors of shape [num_envs, ...] or [num_envs]
+        num_agents: Number of agents (runs)
+        envs_per_agent: Environments per agent
+
+    Returns:
+        List of rollout_data dicts, one per agent
+    """
+    agent_rollout_data = []
+
+    for agent_idx in range(num_agents):
+        start_idx = agent_idx * envs_per_agent
+        end_idx = (agent_idx + 1) * envs_per_agent
+
+        agent_data = {}
+        for key, tensor in rollout_data.items():
+            if tensor is None:
+                agent_data[key] = None
+            elif isinstance(tensor, torch.Tensor):
+                # Slice along first dimension (env dimension)
+                agent_data[key] = tensor[start_idx:end_idx].clone()
+            else:
+                # Non-tensor data (pass through)
+                agent_data[key] = tensor
+
+        agent_rollout_data.append(agent_data)
+
+    return agent_rollout_data
+
+
+def compute_run_metrics(
+    rollout_data: Dict[str, torch.Tensor],
+    eval_mode: str
+) -> Dict[str, float]:
+    """
+    Compute metrics for one run's slice of rollout data.
+
+    Args:
+        rollout_data: Per-environment data from run_basic_evaluation for one agent
+        eval_mode: Evaluation mode (performance, noise, rotation, gain, dynamics, trajectory)
+
+    Returns:
+        Dictionary of prefixed metrics ready for WandB logging
+
+    Raises:
+        RuntimeError: If eval_mode is unknown
+    """
+    if eval_mode == "performance":
+        # Compute basic aggregated metrics
+        base_metrics = _compute_aggregated_metrics(
+            episode_lengths=rollout_data['episode_lengths'],
+            episode_terminated=rollout_data['episode_terminated'],
+            episode_succeeded=rollout_data['episode_succeeded'],
+            episode_ssv=rollout_data['episode_ssv'],
+            episode_ssjv=rollout_data['episode_ssjv'],
+            episode_max_force=rollout_data['episode_max_force'],
+            episode_sum_force_in_contact=rollout_data['episode_sum_force_in_contact'],
+            episode_contact_steps=rollout_data['episode_contact_steps'],
+            episode_energy=rollout_data['episode_energy'],
+            contact_force_counts=rollout_data['contact_force_counts'],
+            contact_pos_counts=rollout_data['contact_pos_counts'],
+            no_contact_force_counts=rollout_data['no_contact_force_counts'],
+            no_contact_pos_counts=rollout_data['no_contact_pos_counts'],
+        )
+        return prefix_metrics_by_category(base_metrics, "Eval_Core", "Eval_Contact")
+
+    elif eval_mode == "noise":
+        # Split by noise range
+        split_metrics = {}
+        for range_idx, (min_val, max_val, range_name) in enumerate(NOISE_RANGES):
+            start_idx = range_idx * ENVS_PER_NOISE_RANGE
+            end_idx = start_idx + ENVS_PER_NOISE_RANGE
+            range_metrics = _compute_range_metrics(rollout_data, start_idx, end_idx, range_name)
+            prefixed = prefix_metrics_by_category(
+                range_metrics,
+                f"Noise_Eval({range_name})_Core",
+                f"Noise_Eval({range_name})_Contact"
+            )
+            split_metrics.update(prefixed)
+        return split_metrics
+
+    elif eval_mode == "rotation":
+        # Split by rotation angle
+        split_metrics = {}
+        for angle_idx, angle_deg in enumerate(ROTATION_ANGLES_DEG):
+            start_idx = angle_idx * ENVS_PER_ROTATION_ANGLE
+            end_idx = start_idx + ENVS_PER_ROTATION_ANGLE
+            angle_metrics = _compute_range_metrics(rollout_data, start_idx, end_idx, f"{angle_deg}deg")
+            prefixed = prefix_metrics_by_category(
+                angle_metrics,
+                f"Rot_Eval({angle_deg}deg)_Core",
+                f"Rot_Eval({angle_deg}deg)_Contact"
+            )
+            split_metrics.update(prefixed)
+        return split_metrics
+
+    elif eval_mode == "gain":
+        # Split by gain multiplier
+        split_metrics = {}
+        for mult_idx, multiplier in enumerate(GAIN_MULTIPLIERS):
+            start_idx = mult_idx * ENVS_PER_GAIN_MULTIPLIER
+            end_idx = start_idx + ENVS_PER_GAIN_MULTIPLIER
+            mult_metrics = _compute_range_metrics(rollout_data, start_idx, end_idx, f"{multiplier}x")
+            prefixed = prefix_metrics_by_category(
+                mult_metrics,
+                f"Gain_Eval({multiplier}x)_Core",
+                f"Gain_Eval({multiplier}x)_Contact"
+            )
+            split_metrics.update(prefixed)
+        return split_metrics
+
+    elif eval_mode == "dynamics":
+        # Split by friction/mass combination
+        split_metrics = {}
+        combo_idx = 0
+        for fric_mult in DYNAMICS_FRICTION_MULTIPLIERS:
+            for mass_mult in DYNAMICS_MASS_MULTIPLIERS:
+                start_idx = combo_idx * ENVS_PER_DYNAMICS_COMBO
+                end_idx = start_idx + ENVS_PER_DYNAMICS_COMBO
+                combo_name = f"fric={fric_mult}x,mass={mass_mult}x"
+                combo_metrics = _compute_range_metrics(rollout_data, start_idx, end_idx, combo_name)
+                prefixed = prefix_metrics_by_category(
+                    combo_metrics,
+                    f"Dyn_Eval({combo_name})_Core",
+                    f"Dyn_Eval({combo_name})_Contact"
+                )
+                split_metrics.update(prefixed)
+                combo_idx += 1
+        return split_metrics
+
+    elif eval_mode == "trajectory":
+        # Trajectory mode returns minimal metrics (data is in .pkl file)
+        raise RuntimeError("compute_run_metrics should not be called for trajectory mode")
+
+    else:
+        raise RuntimeError(f"Unknown eval_mode: {eval_mode}")
+
+
 def _create_checkpoint_gif(images: torch.Tensor, values: torch.Tensor, cumulative_rewards: torch.Tensor,
                           success_step: torch.Tensor, termination_step: torch.Tensor,
                           truncation_step: torch.Tensor, engagement_history: torch.Tensor,
@@ -3035,6 +3391,339 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
 
 # ===== MAIN EXECUTION =====
 
+def _run_parallel_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
+    """
+    Run evaluation in parallel mode: all runs evaluated simultaneously.
+
+    Checkpoint loop is outermost, run loop is innermost (for logging only).
+    Environment has num_agents = num_runs, each agent slot gets one run's checkpoint.
+    """
+    num_runs = len(runs)
+    print(f"\n=== PARALLEL MODE: Evaluating {num_runs} runs simultaneously ===")
+
+    # Setup environment with multiple agents
+    print("\nSetting up environment with multiple agents...")
+    result = setup_environment_once(
+        configs=configs,
+        args=args_cli,
+        num_runs=num_runs,
+        parallel_mode=True
+    )
+    env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, \
+        gain_assignments, friction_assignments, mass_assignments, envs_per_agent = result
+
+    print(f"\nEnvironment configured (parallel mode):")
+    print(f"  - Number of runs/agents: {num_runs}")
+    print(f"  - Environments per agent: {envs_per_agent}")
+    print(f"  - Total environments: {num_runs * envs_per_agent}")
+    print(f"  - Max rollout steps: {max_rollout_steps}")
+    print(f"  - Policy Hz: {policy_hz}")
+
+    # Get checkpoint steps from representative run (all runs have same checkpoints)
+    representative_run = runs[0]
+    checkpoint_steps = get_checkpoint_steps(representative_run, args_cli)
+    print(f"\nCheckpoints to evaluate: {checkpoint_steps}")
+
+    # Initialize all WandB eval runs upfront (using reinit="create_new" for concurrent runs)
+    eval_wandb_runs = []  # List of (run, wandb_run_object) tuples
+    if not args_cli.no_wandb and not args_cli.report_to_base_run and args_cli.eval_mode != "trajectory":
+        if args_cli.debug_project:
+            print(f"\n[DEBUG MODE] Initializing {num_runs} WandB eval runs in 'debug' project...")
+        else:
+            print(f"\nInitializing {num_runs} WandB eval runs...")
+        for run_idx, run in enumerate(runs):
+            try:
+                eval_tags = [f"eval_{args_cli.eval_mode}", f"source_run:{run.id}"] + list(run.tags)
+
+                if args_cli.debug_project:
+                    target_project = "debug"
+                else:
+                    target_project = run.project
+
+                eval_run_name = f"Eval_{args_cli.eval_mode}_{run.name}"
+                eval_group_name = f"Eval_{args_cli.eval_mode}_{run.group}_{args_cli.tag}" if run.group else None
+
+                wandb_run = wandb.init(
+                    project=target_project,
+                    entity=args_cli.entity,
+                    name=eval_run_name,
+                    group=eval_group_name,
+                    tags=eval_tags,
+                    reinit="create_new",  # Key: allows multiple concurrent runs
+                    config={
+                        "source_run_id": run.id,
+                        "source_run_name": run.name,
+                        "source_run_group": run.group,
+                        "source_project": run.project,
+                        "eval_mode": args_cli.eval_mode,
+                        "eval_seed": args_cli.eval_seed,
+                        "num_checkpoints": len(checkpoint_steps),
+                        "parallel_mode": True,
+                    }
+                )
+                eval_wandb_runs.append((run, wandb_run))
+                print(f"  Initialized eval run {run_idx + 1}/{num_runs}: {eval_run_name}")
+            except Exception as e:
+                print(f"  WARNING: Failed to initialize eval run for {run.id}: {e}")
+                # Continue without this run's wandb logging
+                eval_wandb_runs.append((run, None))
+    else:
+        # No wandb logging - just track runs without wandb objects
+        eval_wandb_runs = [(run, None) for run in runs]
+
+    # Checkpoint loop (OUTERMOST)
+    for step_idx, step in enumerate(checkpoint_steps):
+        print(f"\n{'=' * 80}")
+        print(f"Checkpoint {step_idx + 1}/{len(checkpoint_steps)}: step {step}")
+        print(f"{'=' * 80}")
+
+        # Load all checkpoints in parallel
+        download_dirs = load_checkpoints_parallel(runs, step, env, agent)
+
+        try:
+            # Run ONE evaluation (covers all agents at once)
+            # For parallel mode, always use run_basic_evaluation to get full rollout_data
+            # The mode-specific metric computation happens in compute_run_metrics
+            if args_cli.eval_mode == "trajectory":
+                # Trajectory mode needs special handling - run and save per agent
+                trajectory_data = run_trajectory_evaluation(
+                    env=env,
+                    agent=agent,
+                    configs=configs,
+                    max_rollout_steps=max_rollout_steps,
+                    show_progress=args_cli.show_progress,
+                    eval_seed=args_cli.eval_seed
+                )
+                # For trajectory mode, we need to handle saving per-agent
+                # This is more complex, so for now just save combined data
+                for run_idx, run in enumerate(runs):
+                    run_output_dir = os.path.join(args_cli.traj_output_dir, run.id)
+                    os.makedirs(run_output_dir, exist_ok=True)
+                    media_path = os.path.join(run_output_dir, f"traj_{step}.pkl")
+                    save_trajectory_data(trajectory_data, media_path)
+                    print(f"    Saved trajectory data for {run.id} to: {media_path}")
+                continue  # Skip the per-run metrics computation for trajectory mode
+            elif args_cli.eval_mode in ("performance", "noise", "rotation", "gain", "dynamics"):
+                # All standard modes use run_basic_evaluation in parallel mode
+                # This returns full rollout_data that can be split by agent
+                eval_metrics, rollout_data = run_basic_evaluation(
+                    env=env,
+                    agent=agent,
+                    configs=configs,
+                    max_rollout_steps=max_rollout_steps,
+                    enable_video=False,  # No video in parallel mode
+                    show_progress=args_cli.show_progress,
+                    eval_seed=args_cli.eval_seed
+                )
+            else:
+                raise RuntimeError(f"Unknown eval_mode: {args_cli.eval_mode}")
+
+            print(f"  Evaluation complete, splitting results by agent...")
+
+            # Split rollout data by agent
+            per_agent_data = split_rollout_data_by_agent(rollout_data, num_runs, envs_per_agent)
+
+            # Compute and log metrics for each run (INNERMOST loop)
+            for run_idx, (run, wandb_run) in enumerate(eval_wandb_runs):
+                print(f"\n  Processing results for run {run_idx + 1}/{num_runs}: {run.id}")
+
+                # Compute metrics for this run's slice
+                run_metrics = compute_run_metrics(
+                    rollout_data=per_agent_data[run_idx],
+                    eval_mode=args_cli.eval_mode
+                )
+
+                # Add standard metrics
+                run_metrics['eval_seed'] = args_cli.eval_seed
+                run_metrics['total_steps'] = step
+                run_metrics['env_steps'] = step / 256
+
+                # Log to WandB if we have a run object
+                if wandb_run is not None:
+                    print(f"    [DEBUG] wandb_run type: {type(wandb_run)}, id: {wandb_run.id}")
+                    print(f"    [DEBUG] Logging {len(run_metrics)} metrics to step {step}")
+                    wandb_run.log(run_metrics, step=step, commit=True)
+                    print(f"    Logged {len(run_metrics)} metrics to WandB at step {step}")
+                elif args_cli.report_to_base_run:
+                    # Resume original run, log, and finish (same pattern as sequential)
+                    print(f"    [REPORT_TO_BASE_RUN] Logging to original run {run.id}...")
+                    try:
+                        wandb.init(project=run.project, id=run.id, resume="must")
+                        wandb.log(run_metrics, step=step)
+                        wandb.finish()
+                        print(f"    Logged {len(run_metrics)} metrics to base run at step {step}")
+                    except Exception as e:
+                        print(f"    WARNING: Failed to log to base run {run.id}: {e}")
+                else:
+                    print(f"    [DEBUG] Skipping WandB logging (wandb_run=None, report_to_base_run=False)")
+
+                # Print summary
+                _print_run_summary(run_metrics, args_cli.eval_mode, run.id)
+
+        finally:
+            # Clean up downloaded checkpoint files
+            for download_dir in download_dirs:
+                if os.path.exists(download_dir):
+                    shutil.rmtree(download_dir, ignore_errors=True)
+
+    # Finish all WandB runs
+    print(f"\nFinishing {len(eval_wandb_runs)} WandB eval runs...")
+    for run, wandb_run in eval_wandb_runs:
+        if wandb_run is not None:
+            wandb_run.finish()
+            print(f"  Finished eval run for {run.id}")
+
+
+def _print_run_summary(metrics: Dict[str, float], eval_mode: str, run_id: str):
+    """Print evaluation summary for a single run."""
+    if eval_mode == "performance":
+        total = metrics.get('Eval_Core/total_episodes', 0)
+        successes = metrics.get('Eval_Core/num_successful_completions', 0)
+        success_rate = successes / total if total > 0 else 0.0
+        print(f"    [{run_id}] Success rate: {success_rate:.2%} ({successes}/{total})")
+    elif eval_mode == "noise":
+        for min_val, max_val, range_name in NOISE_RANGES:
+            total = metrics.get(f'Noise_Eval({range_name})_Core/total_episodes', 0)
+            successes = metrics.get(f'Noise_Eval({range_name})_Core/num_successful_completions', 0)
+            success_rate = successes / total if total > 0 else 0.0
+            print(f"    [{run_id}] {range_name}: {success_rate:.2%}")
+    elif eval_mode == "rotation":
+        for angle_deg in ROTATION_ANGLES_DEG:
+            total = metrics.get(f'Rot_Eval({angle_deg}deg)_Core/total_episodes', 0)
+            successes = metrics.get(f'Rot_Eval({angle_deg}deg)_Core/num_successful_completions', 0)
+            success_rate = successes / total if total > 0 else 0.0
+            print(f"    [{run_id}] {angle_deg}deg: {success_rate:.2%}")
+    elif eval_mode == "gain":
+        for multiplier in GAIN_MULTIPLIERS:
+            total = metrics.get(f'Gain_Eval({multiplier}x)_Core/total_episodes', 0)
+            successes = metrics.get(f'Gain_Eval({multiplier}x)_Core/num_successful_completions', 0)
+            success_rate = successes / total if total > 0 else 0.0
+            print(f"    [{run_id}] {multiplier}x: {success_rate:.2%}")
+    elif eval_mode == "dynamics":
+        for fric_mult in DYNAMICS_FRICTION_MULTIPLIERS:
+            for mass_mult in DYNAMICS_MASS_MULTIPLIERS:
+                combo_name = f"fric={fric_mult}x,mass={mass_mult}x"
+                total = metrics.get(f'Dyn_Eval({combo_name})_Core/total_episodes', 0)
+                successes = metrics.get(f'Dyn_Eval({combo_name})_Core/num_successful_completions', 0)
+                success_rate = successes / total if total > 0 else 0.0
+                print(f"    [{run_id}] ({combo_name}): {success_rate:.2%}")
+
+
+def _run_sequential_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
+    """
+    Run evaluation in sequential mode: one run at a time (existing behavior).
+
+    Used for performance+video mode where memory is constrained.
+    """
+    print(f"\n=== SEQUENTIAL MODE: Evaluating {len(runs)} runs one at a time ===")
+
+    # Setup environment with 1 agent
+    print("\nSetting up environment with single agent...")
+    result = setup_environment_once(
+        configs=configs,
+        args=args_cli,
+        num_runs=1,
+        parallel_mode=False
+    )
+    env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, \
+        gain_assignments, friction_assignments, mass_assignments, envs_per_agent = result
+
+    print(f"\nEnvironment configured (sequential mode):")
+    if args_cli.eval_mode == "performance":
+        print(f"  - Environments per agent: 100")
+    elif args_cli.eval_mode == "noise":
+        print(f"  - Environments per agent: {NOISE_MODE_TOTAL_ENVS}")
+    elif args_cli.eval_mode == "rotation":
+        print(f"  - Environments per agent: {ROTATION_MODE_TOTAL_ENVS}")
+    elif args_cli.eval_mode == "gain":
+        print(f"  - Environments per agent: {GAIN_MODE_TOTAL_ENVS}")
+    elif args_cli.eval_mode == "dynamics":
+        print(f"  - Environments per agent: {DYNAMICS_MODE_TOTAL_ENVS}")
+    elif args_cli.eval_mode == "trajectory":
+        print(f"  - Environments per agent: {TRAJECTORY_MODE_TOTAL_ENVS}")
+    print(f"  - Max rollout steps: {max_rollout_steps}")
+    print(f"  - Policy Hz: {policy_hz}")
+
+    # Evaluate each run sequentially (existing logic)
+    for run_idx, run in enumerate(runs):
+        print(f"\n{'=' * 80}")
+        print(f"Evaluating run {run_idx + 1}/{len(runs)}: {run.project}/{run.id}")
+        print(f"{'=' * 80}")
+
+        # Get checkpoint steps for this run
+        checkpoint_steps = get_checkpoint_steps(run, args_cli)
+
+        # Initialize WandB eval run once for all checkpoints
+        eval_run_initialized = False
+        if not args_cli.no_wandb and not args_cli.report_to_base_run and args_cli.eval_mode != "trajectory":
+            try:
+                eval_tags = [f"eval_{args_cli.eval_mode}", f"source_run:{run.id}"] + list(run.tags)
+
+                if args_cli.debug_project:
+                    target_project = "debug"
+                    eval_run_name = f"Eval_{args_cli.eval_mode}_{run.name}"
+                    eval_group_name = f"Eval_{args_cli.eval_mode}_{run.group}_{args_cli.tag}" if run.group else None
+                    print(f"\n[DEBUG MODE] Initializing eval run in 'debug' project: {eval_run_name}")
+                else:
+                    target_project = run.project
+                    eval_run_name = f"Eval_{args_cli.eval_mode}_{run.name}"
+                    eval_group_name = f"Eval_{args_cli.eval_mode}_{run.group}_{args_cli.tag}" if run.group else None
+                    print(f"\nInitializing eval run: {eval_run_name}")
+                    print(f"  Project: {target_project}")
+                    if eval_group_name:
+                        print(f"  Group: {eval_group_name}")
+
+                wandb.init(
+                    project=target_project,
+                    entity=args_cli.entity,
+                    name=eval_run_name,
+                    group=eval_group_name,
+                    tags=eval_tags,
+                    config={
+                        "source_run_id": run.id,
+                        "source_run_name": run.name,
+                        "source_run_group": run.group,
+                        "source_project": run.project,
+                        "eval_mode": args_cli.eval_mode,
+                        "eval_seed": args_cli.eval_seed,
+                        "num_checkpoints": len(checkpoint_steps),
+                    }
+                )
+                eval_run_initialized = True
+                print(f"  Eval run initialized successfully")
+            except Exception as e:
+                print(f"  WARNING: Failed to initialize eval run: {e}")
+                print(f"  Continuing without WandB logging...")
+                args_cli.no_wandb = True
+
+        # Evaluate each checkpoint
+        for step_idx, step in enumerate(checkpoint_steps):
+            print(f"\nCheckpoint {step_idx + 1}/{len(checkpoint_steps)}: step {step}")
+
+            try:
+                # Evaluate this checkpoint
+                metrics, media_path = evaluate_checkpoint(
+                    run, step, env, agent, configs, args_cli,
+                    max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, gain_assignments,
+                    friction_assignments, mass_assignments
+                )
+
+                # Log results to WandB (skip for trajectory mode)
+                if args_cli.eval_mode != "trajectory":
+                    log_results_to_wandb(run, step, metrics, media_path, args_cli)
+
+            except Exception as e:
+                print(f"  ERROR: Failed to evaluate checkpoint at step {step}: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+
+        # Finish eval run after all checkpoints
+        if eval_run_initialized:
+            print(f"\nFinishing eval run")
+            wandb.finish()
+
+
 def main():
     """Main execution function."""
     print("=" * 80)
@@ -3052,110 +3741,13 @@ def main():
         # Reconstruct config from WandB
         configs = reconstruct_config_from_wandb(representative_run)
 
-        # Setup environment once
-        print("\nSetting up environment...")
-        env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, gain_assignments, friction_assignments, mass_assignments = setup_environment_once(configs, args_cli)
+        # Determine execution mode
+        parallel_mode = is_parallel_mode(args_cli)
 
-        print(f"\nEnvironment configured:")
-        if args_cli.eval_mode == "performance":
-            print(f"  - Environments per agent: 100")
-        elif args_cli.eval_mode == "noise":
-            print(f"  - Environments per agent: {NOISE_MODE_TOTAL_ENVS} (noise mode: {len(NOISE_RANGES)} ranges × {ENVS_PER_NOISE_RANGE} envs)")
-        elif args_cli.eval_mode == "rotation":
-            print(f"  - Environments per agent: {ROTATION_MODE_TOTAL_ENVS} (rotation mode: {len(ROTATION_ANGLES_DEG)} angles × {ENVS_PER_ROTATION_ANGLE} envs)")
-        elif args_cli.eval_mode == "gain":
-            print(f"  - Environments per agent: {GAIN_MODE_TOTAL_ENVS} (gain mode: {len(GAIN_MULTIPLIERS)} multipliers × {ENVS_PER_GAIN_MULTIPLIER} envs)")
-        elif args_cli.eval_mode == "dynamics":
-            print(f"  - Environments per agent: {DYNAMICS_MODE_TOTAL_ENVS} (dynamics mode: {len(DYNAMICS_FRICTION_MULTIPLIERS)} friction × {len(DYNAMICS_MASS_MULTIPLIERS)} mass × {ENVS_PER_DYNAMICS_COMBO} envs)")
-        elif args_cli.eval_mode == "trajectory":
-            print(f"  - Environments per agent: {TRAJECTORY_MODE_TOTAL_ENVS} (trajectory mode: detailed trajectory capture)")
-        print(f"  - Max rollout steps: {max_rollout_steps}")
-        print(f"  - Policy Hz: {policy_hz}")
-
-        # Evaluate each run
-        for run_idx, run in enumerate(runs):
-            print(f"\n{'=' * 80}")
-            print(f"Evaluating run {run_idx + 1}/{len(runs)}: {run.project}/{run.id}")
-            print(f"{'=' * 80}")
-
-            # Get checkpoint steps for this run
-            checkpoint_steps = get_checkpoint_steps(run, args_cli)
-
-            # Initialize WandB eval run once for all checkpoints (if applicable)
-            # Modes: default (new eval run), debug_project (debug project), report_to_base_run (per-checkpoint), no_wandb (none)
-            # Trajectory mode saves locally only, no wandb run needed
-            eval_run_initialized = False
-            if not args_cli.no_wandb and not args_cli.report_to_base_run and args_cli.eval_mode != "trajectory":
-                try:
-                    # Determine project and naming based on mode
-                    # Build tags: eval-specific tags + all original run tags
-                    eval_tags = [f"eval_{args_cli.eval_mode}", f"source_run:{run.id}"] + list(run.tags)
-
-                    if args_cli.debug_project:
-                        # Debug mode: Use "debug" project
-                        target_project = "debug"
-                        eval_run_name = f"Eval_{args_cli.eval_mode}_{run.name}"
-                        eval_group_name = f"Eval_{args_cli.eval_mode}_{run.group}_{args_cli.tag}" if run.group else None
-                        print(f"\n[DEBUG MODE] Initializing eval run in 'debug' project: {eval_run_name}")
-                    else:
-                        # Default mode: Use same project as original run
-                        target_project = run.project
-                        eval_run_name = f"Eval_{args_cli.eval_mode}_{run.name}"
-                        eval_group_name = f"Eval_{args_cli.eval_mode}_{run.group}_{args_cli.tag}" if run.group else None
-                        print(f"\nInitializing eval run: {eval_run_name}")
-                        print(f"  Project: {target_project}")
-                        if eval_group_name:
-                            print(f"  Group: {eval_group_name}")
-
-                    wandb.init(
-                        project=target_project,
-                        entity=args_cli.entity,
-                        name=eval_run_name,
-                        group=eval_group_name,
-                        tags=eval_tags,
-                        config={
-                            "source_run_id": run.id,
-                            "source_run_name": run.name,
-                            "source_run_group": run.group,
-                            "source_project": run.project,
-                            "eval_mode": args_cli.eval_mode,
-                            "eval_seed": args_cli.eval_seed,
-                            "num_checkpoints": len(checkpoint_steps),
-                        }
-                    )
-                    eval_run_initialized = True
-                    print(f"  Eval run initialized successfully")
-                except Exception as e:
-                    print(f"  WARNING: Failed to initialize eval run: {e}")
-                    print(f"  Continuing without WandB logging...")
-                    args_cli.no_wandb = True
-
-            # Evaluate each checkpoint
-            for step_idx, step in enumerate(checkpoint_steps):
-                print(f"\nCheckpoint {step_idx + 1}/{len(checkpoint_steps)}: step {step}")
-
-                try:
-                    # Evaluate this checkpoint
-                    metrics, media_path = evaluate_checkpoint(
-                        run, step, env, agent, configs, args_cli,
-                        max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, gain_assignments,
-                        friction_assignments, mass_assignments
-                    )
-
-                    # Log results to WandB (skip for trajectory mode which saves locally only)
-                    if args_cli.eval_mode != "trajectory":
-                        log_results_to_wandb(run, step, metrics, media_path, args_cli)
-
-                except Exception as e:
-                    print(f"  ERROR: Failed to evaluate checkpoint at step {step}: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    continue
-
-            # Finish eval run after all checkpoints (if we initialized one)
-            if eval_run_initialized:
-                print(f"\nFinishing eval run")
-                wandb.finish()
+        if parallel_mode:
+            _run_parallel_evaluation(runs, configs)
+        else:
+            _run_sequential_evaluation(runs, configs)
 
         print(f"\n{'=' * 80}")
         print("Evaluation complete!")
