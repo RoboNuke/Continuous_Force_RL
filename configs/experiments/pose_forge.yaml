@@ -45,6 +45,9 @@ environment:
     fixed_asset_pos: [0.001, 0.001, 0.001]  # 1mm position noise (default from IsaacLab)
     ee_pos: [0.0025, 0.0025, 0.0025]
     force_torque: [1.0, 1.0, 1.0, 0.2, 0.2, 0.2]  # Force (N) and Torque (Nm) noise - applied per step
+
+  ctrl:
+    ema_mode: 'wrench'
     
 #agent:
 #  policy_learning_rate: 5.0e-4
