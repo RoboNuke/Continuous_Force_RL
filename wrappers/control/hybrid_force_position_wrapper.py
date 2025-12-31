@@ -416,10 +416,6 @@ class HybridForcePositionWrapper(gym.Wrapper):
                 self.unwrapped._reset_buffers(env_ids)
             self._reset_ema_actions(env_ids)
 
-        # Store previous actions for backward compatibility
-        if hasattr(self.unwrapped, 'actions'):
-            self.unwrapped.prev_action = self.unwrapped.actions.clone()
-
         # Call original pre_physics_step to maintain wrapper chain
         # (allows ForceTorqueWrapper and other wrappers to execute)
         # Base env will apply EMA, but we override it below for hybrid control
@@ -433,12 +429,12 @@ class HybridForcePositionWrapper(gym.Wrapper):
         if self.use_ground_truth_selection:
             modified_action[:, :self.force_size] = self.unwrapped.in_contact[:, :self.force_size].float().detach()
 
-        # Override base env's EMA - hybrid control does its own EMA on actions
-        # Use modified action for storage
-        self.unwrapped.actions = modified_action.clone().to(self.device)
-
         # Step 1: Apply EMA to modified actions
         self._apply_ema_to_actions(modified_action)
+
+        # Store smoothed actions for observation consistency with base factory
+        # Observation wrappers use self.unwrapped.actions.clone() for prev_actions
+        self.unwrapped.actions = self.ema_actions.clone()
 
         # Step 2: Compute control targets from current state + EMA actions
         self._compute_control_targets()

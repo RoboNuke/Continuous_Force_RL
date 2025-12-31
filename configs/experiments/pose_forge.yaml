@@ -11,11 +11,26 @@ primary:
   break_forces: [100000]  # Break force conditions (-1 = unbreakable)
 
 # Model configuration for hybrid agent
+#model:
+#  use_hybrid_agent: false
+# Model configuration for hybrid agent
 model:
-  use_hybrid_agent: false
+  use_hybrid_agent: true
+  hybrid_agent:
+    force_init_std: 0.1 # implies a 96% range [-2.5, 2.5] 
 
 # Enable hybrid control wrapper and related systems
 wrappers:
+  # Enable hybrid control wrapper
+  hybrid_control:
+    enabled: true
+    reward_type: "none"
+    use_ground_truth_selection: false
+    
+  pose_contact_logging:
+    enabled: false
+  # Enable hybrid control wrapper and related systems
+  #wrappers:
 
   force_reward:
     enabled: false
