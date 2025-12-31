@@ -1,0 +1,45 @@
+# Hybrid Agent Control Experiment Configuration 
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+
+primary:
+  agents_per_break_force: 5 # Number of agents per break force condition
+  num_envs_per_agent: 256   # Environments per individual agent
+  max_steps: 5030400 #10000128 #3000064 #25000192
+
+# Model configuration for hybrid agent
+model:
+  use_hybrid_agent: true
+  hybrid_agent:
+    force_init_std: 0.1 # implies a 96% range [-2.5, 2.5] 
+
+# Enable hybrid control wrapper and related systems
+wrappers:
+  # Enable hybrid control wrapper
+  hybrid_control:
+    enabled: true
+    reward_type: "none"
+    use_ground_truth_selection: false
+    
+  pose_contact_logging:
+    enabled: false
+
+agent:
+  supervised_selection_loss_weight: 1.0
+    
+environment:
+  ctrl:
+    apply_ema_force: true
+    no_sel_ema: true
+    force_action_bounds: [25.0, 25.0, 25.0] #
+    torque_action_bounds: [0.5, 0.5, 0.5]
+    force_action_threshold: [2.0, 2.0, 2.0] #
+    torque_action_threshold: [0.1, 0.1, 0.1]
+    default_task_force_gains: [1.75, 1.75, 1.75, 0.001, 0.001, 0.001]
+
+# Experiment metadata
+experiment:
+  name: &exp_name "LCLoP_fGain_175"
+  tags: ['medFixedNoise','ft_noise','ee_pos_noise']
+  group: *exp_name
