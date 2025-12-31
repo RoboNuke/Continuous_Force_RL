@@ -121,6 +121,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
         self.use_delta_force = getattr(self.ctrl_cfg, 'use_delta_force', False)
         self.async_z_bounds = self.ctrl_cfg.async_z_force_bounds
         self.apply_ema_force = self.ctrl_cfg.apply_ema_force
+        self.ema_mode = getattr(self.ctrl_cfg, 'ema_mode', 'action')  # 'action' or 'wrench'
 
         # PID force control flags
         self.enable_force_derivative = getattr(self.ctrl_cfg, 'enable_force_derivative', False)
@@ -159,6 +160,9 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         # Task wrench (commanded wrench to robot, stored for external access/plotting)
         self.task_wrench = torch.zeros((self.num_envs, 6), device=self.device)
+
+        # EMA-filtered task wrench (for wrench EMA mode)
+        self.ema_task_wrench = torch.zeros((self.num_envs, 6), device=self.device)
 
         # Integral state for force control (accumulates force error)
         self.force_integral_error = torch.zeros((self.num_envs, 6), device=self.device)
@@ -481,6 +485,9 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Reset integral state on environment reset
         self.force_integral_error[env_ids] = 0.0
 
+        # Reset wrench EMA state on environment reset
+        self.ema_task_wrench[env_ids] = 0.0
+
         # Reset per-step tracking states
         if self._first_step_set:
             # Reset to current state values for reset environments
@@ -501,7 +508,14 @@ class HybridForcePositionWrapper(gym.Wrapper):
             self.force_integral_error[env_changed] = 0.0
 
     def _apply_ema_to_actions(self, action):
-        """Apply EMA to actions, with special handling for selection terms."""
+        """Apply EMA to actions, with special handling for selection terms.
+
+        In 'wrench' mode, EMA is applied to all actions for observations,
+        but raw actions are used for control (wrench EMA happens later).
+        """
+        # When using wrench EMA, ensure all actions get EMA'd for observations
+        apply_ema_force_for_obs = self.apply_ema_force or (self.ema_mode == 'wrench')
+
         # Selection actions (handle no_sel_ema flag)
         sel_actions = action[:, :self.force_size]
         if self.no_sel_ema:
@@ -514,7 +528,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         # Position, rotation, and force actions (combined into one operation)
         # All use the same EMA factor, so we can apply it in one go
-        if self.apply_ema_force:
+        if apply_ema_force_for_obs:
             # apply ema to both force and pose commands
             pose_force_start = self.force_size
             pose_force_end = 2 * self.force_size + 6
@@ -529,6 +543,13 @@ class HybridForcePositionWrapper(gym.Wrapper):
             (1 - self.ema_factor) * self.ema_actions[:, pose_force_start:pose_force_end]
         )
 
+        # Store which actions to use for control
+        if self.ema_mode == 'wrench':
+            # Use raw actions for control, EMA'd actions only for observations
+            self.control_actions = action.clone()
+        else:
+            # Use EMA'd actions for control (current behavior)
+            self.control_actions = self.ema_actions
 
         # Log raw network outputs
         if hasattr(self.unwrapped, 'extras'):
@@ -634,7 +655,8 @@ class HybridForcePositionWrapper(gym.Wrapper):
                 self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos RZ summed_total'] = case_no_contact_pos[:, 5]
 
         # 2. Position target (Isaac Lab style: current_pos + scaled_action)
-        pos_actions = self.ema_actions[:, self.force_size:self.force_size+3] * self.unwrapped.pos_threshold
+        # Use control_actions (raw in wrench mode, EMA'd in action mode)
+        pos_actions = self.control_actions[:, self.force_size:self.force_size+3] * self.unwrapped.pos_threshold
         pos_target = self.unwrapped.fingertip_midpoint_pos + pos_actions
 
         # Apply bounds constraint
@@ -653,7 +675,8 @@ class HybridForcePositionWrapper(gym.Wrapper):
             self.unwrapped.extras['to_log']['Control Target / Pos Z Goal'] = torch.abs(pos_goal[:, 2])
 
         # 3. Rotation target (Isaac Lab style)
-        rot_actions = self.ema_actions[:, self.force_size+3:self.force_size+6]
+        # Use control_actions (raw in wrench mode, EMA'd in action mode)
+        rot_actions = self.control_actions[:, self.force_size+3:self.force_size+6]
 
         # Handle unidirectional rotation if configured
         if getattr(self.unwrapped.cfg_task, 'unidirectional_rot', False):
@@ -686,7 +709,8 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Two modes controlled by use_delta_force config:
         # - Delta mode (use_delta_force=True): target = action * threshold + current_force
         # - Absolute mode (use_delta_force=False): target = action * bounds
-        force_actions = self.ema_actions[:, self.force_size+6:2*self.force_size+6]
+        # Use control_actions (raw in wrench mode, EMA'd in action mode)
+        force_actions = self.control_actions[:, self.force_size+6:2*self.force_size+6]
 
         self.target_force_for_control = torch.zeros((self.num_envs, 6), device=self.device)
 
@@ -1001,6 +1025,11 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         # Combine wrenches using filtered selection matrix
         task_wrench = (1 - self.sel_matrix) * pose_wrench + self.sel_matrix * force_wrench
+
+        # Apply wrench EMA if enabled (before bounds constraint)
+        if self.ema_mode == 'wrench':
+            task_wrench = self.ema_factor * task_wrench + (1 - self.ema_factor) * self.ema_task_wrench
+            self.ema_task_wrench = task_wrench.clone()
 
         # Apply bounds constraint to final wrench - prevent motion outside boundaries
         delta_pos = self.unwrapped.fingertip_midpoint_pos - self.unwrapped.fixed_pos_action_frame

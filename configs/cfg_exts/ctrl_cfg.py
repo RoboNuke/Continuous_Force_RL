@@ -58,7 +58,11 @@ class ExtendedCtrlCfg(CtrlCfg):
 
     apply_ema_force: bool = True
     """When true ema is applied to pose and force commands, when false only to pose"""
-    
+
+    ema_mode: Literal["action", "wrench"] = "action"
+    """EMA mode: 'action' applies EMA to actions before control targets,
+    'wrench' applies EMA to final task wrench after combining pose/force wrenches"""
+
     # Force PID control flags
     enable_force_derivative: bool = False
     """Enable derivative (D) term in force control. D gains derived from Kp (2*sqrt(Kp))."""
