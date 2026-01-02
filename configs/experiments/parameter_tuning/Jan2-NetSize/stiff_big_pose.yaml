@@ -34,6 +34,6 @@ environment:
     
 # Experiment metadata
 experiment:
-  name: "pose_big_stiff"
+  name: &exp_name "pose_big_stiff"
   tags: ['medFixedNoise','ft_noise','ee_pos_noise','base_set']
   group: *exp_name
