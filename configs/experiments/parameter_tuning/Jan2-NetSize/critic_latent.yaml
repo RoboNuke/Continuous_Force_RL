@@ -6,7 +6,7 @@ base_config: "configs/base/PiH_base.yaml"
 primary:
   agents_per_break_force: 5 # Number of agents per break force condition
   num_envs_per_agent: 256   # Environments per individual agent
-  max_steps: 5030400 #10000128 #3000064 #25000192
+  max_steps: 10000128 #3000064 #25000192
 
 # Model configuration for hybrid agent
 model:
@@ -20,13 +20,13 @@ model:
   
   # Actor architecture (SimBa policy network)
   actor:
-    n: 2  # Number of SimBa layers
+    n: 1  # Number of SimBa layers
     latent_size: 512  # Hidden dimension
 
   # Critic architecture (SimBa value network)
   critic:
-    n: 3  # Number of SimBa layers
-    latent_size: 1024  # Hidden dimension
+    n: 4  # Number of SimBa layers
+    latent_size: 2048  # Hidden dimension
 
 # Enable hybrid control wrapper and related systems
 wrappers:
@@ -46,13 +46,21 @@ environment:
   ctrl:
     apply_ema_force: true
     no_sel_ema: true
-    force_action_bounds: [25.0, 25.0, 25.0] #
-    torque_action_bounds: [0.5, 0.5, 0.5]
-    force_action_threshold: [2.0, 2.0, 2.0] #
-    torque_action_threshold: [0.1, 0.1, 0.1]
+    async_z_force_bounds: true
+
+    enable_force_derivative: false  # Enable D term (velocity damping) in force control
+
+    force_action_bounds: [20.0, 20.0, 20.0]
+
+    default_task_prop_gains: [565.0, 565.0, 565.0, 28.0, 28.0, 28.0]
+    default_task_force_gains: [0.75, 0.75, 0.75, 0.001, 0.001, 0.001]
+
+    enable_force_integral: true    # Enable I term in force control
+    default_task_force_integ_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]  # Ki gains
+    force_integral_clamp: 50.0      # Anti-windup clamp for integral term
 
 # Experiment metadata
 experiment:
-  name: &exp_name "LCLoP_policy_2-512"
+  name: &exp_name "LCLoP_critic_latent_stiff"
   tags: ['medFixedNoise','ft_noise','ee_pos_noise']
   group: *exp_name
