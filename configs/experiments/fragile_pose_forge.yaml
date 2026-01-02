@@ -67,6 +67,8 @@ environment:
 #  #learning_epochs: 1
 
 agent:
+  supervised_selection_loss_weight: 1.0
+agent:
   # Core identification
   disable_progressbar: false
   #learning_epochs: 1
