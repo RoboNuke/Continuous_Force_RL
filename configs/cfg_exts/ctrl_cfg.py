@@ -67,6 +67,9 @@ class ExtendedCtrlCfg(CtrlCfg):
     enable_force_derivative: bool = False
     """Enable derivative (D) term in force control. D gains derived from Kp (2*sqrt(Kp))."""
 
+    force_deriv_scale: float = 1.0
+    """Scale factor for auto-calculated derivative gains. kd = force_deriv_scale * 2 * sqrt(kp)."""
+
     enable_force_integral: bool = False
     """Enable integral (I) term in force control."""
 

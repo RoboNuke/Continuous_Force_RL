@@ -167,8 +167,16 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Integral state for force control (accumulates force error)
         self.force_integral_error = torch.zeros((self.num_envs, 6), device=self.device)
 
+        # Previous force error for derivative calculation
+        self._prev_force_error = torch.zeros((self.num_envs, 6), device=self.device)
+        # Flag to track if derivative needs initialization (set prev_error = current_error on first step)
+        self._derivative_needs_init = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
+
         # Track previous contact state for integral reset on contact change
         self._prev_contact_state = None
+
+        # Track previous selection matrix for detecting mode switches (per-axis)
+        self._prev_sel_matrix = torch.zeros((self.num_envs, 6), device=self.device)
 
         # Note: Contact detection (active_force) has been moved to ForceTorqueWrapper
         # Access via self.unwrapped.in_contact instead
@@ -201,6 +209,21 @@ class HybridForcePositionWrapper(gym.Wrapper):
                 self.ki[:, 3:] = 0.0
         else:
             self.ki = None
+
+        # Initialize derivative gains if enabled (auto-calculated for critical damping)
+        if self.enable_force_derivative:
+            # kd = force_deriv_scale * 2 * sqrt(kp) for critical damping
+            self.force_deriv_scale = getattr(self.ctrl_cfg, 'force_deriv_scale', 1.0)
+            self.kd = self.force_deriv_scale * 2.0 * torch.sqrt(self.kp)
+            # Zero out torque derivative gains if not controlling torques
+            if not ctrl_torque:
+                self.kd[:, 3:] = 0.0
+            # print(f"[DEBUG] Force derivative control enabled")
+            # print(f"[DEBUG]   kp (force gains): {self.kp[0, :3].tolist()}")
+            # print(f"[DEBUG]   force_deriv_scale: {self.force_deriv_scale}")
+            # print(f"[DEBUG]   kd (= scale * 2*sqrt(kp)): {self.kd[0, :3].tolist()}")
+        else:
+            self.kd = None
 
         # Initialize threshold and bounds as class variables (per-environment tensors)
         # These are independent of base env to keep wrapper self-contained
@@ -403,15 +426,15 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
     def _wrapped_pre_physics_step(self, action):
         """Process actions through EMA->compute targets->control flow (Isaac Lab style)."""
-        # Check for contact change from previous step and reset integral if needed
-        # This compares prev contact (stored before last physics step) with current contact (after last physics step)
-        if self.enable_force_integral and self._prev_contact_state is not None and hasattr(self.unwrapped, 'in_contact'):
-            curr_contact = self.unwrapped.in_contact[:, :self.force_size]
-            self._reset_integral_on_contact_change(self._prev_contact_state, curr_contact)
+        # DISABLED: Contact-based reset - now using selection-based reset only
+        # The integral/derivative now resets when an axis switches from position to force control
+        # if self.enable_force_integral and self._prev_contact_state is not None and hasattr(self.unwrapped, 'in_contact'):
+        #     curr_contact = self.unwrapped.in_contact[:, :self.force_size]
+        #     self._reset_integral_on_contact_change(self._prev_contact_state, curr_contact)
 
-        # Store current contact state for next step's comparison
-        if self.enable_force_integral and hasattr(self.unwrapped, 'in_contact'):
-            self._prev_contact_state = self.unwrapped.in_contact[:, :self.force_size].clone()
+        # DISABLED: No longer tracking contact state for resets
+        # if self.enable_force_integral and hasattr(self.unwrapped, 'in_contact'):
+        #     self._prev_contact_state = self.unwrapped.in_contact[:, :self.force_size].clone()
 
         # Handle reset environments first
         env_ids = self.unwrapped.reset_buf.nonzero(as_tuple=False).squeeze(-1)
@@ -485,6 +508,12 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Reset integral state on environment reset
         self.force_integral_error[env_ids] = 0.0
 
+        # Mark derivative as needing initialization on next step (will set prev_error = current_error)
+        self._derivative_needs_init[env_ids] = True
+
+        # Reset previous selection matrix (so first step doesn't trigger mode-switch logic)
+        self._prev_sel_matrix[env_ids] = 0.0
+
         # Reset wrench EMA state on environment reset
         self.ema_task_wrench[env_ids] = 0.0
 
@@ -496,8 +525,8 @@ class HybridForcePositionWrapper(gym.Wrapper):
             self._prev_step_force[env_ids] = self.robot_force_torque[env_ids, :3]
 
     def _reset_integral_on_contact_change(self, prev_contact, curr_contact):
-        """Reset integral when contact state changes (anti-windup protection)."""
-        if not self.enable_force_integral:
+        """Reset integral and derivative state when contact state changes (anti-windup protection)."""
+        if not self.enable_force_integral and not self.enable_force_derivative:
             return
 
         # Check each axis for contact state change
@@ -505,7 +534,11 @@ class HybridForcePositionWrapper(gym.Wrapper):
         # Reset any env where any axis changed contact state
         env_changed = contact_changed.any(dim=1)
         if env_changed.any():
-            self.force_integral_error[env_changed] = 0.0
+            if self.enable_force_integral:
+                self.force_integral_error[env_changed] = 0.0
+            if self.enable_force_derivative:
+                # Mark derivative as needing re-initialization on contact change
+                self._derivative_needs_init[env_changed] = True
 
     def _apply_ema_to_actions(self, action):
         """Apply EMA to actions, with special handling for selection terms.
@@ -745,16 +778,35 @@ class HybridForcePositionWrapper(gym.Wrapper):
                 self.target_force_for_control[:, 3:] = force_actions[:, 3:] * self.torque_bounds
 
         # 5. Update integral state if enabled (for PID force control)
+        # Only accumulate for axes in force control mode, reset when switching to force control
         if self.enable_force_integral:
             force_error = self.target_force_for_control - self.robot_force_torque
-            # Accumulate error (will be scaled by Ki in wrench computation)
-            self.force_integral_error += force_error
+
+            # Mask: only accumulate for axes in force control (sel_matrix > 0.5)
+            force_control_mask = self.sel_matrix > 0.5
+
+            # Detect axes that just switched to force control (were position, now force)
+            just_switched_to_force = (self._prev_sel_matrix <= 0.5) & (self.sel_matrix > 0.5)
+
+            # Reset integral for axes that just switched to force control
+            self.force_integral_error = torch.where(just_switched_to_force, 0.0, self.force_integral_error)
+
+            # Only accumulate error for axes in force control
+            self.force_integral_error = torch.where(
+                force_control_mask,
+                self.force_integral_error + force_error,
+                self.force_integral_error  # Keep unchanged for position control axes
+            )
+
             # Anti-windup clamping
             self.force_integral_error = torch.clamp(
                 self.force_integral_error,
                 -self.force_integral_clamp,
                 self.force_integral_clamp
             )
+
+        # 6. Update previous selection matrix for next step's mode-switch detection
+        self._prev_sel_matrix = self.sel_matrix.clone()
 
         # Log force goal norm
         if hasattr(self.unwrapped, 'extras'):
@@ -949,9 +1001,23 @@ class HybridForcePositionWrapper(gym.Wrapper):
             ctrl_target_fingertip_midpoint_pos=self.unwrapped.ctrl_target_fingertip_midpoint_pos,
             ctrl_target_fingertip_midpoint_quat=self.unwrapped.ctrl_target_fingertip_midpoint_quat,
             task_prop_gains=self.unwrapped.task_prop_gains,
-            task_deriv_gains=self.unwrapped.task_deriv_gains,  
+            task_deriv_gains=self.unwrapped.task_deriv_gains,
             device=self.unwrapped.device
         )
+
+        # Initialize derivative state on first step (set prev_error = current_error to avoid spike)
+        if self.enable_force_derivative and self._derivative_needs_init.any():
+            current_force_error = self.target_force_for_control - self.robot_force_torque
+            self._prev_force_error[self._derivative_needs_init] = current_force_error[self._derivative_needs_init]
+            self._derivative_needs_init[:] = False
+
+        # Initialize derivative for axes that just switched to force control (avoid spike)
+        if self.enable_force_derivative:
+            just_switched_to_force = (self._prev_sel_matrix <= 0.5) & (self.sel_matrix > 0.5)
+            if just_switched_to_force.any():
+                current_force_error = self.target_force_for_control - self.robot_force_torque
+                # Set prev_error = current_error for newly switched axes to avoid derivative spike
+                self._prev_force_error = torch.where(just_switched_to_force, current_force_error, self._prev_force_error)
 
         # Compute force wrench using filtered targets (with optional PID control)
         force_wrench = compute_force_task_wrench(
@@ -962,14 +1028,23 @@ class HybridForcePositionWrapper(gym.Wrapper):
             fingertip_midpoint_angvel=self.unwrapped.fingertip_midpoint_angvel,
             ctrl_target_force=self.target_force_for_control,
             task_gains=self.kp,
-            task_deriv_gains=self.unwrapped.task_deriv_gains,
+            task_deriv_gains=self.kd,  # Use auto-calculated force derivative gains
             device=self.unwrapped.device,
             # PID control parameters
             task_integ_gains=self.ki if self.enable_force_integral else None,
             force_integral_error=self.force_integral_error if self.enable_force_integral else None,
+            prev_force_error=self._prev_force_error if self.enable_force_derivative else None,
+            physics_dt=self.unwrapped.physics_dt,
             enable_derivative=self.enable_force_derivative,
             enable_integral=self.enable_force_integral,
         )
+
+        # Update previous force error for derivative calculation (must happen after wrench computation)
+        # Only update for axes in force control mode to avoid accumulating stale errors
+        if self.enable_force_derivative:
+            current_force_error = self.target_force_for_control - self.robot_force_torque
+            force_control_mask = self.sel_matrix > 0.5
+            self._prev_force_error = torch.where(force_control_mask, current_force_error, self._prev_force_error)
 
         # Log active wrench magnitudes based on control mode, aggregated per agent
         # Only log once per step (first apply_action call)

@@ -20,7 +20,7 @@ wrappers:
     
 
   manual_control:
-    enabled: true
+    enabled: false
 
   factory_metrics:
     enabled: true
@@ -81,18 +81,27 @@ environment:
 
     
   ctrl:
-    force_action_bounds: [50.0, 50.0, 50.0]
+    async_z_force_bounds: true
+    enable_force_derivative: false  # Enable D term (velocity damping) in force control
+
+    force_deriv_scale: 0.25
+    force_action_bounds: [20.0, 20.0, 20.0]
     torque_action_bounds: [0.5, 0.5, 0.5]
     force_action_threshold: [10.0, 10.0, 10.0]
     torque_action_threshold: [0.1, 0.1, 0.1]
+    #default_task_prop_gains: [565.0, 565.0, 565.0, 28.0, 28.0, 28.0]
     
-    default_task_prop_gains: [600, 600, 600, 30, 30, 30]
-    default_task_force_gains: [2.0, 2.0, 2.0, 0.001, 0.001, 0.001]
-
-    #default_task_force_gains: [0.8, 0.8, 0.8, 0.001, 0.001, 0.001]
+    #default_task_prop_gains: [6000, 6000, 6000, 30, 30, 30]
+    default_task_force_gains: [0.75, 0.75, 0.75, 0.001, 0.001, 0.001]
+    #default_task_force_gains: [0.5, 0.5, 0.5, 0.001, 0.001, 0.001]
+    #default_task_force_gains: [0.15, 0.15, 0.15, 0.001, 0.001, 0.001]
     #default_task_prop_gains: [250, 250, 250, 30, 30, 30]
     ema_factor: 1.0  # 1.0 = no smoothing, use raw actions directly
     use_delta_force: false
+
+    enable_force_integral: true    # Enable I term in force control
+    default_task_force_integ_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]  # Ki gains
+    force_integral_clamp: 50.0      # Anti-windup clamp for integral term
 
   # No observation noise for tuning
   obs_rand:

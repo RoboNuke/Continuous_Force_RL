@@ -83,6 +83,8 @@ def compute_force_task_wrench(
     # PID control parameters (optional)
     task_integ_gains=None,
     force_integral_error=None,
+    prev_force_error=None,
+    physics_dt=None,
     enable_derivative=False,
     enable_integral=False,
 ):
@@ -92,24 +94,42 @@ def compute_force_task_wrench(
         cfg: Environment configuration
         dof_pos: Joint positions
         eef_force: End-effector force/torque measurements
-        fingertip_midpoint_linvel: Fingertip linear velocity
-        fingertip_midpoint_angvel: Fingertip angular velocity
+        fingertip_midpoint_linvel: Fingertip linear velocity (unused, kept for API compatibility)
+        fingertip_midpoint_angvel: Fingertip angular velocity (unused, kept for API compatibility)
         ctrl_target_force: Target force/torque
         task_gains: Proportional gains (Kp)
-        task_deriv_gains: Derivative gains (Kd) - derived from Kp as 2*sqrt(Kp)
+        task_deriv_gains: Derivative gains (Kd) - auto-calculated as 2*sqrt(Kp) for critical damping
         device: Torch device
         task_integ_gains: Integral gains (Ki) - optional, required if enable_integral=True
         force_integral_error: Accumulated integral error - optional, required if enable_integral=True
-        enable_derivative: Enable D term (velocity damping)
+        prev_force_error: Previous force error for derivative calculation
+        physics_dt: Physics timestep for derivative calculation
+        enable_derivative: Enable D term (true derivative of force error)
         enable_integral: Enable I term
     """
     # Proportional term (always active)
-    force_wrench = task_gains * (ctrl_target_force - eef_force)
+    force_error = ctrl_target_force - eef_force
+    force_wrench_p = task_gains * force_error
 
-    # Derivative term (velocity damping) - optional
-    if enable_derivative:
-        force_wrench[:, 0:3] += task_deriv_gains[:, 0:3] * (0.0 - fingertip_midpoint_linvel)
-        force_wrench[:, 3:6] += task_deriv_gains[:, 3:6] * (0.0 - fingertip_midpoint_angvel)
+    # Derivative term - uses error delta (not divided by dt to avoid noise amplification)
+    force_wrench_d = None
+    if enable_derivative and task_deriv_gains is not None and prev_force_error is not None:
+        force_error_delta = force_error - prev_force_error
+        force_wrench_d = task_deriv_gains * force_error_delta
+
+        # DEBUG: Print derivative control values (env 0, Z axis only to reduce spam)
+        # print(f"[DEBUG DERIV] target_force_z={ctrl_target_force[0, 2].item():.2f}, "
+        #       f"measured_force_z={eef_force[0, 2].item():.2f}, "
+        #       f"force_error_z={force_error[0, 2].item():.2f}")
+        # print(f"[DEBUG DERIV] prev_error_z={prev_force_error[0, 2].item():.2f}, "
+        #       f"error_delta_z={force_error_delta[0, 2].item():.2f}")
+        # print(f"[DEBUG DERIV] wrench_P_z={force_wrench_p[0, 2].item():.2f}, "
+        #       f"wrench_D_z={force_wrench_d[0, 2].item():.2f}, "
+        #       f"wrench_total_z={(force_wrench_p[0, 2] + force_wrench_d[0, 2]).item():.2f}")
+
+    force_wrench = force_wrench_p
+    if force_wrench_d is not None:
+        force_wrench = force_wrench + force_wrench_d
 
     # Integral term - optional
     if enable_integral and task_integ_gains is not None and force_integral_error is not None:
@@ -154,11 +174,11 @@ def compute_dof_torque_from_wrench(
     u_null = cfg.ctrl.kd_null * -dof_vel[:, :7] + cfg.ctrl.kp_null * distance_to_default_dof_pos
     u_null = arm_mass_matrix @ u_null.unsqueeze(-1)
     torque_null = (torch.eye(7, device=device).unsqueeze(0) - torch.transpose(jacobian, 1, 2) @ j_eef_inv) @ u_null
-    #print(f"Null-space torques: {torque_null[0].squeeze()}")
     dof_torque[:, 0:7] += torque_null.squeeze(-1)
 
     # Clamp torques to safe limits
     dof_torque = torch.clamp(dof_torque, min=-100.0, max=100.0)
+
     return dof_torque, task_wrench
 
 

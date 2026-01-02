@@ -15,7 +15,7 @@ primary:
 #  use_hybrid_agent: false
 # Model configuration for hybrid agent
 model:
-  use_hybrid_agent: false
+  use_hybrid_agent: true
   hybrid_agent:
     force_init_std: 0.1 # implies a 96% range [-2.5, 2.5] 
 
@@ -23,12 +23,12 @@ model:
 wrappers:
   # Enable hybrid control wrapper
   hybrid_control:
-    enabled: false
+    enabled: true
     reward_type: "none"
     use_ground_truth_selection: false
     
   pose_contact_logging:
-    enabled: true
+    enabled: false
   # Enable hybrid control wrapper and related systems
   #wrappers:
 
@@ -47,9 +47,19 @@ environment:
     force_torque: [1.0, 1.0, 1.0, 0.2, 0.2, 0.2]  # Force (N) and Torque (Nm) noise - applied per step
 
   ctrl:
-    ema_mode: 'wrench'
+    async_z_force_bounds: true
+    enable_force_derivative: false  # Enable D term (velocity damping) in force control
+
+    force_action_bounds: [20.0, 20.0, 20.0]
 
     default_task_prop_gains: [565.0, 565.0, 565.0, 28.0, 28.0, 28.0]
+    default_task_force_gains: [0.75, 0.75, 0.75, 0.001, 0.001, 0.001]
+
+    enable_force_integral: true    # Enable I term in force control
+    default_task_force_integ_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]  # Ki gains
+    force_integral_clamp: 50.0      # Anti-windup clamp for integral term
+
+
     
 #agent:
 #  policy_learning_rate: 5.0e-4
@@ -64,6 +74,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: "pose_stiff_forge"
+  name: "hybrid_stiff_forge"
   tags: ['pos_noise','low_pos_noise']
-  group: "pose_stiff_forge"
+  group: "hybrid_stiff_forge"

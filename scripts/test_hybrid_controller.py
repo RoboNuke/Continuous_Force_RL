@@ -284,7 +284,7 @@ def compute_position_action(env, target_x, target_y, target_z, configs):
     return action
 
 
-def compute_force_action(env, target_x, target_y, target_force_z, configs):
+def compute_force_action(env, target_x, target_y, target_force_z, configs, async_z_bounds=False):
     """
     Compute action with position control on X,Y and force control on Z.
 
@@ -294,6 +294,10 @@ def compute_force_action(env, target_x, target_y, target_force_z, configs):
     - Selection: 0 = position control, 1 = force control
     - Position: delta scaled by pos_threshold
     - Force: absolute targeting, action = target_force / force_bounds
+
+    Args:
+        async_z_bounds: If True, use inverse formula for asymmetric Z bounds
+            where action range [+1, -1] maps to target range [0, -bounds]
     """
     # Get current state
     current_pos = env.unwrapped.fingertip_midpoint_pos[0].cpu().numpy()
@@ -312,11 +316,19 @@ def compute_force_action(env, target_x, target_y, target_force_z, configs):
     dy = np.clip(dy, -1.0, 1.0)
 
     # Compute force action (for Z - force control)
-    # Absolute force targeting: target = action * force_bounds
-    # So: action = target / force_bounds
     # Note: Pushing down is negative Z force in the robot's force sensing frame
     desired_force_z = -abs(target_force_z)  # Always negative = pushing down
-    fz_action = desired_force_z / force_bounds
+
+    if async_z_bounds:
+        # Asymmetric Z bounds: wrapper applies target = (action * bounds - bounds) / 2
+        # Inverse formula: action = 2 * target / bounds + 1
+        # This maps action [+1, -1] to target [0, -bounds]
+        fz_action = 2 * desired_force_z / force_bounds + 1
+    else:
+        # Standard symmetric bounds: target = action * force_bounds
+        # So: action = target / force_bounds
+        fz_action = desired_force_z / force_bounds
+
     fz_action = np.clip(fz_action, -1.0, 1.0)
 
     # Build action tensor
@@ -354,7 +366,7 @@ def print_progress_bar(current_degrees, total_degrees, bar_length=40):
 
 
 def run_trajectory_test(env, configs, hybrid_wrapper, radius, target_force_z, num_loops, speed,
-                        stationary_save_path=None):
+                        stationary_save_path=None, async_z_bounds=False):
     """
     Run the circular trajectory test and collect data.
 
@@ -483,7 +495,7 @@ def run_trajectory_test(env, configs, hybrid_wrapper, radius, target_force_z, nu
     fingertip_target_y = peg_tip_target_y - fingertip_to_peg_tip_offset[1]
     fingertip_target_z = peg_tip_target_z - fingertip_to_peg_tip_offset[2]
 
-    position_threshold = 0.001  # Switch to force control when within 1mm
+    position_threshold = 0.0 #0.001  # Switch to force control when within 1mm
 
     print("\n" + "=" * 60)
     print("PHASE 2: APPROACHING")
@@ -509,7 +521,6 @@ def run_trajectory_test(env, configs, hybrid_wrapper, radius, target_force_z, nu
     print(f"[INFO]: Using scaled gains for approach (90% of default):")
     print(f"  Original prop gains: {original_prop_gains[0].tolist()}")
     print(f"  Scaled prop gains:   {scaled_prop_gains[0].tolist()}")
-    #print(f"  Scaled deriv gains:  {scaled_deriv_gains[0].tolist()}")
 
     # -----------------------------------------
     # Sub-phase 2a: Position control approach
@@ -590,14 +601,14 @@ def run_trajectory_test(env, configs, hybrid_wrapper, radius, target_force_z, nu
     # Debug: Print initial state before force control
     initial_force = env.unwrapped.robot_force_torque[0].cpu().numpy()
     print(f"[DEBUG 2b START]: Measured force = {initial_force[:3]}")
-    actual_target_force = -abs(target_force_z)
+    actual_target_force = -1.0 #abs(target_force_z)
     print(f"[DEBUG 2b START]: Target force Z = {actual_target_force:.1f}N")
     print(f"[DEBUG 2b START]: Force error = {actual_target_force - initial_force[2]:.2f}N")
 
     num_force_steps = 100
     for step in range(num_force_steps):
         # Use fingertip X/Y targets with force control on Z
-        action = compute_force_action(env, fingertip_target_x, fingertip_target_y, target_force_z, configs)
+        action = compute_force_action(env, fingertip_target_x, fingertip_target_y, actual_target_force, configs, async_z_bounds)
         obs, reward, terminated, truncated, info = env.step(action)
 
         if step % 20 == 0:
@@ -646,7 +657,7 @@ def run_trajectory_test(env, configs, hybrid_wrapper, radius, target_force_z, nu
 
     for step in range(stationary_steps):
         # Force control in Z, position control in XY at CURRENT position (no motion)
-        action = compute_force_action(env, hold_fingertip_x, hold_fingertip_y, target_force_z, configs)
+        action = compute_force_action(env, hold_fingertip_x, hold_fingertip_y, target_force_z, configs, async_z_bounds)
         obs, reward, terminated, truncated, info = env.step(action)
 
         # Collect data
@@ -683,63 +694,67 @@ def run_trajectory_test(env, configs, hybrid_wrapper, radius, target_force_z, nu
 
     print(f"\n[INFO]: PHASE 2 COMPLETE")
 
-    # =========================================
-    # PHASE 3: CIRCLE TRAVERSAL
-    # =========================================
-    print("\n" + "=" * 60)
-    print("PHASE 3: CIRCLE TRAVERSAL")
-    print(f"Goal: Complete {num_loops} loops while maintaining {target_force_z:.1f}N force")
-    print("=" * 60 + "\n")
-
-    # Pre-compute fingertip trajectory from peg tip trajectory
-    # fingertip_target = peg_tip_target - fingertip_to_peg_tip_offset
-    x_traj_fingertip = x_traj - fingertip_to_peg_tip_offset[0]
-    y_traj_fingertip = y_traj - fingertip_to_peg_tip_offset[1]
-
-    # Main trajectory loop
-    for step, (peg_target_x, peg_target_y, fingertip_x, fingertip_y, angle) in enumerate(
-            zip(x_traj, y_traj, x_traj_fingertip, y_traj_fingertip, angles)):
-        # Compute and apply action using fingertip targets
-        action = compute_force_action(env, fingertip_x, fingertip_y, target_force_z, configs)
-        obs, reward, terminated, truncated, info = env.step(action)
-
-        # Collect data - track peg tip position (what we actually care about)
-        current_peg_tip = env.unwrapped.held_base_pos[0].cpu().numpy()
-        measured_force_z = env.unwrapped.robot_force_torque[0, 2].cpu().item()
-        commanded_wrench_z = hybrid_wrapper.task_wrench[0, 2].cpu().item()
-
-        data['time'].append(step * dt)
-        data['measured_force_z'].append(measured_force_z)
-        data['target_force_z'].append(-abs(target_force_z))  # Negative for downward contact
-        data['commanded_wrench_z'].append(commanded_wrench_z)
-        data['position_x'].append(current_peg_tip[0])
-        data['position_y'].append(current_peg_tip[1])
-        data['position_z'].append(current_peg_tip[2])
-        data['target_x'].append(peg_target_x)
-        data['target_y'].append(peg_target_y)
-        data['angle'].append(angle)
-
-        # Progress bar update
-        current_degrees = np.degrees(angle)
-        print_progress_bar(current_degrees, total_degrees)
-
-        if terminated or truncated:
-            print(f"\n[WARNING]: Episode terminated at step {step}")
-            break
-
-    # Final newline after progress bar
-    print()
-    print(f"\n[INFO]: PHASE 3 COMPLETE - Collected {len(data['time'])} data points")
-
-    # Print summary statistics
-    measured_forces = np.array(data['measured_force_z'])
-    print(f"\n[INFO]: Force Statistics:")
-    print(f"  - Mean Force Z: {np.mean(measured_forces):.3f} N (target: {-abs(target_force_z):.1f} N)")
-    print(f"  - Std Force Z:  {np.std(measured_forces):.3f} N")
-    print(f"  - Min Force Z:  {np.min(measured_forces):.3f} N")
-    print(f"  - Max Force Z:  {np.max(measured_forces):.3f} N")
-
+    # Skip circle traversal - only run stationary tests
+    print("\n[INFO]: Skipping Phase 3 (circle traversal) - stationary test only")
     return data
+
+    # # =========================================
+    # # PHASE 3: CIRCLE TRAVERSAL (DISABLED)
+    # # =========================================
+    # print("\n" + "=" * 60)
+    # print("PHASE 3: CIRCLE TRAVERSAL")
+    # print(f"Goal: Complete {num_loops} loops while maintaining {target_force_z:.1f}N force")
+    # print("=" * 60 + "\n")
+    #
+    # # Pre-compute fingertip trajectory from peg tip trajectory
+    # # fingertip_target = peg_tip_target - fingertip_to_peg_tip_offset
+    # x_traj_fingertip = x_traj - fingertip_to_peg_tip_offset[0]
+    # y_traj_fingertip = y_traj - fingertip_to_peg_tip_offset[1]
+    #
+    # # Main trajectory loop
+    # for step, (peg_target_x, peg_target_y, fingertip_x, fingertip_y, angle) in enumerate(
+    #         zip(x_traj, y_traj, x_traj_fingertip, y_traj_fingertip, angles)):
+    #     # Compute and apply action using fingertip targets
+    #     action = compute_force_action(env, fingertip_x, fingertip_y, target_force_z, configs, async_z_bounds)
+    #     obs, reward, terminated, truncated, info = env.step(action)
+    #
+    #     # Collect data - track peg tip position (what we actually care about)
+    #     current_peg_tip = env.unwrapped.held_base_pos[0].cpu().numpy()
+    #     measured_force_z = env.unwrapped.robot_force_torque[0, 2].cpu().item()
+    #     commanded_wrench_z = hybrid_wrapper.task_wrench[0, 2].cpu().item()
+    #
+    #     data['time'].append(step * dt)
+    #     data['measured_force_z'].append(measured_force_z)
+    #     data['target_force_z'].append(-abs(target_force_z))  # Negative for downward contact
+    #     data['commanded_wrench_z'].append(commanded_wrench_z)
+    #     data['position_x'].append(current_peg_tip[0])
+    #     data['position_y'].append(current_peg_tip[1])
+    #     data['position_z'].append(current_peg_tip[2])
+    #     data['target_x'].append(peg_target_x)
+    #     data['target_y'].append(peg_target_y)
+    #     data['angle'].append(angle)
+    #
+    #     # Progress bar update
+    #     current_degrees = np.degrees(angle)
+    #     print_progress_bar(current_degrees, total_degrees)
+    #
+    #     if terminated or truncated:
+    #         print(f"\n[WARNING]: Episode terminated at step {step}")
+    #         break
+    #
+    # # Final newline after progress bar
+    # print()
+    # print(f"\n[INFO]: PHASE 3 COMPLETE - Collected {len(data['time'])} data points")
+    #
+    # # Print summary statistics
+    # measured_forces = np.array(data['measured_force_z'])
+    # print(f"\n[INFO]: Force Statistics:")
+    # print(f"  - Mean Force Z: {np.mean(measured_forces):.3f} N (target: {-abs(target_force_z):.1f} N)")
+    # print(f"  - Std Force Z:  {np.std(measured_forces):.3f} N")
+    # print(f"  - Min Force Z:  {np.min(measured_forces):.3f} N")
+    # print(f"  - Max Force Z:  {np.max(measured_forces):.3f} N")
+    #
+    # return data
 
 
 def plot_stationary_phase(data, target_force_z, save_path=None):
@@ -953,12 +968,16 @@ def main():
         headless=args_cli.headless
     )
 
+    # Extract async_z_bounds setting from hybrid wrapper
+    async_z_bounds = hybrid_wrapper.async_z_bounds
+    print(f"\n[INFO]: Async Z bounds: {async_z_bounds}")
+
     # Create output directory
     force_gain_x = hybrid_wrapper.kp[0, 0].item()
     force_gain_label = int(force_gain_x * 100)  # e.g., 0.1 -> 10 for cleaner filenames
     output_dir = f"scripts/test_hybrid_results/{args_cli.prefix}_{force_gain_label}"
     os.makedirs(output_dir, exist_ok=True)
-    print(f"\n[INFO]: Output directory: {output_dir}")
+    print(f"[INFO]: Output directory: {output_dir}")
     print(f"[INFO]: Force gain X: {force_gain_x} (label: {force_gain_label})")
 
     # Define save paths
@@ -975,13 +994,14 @@ def main():
             target_force_z=args_cli.force_z,
             num_loops=args_cli.loops,
             speed=args_cli.speed,
-            stationary_save_path=stationary_save_path
+            stationary_save_path=stationary_save_path,
+            async_z_bounds=async_z_bounds
         )
 
-        # Plot results
-        plot_results(data, args_cli.force_z, save_path=circle_save_path)
+        # Plot circle results (DISABLED - circle traversal skipped)
+        # plot_results(data, args_cli.force_z, save_path=circle_save_path)
 
-        # Display both plots at end (unless --no-display)
+        # Display plots at end (unless --no-display)
         if not args_cli.no_display:
             print("\n[INFO]: Displaying plots...")
             plt.show()
