@@ -2,7 +2,7 @@
 #SBATCH -J LAUNCHER_JOB		        # job name (will be overridden by sbatch -J)
 #SBATCH -A virl-grp	                # sponsored account name
 #SBATCH -p tiamat,gpu,dgxh,dgx2,eecs2     # partition names
-#SBATCH --time=0-01:59:59           # time limit: 1 day, 23 hours, 59 minutes
+#SBATCH --time=0-23:59:59           # time limit: 1 day, 23 hours, 59 minutes
 #SBATCH --gres=gpu:1                # number of GPUs to request
 #SBATCH --mem=32G                   # request 32 gigabytes memory
 #SBATCH -c 12                       # number of cores/threads per task

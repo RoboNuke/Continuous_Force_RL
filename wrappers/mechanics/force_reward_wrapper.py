@@ -480,7 +480,8 @@ class ForceRewardWrapper(gym.Wrapper):
     def _calculate_softplus(self) -> torch.Tensor:
         current_force = self.unwrapped.robot_force_torque[:, :3]
         force_magnitude = torch.linalg.norm(current_force, dim=1)
-        return torch.ones_like(force_magnitude) - torch.log(1+torch.exp(force_magnitude-self.desired_force))
+        # Use numerically stable softplus to avoid overflow when (force_magnitude - desired_force) is large
+        return torch.ones_like(force_magnitude) - torch.nn.functional.softplus(force_magnitude - self.desired_force)
 
     # Reward Function Implementations
     def _calculate_force_magnitude_reward(self) -> torch.Tensor:
