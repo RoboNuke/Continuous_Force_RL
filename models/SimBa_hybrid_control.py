@@ -259,8 +259,8 @@ class HybridGMMMixin(GaussianMixin):
         self.full_CLoP = full_CLoP
         
     def act(
-        self, 
-        inputs: Mapping[str, Union[torch.Tensor, Any]], 
+        self,
+        inputs: Mapping[str, Union[torch.Tensor, Any]],
         role: str = ""
     ) -> Tuple[torch.Tensor, Union[torch.Tensor, None], Mapping[str, Union[torch.Tensor, Any]]]:
         """Act stochastically in response to the state of the environment"""
@@ -270,10 +270,10 @@ class HybridGMMMixin(GaussianMixin):
         # clamp log standard deviations
         if self._g_clip_log_std:
             log_std = torch.clamp(log_std, self._g_log_std_min, self._g_log_std_max)
-            
+
         batch_size = mean_actions.shape[0]
         selection_probs = mean_actions[:,:self.force_size].float()
-        
+
         # Create independent Bernoulli for selections
         selection_dist = Independent(Bernoulli(probs=selection_probs), 1) #Bernoulli(probs=selection_probs) #
         # For GMM compatibility, still create categorical-style probs
@@ -283,12 +283,18 @@ class HybridGMMMixin(GaussianMixin):
         if self.force_size < 6:
             mix_probs[:, self.force_size:, 0] = 1.0
             mix_probs[:, self.force_size:, 1] = 0.0
-        
+
         # But pass the Bernoulli distribution to GMM instead of Categorical
         mix_dist = selection_dist  # Store the actual Bernoulli
         self._selection_probs = selection_probs  # Store for log_prob use
 
+        # Store the raw policy mean BEFORE scaling for logging
+        # These are the tanh'd outputs bounded to [-1, 1] for pos/rot/force components
+        # and sigmoid outputs [0, 1] for selections
+        outputs["policy_mean_unscaled"] = mean_actions.clone().detach()
 
+        # NOTE: mean1 is a VIEW of mean_actions, so *= modifies mean_actions in-place
+        # This is intentional for the Gaussian parameterization
         mean1 = mean_actions[:, self.force_size:self.force_size+6]
         mean1[:,:3] *= self.pos_scale            # (batch, 6)
         mean1[:,3:6] *= self.rot_scale
@@ -617,6 +623,9 @@ class HybridControlBlockSimBaActor(HybridControlSimBaActor):
 
     def create_net(self, actor_n, actor_latent, hybrid_agent_parameters, device):
         use_separate_heads = hybrid_agent_parameters['use_separate_heads']
+        # Track whether network applies activations internally (separate heads do)
+        self._network_applies_activations = use_separate_heads
+
         self.actor_mean = BlockSimBa(
             num_agents=self.num_agents,
             obs_dim=self.num_observations,
@@ -684,4 +693,26 @@ class HybridControlBlockSimBaActor(HybridControlSimBaActor):
         num_envs = inputs['states'].size()[0] // self.num_agents
         #print("Num envs:", num_envs)
         return self.actor_mean(inputs['states'][:,:self.num_observations], num_envs)
+
+    def compute(self, inputs, role):
+        zout = self.get_zout(inputs)
+        # first force_size are logits/probs, remaining is components
+        sels = zout[:, :self.force_size]
+        not_sels = zout[:, self.force_size:]
+
+        # When using separate heads, activations are already applied inside the network
+        # (BlockMLP applies sigmoid to selection heads, tanh to component heads)
+        # Skip double application to avoid compressing the output range
+        if self._network_applies_activations:
+            # Activations already applied by BlockSimBa's separate heads
+            final_sels = sels
+            final_not_sels = not_sels
+        else:
+            # Apply activations here (standard case without separate heads)
+            final_sels = self.selection_activation(sels)
+            final_not_sels = self.component_activation(not_sels)
+
+        action_mean = torch.cat([final_sels, final_not_sels], dim=-1)
+
+        return action_mean, self.get_logstds(action_mean), {}
     

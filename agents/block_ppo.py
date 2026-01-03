@@ -423,6 +423,49 @@ class BlockPPO(PPO):
         for memory in self.secondary_memories:
                 memory.add_samples( **tensors )
 
+    def act(self, states: torch.Tensor, timestep: int, timesteps: int) -> torch.Tensor:
+        """Override act to log raw policy mean outputs (before Gaussian sampling).
+
+        The policy outputs tanh-bounded means in [-1, 1] for position/rotation/force,
+        and sigmoid-bounded [0, 1] for selections. These are stored in
+        outputs["policy_mean_unscaled"] by HybridGMMMixin.act().
+        """
+        # Call parent act() which calls self.policy.act()
+        actions, log_prob, outputs = super().act(states, timestep, timesteps)
+
+        # Log raw policy mean if available (only for hybrid control policies)
+        if "policy_mean_unscaled" in outputs and hasattr(self.env, 'unwrapped'):
+            policy_mean = outputs["policy_mean_unscaled"]
+            extras = self.env.unwrapped.extras
+            if 'to_log' not in extras:
+                extras['to_log'] = {}
+
+            # Log selection mean (sigmoid output, bounded [0, 1])
+            sel_mean = policy_mean[:, :self.force_size]
+            extras['to_log']['Network Output / Raw Policy Mean Sel X'] = sel_mean[:, 0].clone()
+            extras['to_log']['Network Output / Raw Policy Mean Sel Y'] = sel_mean[:, 1].clone()
+            extras['to_log']['Network Output / Raw Policy Mean Sel Z'] = sel_mean[:, 2].clone()
+
+            # Log position mean (tanh output, bounded [-1, 1])
+            pos_mean = policy_mean[:, self.force_size:self.force_size+3]
+            extras['to_log']['Network Output / Raw Policy Mean Pos X'] = pos_mean[:, 0].clone()
+            extras['to_log']['Network Output / Raw Policy Mean Pos Y'] = pos_mean[:, 1].clone()
+            extras['to_log']['Network Output / Raw Policy Mean Pos Z'] = pos_mean[:, 2].clone()
+
+            # Log rotation mean (tanh output, bounded [-1, 1])
+            rot_mean = policy_mean[:, self.force_size+3:self.force_size+6]
+            extras['to_log']['Network Output / Raw Policy Mean Rot X'] = rot_mean[:, 0].clone()
+            extras['to_log']['Network Output / Raw Policy Mean Rot Y'] = rot_mean[:, 1].clone()
+            extras['to_log']['Network Output / Raw Policy Mean Rot Z'] = rot_mean[:, 2].clone()
+
+            # Log force mean (tanh output, bounded [-1, 1])
+            force_mean = policy_mean[:, self.force_size+6:2*self.force_size+6]
+            extras['to_log']['Network Output / Raw Policy Mean Force X'] = force_mean[:, 0].clone()
+            extras['to_log']['Network Output / Raw Policy Mean Force Y'] = force_mean[:, 1].clone()
+            extras['to_log']['Network Output / Raw Policy Mean Force Z'] = force_mean[:, 2].clone()
+
+        return actions, log_prob, outputs
+
     def record_transition(
         self,
         states: torch.Tensor,
