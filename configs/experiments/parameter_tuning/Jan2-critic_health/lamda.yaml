@@ -39,8 +39,8 @@ agent:
   policy_learning_rate: 1.0e-5
   critic_learning_rate: 1.0e-5
   value_update_ratio: 2
-  discount_factor: 0.98
-  lambda_: 0.95  # Note: underscore for Python compatibility
+  discount_factor: 0.95
+  lambda_: 0.98  # Note: underscore for Python compatibility
 
 # Experiment metadata
 experiment:
