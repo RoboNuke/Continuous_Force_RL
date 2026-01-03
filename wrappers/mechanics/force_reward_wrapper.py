@@ -176,6 +176,19 @@ class ForceRewardWrapper(gym.Wrapper):
         self.enable_square_vel = self.config.get('enable_square_vel', False)
         self.square_vel_weight = self.config.get('square_vel_weight', 1.0)
 
+        self.desired_force = self.config.get('ideal_force', 5.0)
+        # softmax
+        self.enable_softplus = self.config.get('enable_softplus', False)
+        self.softplus_weight = self.config.get('softplus_weight', 1.0)
+
+        # abs
+        self.enable_abs = self.config.get('enable_abs_target', False)
+        self.abs_weight = self.config.get('abs_target_weight', 1.0)
+
+        # forge style
+        self.enable_forge_style = self.config.get('enable_forge_style', False)
+        self.forge_weight = self.config.get('forge_style_weight', 1.0)
+
     def _init_state_management(self):
         """Initialize per-environment state variables for reward calculations."""
         # Contact detection state
@@ -378,6 +391,21 @@ class ForceRewardWrapper(gym.Wrapper):
             total_force_reward += square_vel_rew * self.square_vel_weight
             self.unwrapped.extras['logs_rew_square_vel_rew'] = square_vel_rew * self.square_vel_weight
 
+        if self.enable_softplus:
+            rew = self._calculate_softplus()
+            total_force_reward += rew * self.softplus_weight
+            self.unwrapped.extras['logs_rew_softplus_rew'] = rew * self.softplus_weight
+
+        if self.enable_abs:
+            rew = self._calculate_abs()
+            total_force_reward += rew * self.abs_weight
+            self.unwrapped.extras['logs_rew_abs_target_rew'] = rew * self.abs_weight
+
+        if self.enable_forge_style:
+            rew = self._calculate_forge_style()
+            total_force_reward += rew * self.forge_weight
+            self.unwrapped.extras['logs_rew_forge_style_rew'] = rew * self.forge_weight
+
         # Return combined rewards
         return base_rewards + total_force_reward
 
@@ -437,6 +465,22 @@ class ForceRewardWrapper(gym.Wrapper):
                 return torch.zeros((self.num_envs, 3), device=self.device)
         else:
             return torch.zeros((self.num_envs, 3), device=self.device)
+
+
+    def _calculate_forge_style(self) -> torch.Tensor:
+        current_force = self.unwrapped.robot_force_torque[:, :3]
+        force_magnitude = torch.linalg.norm(current_force, dim=1)
+        return torch.ones_like(force_magnitude) - torch.max(torch.zeros_like(force_magnitude), force_magnitude - self.desired_force)
+
+    def _calculate_abs(self) -> torch.Tensor:
+        current_force = self.unwrapped.robot_force_torque[:, :3]
+        force_magnitude = torch.linalg.norm(current_force, dim=1)
+        return torch.ones_like(force_magnitude) - torch.abs(force_magnitude - self.desired_force)
+
+    def _calculate_softplus(self) -> torch.Tensor:
+        current_force = self.unwrapped.robot_force_torque[:, :3]
+        force_magnitude = torch.linalg.norm(current_force, dim=1)
+        return torch.ones_like(force_magnitude) - torch.log(1+torch.exp(force_magnitude-self.desired_force))
 
     # Reward Function Implementations
     def _calculate_force_magnitude_reward(self) -> torch.Tensor:

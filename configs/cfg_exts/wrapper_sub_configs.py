@@ -144,6 +144,18 @@ class ForceRewardConfig:
     enable_square_vel: bool = False
     square_vel_weight: float = 1.0
 
+    # relative to desired force configs
+    ideal_force: float = 5.0
+
+    enable_softplus: bool = False
+    softplus_weight: float = 1.0
+
+    enable_abs_target: bool = False
+    abs_target_weight: float = 1.0
+
+    enable_forge_style: bool = False
+    forge_style_weight: float = 1.0
+
 
 
 
