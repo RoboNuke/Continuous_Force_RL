@@ -40,10 +40,10 @@ agent:
   critic_learning_rate: 1.0e-5
   value_update_ratio: 2
   discount_factor: 0.95
-  lambda_: 0.98  # Note: underscore for Python compatibility
+  lambda_: 0.90  # Note: underscore for Python compatibility
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_lambda98"
+  name: &exp_name "pose_lambda90"
   tags: []
   group: *exp_name

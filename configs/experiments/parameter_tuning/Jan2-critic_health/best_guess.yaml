@@ -35,7 +35,7 @@ environment:
 agent:
   supervised_selection_loss_weight: 1.0
 
-  learning_epochs: 4
+  learning_epochs: 2
   policy_learning_rate: 1.0e-5
   critic_learning_rate: 1.0e-4
   value_update_ratio: 8
@@ -44,6 +44,6 @@ agent:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_combined"
+  name: &exp_name "pose_2epochs"
   tags: []
   group: *exp_name
