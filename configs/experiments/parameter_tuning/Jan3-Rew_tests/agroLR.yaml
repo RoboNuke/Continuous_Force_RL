@@ -34,7 +34,7 @@ environment:
     pos_action_bounds: [0.05, 0.05, 0.05]
     rot_action_bounds: [1.0, 1.0, 1.0]
 
-    pos_action_threshold: [0.005, 0.005, 0.005]
+    pos_action_threshold: [0.0005, 0.0005, 0.0005]
     rot_action_threshold: [0.097, 0.097, 0.097]
 
     
@@ -88,6 +88,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_agroLR"
+  name: &exp_name "pose_agroLR_thresh0005"
   tags: []
   group: *exp_name
