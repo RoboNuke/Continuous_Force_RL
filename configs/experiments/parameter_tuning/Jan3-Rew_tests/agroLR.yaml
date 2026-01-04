@@ -78,7 +78,7 @@ wrappers:
     ideal_force: 5.0
 
     enable_softplus: true
-    softplus_weight: 0.5
+    softplus_weight: 1.0
 
     enable_abs_target: False
     abs_target_weight: 1.0
@@ -88,6 +88,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_agroLR_thresh02_std02"
+  name: &exp_name "pose_agroLR_thresh02_std02_sp05"
   tags: []
   group: *exp_name
