@@ -7,7 +7,7 @@ primary:
   agents_per_break_force: 5 # Number of agents per break force condition
   num_envs_per_agent: 256   # Environments per individual agent
   max_steps: 10000128  #3000064 #25000192
-  break_forces: [10]  # Break force conditions (-1 = unbreakable)
+  break_forces: [10000]  # Break force conditions (-1 = unbreakable)
 
 # Model configuration for hybrid agent
 model:
