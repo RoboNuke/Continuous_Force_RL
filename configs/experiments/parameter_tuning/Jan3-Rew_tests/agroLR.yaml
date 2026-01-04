@@ -34,7 +34,7 @@ environment:
     pos_action_bounds: [0.05, 0.05, 0.05]
     rot_action_bounds: [1.0, 1.0, 1.0]
 
-    pos_action_threshold: [0.02, 0.02, 0.02]
+    pos_action_threshold: [0.005, 0.005, 0.005]
     rot_action_threshold: [0.097, 0.097, 0.097]
 
     
@@ -57,7 +57,7 @@ wrappers:
   # Spawn height curriculum learning
   spawn_height_curriculum:
     # current default in line with IndustREAL baseline
-    enabled: true
+    enabled: false
     progress_threshold: 0.50         # Increase min_height when success rate >= this
     regress_threshold: 0.10          # Decrease min_height when success rate < this
     progress_height_delta: 0.005     # Increase min by 5mm when succeeding
@@ -78,6 +78,12 @@ wrappers:
     timeout_penalty: -20.0 # Penalty applied on timeout (max steps reached, default 0.0 = no penalty)
     # num_agents is computed from primary config automatically
 
+  # Efficient environment resetting
+  efficient_reset:
+    enabled: true
+    terminate_on_success: true  # If true, episodes terminate immediately upon success
+    success_bonus: 1.0  # Total reward on success (base env gives +1, wrapper adjusts to this total)
+    use_remaining_steps_bonus: false  # If true, bonus = max_episode_length - steps_taken (overrides success_bonus)
 
   force_reward:
     enabled: true
@@ -99,6 +105,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_curr_agroLR_thresh02_std02_sp005"
+  name: &exp_name "pose_agroLR_thresh005_std02_sp05_succEnd"
   tags: []
   group: *exp_name
