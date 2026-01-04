@@ -38,8 +38,8 @@ agent:
   supervised_selection_loss_weight: 1.0
 
   learning_epochs: 4
-  policy_learning_rate: 5.0e-5
-  critic_learning_rate: 1.0e-4
+  policy_learning_rate: 1.0e-5
+  critic_learning_rate: 1.0e-5
   value_update_ratio: 2
   discount_factor: 0.99
   lambda_: 0.95  # Note: underscore for Python compatibility
@@ -92,6 +92,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_curr_fasterLR_oldparams_lowishBounds"
+  name: &exp_name "pose_curr_oldparams_lowishBounds"
   tags: []
   group: *exp_name
