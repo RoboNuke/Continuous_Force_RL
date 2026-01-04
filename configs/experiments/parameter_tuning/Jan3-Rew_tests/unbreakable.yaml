@@ -30,7 +30,7 @@ environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
   ctrl:
     default_task_prop_gains: [565.0, 565.0, 565.0, 28.0, 28.0, 28.0]
-    pos_action_threshold: [0.005, 0.005, 0.005]
+    pos_action_threshold: [0.0025, 0.0025, 0.0025]
   obs_rand:
     fixed_asset_pos: [0.0025, 0.0025, 0.0025]  
    
@@ -49,7 +49,7 @@ wrappers:
   # Spawn height curriculum learning
   spawn_height_curriculum:
     # current default in line with IndustREAL baseline
-    enabled: true
+    enabled: false
     progress_threshold: 0.50         # Increase min_height when success rate >= this
     regress_threshold: 0.10          # Decrease min_height when success rate < this
     progress_height_delta: 0.005     # Increase min by 5mm when succeeding
@@ -71,6 +71,9 @@ wrappers:
     timeout_penalty: -20.0 # Penalty applied on timeout (max steps reached, default 0.0 = no penalty)
     # num_agents is computed from primary config automatically
 
+  efficient_reset:
+    enabled: true
+    terminate_on_success: true  # If true, episodes terminate immediately upon success
 
   force_reward:
     enabled: true
@@ -92,6 +95,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_curr_oldparams_lowishBounds"
+  name: &exp_name "pose_killSuc_oldparams_lowerBounds"
   tags: []
   group: *exp_name
