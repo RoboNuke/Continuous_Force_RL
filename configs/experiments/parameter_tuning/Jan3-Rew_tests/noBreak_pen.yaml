@@ -7,7 +7,7 @@ primary:
   agents_per_break_force: 5 # Number of agents per break force condition
   num_envs_per_agent: 256   # Environments per individual agent
   max_steps: 10000128  #3000064 #25000192
-  break_forces: [10]  # Break force conditions (-1 = unbreakable)
+  break_forces: [10000]  # Break force conditions (-1 = unbreakable)
 
 # Model configuration for hybrid agent
 model:
@@ -18,8 +18,8 @@ model:
   
   # Actor architecture (SimBa policy network)
   actor:
-    n: 2  # Number of SimBa layers
-    latent_size: 512  # Hidden dimension
+    n: 1  # Number of SimBa layers
+    latent_size: 256  # Hidden dimension
 
   # Critic architecture (SimBa value network)
   critic:
@@ -30,6 +30,14 @@ environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
   ctrl:
     default_task_prop_gains: [565.0, 565.0, 565.0, 28.0, 28.0, 28.0]
+
+    pos_action_bounds: [0.05, 0.05, 0.05]
+    rot_action_bounds: [1.0, 1.0, 1.0]
+
+    pos_action_threshold: [0.005, 0.005, 0.005]
+    rot_action_threshold: [0.097, 0.097, 0.097]
+
+    
   obs_rand:
     fixed_asset_pos: [0.0025, 0.0025, 0.0025]  
    
@@ -37,9 +45,9 @@ agent:
   supervised_selection_loss_weight: 1.0
 
   learning_epochs: 4
-  policy_learning_rate: 5.0e-5
+  policy_learning_rate: 5.0e-4
   critic_learning_rate: 1.0e-4
-  value_update_ratio: 6
+  value_update_ratio: 2
   discount_factor: 0.99
   lambda_: 0.95  # Note: underscore for Python compatibility
 
@@ -63,14 +71,14 @@ wrappers:
   force_reward:
     enabled: true
 
-    enable_contact_reward: false
+    enable_contact_reward: True
     contact_reward_weight: 2.0
 
     # relative to desired force configs
     ideal_force: 5.0
 
-    enable_softplus: true
-    softplus_weight: 0.1
+    enable_softplus: false
+    softplus_weight: 0.5
 
     enable_abs_target: False
     abs_target_weight: 1.0
@@ -80,6 +88,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_noBreakPen"
+  name: &exp_name "pose_agroLR_zConRew"
   tags: []
   group: *exp_name
