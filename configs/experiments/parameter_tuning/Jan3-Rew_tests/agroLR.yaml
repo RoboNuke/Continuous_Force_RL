@@ -88,6 +88,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_no-break_low-thresh"
+  name: &exp_name "pose_agroLR"
   tags: []
   group: *exp_name
