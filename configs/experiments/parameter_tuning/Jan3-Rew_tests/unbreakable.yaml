@@ -18,8 +18,8 @@ model:
   
   # Actor architecture (SimBa policy network)
   actor:
-    n: 2  # Number of SimBa layers
-    latent_size: 512  # Hidden dimension
+    n: 1  # Number of SimBa layers
+    latent_size: 256  # Hidden dimension
 
   # Critic architecture (SimBa value network)
   critic:
@@ -37,9 +37,9 @@ agent:
   supervised_selection_loss_weight: 1.0
 
   learning_epochs: 4
-  policy_learning_rate: 5.0e-5
-  critic_learning_rate: 1.0e-4
-  value_update_ratio: 6
+  policy_learning_rate: 1.0e-5
+  critic_learning_rate: 1.0e-5
+  value_update_ratio: 2
   discount_factor: 0.99
   lambda_: 0.95  # Note: underscore for Python compatibility
 
@@ -80,6 +80,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_unbreakable"
+  name: &exp_name "pose_unbreakable_oldparams"
   tags: []
   group: *exp_name
