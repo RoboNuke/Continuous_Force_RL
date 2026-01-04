@@ -30,7 +30,7 @@ environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
   ctrl:
     default_task_prop_gains: [565.0, 565.0, 565.0, 28.0, 28.0, 28.0]
-    pos_action_threshold: [0.0025, 0.0025, 0.0025]
+    pos_action_threshold: [0.005, 0.005, 0.005]
   obs_rand:
     fixed_asset_pos: [0.0025, 0.0025, 0.0025]  
    
@@ -92,6 +92,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_curr_fasterLR_oldparams_lowBounds"
+  name: &exp_name "pose_curr_fasterLR_oldparams_lowishBounds"
   tags: []
   group: *exp_name
