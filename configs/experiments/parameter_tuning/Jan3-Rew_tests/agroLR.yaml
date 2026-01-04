@@ -62,9 +62,9 @@ wrappers:
   factory_metrics:
     enabled: true
     publish_to_wandb: true
-    engagement_reward_scale: 60.0  # Scale for engagement rewards (default 1.0 = no change)
-    success_reward_scale: 40.0
-    timeout_penalty: -20.0 # Penalty applied on timeout (max steps reached, default 0.0 = no penalty)
+    engagement_reward_scale: 6.0  # Scale for engagement rewards (default 1.0 = no change)
+    success_reward_scale: 4.0
+    timeout_penalty: -2.0 # Penalty applied on timeout (max steps reached, default 0.0 = no penalty)
     # num_agents is computed from primary config automatically
 
 
@@ -88,6 +88,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_agroLR_thresh02_std02_sp005"
+  name: &exp_name "pose_agroLR_thresh02_std02_sp005_lowRew"
   tags: []
   group: *exp_name
