@@ -470,7 +470,8 @@ class ForceRewardWrapper(gym.Wrapper):
     def _calculate_forge_style(self) -> torch.Tensor:
         current_force = self.unwrapped.robot_force_torque[:, :3]
         force_magnitude = torch.linalg.norm(current_force, dim=1)
-        return torch.ones_like(force_magnitude) - torch.max(torch.zeros_like(force_magnitude), force_magnitude - self.desired_force)
+        raw = torch.ones_like(force_magnitude) - torch.max(torch.zeros_like(force_magnitude), force_magnitude - self.desired_force)
+        return torch.where(torch.any(self.in_contact, dim=-1), raw, torch.zeros_like(raw))
 
     def _calculate_abs(self) -> torch.Tensor:
         current_force = self.unwrapped.robot_force_torque[:, :3]
@@ -481,7 +482,8 @@ class ForceRewardWrapper(gym.Wrapper):
         current_force = self.unwrapped.robot_force_torque[:, :3]
         force_magnitude = torch.linalg.norm(current_force, dim=1)
         # Use numerically stable softplus to avoid overflow when (force_magnitude - desired_force) is large
-        return torch.ones_like(force_magnitude) - torch.nn.functional.softplus(force_magnitude - self.desired_force)
+        raw_softplus = torch.ones_like(force_magnitude) - torch.nn.functional.softplus(force_magnitude - self.desired_force)
+        return torch.where(torch.any(self.in_contact, dim=-1), raw_softplus, torch.zeros_like(raw_softplus))
 
     # Reward Function Implementations
     def _calculate_force_magnitude_reward(self) -> torch.Tensor:
