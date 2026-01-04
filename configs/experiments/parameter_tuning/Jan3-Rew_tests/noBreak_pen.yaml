@@ -52,6 +52,17 @@ agent:
   lambda_: 0.95  # Note: underscore for Python compatibility
 
 wrappers:
+
+  # Spawn height curriculum learning
+  spawn_height_curriculum:
+    # current default in line with IndustREAL baseline
+    enabled: true
+    progress_threshold: 0.50         # Increase min_height when success rate >= this
+    regress_threshold: 0.10          # Decrease min_height when success rate < this
+    progress_height_delta: 0.005     # Increase min by 5mm when succeeding
+    regression_height_delta: 0.003   # Decrease min by 3mmm when struggling
+    min_height: -0.011  
+
   # Fragile object behavior
   fragile_objects:
     enabled: true
@@ -88,6 +99,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_agroLR_zConRew"
+  name: &exp_name "pose_curr_agroLR_zConRew"
   tags: []
   group: *exp_name
