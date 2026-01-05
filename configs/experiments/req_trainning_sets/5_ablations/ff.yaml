@@ -34,10 +34,10 @@ agent:
 environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
-    fixed_asset_pos: [0.0075, 0.0075, 0.0075]  
+    fixed_asset_pos: [0.001, 0.001, 0.001]  
     
 # Experiment metadata
 experiment:
-  name: "ff_fullNoiseSet"
-  tags: ['full_noise_set','ft_noise','ee_pos_noise']
-  group: "ff_fullNoiseSet"
+  name: &exp_name "ablate_ff"
+  tags: ['exp_ablation']
+  group: *exp_name

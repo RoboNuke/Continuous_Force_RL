@@ -10,7 +10,7 @@ primary:
 
 # Model configuration for hybrid agent
 model:
-  use_hybrid_agent: true
+  use_hybrid_agent: false
   hybrid_agent:
     force_init_std: 0.1 # implies a 96% range [-2.5, 2.5] 
 
@@ -34,10 +34,10 @@ agent:
 environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
-    fixed_asset_pos: [0.0025, 0.0025, 0.0025]  
+    fixed_asset_pos: [0.001, 0.001, 0.001]  
     
 # Experiment metadata
 experiment:
-  name: "LCLoP_baseSet"
-  tags: ['medFixedNoise','ft_noise','ee_pos_noise','base_set']
-  group: "LCLoP_baseSet"
+  name: &exp_name "basic-hybrid_base-noise"
+  tags: ['exp_base-noise_position', 'low_noise']
+  group: *exp_name

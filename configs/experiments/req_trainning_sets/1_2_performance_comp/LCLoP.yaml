@@ -4,7 +4,7 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  agents_per_break_force: 10 # Number of agents per break force condition
+  agents_per_break_force: 5 # Number of agents per break force condition
   num_envs_per_agent: 256   # Environments per individual agent
   max_steps: 3000064 #25000192
 
@@ -24,16 +24,6 @@ wrappers:
     
   pose_contact_logging:
     enabled: false
-  
-  dynamics_randomization:
-    enabled: true
-
-    randomize_held_mass: true
-    held_mass_range: [0.5, 2.0]  # Scale factors
-
-    # Friction randomization (held asset only)
-    randomize_friction: true
-    friction_range: [0.5, 1.0]
 
 agent:
   supervised_selection_loss_weight: 1.0
@@ -48,6 +38,6 @@ environment:
     
 # Experiment metadata
 experiment:
-  name: "LCLoP_fullDynamics"
-  tags: ['full_dynamics','ft_noise','ee_pos_noise']
-  group: "LCLoP_fullDynamics"
+  name: &exp_name "LCLoP_perf-comp"
+  tags: ['exp_perf-comp']
+  group: *exp_name

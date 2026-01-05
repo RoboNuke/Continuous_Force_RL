@@ -20,13 +20,13 @@ wrappers:
   hybrid_control:
     enabled: true
     reward_type: "none"
-    use_ground_truth_selection: true
+    use_ground_truth_selection: false
     
   pose_contact_logging:
     enabled: false
 
 agent:
-  supervised_selection_loss_weight: 1.0
+  supervised_selection_loss_weight: 0.0
 #  policy_learning_rate: 5.0e-4
 #  critic_learning_rate: 1.0e-4
 #  #learning_epochs: 1
@@ -34,10 +34,10 @@ agent:
 environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
-    fixed_asset_pos: [0.0025, 0.0025, 0.0025]  
+    fixed_asset_pos: [0.001, 0.001, 0.001]  
     
 # Experiment metadata
 experiment:
-  name: "ff_baseSet"
-  tags: ['medFixedNoise','ft_noise','ee_pos_noise','base_set']
-  group: "ff_baseSet"
+  name: &exp_name "ablate_no-SSL"
+  tags: ['exp_ablation']
+  group: *exp_name

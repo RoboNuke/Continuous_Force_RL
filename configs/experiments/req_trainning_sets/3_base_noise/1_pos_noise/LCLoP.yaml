@@ -4,7 +4,7 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  agents_per_break_force: 10 # Number of agents per break force condition
+  agents_per_break_force: 5 # Number of agents per break force condition
   num_envs_per_agent: 256   # Environments per individual agent
   max_steps: 3000064 #25000192
 
@@ -24,15 +24,6 @@ wrappers:
     
   pose_contact_logging:
     enabled: false
-  
-  
-  dynamics_randomization:
-    enabled: true
-
-    randomize_gains: true
-    #pos_gains_range: [80.0, 120.0]
-    pos_gains_range: [50.0, 150.0]
-    rot_gains_range: [30.0, 30.0]    # Don't actually want to randomize
 
 agent:
   supervised_selection_loss_weight: 1.0
@@ -43,10 +34,10 @@ agent:
 environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
-    fixed_asset_pos: [0.0025, 0.0025, 0.0025]  
+    fixed_asset_pos: [0.001, 0.001, 0.001]  
     
 # Experiment metadata
 experiment:
-  name: "LCLoP_fullGain"
-  tags: ['full_gain','ft_noise','ee_pos_noise']
-  group: "LCLoP_fullGain"
+  name: &exp_name "LCLoP_base-noise"
+  tags: ['exp_base-noise_position', 'low_noise']
+  group: *exp_name
