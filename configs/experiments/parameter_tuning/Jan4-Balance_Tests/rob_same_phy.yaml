@@ -1,0 +1,133 @@
+# Hybrid Agent Control Experiment Configuration 
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+
+primary:
+  agents_per_break_force: 3 # Number of agents per break force condition
+  num_envs_per_agent: 256   # Environments per individual agent
+  max_steps: 10000128  #3000064 #25000192
+  break_forces: [10000]  # Break force conditions (-1 = unbreakable)
+
+# Model configuration for hybrid agent
+model:
+  use_hybrid_agent: false
+  use_separate_heads: false
+  selection_head_hidden_dim: 2
+  component_head_hidden_dim: 256
+  act_init_std: 0.2
+  # Actor architecture (SimBa policy network)
+  actor:
+    n: 2  # Number of SimBa layers
+    latent_size: 512  # Hidden dimension
+
+  # Critic architecture (SimBa value network)
+  critic:
+    n: 4  # Number of SimBa layers
+    latent_size: 1024  # Hidden dimension
+
+environment:
+  # OBSERVATION RANDOMIZATION CONFIGURATIONenvironment:
+  sim:
+    physx:
+      solver_type: 1
+      max_position_iteration_count: &pos_iter 32  # Important to avoid interpenetration.
+      max_velocity_iteration_count: &vel_iter 8
+      bounce_threshold_velocity: 0.2
+      friction_offset_threshold: 0.01
+      friction_correlation_distance: 0.00625
+      #gpu_max_rigid_contact_count: 2**23
+      #gpu_max_rigid_patch_count: 2**23
+      gpu_max_num_partitions: 1
+  
+  robot:
+    spawn:
+      rigid_props:
+        solver_position_iteration_count: &robot_pos_iter 32
+        solver_velocity_iteration_count: &robot_vel_iter 8
+        linear_damping: &lin_damp 0.0
+
+      articulation_props:
+        solver_position_iteration_count: *robot_pos_iter
+        solver_velocity_iteration_count: *robot_vel_iter
+
+  ctrl:
+    default_task_prop_gains: [565.0, 565.0, 565.0, 28.0, 28.0, 28.0]
+
+    pos_action_bounds: [0.05, 0.05, 0.05]
+    rot_action_bounds: [1.0, 1.0, 1.0]
+
+    pos_action_threshold: [0.02, 0.02, 0.02]
+    rot_action_threshold: [0.097, 0.097, 0.097]
+
+    
+  obs_rand:
+    fixed_asset_pos: [0.0025, 0.0025, 0.0025]  
+   
+agent:
+  supervised_selection_loss_weight: 0.0
+
+  learning_epochs: 4
+  policy_learning_rate: 1.0e-5
+  critic_learning_rate: 1.0e-5
+  value_update_ratio: 2
+  discount_factor: 0.99
+  lambda_: 0.95  # Note: underscore for Python compatibility
+
+wrappers:
+  # Fragile object behavior
+
+  # Spawn height curriculum learning
+  spawn_height_curriculum:
+    # current default in line with IndustREAL baseline
+    enabled: true
+    progress_threshold: 0.50         # Increase min_height when success rate >= this
+    regress_threshold: 0.10          # Decrease min_height when success rate < this
+    progress_height_delta: 0.005     # Increase min by 5mm when succeeding
+    regression_height_delta: 0.003   # Decrease min by 3mmm when struggling
+    min_height: -0.011  
+
+  fragile_objects:
+    enabled: true
+    peg_break_rew: 0.0
+    # break_force and num_agents are computed from primary config automatically
+    
+  # Factory-specific metrics tracking
+  factory_metrics:
+    enabled: true
+    publish_to_wandb: true
+    engagement_reward_scale: 1.0  # Scale for engagement rewards (default 1.0 = no change)
+    success_reward_scale: 1.0
+    timeout_penalty: 0.0 # Penalty applied on timeout (max steps reached, default 0.0 = no penalty)
+    # num_agents is computed from primary config automatically
+
+  # Efficient environment resetting
+  efficient_reset:
+    enabled: true
+    terminate_on_success: false  # If true, episodes terminate immediately upon success
+    success_bonus: 1.0  # Total reward on success (base env gives +1, wrapper adjusts to this total)
+    use_remaining_steps_bonus: false  # If true, bonus = max_episode_length - steps_taken (overrides success_bonus)
+
+  force_reward:
+    enabled: true
+
+    enable_contact_reward: false
+    contact_reward_weight: 0.5
+
+    # relative to desired force configs
+    ideal_force: 5.0
+
+    enable_softplus: false
+    softplus_weight: 0.5
+
+    enable_abs_target: False
+    abs_target_weight: 1.0
+
+    enable_forge_style: False
+    forge_style_weight: 1.0
+
+# Experiment metadata
+experiment:
+  name: &exp_name "pose_loose_robot"
+  tags: []
+  group: *exp_name
