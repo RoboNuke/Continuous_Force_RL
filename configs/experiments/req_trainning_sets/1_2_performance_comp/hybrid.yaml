@@ -34,7 +34,7 @@ agent:
 environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
-    fixed_asset_pos: [0.0025, 0.0025, 0.0025]  
+    fixed_asset_pos: [0.001, 0.001, 0.001]  
     
 # Experiment metadata
 experiment:

@@ -6,7 +6,8 @@ base_config: "configs/base/PiH_base.yaml"
 primary:
   agents_per_break_force: 5 # Number of agents per break force condition
   num_envs_per_agent: 256   # Environments per individual agent
-  max_steps: 3000064 #25000192
+  break_forces: [5]  # Break force conditions (-1 = unbreakable)
+  max_steps: 5000000 #25000192
 
 # Model configuration for hybrid agent
 model:
@@ -38,6 +39,6 @@ environment:
     
 # Experiment metadata
 experiment:
-  name: &exp_name "LCLoP_perf-comp"
-  tags: ['exp_perf-comp']
+  name: &exp_name "LCLoP_task_frag"
+  tags: ['exp_task_frag']
   group: *exp_name
