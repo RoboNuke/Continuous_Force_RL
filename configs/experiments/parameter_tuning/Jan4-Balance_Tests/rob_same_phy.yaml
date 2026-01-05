@@ -4,7 +4,7 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  agents_per_break_force: 3 # Number of agents per break force condition
+  agents_per_break_force: 5 # Number of agents per break force condition
   num_envs_per_agent: 256   # Environments per individual agent
   max_steps: 10000128  #3000064 #25000192
   break_forces: [10000]  # Break force conditions (-1 = unbreakable)
@@ -80,7 +80,7 @@ wrappers:
   # Spawn height curriculum learning
   spawn_height_curriculum:
     # current default in line with IndustREAL baseline
-    enabled: true
+    enabled: false
     progress_threshold: 0.50         # Increase min_height when success rate >= this
     regress_threshold: 0.10          # Decrease min_height when success rate < this
     progress_height_delta: 0.005     # Increase min by 5mm when succeeding
