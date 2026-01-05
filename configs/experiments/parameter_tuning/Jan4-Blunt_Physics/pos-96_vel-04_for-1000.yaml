@@ -45,7 +45,7 @@ environment:
         solver_position_iteration_count: &robot_pos_iter 192
         solver_velocity_iteration_count: &robot_vel_iter 4
         linear_damping: &lin_damp 0.0
-        max_contact_impulse: &con_imp 1e3
+        max_contact_impulse: &con_imp 1000.0
 
       articulation_props:
         solver_position_iteration_count: *robot_pos_iter
