@@ -7,7 +7,7 @@ primary:
   agents_per_break_force: 3 # Number of agents per break force condition
   num_envs_per_agent: 256   # Environments per individual agent
   max_steps: 10000128  #3000064 #25000192
-  break_forces: [10]  # Break force conditions (-1 = unbreakable)
+  break_forces: [10000]  # Break force conditions (-1 = unbreakable)
 
 # Model configuration for hybrid agent
 model:
@@ -18,12 +18,12 @@ model:
   act_init_std: 0.2
   # Actor architecture (SimBa policy network)
   actor:
-    n: 1  # Number of SimBa layers
-    latent_size: 256  # Hidden dimension
+    n: 2  # Number of SimBa layers
+    latent_size: 512  # Hidden dimension
 
   # Critic architecture (SimBa value network)
   critic:
-    n: 3  # Number of SimBa layers
+    n: 4  # Number of SimBa layers
     latent_size: 1024  # Hidden dimension
 
 environment:
@@ -47,8 +47,8 @@ agent:
   supervised_selection_loss_weight: 0.0
 
   learning_epochs: 4
-  policy_learning_rate: 5.0e-4
-  critic_learning_rate: 1.0e-4
+  policy_learning_rate: 1.0e-5
+  critic_learning_rate: 1.0e-5
   value_update_ratio: 2
   discount_factor: 0.99
   lambda_: 0.95  # Note: underscore for Python compatibility
