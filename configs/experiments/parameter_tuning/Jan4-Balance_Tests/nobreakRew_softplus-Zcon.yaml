@@ -57,7 +57,7 @@ wrappers:
   # Spawn height curriculum learning
   spawn_height_curriculum:
     # current default in line with IndustREAL baseline
-    enabled: false
+    enabled: true
     progress_threshold: 0.50         # Increase min_height when success rate >= this
     regress_threshold: 0.10          # Decrease min_height when success rate < this
     progress_height_delta: 0.005     # Increase min by 5mm when succeeding
@@ -105,6 +105,6 @@ wrappers:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_std02_sp05_zcon05_breakRew00"
+  name: &exp_name "pose_curr_std02_sp05_zcon05_breakRew00"
   tags: []
   group: *exp_name
