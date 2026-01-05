@@ -140,12 +140,12 @@ model:
   component_head_hidden_dim: 256
   # Actor architecture (SimBa policy network)
   actor:
-    n: 1  # Number of SimBa layers
-    latent_size: 256  # Hidden dimension
+    n: 2  # Number of SimBa layers
+    latent_size: 512  # Hidden dimension
 
   # Critic architecture (SimBa value network)
   critic:
-    n: 3  # Number of SimBa layers
+    n: 4  # Number of SimBa layers
     latent_size: 1024  # Hidden dimension
 
   # Hybrid agent configuration
