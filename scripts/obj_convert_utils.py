@@ -241,52 +241,47 @@ def update_joint_body_references(stage: Usd.Stage, old_name: str, new_name: str,
     specific prims. When we rename prims, these references become stale and
     cause PhysX errors like "CreateJoint - no bodies defined".
 
-    The factory templates use "forge_" prefixed names in their joint references
-    (e.g., forge_hole_8mm) which need to be updated to the new prim name.
+    Instead of string manipulation on the old paths, we find the prim with
+    RigidBodyAPI and set body1 to point directly to it. This handles the
+    complex renaming where ALL Xforms (including /Root) get renamed.
 
     Args:
         stage: The USD stage to modify
-        old_name: The old prim name to replace (unused, we search for forge_ pattern)
-        new_name: The new prim name to use
+        old_name: The old prim name (unused, kept for API compatibility)
+        new_name: The new prim name (unused, kept for API compatibility)
         verbose: Whether to print debug information
     """
-    import re
+    # Find the prim with RigidBodyAPI - this is what body1 should point to
+    rigidbody_prim_path = None
+    for prim in stage.Traverse():
+        if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            rigidbody_prim_path = prim.GetPath()
+            if verbose:
+                print(f"    Found RigidBody prim: {rigidbody_prim_path}")
+            break
 
+    if not rigidbody_prim_path:
+        if verbose:
+            print("    WARNING: No RigidBodyAPI prim found!")
+        return
+
+    # Update joints to point to the RigidBody prim
     for prim in stage.Traverse():
         # Check if this is any kind of joint (FixedJoint, RevoluteJoint, etc.)
-        # UsdPhysics.Joint is a typed schema, not an API schema, so we check the type name
         if 'Joint' in prim.GetTypeName():
             if verbose:
                 print(f"    Found joint: {prim.GetPath()} ({prim.GetTypeName()})")
 
-            for rel_name in ['physics:body0', 'physics:body1']:
-                rel = prim.GetRelationship(rel_name)
-                if rel:
-                    targets = rel.GetTargets()
-                    if verbose:
-                        print(f"      {rel_name} targets: {targets}")
+            body1_rel = prim.GetRelationship('physics:body1')
+            if body1_rel:
+                old_targets = body1_rel.GetTargets()
+                if verbose:
+                    print(f"      physics:body1 old: {old_targets}")
 
-                    if targets:
-                        new_targets = []
-                        updated = False
-                        for target in targets:
-                            target_str = str(target)
-                            # Look for forge_ or factory_ prefixed names and replace with new_name
-                            if 'forge_' in target_str or 'factory_' in target_str:
-                                # Replace the old prim name with new_name
-                                new_target_str = re.sub(r'(forge_|factory_)[^/]+', new_name, target_str)
-                                # Remove /Root prefix if present
-                                new_target_str = re.sub(r'^/Root', '', new_target_str)
-                                new_targets.append(Sdf.Path(new_target_str))
-                                updated = True
-                                if verbose:
-                                    print(f"        Updated: {target_str} -> {new_target_str}")
-                            else:
-                                new_targets.append(target)
-                        if updated:
-                            rel.SetTargets(new_targets)
-                            if verbose:
-                                print(f"      {rel_name} new targets: {new_targets}")
+                # Set body1 to point to the RigidBody prim
+                body1_rel.SetTargets([rigidbody_prim_path])
+                if verbose:
+                    print(f"      physics:body1 new: [{rigidbody_prim_path}]")
 
 
 def convert_from_template(
