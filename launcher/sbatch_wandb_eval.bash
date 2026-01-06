@@ -7,6 +7,7 @@
 TAGS=""
 VIDEO_ENABLED="false"
 EVAL_MODES=""
+PROJECT=""
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -25,6 +26,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --eval_modes)
             EVAL_MODES="$2"
+            shift 2
+            ;;
+        --project)
+            PROJECT="$2"
             shift 2
             ;;
         *)
@@ -63,6 +68,7 @@ echo "=== WandB Eval Launch Script ==="
 echo "Tags: $TAGS"
 echo "Eval Modes: $EVAL_MODES"
 echo "Video Enabled: $VIDEO_ENABLED"
+echo "Project: ${PROJECT:-<default>}"
 echo ""
 
 # Convert tags string to array
@@ -84,7 +90,7 @@ for tag in "${TAG_ARRAY[@]}"; do
         sbatch -J "$job_name" \
                -o "exp_logs/wandb_eval/${output_name}_%j.out" \
                -e "exp_logs/wandb_eval/${output_name}_%j.err" \
-               launcher/hpc_wandb_eval_batch.bash "$tag" "$VIDEO_ENABLED" "$eval_mode"
+               launcher/hpc_wandb_eval_batch.bash "$tag" "$VIDEO_ENABLED" "$eval_mode" "$PROJECT"
 
         echo "  Job submitted successfully"
         echo ""
