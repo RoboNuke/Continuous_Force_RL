@@ -57,6 +57,8 @@ def parse_arguments():
                         help="Log results to the original training run instead of creating a new eval run")
     parser.add_argument("--traj_output_dir", type=str, default="./traj_eval_results",
                         help="Output directory for trajectory evaluation .pkl files (only used with --eval_mode trajectory)")
+    parser.add_argument("--override", action="append",
+                        help="Override config values (e.g., --override environment.task.asset_variant=hex_short_small)")
 
     # Append AppLauncher args
     AppLauncher.add_app_launcher_args(parser)
@@ -1071,6 +1073,19 @@ def setup_environment_once(
 
     # Calculate max_rollout_steps
     env_cfg = configs['environment']
+
+    # Apply asset variant if specified in config (e.g., custom peg/hole from training)
+    task_cfg = env_cfg.task
+    print(f"  DEBUG: task_cfg.asset_variant = {getattr(task_cfg, 'asset_variant', 'NOT FOUND')}")
+    print(f"  DEBUG: task_cfg.asset_manifest_path = {getattr(task_cfg, 'asset_manifest_path', 'NOT FOUND')}")
+    if hasattr(task_cfg, 'apply_asset_variant_if_specified'):
+        result = task_cfg.apply_asset_variant_if_specified()
+        print(f"  DEBUG: apply_asset_variant_if_specified() returned: {result}")
+        if result:
+            print(f"  Applied asset variant: {task_cfg.asset_variant}")
+    else:
+        print(f"  DEBUG: task_cfg does not have apply_asset_variant_if_specified method")
+
     max_rollout_steps = int(
         (1 / env_cfg.sim.dt) / env_cfg.decimation * env_cfg.episode_length_s
     )
@@ -3740,6 +3755,27 @@ def main():
 
         # Reconstruct config from WandB
         configs = reconstruct_config_from_wandb(representative_run)
+
+        # Apply CLI overrides if provided
+        if args_cli.override:
+            print(f"\nApplying {len(args_cli.override)} CLI override(s):")
+            for ovr in args_cli.override:
+                print(f"  --override {ovr}")
+
+            # Parse and apply overrides directly (ConfigManagerV3.apply_cli_overrides
+            # doesn't work here because 'environment' isn't in its section_mapping)
+            config_manager = ConfigManagerV3()
+            parsed_overrides = config_manager.parse_cli_overrides(args_cli.override)
+
+            # Apply overrides directly to config objects
+            for section, section_overrides in parsed_overrides.items():
+                if section in configs:
+                    config_manager._apply_yaml_overrides(configs[section], section_overrides, indent_level=2)
+                    print(f"  Applied overrides to '{section}'")
+                else:
+                    print(f"  WARNING: Section '{section}' not found in configs")
+
+            print("  Overrides applied successfully")
 
         # Determine execution mode
         parallel_mode = is_parallel_mode(args_cli)
