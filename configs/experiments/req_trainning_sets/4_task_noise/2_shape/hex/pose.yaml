@@ -4,8 +4,8 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  agents_per_break_force: 1 # Number of agents per break force condition
-  num_envs_per_agent: 1   # Environments per individual agent
+  agents_per_break_force: 5 # Number of agents per break force condition
+  num_envs_per_agent: 256   # Environments per individual agent
   max_steps: 3000064 #25000192
 
 # Model configuration for hybrid agent
@@ -21,6 +21,6 @@ environment:
     asset_variant: hex_short_small
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_perf-comp"
-  tags: ['exp_perf-comp']
+  name: &exp_name "pose_task_shape_hex"
+  tags: ['exp_task_shape']
   group: *exp_name
