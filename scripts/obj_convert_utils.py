@@ -472,9 +472,11 @@ def convert_from_template(
 
     if asset_type == "peg":
         asset_info['diameter'] = float(max(size[0], size[1]))
-        # Get goal offset based on peg name prefix
+        # Get goal offset based on peg name prefix and scale to match mesh
         goal_offset = get_goal_offset_for_peg(prim_name)
-        asset_info['goal_offset'] = goal_offset
+        # Scale goal_offset: original values are in mm, scale by 1000 * scale to match mesh units
+        scaled_goal_offset = (goal_offset[0] * 1000 * scale, goal_offset[1] * 1000 * scale)
+        asset_info['goal_offset'] = scaled_goal_offset
 
     log(f"\n{'='*60}")
     log(f"Asset Info (for manifest.json):")
@@ -482,9 +484,10 @@ def convert_from_template(
     log(f"  prim_name: \"{prim_name}\"")
     if asset_type == "peg":
         log(f"  diameter: {asset_info['diameter']:.6f}  # meters ({asset_info['diameter']*1000:.3f}mm)")
-        if asset_info.get('goal_offset', (0.0, 0.0)) != (0.0, 0.0):
-            gx, gy = asset_info['goal_offset']
+        gx, gy = asset_info['goal_offset']
+        if gx != 0.0 or gy != 0.0:
             log(f"  goal_offset: [{gx:.6f}, {gy:.6f}]  # meters ({gx*1000:.2f}mm, {gy*1000:.2f}mm)")
+            log(f"               (scaled from raw [{goal_offset[0]:.6f}, {goal_offset[1]:.6f}] by 1000*{scale})")
     log(f"  height: {asset_info['height']:.6f}  # meters ({asset_info['height']*1000:.3f}mm)")
     log(f"  mass: {mass}")
     log(f"  friction: {friction}")

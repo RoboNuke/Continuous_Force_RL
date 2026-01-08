@@ -3,6 +3,7 @@ from wrappers.mechanics.fragile_object_wrapper import FragileObjectWrapper
 from wrappers.mechanics.force_reward_wrapper import ForceRewardWrapper
 from wrappers.mechanics.efficient_reset_wrapper import EfficientResetWrapper
 from wrappers.mechanics.close_gripper_action_wrapper import GripperCloseEnv
+from wrappers.mechanics.plate_spawn_offset_wrapper import PlateSpawnOffsetWrapper
 from wrappers.sensors.force_torque_wrapper import ForceTorqueWrapper
 from wrappers.observations.observation_manager_wrapper import ObservationManagerWrapper
 from wrappers.logging.factory_metrics_wrapper import FactoryMetricsWrapper
@@ -53,6 +54,13 @@ def apply_wrappers(env, configs):
             num_agents=configs['primary'].total_agents,
             config=wrappers_config.fragile_objects
         )
+
+    # Apply plate spawn offset wrapper if goal_offset is non-zero
+    # MUST be before EfficientResetWrapper so cached states have offset applied
+    goal_offset = getattr(configs['environment'].task, 'goal_offset', (0.0, 0.0))
+    if goal_offset[0] != 0.0 or goal_offset[1] != 0.0:
+        print(f"  - Applying Plate Spawn Offset Wrapper (offset: {goal_offset})")
+        env = PlateSpawnOffsetWrapper(env)
 
     if wrappers_config.efficient_reset.enabled:
         print(f"  - Applying Efficient Reset Wrapper (terminate_on_success={wrappers_config.efficient_reset.terminate_on_success})")

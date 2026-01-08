@@ -772,7 +772,39 @@ def main(
         print("="*80)
         return
 
+    elif args_cli.manual_control:
+        # ===== STEP 5: MANUAL CONTROL VISUALIZATION =====
+        print("\n" + "="*80)
+        print("MANUAL CONTROL MODE")
+        print("="*80)
+        print("[INFO]: Press Ctrl+C to exit")
 
+        # Initial reset
+        print("\n[INFO]: Performing initial reset...")
+        obs, info = env.reset()
+        print(f"[INFO]: Reset complete ({env.num_envs} environments)")
+
+        # Step loop
+        print("[INFO]: Starting step loop (zero actions)...")
+        step_count = 0
+        try:
+            while True:
+                # Zero action
+                action = torch.zeros((env.num_envs, env.unwrapped.cfg.action_space), device=device)
+                obs, reward, terminated, truncated, info = env.step(action)
+                step_count += 1
+
+                # Update simulation app for rendering
+                simulation_app.update()
+
+                # Print progress every 100 steps
+                if step_count % 100 == 0:
+                    print(f"[INFO]: Step {step_count}")
+
+        except KeyboardInterrupt:
+            print(f"\n[INFO]: Manual control ended after {step_count} steps")
+
+        return
 
     else:
         # ===== STEP 5: CREATE AND START TRAINER =====
