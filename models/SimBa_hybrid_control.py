@@ -596,24 +596,14 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
         return action_mean, self.get_logstds(action_mean), {}
 
     def get_logstds(self, action_mean):
-
-        # for this keep in mind the std is not the same size as the action space, because selection terms
-        # Debug: Only print first time
-        if not hasattr(self, '_debug_printed'):
-            print(f"\nDEBUG get_logstds: action_mean.shape={action_mean.shape}, force_size={self.force_size}, num_agents={self.num_agents}")
-            self._debug_printed = True
-
+        # Note: std is not the same size as action space due to selection terms
         logstds = []
         batch_size = int(action_mean.size()[0] // self.num_agents)
-        for  i, log_std in enumerate(self.actor_logstd):
+        for i, log_std in enumerate(self.actor_logstd):
             target_shape = action_mean[i*batch_size:(i+1)*batch_size,:6+self.force_size]
-            if not hasattr(self, '_debug_printed_shapes'):
-                print(f"  Agent {i}: log_std.shape={log_std.shape}, target_shape={target_shape.shape}")
             logstds.append(
                 log_std.expand_as(target_shape)
             )
-        if not hasattr(self, '_debug_printed_shapes'):
-            self._debug_printed_shapes = True
         logstds = torch.cat(logstds, dim=0)
         return logstds
     

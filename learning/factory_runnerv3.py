@@ -379,13 +379,8 @@ def main(
     print("[INFO]: Ckpt Path:", configs['primary'].ckpt_tracker_path)
     print("[INFO]: Configuration fully loaded")
 
-    # Debug: Asset variant configuration
-    task_cfg = configs['environment'].task
-    print("[DEBUG]: Asset Variant Config:")
-    print(f"  asset_variant: {getattr(task_cfg, 'asset_variant', None)}")
-    print(f"  asset_manifest_path: {getattr(task_cfg, 'asset_manifest_path', None)}")
-
     # Apply asset variant if specified (must happen after all config overrides)
+    task_cfg = configs['environment'].task
     if hasattr(task_cfg, 'apply_asset_variant_if_specified'):
         if task_cfg.apply_asset_variant_if_specified():
             print("[INFO]: Asset variant applied successfully")

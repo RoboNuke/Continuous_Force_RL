@@ -18,7 +18,7 @@ except ImportError:
 
 
 # Debug flag - set to True to enable detailed prim path verification
-DEBUG_PRIM_PATHS = True
+DEBUG_PRIM_PATHS = False
 
 
 def _verify_prim_paths(env, sensor_cfg):

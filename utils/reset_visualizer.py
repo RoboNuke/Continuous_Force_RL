@@ -69,8 +69,6 @@ print("\n\n\n Calling App Launcher \n\n\n\n")
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
-print("\n\n\nApp Launched\n\n\n")
-print("[DEBUG]: About to import carb and other modules...")
 
 # Enable PhysX contact processing for ContactSensor filtering to work
 import carb
@@ -127,14 +125,10 @@ except ImportError:
 
 from wrappers.sensors.factory_env_with_sensors import create_sensor_enabled_factory_env
 
-print("\n\nImports complete\n\n")
-print("[DEBUG]: About to define main function...")
 
 
 def main(args_cli):
     """Main function to run reset visualization."""
-    print("[DEBUG]: Inside main function, starting configuration loading...")
-
     # ===== STEP 1: LOAD CONFIGURATION =====
     print("="*100)
     print("[INFO]: STEP 1 - Loading Configuration")
@@ -243,13 +237,9 @@ def main(args_cli):
     # ===== STEP 3: APPLY WRAPPER STACK =====
     print("="*100)
     print("[INFO]: Step 3 - Applying wrapper stack")
-    print("[DEBUG]: About to call lUtils.apply_wrappers")
     env = lUtils.apply_wrappers(env, configs)
-    print("[DEBUG]: lUtils.apply_wrappers completed")
     print("  - Applying async critic isaac lab wrapper (derived from SKRL isaaclab wrapper)")
-    print("[DEBUG]: About to apply AsyncCriticIsaacLabWrapper")
     env = AsyncCriticIsaacLabWrapper(env)
-    print("[DEBUG]: AsyncCriticIsaacLabWrapper completed")
     print("[INFO]: Wrappers Applied successfully")
     print("="*100)
 

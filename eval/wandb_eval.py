@@ -1076,15 +1076,10 @@ def setup_environment_once(
 
     # Apply asset variant if specified in config (e.g., custom peg/hole from training)
     task_cfg = env_cfg.task
-    print(f"  DEBUG: task_cfg.asset_variant = {getattr(task_cfg, 'asset_variant', 'NOT FOUND')}")
-    print(f"  DEBUG: task_cfg.asset_manifest_path = {getattr(task_cfg, 'asset_manifest_path', 'NOT FOUND')}")
     if hasattr(task_cfg, 'apply_asset_variant_if_specified'):
         result = task_cfg.apply_asset_variant_if_specified()
-        print(f"  DEBUG: apply_asset_variant_if_specified() returned: {result}")
         if result:
             print(f"  Applied asset variant: {task_cfg.asset_variant}")
-    else:
-        print(f"  DEBUG: task_cfg does not have apply_asset_variant_if_specified method")
 
     max_rollout_steps = int(
         (1 / env_cfg.sim.dt) / env_cfg.decimation * env_cfg.episode_length_s
@@ -1765,12 +1760,8 @@ def run_basic_evaluation(
             # Accumulate for active environments
             episode_ssv[active_mask] += velocity_norm[active_mask]
 
-            # Debug on first step
-            if step_count == 0 and show_progress:
-                print(f"    [DEBUG] Step 0 - EE velocity norm: min={velocity_norm.min().item():.6f}, max={velocity_norm.max().item():.6f}, mean={velocity_norm.mean().item():.6f}")
         else:
-            if step_count == 0 and show_progress:
-                print(f"    [DEBUG] WARNING: fingertip_midpoint_linvel not found on env.unwrapped")
+            pass
 
         # Calculate SSJV directly from environment joint velocity data
         if hasattr(env.unwrapped, 'joint_vel'):
@@ -1781,12 +1772,8 @@ def run_basic_evaluation(
             # Accumulate for active environments
             episode_ssjv[active_mask] += ssjv_step[active_mask]
 
-            # Debug on first step
-            if step_count == 0 and show_progress:
-                print(f"    [DEBUG] Step 0 - SSJV step: min={ssjv_step.min().item():.6f}, max={ssjv_step.max().item():.6f}, mean={ssjv_step.mean().item():.6f}")
         else:
-            if step_count == 0 and show_progress:
-                print(f"    [DEBUG] WARNING: joint_vel not found on env.unwrapped")
+            pass
 
         # Force metrics - only accumulate when in contact
         if hasattr(env.unwrapped, 'robot_force_torque') and hasattr(env.unwrapped, 'in_contact'):
@@ -1875,11 +1862,6 @@ def run_basic_evaluation(
 
     progress_bar.close()
     print(f"    Completed {num_envs} episodes in {step_count} steps")
-
-    # Debug: Print final SSV/SSJV values
-    if show_progress:
-        print(f"    [DEBUG] Final SSV values: min={episode_ssv.min().item():.6f}, max={episode_ssv.max().item():.6f}, mean={episode_ssv.mean().item():.6f}")
-        print(f"    [DEBUG] Final SSJV values: min={episode_ssjv.min().item():.6f}, max={episode_ssjv.max().item():.6f}, mean={episode_ssjv.mean().item():.6f}")
 
     # Compute aggregated metrics from raw data
     print("  Computing aggregated metrics...")
@@ -3555,8 +3537,6 @@ def _run_parallel_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
 
                 # Log to WandB if we have a run object
                 if wandb_run is not None:
-                    print(f"    [DEBUG] wandb_run type: {type(wandb_run)}, id: {wandb_run.id}")
-                    print(f"    [DEBUG] Logging {len(run_metrics)} metrics to step {step}")
                     wandb_run.log(run_metrics, step=step, commit=True)
                     print(f"    Logged {len(run_metrics)} metrics to WandB at step {step}")
                 elif args_cli.report_to_base_run:
@@ -3569,9 +3549,6 @@ def _run_parallel_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
                         print(f"    Logged {len(run_metrics)} metrics to base run at step {step}")
                     except Exception as e:
                         print(f"    WARNING: Failed to log to base run {run.id}: {e}")
-                else:
-                    print(f"    [DEBUG] Skipping WandB logging (wandb_run=None, report_to_base_run=False)")
-
                 # Print summary
                 _print_run_summary(run_metrics, args_cli.eval_mode, run.id)
 
