@@ -14,9 +14,7 @@ primary:
 # Model configuration for hybrid agent
 model:
   use_hybrid_agent: false
-agent:
-
-  use_huber_value_loss: false
+  
 wrappers:
   manual_control:
       enabled: true
