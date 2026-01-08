@@ -15,9 +15,6 @@ primary:
 model:
   use_hybrid_agent: false
   
-wrappers:
-  manual_control:
-      enabled: true
 environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:

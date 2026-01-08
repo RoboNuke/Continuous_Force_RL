@@ -149,7 +149,6 @@ class EnhancedActionLoggingWrapper(gym.Wrapper):
 
     def step(self, action):
         """Step environment and log action data."""
-        print("[DEBUG] EnhancedActionLoggingWrapper.step() CALLED")
         # Log action data
         self._log_action_data(action)
 
@@ -294,7 +293,6 @@ class EnhancedActionLoggingWrapper(gym.Wrapper):
 
     def reset(self, **kwargs):
         """Reset environment and clear temporary data."""
-        print("[DEBUG] EnhancedActionLoggingWrapper.reset() CALLED")
         return super().reset(**kwargs)
 
     def close(self):

@@ -43,12 +43,10 @@ args_cli.video = False
 args_cli.enable_cameras = args_cli.manual_control
 args_cli.headless = not args_cli.manual_control
 
-print(f"[DEBUG] manual_control={args_cli.manual_control}, headless={args_cli.headless}, enable_cameras={args_cli.enable_cameras}")
 
 # clear out sys.argv for Hydra
 sys.argv = [sys.argv[0]] + hydra_args
 
-print("\n\n\n Calling App Launcher \n\n\n\n")
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
@@ -56,7 +54,6 @@ simulation_app = app_launcher.app
 # Store simulation app reference for cleanup handler
 _simulation_app = simulation_app
 
-print("\n\n\nApp Launched\n\n\n")
 
 # Enable PhysX contact processing for ContactSensor filtering to work
 import carb

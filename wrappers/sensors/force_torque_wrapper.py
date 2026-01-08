@@ -111,7 +111,6 @@ class ForceTorqueWrapper(gym.Wrapper):
         Returns:
             Observation and info from base environment's reset
         """
-        print("="*100, "\nCalling Reset")
         if not self._sensor_initialized and hasattr(self.unwrapped, '_robot'):
             self._initialize_wrapper()
         return super().reset(**kwargs)
