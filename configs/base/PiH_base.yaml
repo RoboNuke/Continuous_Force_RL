@@ -57,8 +57,8 @@ environment:
     # Asset variant selection (optional - defaults to IsaacLab built-in assets)
     # Set both fields to use custom peg/hole assets from manifest
     asset_variant: null          # e.g., "forge_8mm", "custom_10mm"
-    #asset_manifest_path: "/nfs/stak/users/brownhun/hpc-share/Continuous_Force_RL/assets/peg_hole/manifest.json"    # e.g., "/path/to/assets/peg_hole/manifest.json"
-    asset_manifest_path: "/home/hunter/Continuous_Force_RL/assets/peg_hole/manifest.json"    # e.g., "/path/to/assets/peg_hole/manifest.json"
+    asset_manifest_path: "/nfs/stak/users/brownhun/hpc-share/Continuous_Force_RL/assets/peg_hole/manifest.json"    # e.g., "/path/to/assets/peg_hole/manifest.json"
+    #asset_manifest_path: "/home/hunter/Continuous_Force_RL/assets/peg_hole/manifest.json"    # e.g., "/path/to/assets/peg_hole/manifest.json"
     fixed_asset:
       spawn:
         rigid_props:
