@@ -40,16 +40,26 @@ environment:
       #gpu_max_rigid_patch_count: 2**23
       gpu_max_num_partitions: 1
   
+  #robot:
+  #  spawn:
+  #    rigid_props:
+  #      solver_position_iteration_count: &robot_pos_iter 192
+  #      solver_velocity_iteration_count: &robot_vel_iter 8
+  #      linear_damping: &lin_damp 0.0
+
+  #    articulation_props:
+  #      solver_position_iteration_count: *robot_pos_iter
+  #      solver_velocity_iteration_count: *robot_vel_iter
   robot:
     spawn:
       rigid_props:
-        solver_position_iteration_count: &robot_pos_iter 192
-        solver_velocity_iteration_count: &robot_vel_iter 8
+        solver_position_iteration_count: *pos_iter
+        solver_velocity_iteration_count: *vel_iter
         linear_damping: &lin_damp 0.0
 
       articulation_props:
-        solver_position_iteration_count: *robot_pos_iter
-        solver_velocity_iteration_count: *robot_vel_iter
+        solver_position_iteration_count: *pos_iter
+        solver_velocity_iteration_count: *vel_iter      
         
   task:
     name: 'peg_insert'
