@@ -149,6 +149,7 @@ class ForceRewardConfig:
 
     enable_softplus: bool = False
     softplus_weight: float = 1.0
+    enable_softplus_max: bool = False
 
     enable_abs_target: bool = False
     abs_target_weight: float = 1.0

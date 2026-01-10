@@ -349,6 +349,10 @@ wrappers:
     enable_square_vel: False
     square_vel_weight: 1000.0
 
+    enable_softplus: False
+    softplus_weight: 2.0
+    enable_softplus_max: False
+
   # Dynamics randomization for domain randomization
   dynamics_randomization:
     enabled: false

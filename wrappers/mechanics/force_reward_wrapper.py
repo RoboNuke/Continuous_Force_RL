@@ -180,6 +180,7 @@ class ForceRewardWrapper(gym.Wrapper):
         # softmax
         self.enable_softplus = self.config.get('enable_softplus', False)
         self.softplus_weight = self.config.get('softplus_weight', 1.0)
+        self.use_softplus_max = self.config.get('enable_softplus_max', False)
 
         # abs
         self.enable_abs = self.config.get('enable_abs_target', False)
@@ -483,6 +484,8 @@ class ForceRewardWrapper(gym.Wrapper):
         force_magnitude = torch.linalg.norm(current_force, dim=1)
         # Use numerically stable softplus to avoid overflow when (force_magnitude - desired_force) is large
         raw_softplus = torch.ones_like(force_magnitude) - torch.nn.functional.softplus(force_magnitude - self.desired_force)
+        if self.use_softplus_max:
+            raw_softplus = torch.max(torch.zeros_like(force_magnitude), raw_softplus)
         return torch.where(torch.any(self.in_contact, dim=-1), raw_softplus, torch.zeros_like(raw_softplus))
 
     # Reward Function Implementations
