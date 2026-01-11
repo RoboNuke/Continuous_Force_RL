@@ -14,7 +14,12 @@ primary:
 # Model configuration for hybrid agent
 model:
   use_hybrid_agent: false
-  
+wrappers:
+  force_reward:
+    
+    enable_contact_reward: false
+    contact_reward_weight: 2.0
+    
 environment:
   ctrl: 
     pos_action_bounds: [0.05, 0.05, 0.08]
@@ -28,6 +33,6 @@ environment:
     asset_variant: hex_short_small
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_higher_bounds_hex"
+  name: &exp_name "pose_noZcon_higherBounds_hex"
   tags: ['exp_task_shape']
   group: *exp_name
