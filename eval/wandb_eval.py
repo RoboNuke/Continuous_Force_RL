@@ -1154,22 +1154,33 @@ def setup_environment_once(
         # Generate base noise assignments for one agent
         base_noise_assignments_list = []
         for min_val, max_val, range_name in NOISE_RANGES:
-            # Generate 2D noise using polar coordinates in x-y plane
-            # Sample uniformly in circular annulus [min_val, max_val]
+            # Sample each dimension independently from [-max_val, -min_val] ∪ [min_val, max_val]
+            # 1. Sample magnitude uniformly from [min_val, max_val]
+            # 2. Randomly assign sign with 50/50 probability
 
-            # Random angle in x-y plane [0, 2π]
-            theta = torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) * 2 * 3.14159265359
+            # X-axis noise
+            x_magnitude = torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) * (max_val - min_val) + min_val
+            x_sign = (torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) > 0.5).float() * 2 - 1  # -1 or +1
+            x_noise = x_magnitude * x_sign
 
-            # Random radii within the circular annulus [min_val, max_val]
-            # We square the radii to ensure uniform distribution by area, since area scales with r²
-            # This prevents bias toward the inner edge of the annulus
-            radii_squared = torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) * (max_val**2 - min_val**2) + min_val**2
-            radii = torch.sqrt(radii_squared)
+            # Y-axis noise
+            y_magnitude = torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) * (max_val - min_val) + min_val
+            y_sign = (torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) > 0.5).float() * 2 - 1
+            y_noise = y_magnitude * y_sign
 
-            # Convert polar to Cartesian coordinates (x-y plane only, z = 0)
-            x_noise = radii * torch.cos(theta)
-            y_noise = radii * torch.sin(theta)
-            z_noise = torch.zeros(ENVS_PER_NOISE_RANGE, device=env.device)
+            # Z-axis noise
+            z_magnitude = torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) * (max_val - min_val) + min_val
+            z_sign = (torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) > 0.5).float() * 2 - 1
+            z_noise = z_magnitude * z_sign
+
+            # Debug: Print statistics for each dimension
+            print(f"    Noise statistics for {range_name}:")
+            print(f"      X: mean={x_noise.mean().item():.6f}, std={x_noise.std().item():.6f}, "
+                  f"min={x_noise.min().item():.6f}, max={x_noise.max().item():.6f}")
+            print(f"      Y: mean={y_noise.mean().item():.6f}, std={y_noise.std().item():.6f}, "
+                  f"min={y_noise.min().item():.6f}, max={y_noise.max().item():.6f}")
+            print(f"      Z: mean={z_noise.mean().item():.6f}, std={z_noise.std().item():.6f}, "
+                  f"min={z_noise.min().item():.6f}, max={z_noise.max().item():.6f}")
 
             base_noise_assignments_list.append(torch.stack([x_noise, y_noise, z_noise], dim=1))
 
