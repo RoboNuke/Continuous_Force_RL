@@ -6,6 +6,7 @@ base_config: "configs/base/PiH_base.yaml"
 primary:
   agents_per_break_force: 5
   num_envs_per_agent: 256
+  break_forces: [10000]  # Break force conditions (-1 = unbreakable)
 
   #agents_per_break_force: 5 # Number of agents per break force condition
   #num_envs_per_agent: 256   # Environments per individual agent
@@ -27,12 +28,12 @@ environment:
     hand_init_pos: [0.0, 0.0, 0.077]
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
-    fixed_asset_pos: [0.001, 0.001, 0.001]  
+    fixed_asset_pos: [0.000, 0.000, 0.000]  
   
   task:
     asset_variant: hex_short_small
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_noZcon_higherBounds_hex"
+  name: &exp_name "pose_noZcon_higherBounds_noPosNoise_hex"
   tags: ['exp_task_shape']
   group: *exp_name
