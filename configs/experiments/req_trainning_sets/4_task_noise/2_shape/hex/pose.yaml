@@ -6,7 +6,7 @@ base_config: "configs/base/PiH_base.yaml"
 primary:
   agents_per_break_force: 5
   num_envs_per_agent: 256
-  break_forces: [10]  # Break force conditions (-1 = unbreakable)
+  break_forces: [10000]  # Break force conditions (-1 = unbreakable)
 
   #agents_per_break_force: 5 # Number of agents per break force condition
   #num_envs_per_agent: 256   # Environments per individual agent
@@ -32,14 +32,14 @@ wrappers:
     contact_reward_weight: 2.0
     
 environment:
-  #ctrl: 
-  #  #pos_action_bounds: [0.05, 0.05, 0.08]
+  ctrl: 
+    pos_action_bounds: [0.08, 0.08, 0.08]
   task:
-    #hand_init_pos: [0.0, 0.0, 0.077]
+    hand_init_pos: [0.0, 0.0, 0.077]
     asset_variant: hex_short_small
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
-    fixed_asset_pos: [0.001, 0.001, 0.001]  
+    fixed_asset_pos: [0.000, 0.000, 0.000]  
 
 # Experiment metadata
 experiment:
