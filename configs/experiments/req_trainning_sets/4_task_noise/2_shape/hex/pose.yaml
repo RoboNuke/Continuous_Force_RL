@@ -28,7 +28,7 @@ wrappers:
 
   force_reward:
     
-    enable_contact_reward: true
+    enable_contact_reward: false
     contact_reward_weight: 2.0
     
 environment:
@@ -43,6 +43,6 @@ environment:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_hex"
+  name: &exp_name "pose_hex_noZCon"
   tags: ['exp_task_shape']
   group: *exp_name
