@@ -59,6 +59,15 @@ class PlateSpawnOffsetWrapper(gym.Wrapper):
 
         self._wrapper_initialized = False
         self._original_reset_idx = None
+        self._original_compute_intermediate_values = None
+
+        # Storage for target hole position (to restore fixed_pos after base env overwrites it)
+        # This gets populated during reset and used every frame in _compute_intermediate_values
+        self._target_hole_pos = None
+
+        # Flag to skip fixed_pos restoration during reset
+        # (because _compute_intermediate_values is called DURING reset before we can store the value)
+        self._in_reset = False
 
         # Get goal offset from task config
         task_cfg = env.unwrapped.cfg_task
@@ -152,6 +161,25 @@ class PlateSpawnOffsetWrapper(gym.Wrapper):
                 "_reset_idx method"
             )
 
+        # Override _compute_intermediate_values to restore fixed_pos every frame
+        # The base env overwrites fixed_pos from simulation data, which would point
+        # to the actual plate center instead of the target hole location.
+        if hasattr(self.unwrapped, '_compute_intermediate_values'):
+            self._original_compute_intermediate_values = self.unwrapped._compute_intermediate_values
+            self.unwrapped._compute_intermediate_values = self._wrapped_compute_intermediate_values
+        else:
+            raise ValueError(
+                "[PlateSpawnOffsetWrapper] Environment missing required "
+                "_compute_intermediate_values method"
+            )
+
+        # Initialize target hole position tensor
+        self._target_hole_pos = torch.zeros(
+            (self.unwrapped.num_envs, 3),
+            dtype=torch.float32,
+            device=self.unwrapped.device
+        )
+
         self._wrapper_initialized = True
         # Debug print (disabled - uncomment to enable)
         # print("[PlateSpawnOffsetWrapper] Wrapper initialized (using _reset_idx interface)")
@@ -164,15 +192,29 @@ class PlateSpawnOffsetWrapper(gym.Wrapper):
         for both full resets and partial resets during rollouts.
 
         1. Let base env do ALL the work (position, orientation, obs frames, robot, etc.)
-        2. Read generated plate position and orientation
-        3. Compute world offset and shift plate position
-        4. Write new plate position to simulation
-        5. Do NOT modify fixed_pos (it stays at target hole location for rewards)
+        2. Store target hole position (fixed_pos at this point, before we move plate)
+        3. Read generated plate position and orientation
+        4. Compute world offset and shift plate position
+        5. Write new plate position to simulation
+        6. Do NOT modify fixed_pos (it stays at target hole location for rewards)
         """
+        # Set flag to skip fixed_pos restoration during reset
+        # (_compute_intermediate_values is called DURING reset before we can store the value)
+        self._in_reset = True
+
         # (1) Let base env do ALL the work
         self._original_reset_idx(env_ids)
 
-        # (2) Read the generated plate position and orientation from simulation
+        # (2) Store target hole position AFTER base env has set it
+        # At this point, fixed_pos = standard position (where target hole will be)
+        # This is used by _wrapped_compute_intermediate_values to restore fixed_pos
+        # after the base env overwrites it from simulation data every frame.
+        self._target_hole_pos[env_ids] = self.unwrapped.fixed_pos[env_ids].clone()
+
+        # Clear the reset flag now that we have the correct value stored
+        self._in_reset = False
+
+        # (3) Read the generated plate position and orientation from simulation
         env_origins = self.unwrapped.scene.env_origins[env_ids]
         fixed_pos_world = self.unwrapped._fixed_asset.data.root_pos_w[env_ids].clone()
         fixed_pos = fixed_pos_world - env_origins  # Convert to local coords
@@ -222,6 +264,33 @@ class PlateSpawnOffsetWrapper(gym.Wrapper):
 
         # Visualize debug markers
         self._visualize_debug_markers(env_ids)
+
+    def _wrapped_compute_intermediate_values(self, dt):
+        """
+        Wrap _compute_intermediate_values to restore fixed_pos after base env updates it.
+
+        The base env's _compute_intermediate_values() updates fixed_pos from simulation:
+            self.fixed_pos = self._fixed_asset.data.root_pos_w - self.scene.env_origins
+
+        For multi-hole plates, this would set fixed_pos to the actual plate center
+        (which we moved), not the target hole location. We need to restore fixed_pos
+        to the target hole position that we stored during reset.
+
+        This ensures reward/success calculations and critic observations use the
+        correct target hole position, not the plate center.
+        """
+        # Let base env compute all intermediate values (including overwriting fixed_pos)
+        self._original_compute_intermediate_values(dt)
+
+        # Skip restoration during reset - we haven't stored the correct value yet
+        # (_compute_intermediate_values is called DURING _reset_idx before we can store it)
+        if self._in_reset:
+            return
+
+        # Restore fixed_pos to the target hole position
+        # This overwrites what the base env set from simulation data
+        if self._target_hole_pos is not None:
+            self.unwrapped.fixed_pos[:] = self._target_hole_pos
 
     def step(self, action):
         """Step the environment and ensure wrapper is initialized."""
