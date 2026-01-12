@@ -58,9 +58,12 @@ def apply_wrappers(env, configs):
     # Apply plate spawn offset wrapper if goal_offset is non-zero
     # MUST be before EfficientResetWrapper so cached states have offset applied
     goal_offset = getattr(configs['environment'].task, 'goal_offset', (0.0, 0.0))
+    print(f"  [DEBUG] goal_offset from task config: {goal_offset}")
     if goal_offset[0] != 0.0 or goal_offset[1] != 0.0:
         print(f"  - Applying Plate Spawn Offset Wrapper (offset: {goal_offset})")
         env = PlateSpawnOffsetWrapper(env)
+    else:
+        print(f"  [DEBUG] PlateSpawnOffsetWrapper NOT applied (goal_offset is zero)")
 
     if wrappers_config.efficient_reset.enabled:
         print(f"  - Applying Efficient Reset Wrapper (terminate_on_success={wrappers_config.efficient_reset.terminate_on_success})")
