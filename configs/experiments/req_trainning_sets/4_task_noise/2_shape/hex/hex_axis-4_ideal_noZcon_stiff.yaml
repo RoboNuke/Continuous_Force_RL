@@ -19,30 +19,41 @@ model:
 
 wrappers:
 
-  manual_control:
-    enabled: false
-    checkpoint_path: null  # Set to checkpoint path to enable RL toggle
-    action_scale: 0.5
-    force_scale: 0.1
-    start_in_manual_mode: true
+  # Custom keypoint offset patterns for non-default peg shapes
+  keypoint_offset:
+    enabled: true
+    mode: 'axis'  # 'axis' or 'polygon'
+    # Axis mode parameters
+    num_keypoints: 4
+    x_scale: 0.15
+    y_scale: 0.15
+    z_scale: 0.15
+
+    # Polygon mode parameters
+    num_lines: 6
+    num_keypoints_z: 4
+    num_keypoints_radial: 4
+    xy_scale: 0.005
 
   force_reward:
     
-    enable_contact_reward: true
+    enable_contact_reward: false
     contact_reward_weight: 2.0
     
 environment:
   ctrl: 
-    pos_action_bounds: [0.08, 0.08, 0.08]
+    #pos_action_bounds: [0.08, 0.08, 0.08]
+
+    default_task_prop_gains: [565.0, 565.0, 565.0, 28.0, 28.0, 28.0]
   task:
-    hand_init_pos: [0.0, 0.0, 0.077]
+    #hand_init_pos: [0.0, 0.0, 0.077]
     asset_variant: hex_short_small
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
-    fixed_asset_pos: [0.001, 0.001, 0.001]  
+    fixed_asset_pos: [0.000, 0.000, 0.000]  
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_hex_ZCon_noise"
+  name: &exp_name "pose_hex_axis-4_ideal_noZcon_stiff"
   tags: ['exp_task_shape']
   group: *exp_name

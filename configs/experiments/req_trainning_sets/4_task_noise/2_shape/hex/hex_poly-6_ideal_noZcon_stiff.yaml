@@ -41,7 +41,8 @@ wrappers:
     contact_reward_weight: 2.0
     
 environment:
-  #ctrl: 
+  ctrl:
+    default_task_prop_gains: [565.0, 565.0, 565.0, 28.0, 28.0, 28.0] 
   #  pos_action_bounds: [0.08, 0.08, 0.08]
   task:
   #  hand_init_pos: [0.0, 0.0, 0.077]
@@ -52,6 +53,6 @@ environment:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_hex_poly-6_noZcon"
+  name: &exp_name "pose_hex_poly-6_noZcon_stiff"
   tags: ['exp_task_shape']
   group: *exp_name

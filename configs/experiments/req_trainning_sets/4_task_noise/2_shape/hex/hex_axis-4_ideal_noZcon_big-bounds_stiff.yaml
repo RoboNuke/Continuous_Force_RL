@@ -22,7 +22,7 @@ wrappers:
   # Custom keypoint offset patterns for non-default peg shapes
   keypoint_offset:
     enabled: true
-    mode: 'polygon'  # 'axis' or 'polygon'
+    mode: 'axis'  # 'axis' or 'polygon'
     # Axis mode parameters
     num_keypoints: 4
     x_scale: 0.15
@@ -33,7 +33,7 @@ wrappers:
     num_lines: 6
     num_keypoints_z: 4
     num_keypoints_radial: 4
-    xy_scale: 0.015
+    xy_scale: 0.005
 
   force_reward:
     
@@ -41,10 +41,12 @@ wrappers:
     contact_reward_weight: 2.0
     
 environment:
-  #ctrl: 
-  #  pos_action_bounds: [0.08, 0.08, 0.08]
+  ctrl: 
+    pos_action_bounds: [0.08, 0.08, 0.08]
+
+    default_task_prop_gains: [565.0, 565.0, 565.0, 28.0, 28.0, 28.0]
   task:
-  #  hand_init_pos: [0.0, 0.0, 0.077]
+    hand_init_pos: [0.0, 0.0, 0.077]
     asset_variant: hex_short_small
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
@@ -52,6 +54,6 @@ environment:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_hex_poly-6_noZcon"
+  name: &exp_name "pose_hex_axis-4_ideal_noZcon_big-bounds_stiff"
   tags: ['exp_task_shape']
   group: *exp_name
