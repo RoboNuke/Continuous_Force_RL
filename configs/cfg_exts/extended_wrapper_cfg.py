@@ -14,8 +14,8 @@ from .wrapper_sub_configs import (
     EEPoseNoiseConfig, WandbLoggingConfig, ActionLoggingConfig, ForceRewardConfig,
     FragileObjectConfig, ObsManagerConfig, FactoryMetricsConfig,
     PoseContactLoggingConfig, MisalignmentPenaltyConfig,
-    TwoStageKeypointRewardConfig, CurriculumConfig, ManualControlConfig,
-    DynamicsRandomizationConfig, EfficientResetConfig
+    TwoStageKeypointRewardConfig, KeypointOffsetConfig, CurriculumConfig,
+    ManualControlConfig, DynamicsRandomizationConfig, EfficientResetConfig
 )
 
 # Get configclass decorator with version compatibility
@@ -71,6 +71,9 @@ class ExtendedWrapperConfig:
 
     two_stage_keypoint_reward: TwoStageKeypointRewardConfig = field(default_factory=TwoStageKeypointRewardConfig)
     """Two-stage keypoint reward wrapper configuration"""
+
+    keypoint_offset: KeypointOffsetConfig = field(default_factory=KeypointOffsetConfig)
+    """Keypoint offset wrapper configuration for custom keypoint patterns"""
 
     spawn_height_curriculum: CurriculumConfig = field(default_factory=CurriculumConfig)
     """Spawn height curriculum wrapper configuration"""

@@ -302,6 +302,21 @@ wrappers:
     enabled: false
     xy_threshold: 0.0025
 
+  # Custom keypoint offset patterns for non-default peg shapes
+  keypoint_offset:
+    enabled: false
+    mode: 'axis'  # 'axis' or 'polygon'
+    # Axis mode parameters
+    num_keypoints: 4
+    x_scale: 0.01
+    y_scale: 0.01
+    z_scale: 0.05
+    # Polygon mode parameters
+    num_lines: 6
+    num_keypoints_z: 4
+    num_keypoints_radial: 4
+    xy_scale: 0.005
+
   # Force reward system with 8 reward functions
   force_reward:
     enabled: true

@@ -6,7 +6,7 @@ base_config: "configs/base/PiH_base.yaml"
 primary:
   agents_per_break_force: 5
   num_envs_per_agent: 256
-  break_forces: [10000]  # Break force conditions (-1 = unbreakable)
+  break_forces: [10]  # Break force conditions (-1 = unbreakable)
 
   #agents_per_break_force: 5 # Number of agents per break force condition
   #num_envs_per_agent: 256   # Environments per individual agent
@@ -18,9 +18,6 @@ model:
 
 
 wrappers:
-  factory_metrics:
-    enabled: true
-    publish_to_wandb: false
 
   manual_control:
     enabled: false
@@ -29,9 +26,25 @@ wrappers:
     force_scale: 0.1
     start_in_manual_mode: true
 
+  # Custom keypoint offset patterns for non-default peg shapes
+  keypoint_offset:
+    enabled: true
+    mode: 'axis'  # 'axis' or 'polygon'
+    # Axis mode parameters
+    num_keypoints: 4
+    x_scale: 0.15
+    y_scale: 0.15
+    z_scale: 0.15
+
+    # Polygon mode parameters
+    num_lines: 6
+    num_keypoints_z: 4
+    num_keypoints_radial: 4
+    xy_scale: 0.005
+
   force_reward:
     
-    enable_contact_reward: false
+    enable_contact_reward: true
     contact_reward_weight: 2.0
     
 environment:
@@ -46,6 +59,6 @@ environment:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_hex_noZCon"
+  name: &exp_name "pose_hex_axisKeypoints"
   tags: ['exp_task_shape']
   group: *exp_name

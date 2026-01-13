@@ -13,6 +13,7 @@ from wrappers.logging.pose_contact_logging_wrapper import PoseContactLoggingWrap
 from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
 from wrappers.control.manual_control_wrapper import ManualControlWrapper
 from wrappers.mechanics.two_stage_keypoint_reward_wrapper import TwoStageKeypointRewardWrapper
+from wrappers.mechanics.keypoint_offset_wrapper import KeypointOffsetWrapper
 from wrappers.mechanics.spawn_height_curriculum_wrapper import SpawnHeightCurriculumWrapper
 from wrappers.mechanics.dynamics_randomization_wrapper import DynamicsRandomizationWrapper
 from wrappers.observations.ee_pose_noise_wrapper import EEPoseNoiseWrapper
@@ -64,6 +65,15 @@ def apply_wrappers(env, configs):
         env = PlateSpawnOffsetWrapper(env)
     else:
         print(f"  [DEBUG] PlateSpawnOffsetWrapper NOT applied (goal_offset is zero)")
+
+    # Apply keypoint offset wrapper for custom keypoint patterns
+    # MUST be before EfficientResetWrapper and before wrappers that use keypoints
+    if wrappers_config.keypoint_offset.enabled:
+        print("  - Applying Keypoint Offset Wrapper")
+        env = KeypointOffsetWrapper(
+            env,
+            config=asdict(wrappers_config.keypoint_offset)
+        )
 
     if wrappers_config.efficient_reset.enabled:
         print(f"  - Applying Efficient Reset Wrapper (terminate_on_success={wrappers_config.efficient_reset.terminate_on_success})")

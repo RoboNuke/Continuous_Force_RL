@@ -182,6 +182,28 @@ class TwoStageKeypointRewardConfig:
 
 
 @dataclass
+class KeypointOffsetConfig:
+    """Keypoint offset wrapper configuration for custom keypoint patterns."""
+    enabled: bool = False
+
+    # Mode selection: 'axis' or 'polygon'
+    mode: str = 'axis'
+
+    # Axis mode parameters
+    num_keypoints: int = 4  # Keypoints per axis
+    x_scale: float = 0.01
+    y_scale: float = 0.01
+    z_scale: float = 0.05
+
+    # Polygon mode parameters
+    num_lines: int = 6           # Number of radial lines (polygon sides)
+    num_keypoints_z: int = 4     # Keypoints along z per radial position
+    num_keypoints_radial: int = 4  # Keypoints from center to edge per line
+    xy_scale: float = 0.005      # Max radial distance (edge)
+    # z_scale shared with axis mode
+
+
+@dataclass
 class CurriculumConfig:
     """Spawn height curriculum wrapper configuration for bidirectional difficulty adjustment."""
     enabled: bool = False
