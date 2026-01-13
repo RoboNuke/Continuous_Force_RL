@@ -18,6 +18,9 @@ model:
 
 
 wrappers:
+  factory_metrics:
+    enabled: true
+    publish_to_wandb: false
 
   manual_control:
     enabled: false

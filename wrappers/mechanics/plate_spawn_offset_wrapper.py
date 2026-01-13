@@ -292,6 +292,31 @@ class PlateSpawnOffsetWrapper(gym.Wrapper):
         if self._target_hole_pos is not None:
             self.unwrapped.fixed_pos[:] = self._target_hole_pos
 
+            # Also recompute target_held_base_pos since it was computed with wrong fixed_pos
+            # This is critical for engagement/success detection in _get_curr_successes
+            # Note: combine_frame_transforms takes (t01, q01, t12, q12) and returns (pos, quat)
+            # whereas tf_combine takes (q01, t01, q12, t12) and returns (quat, pos)
+            self.unwrapped.target_held_base_pos[:], self.unwrapped.target_held_base_quat[:] = torch_utils.combine_frame_transforms(
+                self.unwrapped.fixed_pos,
+                self.unwrapped.fixed_quat,
+                self.unwrapped.fixed_success_pos_local,
+                self.unwrapped.identity_quat
+            )
+
+            # Also recompute keypoints_fixed since they depend on target_held_base_pos
+            for idx, keypoint_offset in enumerate(self.unwrapped.keypoint_offsets):
+                self.unwrapped.keypoints_fixed[:, idx] = torch_utils.combine_frame_transforms(
+                    self.unwrapped.target_held_base_pos,
+                    self.unwrapped.target_held_base_quat,
+                    keypoint_offset.repeat(self.unwrapped.num_envs, 1),
+                    self.unwrapped.identity_quat
+                )[0]  # [0] is position (combine_frame_transforms returns pos, quat)
+
+            # Recompute keypoint_dist
+            self.unwrapped.keypoint_dist = torch.norm(
+                self.unwrapped.keypoints_held - self.unwrapped.keypoints_fixed, p=2, dim=-1
+            ).mean(-1)
+
     def step(self, action):
         """Step the environment and ensure wrapper is initialized."""
         if not self._wrapper_initialized and hasattr(self.unwrapped, '_reset_idx'):
