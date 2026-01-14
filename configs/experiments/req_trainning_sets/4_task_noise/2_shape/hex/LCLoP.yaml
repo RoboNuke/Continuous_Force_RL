@@ -44,7 +44,7 @@ wrappers:
 
   force_reward:
     
-    enable_contact_reward: false
+    enable_contact_reward: true
     contact_reward_weight: 2.0
 
 agent:
@@ -69,6 +69,6 @@ environment:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "LCLoP_hex"
+  name: &exp_name "LCLoP_hex_zCon-2"
   tags: ['exp_task_shape']
   group: *exp_name
