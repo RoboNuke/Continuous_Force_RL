@@ -10,7 +10,7 @@ primary:
 
   #agents_per_break_force: 5 # Number of agents per break force condition
   #num_envs_per_agent: 256   # Environments per individual agent
-  max_steps: 5000064 #25000192
+  max_steps: 7500064 #25000192
 
 # Model configuration for hybrid agent
 model:
@@ -22,18 +22,18 @@ wrappers:
   # Custom keypoint offset patterns for non-default peg shapes
   keypoint_offset:
     enabled: true
-    mode: 'axis'  # 'axis' or 'polygon'
+    mode: 'polygon'  # 'axis' or 'polygon'
     # Axis mode parameters
     num_keypoints: 4
-    x_scale: 0.15
-    y_scale: 0.15
+    x_scale: 0.015
+    y_scale: 0.025 # ratio of y to x on arch is 38.61/23.17=1.666
     z_scale: 0.15
 
     # Polygon mode parameters
     num_lines: 6
     num_keypoints_z: 4
     num_keypoints_radial: 4
-    xy_scale: 0.005
+    xy_scale: 0.015
 
   force_reward:
     
@@ -41,17 +41,15 @@ wrappers:
     contact_reward_weight: 2.0
     
 environment:
-  #ctrl: 
-  #  pos_action_bounds: [0.08, 0.08, 0.08]
   task:
-    #hand_init_pos: [0.0, 0.0, 0.077]
-    asset_variant: hex_short_small
+    asset_variant: arch_short_small
+    
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
-    fixed_asset_pos: [0.000, 0.000, 0.000]  
+    fixed_asset_pos: [0.001, 0.001, 0.001]  
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_hex_axis-4_ideal_noZcon"
+  name: &exp_name "pose_arch"
   tags: ['exp_task_shape']
   group: *exp_name

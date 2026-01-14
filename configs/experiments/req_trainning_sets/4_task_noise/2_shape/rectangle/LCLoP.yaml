@@ -4,20 +4,26 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  agents_per_break_force: 5
-  num_envs_per_agent: 256
-  break_forces: [10]  # Break force conditions (-1 = unbreakable)
-
-  #agents_per_break_force: 5 # Number of agents per break force condition
-  #num_envs_per_agent: 256   # Environments per individual agent
+  agents_per_break_force: 5 # Number of agents per break force condition
+  num_envs_per_agent: 256   # Environments per individual agent
   max_steps: 7500064 #25000192
 
 # Model configuration for hybrid agent
 model:
-  use_hybrid_agent: false
+  use_hybrid_agent: true
+  #hybrid_agent:
+  #  force_init_std: 0.1 # implies a 96% range [-2.5, 2.5] 
 
-
+# Enable hybrid control wrapper and related systems
 wrappers:
+  # Enable hybrid control wrapper
+  hybrid_control:
+    enabled: true
+    reward_type: "none"
+    use_ground_truth_selection: false
+    
+  pose_contact_logging:
+    enabled: false
 
   # Custom keypoint offset patterns for non-default peg shapes
   keypoint_offset:
@@ -26,7 +32,7 @@ wrappers:
     # Axis mode parameters
     num_keypoints: 4
     x_scale: 0.015
-    y_scale: 0.015
+    y_scale: 0.023 # ratio of y to x on rect is 32.43/20.85=1.555
     z_scale: 0.15
 
     # Polygon mode parameters
@@ -39,19 +45,22 @@ wrappers:
     
     enable_contact_reward: false
     contact_reward_weight: 2.0
-    
+
+agent:
+  supervised_selection_loss_weight: 1.0
+#  policy_learning_rate: 5.0e-4
+#  critic_learning_rate: 1.0e-4
+#  #learning_epochs: 1
+
 environment:
   task:
-    asset_variant: hex_short_small
-
-    hand_init_orn_noise: [0.0, 0.0, 0.5236]
-    
+    asset_variant: rect_short_small
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
     fixed_asset_pos: [0.001, 0.001, 0.001]  
-
+    
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_hex"
+  name: &exp_name "LCLoP_rect"
   tags: ['exp_task_shape']
   group: *exp_name
