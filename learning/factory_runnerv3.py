@@ -20,6 +20,11 @@ parser.add_argument("--override", action="append", help="Override config values:
 parser.add_argument("--manual-control", action="store_true", help="Enable manual control mode with visualization")
 parser.add_argument("--test_reset", action="store_true", help="Initializes env and then resets it 20 times allowing space for different checks")
 parser.add_argument("--eval_tag", type=str, default=None, help="Evaluation tag for tracking training runs (overrides auto-generated timestamp tag)")
+parser.add_argument("--checkpoint_tag", type=str, default=None, help="WandB tag to find checkpoint runs for initialization")
+parser.add_argument("--checkpoint_step", type=int, default=None, help="Checkpoint step number to load (required with --checkpoint_tag)")
+parser.add_argument("--checkpoint_project", type=str, default="SG_Exps", help="WandB project to search for checkpoint runs (default: SG_Exps)")
+parser.add_argument("--checkpoint_entity", type=str, default="hur", help="WandB entity for checkpoint runs (default: hur)")
+parser.add_argument("--new_project", type=str, default=None, help="WandB project for new training runs (overrides config value)")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -35,8 +40,8 @@ if args_cli.manual_control:
     else:
         print(f"[INFO]: --manual-control flag set, using provided config: {args_cli.config}")
 else:
-    if args_cli.config is None:
-        raise ValueError("--config argument is required when not using --manual-control")
+    if args_cli.config is None and args_cli.checkpoint_tag is None:
+        raise ValueError("--config argument is required when not using --manual-control or --checkpoint_tag")
 
 # Set visualization based on manual control flag
 args_cli.video = False
@@ -100,6 +105,7 @@ from memories.importance_sampling_memory import ImportanceSamplingMemory
 import learning.launch_utils_v3 as lUtils
 from configs.config_manager_v3 import ConfigManagerV3
 from wrappers.skrl.async_critic_isaaclab_wrapper import AsyncCriticIsaacLabWrapper
+from eval.checkpoint_utils import query_runs_by_tag, load_checkpoints_parallel, reconstruct_config_from_wandb
 
 # Import factory environment class for direct instantiation
 try:
@@ -313,10 +319,46 @@ def cleanup_wandb(signum=None, frame=None):
 def main(
     args_cli
 ):
-    # unpack configuration files
-    configManager = ConfigManagerV3()
+    # Track WandB runs if loading from checkpoint (used later for checkpoint loading)
+    checkpoint_runs = None
 
-    configs = configManager.process_config(args_cli.config, args_cli.override)
+    # Load configuration - either from WandB checkpoint or from local config file
+    if args_cli.checkpoint_tag is not None:
+        # Validate checkpoint arguments
+        if args_cli.checkpoint_step is None:
+            raise ValueError("--checkpoint_step is required when using --checkpoint_tag")
+
+        print(f"[INFO]: Loading config from WandB checkpoint tag '{args_cli.checkpoint_tag}'")
+
+        # Query WandB for runs with the specified tag
+        checkpoint_runs = query_runs_by_tag(
+            tag=args_cli.checkpoint_tag,
+            entity=args_cli.checkpoint_entity,  # Can be None, will use default
+            project=args_cli.checkpoint_project
+        )
+
+        if len(checkpoint_runs) == 0:
+            raise ValueError(f"No runs found with tag '{args_cli.checkpoint_tag}'")
+
+        # Download config from the first run (all runs should have same config)
+        configs = reconstruct_config_from_wandb(checkpoint_runs[0])
+
+        # Apply any CLI overrides on top of the downloaded config
+        if args_cli.override:
+            configManager = ConfigManagerV3()
+            parsed_overrides = configManager.parse_cli_overrides(args_cli.override)
+            configManager.apply_cli_overrides(configs, parsed_overrides)
+            # Re-apply primary config to propagate changes (e.g., num_envs_per_agent -> scene.num_envs)
+            configManager._apply_primary_config_to_all(configs)
+    else:
+        # Load config from local file
+        configManager = ConfigManagerV3()
+        configs = configManager.process_config(args_cli.config, args_cli.override)
+
+    # Override WandB project for new training runs if specified
+    if args_cli.new_project is not None:
+        configs['experiment'].wandb_project = args_cli.new_project
+        print(f"[INFO]: New training runs will be logged to project: {args_cli.new_project}")
 
     # Validate manual control mode consistency
     if args_cli.manual_control:
@@ -520,6 +562,34 @@ def main(
     print("[INFO]:   Creating agents")
     agents = lUtils.create_block_ppo_agents(env, configs, models, memory)
     print("[INFO]:   Agents Created")
+
+    # Load from WandB checkpoint if specified
+    if checkpoint_runs is not None:
+        print(f"[INFO]: Loading checkpoints from WandB at step {args_cli.checkpoint_step}")
+
+        # Verify number of runs matches expected agents
+        num_agents = configs['primary'].total_agents
+        if len(checkpoint_runs) != num_agents:
+            raise ValueError(
+                f"Number of WandB runs ({len(checkpoint_runs)}) does not match total_agents ({num_agents}). "
+                f"Found runs: {[r.id for r in checkpoint_runs]}"
+            )
+
+        # Download and load checkpoints into agent
+        download_dirs = load_checkpoints_parallel(
+            runs=checkpoint_runs,
+            step=args_cli.checkpoint_step,
+            env=env,
+            agent=agents
+        )
+
+        # Clean up temporary download directories
+        import shutil
+        for d in download_dirs:
+            shutil.rmtree(d, ignore_errors=True)
+
+        print(f"[INFO]: Successfully loaded checkpoints from WandB")
+
     print("[INFO]: Learning objects instanciated")
     print("=" * 100)
 

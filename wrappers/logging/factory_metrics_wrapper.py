@@ -74,9 +74,12 @@ class FactoryMetricsWrapper(gym.Wrapper):
             self.agent_episode_data[i] = {
                 'success_rates': [],
                 'success_times': [],
+                'is_timeouts': [],  # Whether episode timed out (only meaningful if not succeeded)
                 'engagement_rates': [],
                 'engagement_times': [],
-                'engagement_lengths': [],
+                'engagement_lengths': [],  # Kept for backwards compat (total steps engaged)
+                'engagement_period_counts': [],  # Number of continuous periods per episode
+                'avg_engagement_period_lengths': [],  # Average period length per episode
                 'ssv_values': [],
                 'ssjv_values': [],
                 # Force metrics will be added dynamically when force data is detected
@@ -133,7 +136,13 @@ class FactoryMetricsWrapper(gym.Wrapper):
         # Engagement tracking
         self.ep_engaged = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
         self.ep_engaged_times = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
-        self.ep_engaged_length = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
+        self.ep_engaged_length = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)  # Total steps engaged (backwards compat)
+
+        # Engagement period tracking (for continuous engagement periods)
+        self.prev_engaged = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
+        self.current_engagement_length = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
+        self.engagement_period_count = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
+        self.engagement_period_total_length = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
 
         # Smoothness metrics
         self.ep_ssv = torch.zeros((self.num_envs,), device=self.device)  # Sum squared velocity
@@ -161,27 +170,42 @@ class FactoryMetricsWrapper(gym.Wrapper):
             joint_vel = self.unwrapped._robot.data.joint_vel
             self.ep_ssjv += torch.linalg.norm(joint_vel * joint_vel, axis=1)
 
-        # Update force/torque metrics if available
+        # Update force/torque metrics if available - ONLY when in contact
         if self.has_force_data and hasattr(self.unwrapped, 'robot_force_torque'):
             force_magnitude = torch.linalg.norm(self.unwrapped.robot_force_torque[:, :3], axis=1)
             torque_magnitude = torch.linalg.norm(self.unwrapped.robot_force_torque[:, 3:], axis=1)
 
-            self.ep_sum_force += force_magnitude
-            self.ep_sum_torque += torque_magnitude
-            self.ep_max_force = torch.max(self.ep_max_force, force_magnitude)
+            # Determine which environments are in contact (any axis)
+            if hasattr(self.unwrapped, 'in_contact'):
+                # in_contact[:, :3] are force contact flags - any True means contact
+                in_contact_mask = self.unwrapped.in_contact[:, :3].any(dim=1)
+            else:
+                # Fallback: count all steps if in_contact not available
+                in_contact_mask = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
+
+            # Only accumulate for environments in contact
+            self.ep_sum_force[in_contact_mask] += force_magnitude[in_contact_mask]
+            self.ep_sum_torque[in_contact_mask] += torque_magnitude[in_contact_mask]
+            self.ep_max_force = torch.max(self.ep_max_force, force_magnitude)  # Max always updates
             self.ep_max_torque = torch.max(self.ep_max_torque, torque_magnitude)
 
-            # Welford's algorithm for running variance
-            self.ep_force_count += 1
-            delta_force = force_magnitude - self.ep_mean_force
-            self.ep_mean_force += delta_force / self.ep_force_count
-            delta2_force = force_magnitude - self.ep_mean_force
-            self.ep_m2_force += delta_force * delta2_force
+            # Welford's algorithm for running variance - only for environments in contact
+            self.ep_force_count[in_contact_mask] += 1
 
-            delta_torque = torque_magnitude - self.ep_mean_torque
-            self.ep_mean_torque += delta_torque / self.ep_force_count
-            delta2_torque = torque_magnitude - self.ep_mean_torque
-            self.ep_m2_torque += delta_torque * delta2_torque
+            # Only update Welford stats for environments in contact
+            if torch.any(in_contact_mask):
+                count_safe = self.ep_force_count.clone()
+                count_safe[count_safe == 0] = 1  # Avoid division by zero
+
+                delta_force = force_magnitude - self.ep_mean_force
+                self.ep_mean_force[in_contact_mask] += delta_force[in_contact_mask] / count_safe[in_contact_mask]
+                delta2_force = force_magnitude - self.ep_mean_force
+                self.ep_m2_force[in_contact_mask] += (delta_force * delta2_force)[in_contact_mask]
+
+                delta_torque = torque_magnitude - self.ep_mean_torque
+                self.ep_mean_torque[in_contact_mask] += delta_torque[in_contact_mask] / count_safe[in_contact_mask]
+                delta2_torque = torque_magnitude - self.ep_mean_torque
+                self.ep_m2_torque[in_contact_mask] += (delta_torque * delta2_torque)[in_contact_mask]
 
         # Update success and engagement tracking
         self._update_success_engagement_tracking()
@@ -294,20 +318,47 @@ class FactoryMetricsWrapper(gym.Wrapper):
         self.curr_engaged = curr_engaged
 
         # Update success tracking
+        # Only count success if episode_length_buf > 0 (prevents false positives at step 0 after reset)
+        if hasattr(self.unwrapped, 'episode_length_buf'):
+            valid_step_mask = self.unwrapped.episode_length_buf > 0
+            curr_successes = curr_successes & valid_step_mask
+            curr_engaged = curr_engaged & valid_step_mask
+
         first_success = torch.logical_and(curr_successes, torch.logical_not(self.ep_succeeded))
         self.ep_succeeded[curr_successes] = True
         first_success_ids = first_success.nonzero(as_tuple=False).squeeze(-1)
         if len(first_success_ids) > 0 and hasattr(self.unwrapped, 'episode_length_buf'):
             self.ep_success_times[first_success_ids] = self.unwrapped.episode_length_buf[first_success_ids].clone()
 
-        # Update engagement tracking
+        # Update engagement tracking (first engagement time)
         first_engaged = torch.logical_and(curr_engaged, torch.logical_not(self.ep_engaged))
         first_engaged_ids = first_engaged.nonzero(as_tuple=False).squeeze(-1)
         if len(first_engaged_ids) > 0 and hasattr(self.unwrapped, 'episode_length_buf'):
             self.ep_engaged_times[first_engaged_ids] = self.unwrapped.episode_length_buf[first_engaged_ids].clone()
 
         self.ep_engaged[curr_engaged] = True
-        self.ep_engaged_length[curr_engaged] += 1
+        self.ep_engaged_length[curr_engaged] += 1  # Total steps engaged (backwards compat)
+
+        # Track continuous engagement periods
+        # Detect transitions (vectorized - no Python loops)
+        just_engaged = torch.logical_and(curr_engaged, torch.logical_not(self.prev_engaged))
+        just_disengaged = torch.logical_and(self.prev_engaged, torch.logical_not(curr_engaged))
+
+        # Start new periods (first step of engagement)
+        self.current_engagement_length[just_engaged] = 1
+
+        # Continue existing periods
+        continuing = torch.logical_and(curr_engaged, self.prev_engaged)
+        self.current_engagement_length[continuing] += 1
+
+        # Complete periods (disengagement) - record to totals
+        if torch.any(just_disengaged):
+            self.engagement_period_count[just_disengaged] += 1
+            self.engagement_period_total_length[just_disengaged] += self.current_engagement_length[just_disengaged]
+            self.current_engagement_length[just_disengaged] = 0
+
+        # Update previous state
+        self.prev_engaged = curr_engaged.clone()
 
     def _store_completed_episodes(self, completed_mask):
         """Store completed episode data in agent lists (like WandbWrapper)."""
@@ -328,28 +379,42 @@ class FactoryMetricsWrapper(gym.Wrapper):
             # Calculate episode metrics for this completed episode
             episode_length = getattr(self.unwrapped, 'episode_length_buf', torch.zeros(self.num_envs, device=self.device))[env_idx].item()
 
-            # Normalize forces/torques by episode length
-            decimation = getattr(self.unwrapped.cfg, 'decimation', 1)
-            norm_factor = decimation * episode_length if episode_length > 0 else 1
+            # Check if this environment timed out vs early termination
+            env_is_timeout = episode_length >= (self.max_episode_length - 1)
+
+            # Finalize open engagement period (only for early termination)
+            if not env_is_timeout and self.prev_engaged[env_idx] and self.current_engagement_length[env_idx] > 0:
+                self.engagement_period_count[env_idx] += 1
+                self.engagement_period_total_length[env_idx] += self.current_engagement_length[env_idx]
+
+            # Calculate average period length for this episode
+            period_count = self.engagement_period_count[env_idx].item()
+            total_period_length = self.engagement_period_total_length[env_idx].item()
+            avg_period_length = total_period_length / period_count if period_count > 0 else 0.0
 
             # Store factory metrics in agent's episode lists
             self.agent_episode_data[agent_id]['success_rates'].append(float(self.ep_succeeded[env_idx]))
             self.agent_episode_data[agent_id]['success_times'].append(float(self.ep_success_times[env_idx]))
+            self.agent_episode_data[agent_id]['is_timeouts'].append(env_is_timeout)
             self.agent_episode_data[agent_id]['engagement_rates'].append(float(self.ep_engaged[env_idx]))
             self.agent_episode_data[agent_id]['engagement_times'].append(float(self.ep_engaged_times[env_idx]))
-            self.agent_episode_data[agent_id]['engagement_lengths'].append(float(self.ep_engaged_length[env_idx]))
+            self.agent_episode_data[agent_id]['engagement_lengths'].append(float(self.ep_engaged_length[env_idx]))  # Backwards compat
+            self.agent_episode_data[agent_id]['engagement_period_counts'].append(period_count)
+            self.agent_episode_data[agent_id]['avg_engagement_period_lengths'].append(avg_period_length)
             self.agent_episode_data[agent_id]['ssv_values'].append(float(self.ep_ssv[env_idx]))
             self.agent_episode_data[agent_id]['ssjv_values'].append(float(self.ep_ssjv[env_idx]))
 
             if self.has_force_data and hasattr(self, 'ep_max_force'):
                 max_force_val = float(self.ep_max_force[env_idx])
-                avg_force_val = float(self.ep_sum_force[env_idx] / norm_factor)
-                avg_torque_val = float(self.ep_sum_torque[env_idx] / norm_factor)
+
+                # Use contact step count for averaging (not total episode length)
+                contact_count = float(self.ep_force_count[env_idx])
+                avg_force_val = float(self.ep_sum_force[env_idx] / contact_count) if contact_count > 0 else 0.0
+                avg_torque_val = float(self.ep_sum_torque[env_idx] / contact_count) if contact_count > 0 else 0.0
 
                 # Calculate std dev from Welford's M2 (sum of squared deviations)
-                count = float(self.ep_force_count[env_idx])
-                std_force_val = float(torch.sqrt(self.ep_m2_force[env_idx] / count)) if count > 0 else 0.0
-                std_torque_val = float(torch.sqrt(self.ep_m2_torque[env_idx] / count)) if count > 0 else 0.0
+                std_force_val = float(torch.sqrt(self.ep_m2_force[env_idx] / contact_count)) if contact_count > 0 else 0.0
+                std_torque_val = float(torch.sqrt(self.ep_m2_torque[env_idx] / contact_count)) if contact_count > 0 else 0.0
 
                 self.agent_episode_data[agent_id]['max_forces'].append(max_force_val)
                 self.agent_episode_data[agent_id]['max_torques'].append(float(self.ep_max_torque[env_idx]))
@@ -368,6 +433,9 @@ class FactoryMetricsWrapper(gym.Wrapper):
         metrics_names = [
             'Episode/success_rate', 'Episode/success_time', 'Episode/engagement_rate',
             'Episode/engagement_time', 'Episode/engagement_length',
+            'Episode/success_count', 'Episode/engagement_count', 'Episode/engagement_period_count',
+            'Episode/break_rate', 'Episode/break_count',  # Early termination without success
+            'Episode/timeout_rate', 'Episode/timeout_count',  # Max steps without success
             'Smoothness/sum_square_velocity', 'Smoothness/sum_square_joint_velocity'
         ]
 
@@ -392,13 +460,38 @@ class FactoryMetricsWrapper(gym.Wrapper):
 
             # Calculate means across completed episodes for this agent
             mean_success_rate = sum(agent_data['success_rates']) / len(agent_data['success_rates'])
-            mean_success_time = sum(agent_data['success_times']) / len(agent_data['success_times']) if agent_data['success_times'] else 0.0
             mean_engagement_rate = sum(agent_data['engagement_rates']) / len(agent_data['engagement_rates'])
-            mean_engagement_time = sum(agent_data['engagement_times']) / len(agent_data['engagement_times']) if agent_data['engagement_times'] else 0.0
-            mean_engagement_length = sum(agent_data['engagement_lengths']) / len(agent_data['engagement_lengths'])
+
+            # Only average success_time over successful episodes
+            successful_times = [t for t, s in zip(agent_data['success_times'], agent_data['success_rates']) if s == 1.0]
+            mean_success_time = sum(successful_times) / len(successful_times) if successful_times else 0.0
+
+            # Only average engagement_time over engaged episodes
+            engaged_times = [t for t, e in zip(agent_data['engagement_times'], agent_data['engagement_rates']) if e == 1.0]
+            mean_engagement_time = sum(engaged_times) / len(engaged_times) if engaged_times else 0.0
+
+            # Average engagement period length (average of per-episode averages, only for episodes with periods)
+            avg_period_lengths = [l for l in agent_data['avg_engagement_period_lengths'] if l > 0]
+            mean_engagement_length = sum(avg_period_lengths) / len(avg_period_lengths) if avg_period_lengths else 0.0
+
             mean_ssv = sum(agent_data['ssv_values']) / len(agent_data['ssv_values'])
             mean_ssjv = sum(agent_data['ssjv_values']) / len(agent_data['ssjv_values'])
 
+            # Raw counts
+            total_successes = sum(agent_data['success_rates'])
+            total_engagements = sum(agent_data['engagement_rates'])
+            total_engagement_periods = sum(agent_data['engagement_period_counts'])
+
+            # Episode outcomes: success, break, or timeout (mutually exclusive)
+            # Break = early termination WITHOUT success
+            # Timeout = max steps reached WITHOUT success
+            total_episodes = len(agent_data['success_rates'])
+            total_breaks = sum(1 for s, t in zip(agent_data['success_rates'], agent_data['is_timeouts'])
+                              if s == 0.0 and not t)
+            total_timeouts = sum(1 for s, t in zip(agent_data['success_rates'], agent_data['is_timeouts'])
+                                if s == 0.0 and t)
+            break_rate = total_breaks / total_episodes if total_episodes > 0 else 0.0
+            timeout_rate = total_timeouts / total_episodes if total_episodes > 0 else 0.0
 
             # Populate tensors for this agent
             all_agent_metrics['Episode/success_rate'][agent_id] = mean_success_rate
@@ -406,6 +499,13 @@ class FactoryMetricsWrapper(gym.Wrapper):
             all_agent_metrics['Episode/engagement_rate'][agent_id] = mean_engagement_rate
             all_agent_metrics['Episode/engagement_time'][agent_id] = mean_engagement_time
             all_agent_metrics['Episode/engagement_length'][agent_id] = mean_engagement_length
+            all_agent_metrics['Episode/success_count'][agent_id] = total_successes
+            all_agent_metrics['Episode/engagement_count'][agent_id] = total_engagements
+            all_agent_metrics['Episode/engagement_period_count'][agent_id] = total_engagement_periods
+            all_agent_metrics['Episode/break_rate'][agent_id] = break_rate
+            all_agent_metrics['Episode/break_count'][agent_id] = total_breaks
+            all_agent_metrics['Episode/timeout_rate'][agent_id] = timeout_rate
+            all_agent_metrics['Episode/timeout_count'][agent_id] = total_timeouts
             all_agent_metrics['Smoothness/sum_square_velocity'][agent_id] = mean_ssv
             all_agent_metrics['Smoothness/sum_square_joint_velocity'][agent_id] = mean_ssjv
 
@@ -435,9 +535,12 @@ class FactoryMetricsWrapper(gym.Wrapper):
             agent_data = self.agent_episode_data[agent_id]
             agent_data['success_rates'].clear()
             agent_data['success_times'].clear()
+            agent_data['is_timeouts'].clear()
             agent_data['engagement_rates'].clear()
             agent_data['engagement_times'].clear()
             agent_data['engagement_lengths'].clear()
+            agent_data['engagement_period_counts'].clear()
+            agent_data['avg_engagement_period_lengths'].clear()
             agent_data['ssv_values'].clear()
             agent_data['ssjv_values'].clear()
             if self.has_force_data:
@@ -457,6 +560,12 @@ class FactoryMetricsWrapper(gym.Wrapper):
         self.ep_engaged_length[env_ids] = 0
         self.ep_ssv[env_ids] = 0
         self.ep_ssjv[env_ids] = 0
+
+        # Reset engagement period tracking
+        self.prev_engaged[env_ids] = False
+        self.current_engagement_length[env_ids] = 0
+        self.engagement_period_count[env_ids] = 0
+        self.engagement_period_total_length[env_ids] = 0
 
         if self.has_force_data and hasattr(self, 'ep_max_force'):
             self.ep_max_force[env_ids] = 0
@@ -561,28 +670,50 @@ class FactoryMetricsWrapper(gym.Wrapper):
         if not isinstance(env_ids, torch.Tensor):
             env_ids = torch.tensor(env_ids, device=self.device)
 
+        # CRITICAL: Before storing metrics, check if any terminating environments
+        # have just succeeded/engaged THIS step (success detection happens after super().step()
+        # returns, but _reset_idx is called from WITHIN super().step()).
+        # We must capture success/engagement time NOW before episode_length_buf is reset.
+        if hasattr(self.unwrapped, '_get_curr_successes') and hasattr(self.unwrapped, 'cfg_task'):
+            # Early success capture
+            if hasattr(self.unwrapped.cfg_task, 'success_threshold'):
+                success_threshold = self.unwrapped.cfg_task.success_threshold
+                check_rot = getattr(self.unwrapped.cfg_task, 'name', '') == "nut_thread"
+                curr_successes = self.unwrapped._get_curr_successes(success_threshold, check_rot)
+
+                # For terminating envs that are currently successful but haven't been marked yet
+                first_success_in_terminating = curr_successes[env_ids] & ~self.ep_succeeded[env_ids]
+                if torch.any(first_success_in_terminating):
+                    terminating_first_success_ids = env_ids[first_success_in_terminating]
+                    if hasattr(self.unwrapped, 'episode_length_buf'):
+                        self.ep_success_times[terminating_first_success_ids] = self.unwrapped.episode_length_buf[terminating_first_success_ids].clone()
+                        self.ep_succeeded[terminating_first_success_ids] = True
+
+            # Early engagement capture
+            if hasattr(self.unwrapped.cfg_task, 'engage_threshold'):
+                engage_threshold = self.unwrapped.cfg_task.engage_threshold
+                curr_engaged = self.unwrapped._get_curr_successes(engage_threshold, False)
+
+                # For terminating envs that are currently engaged but haven't been marked yet
+                first_engaged_in_terminating = curr_engaged[env_ids] & ~self.ep_engaged[env_ids]
+                if torch.any(first_engaged_in_terminating):
+                    terminating_first_engaged_ids = env_ids[first_engaged_in_terminating]
+                    if hasattr(self.unwrapped, 'episode_length_buf'):
+                        self.ep_engaged_times[terminating_first_engaged_ids] = self.unwrapped.episode_length_buf[terminating_first_engaged_ids].clone()
+                        self.ep_engaged[terminating_first_engaged_ids] = True
+                        # Also update engagement period tracking for first engagement on termination step
+                        self.engagement_period_count[terminating_first_engaged_ids] += 1
+                        self.engagement_period_total_length[terminating_first_engaged_ids] += 1  # At least 1 step
+
         # Skip processing on first reset (all data would be zeros)
         if self._first_reset:
             self._first_reset = False
         else:
             if len(env_ids) == self.num_envs:
-                # Full reset - all environments hit max_steps
-
-                # All environments that hit max_steps are completed episodes
-                episode_lengths = getattr(self.unwrapped, 'episode_length_buf', torch.zeros(self.num_envs, device=self.device, dtype=torch.long))
-                # Use >= (max - 1) to handle 0-indexed episode counting (episodes complete at step 149 for max_length=150)
-                max_step_mask = episode_lengths >= (self.max_episode_length - 1)
-                max_step_env_ids = max_step_mask.nonzero(as_tuple=False).squeeze(-1).tolist()
-
-
-                # Show per-agent breakdown for verification
-                for agent_id in range(self.num_agents):
-                    start_idx = agent_id * self.envs_per_agent
-                    end_idx = (agent_id + 1) * self.envs_per_agent
-                    agent_max_step = [env_id for env_id in max_step_env_ids if start_idx <= env_id < end_idx]
-
-                if torch.any(max_step_mask):
-                    self._store_completed_episodes(max_step_mask)
+                # Full reset - ALL environments get their episodes closed out
+                # This happens at max_steps boundary - store ALL environments, not just timeouts
+                all_envs_mask = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
+                self._store_completed_episodes(all_envs_mask)
 
                 # Publish all accumulated metrics and reset all tracking
                 self._send_aggregated_factory_metrics()
@@ -624,6 +755,12 @@ class FactoryMetricsWrapper(gym.Wrapper):
         self.ep_ssv.fill_(0)
         self.ep_ssjv.fill_(0)
 
+        # Reset engagement period tracking
+        self.prev_engaged.fill_(False)
+        self.current_engagement_length.fill_(0)
+        self.engagement_period_count.fill_(0)
+        self.engagement_period_total_length.fill_(0)
+
         # Reset force tracking if available
         if self.has_force_data and hasattr(self, 'ep_max_force'):
             self.ep_max_force.fill_(0)
@@ -641,9 +778,12 @@ class FactoryMetricsWrapper(gym.Wrapper):
             agent_data = self.agent_episode_data[agent_id]
             agent_data['success_rates'].clear()
             agent_data['success_times'].clear()
+            agent_data['is_timeouts'].clear()
             agent_data['engagement_rates'].clear()
             agent_data['engagement_times'].clear()
             agent_data['engagement_lengths'].clear()
+            agent_data['engagement_period_counts'].clear()
+            agent_data['avg_engagement_period_lengths'].clear()
             agent_data['ssv_values'].clear()
             agent_data['ssjv_values'].clear()
             if self.has_force_data:

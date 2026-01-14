@@ -304,12 +304,6 @@ def create_policy_and_value_models(env, configs):
         print("  - Creating standard SimBa agent models")
         models['policy'] = _create_standard_policy_model(env, configs)
 
-    # Debug: Check log_std memory independence
-    print("\n=== Log Std Memory Check ===")
-    for i in range(models['policy'].num_agents):
-        print(f"Agent {i}: id={id(models['policy'].actor_logstd[i].data)}, values={models['policy'].actor_logstd[i].data}")
-    print("=" * 50)
-
     print("  - Creating value model")
     models["value"] = _create_value_model(env, configs)
 
