@@ -268,13 +268,15 @@ def is_parallel_mode(args: argparse.Namespace) -> bool:
 
 # ===== METRIC CATEGORIES =====
 
-# Core metrics (10 total)
+# Core metrics (12 total)
 CORE_METRICS = [
     'total_episodes',
     'num_successful_completions',
     'num_breaks',
     'num_failed_timeouts',
     'episode_length',
+    'avg_steps_to_success',
+    'avg_steps_to_break',
     'ssv',
     'ssjv',
     'max_force',
@@ -1624,6 +1626,8 @@ def run_basic_evaluation(
         contact_pos_counts=contact_pos_counts,
         no_contact_force_counts=no_contact_force_counts,
         no_contact_pos_counts=no_contact_pos_counts,
+        success_step=success_step,
+        termination_step=termination_step,
     )
 
     # Prepare rollout data for video generation and/or noise evaluation
@@ -1659,6 +1663,7 @@ def run_basic_evaluation(
             'contact_pos_counts': contact_pos_counts,
             'no_contact_force_counts': no_contact_force_counts,
             'no_contact_pos_counts': no_contact_pos_counts,
+            'success_step': success_step,
             'termination_step': termination_step,
             'truncation_step': truncation_step,
         }
@@ -1680,6 +1685,8 @@ def _compute_aggregated_metrics(
     contact_pos_counts: torch.Tensor,
     no_contact_force_counts: torch.Tensor,
     no_contact_pos_counts: torch.Tensor,
+    success_step: torch.Tensor,
+    termination_step: torch.Tensor,
 ) -> Dict[str, float]:
     """
     Compute aggregated metrics from raw episode data.
@@ -1698,9 +1705,11 @@ def _compute_aggregated_metrics(
         contact_pos_counts: Contact+Pos counts [num_envs, 3]
         no_contact_force_counts: NoContact+Force counts [num_envs, 3]
         no_contact_pos_counts: NoContact+Pos counts [num_envs, 3]
+        success_step: Step when success occurred [num_envs] (-1 if never succeeded)
+        termination_step: Step when break occurred [num_envs] (-1 if never broke)
 
     Returns:
-        Dictionary of aggregated metrics (38 total)
+        Dictionary of aggregated metrics (40 total)
     """
     metrics = {}
     num_envs = episode_lengths.shape[0]
@@ -1727,6 +1736,30 @@ def _compute_aggregated_metrics(
         print(f"WARNING: Episode counts don't sum correctly! {total_check} != {num_envs}")
 
     metrics['episode_length'] = episode_lengths.float().mean().item()
+
+    # Average steps to success/break (MUTUALLY EXCLUSIVE categories):
+    # - success_before_break: Succeeded BEFORE breaking (or never broke)
+    # - break_first: Broke on same step as success OR broke without succeeding
+    #
+    # Scenarios:
+    # 1. Succeeds, never breaks → count in avg_steps_to_success ONLY
+    # 2. Succeeds at step 10, breaks at step 15 → count in avg_steps_to_success ONLY
+    # 3. Succeeds and breaks on same step → count in avg_steps_to_break ONLY
+    # 4. Breaks without ever succeeding → count in avg_steps_to_break ONLY
+
+    # Average steps to success (succeeded BEFORE breaking, or succeeded without breaking)
+    success_before_break = episode_succeeded & (~episode_terminated | (success_step < termination_step))
+    if success_before_break.any():
+        metrics['avg_steps_to_success'] = success_step[success_before_break].float().mean().item()
+    else:
+        metrics['avg_steps_to_success'] = 0.0
+
+    # Average steps to break (broke without succeeding first, or broke on same step as success)
+    break_first = episode_terminated & (~episode_succeeded | (termination_step <= success_step))
+    if break_first.any():
+        metrics['avg_steps_to_break'] = termination_step[break_first].float().mean().item()
+    else:
+        metrics['avg_steps_to_break'] = 0.0
 
     # Smoothness metrics
     metrics['ssv'] = episode_ssv.mean().item()
@@ -2101,7 +2134,7 @@ def _compute_range_metrics(
         range_name: Name of the noise/rotation range (for logging)
 
     Returns:
-        Dictionary of metrics for this range (same 38 metrics as main aggregation)
+        Dictionary of metrics for this range (same 40 metrics as main aggregation)
     """
     print(f"    Computing metrics for range {range_name} (envs {start_idx}-{end_idx})")
 
@@ -2119,6 +2152,8 @@ def _compute_range_metrics(
     contact_pos_counts = rollout_data['contact_pos_counts'][start_idx:end_idx]
     no_contact_force_counts = rollout_data['no_contact_force_counts'][start_idx:end_idx]
     no_contact_pos_counts = rollout_data['no_contact_pos_counts'][start_idx:end_idx]
+    success_step = rollout_data['success_step'][start_idx:end_idx]
+    termination_step = rollout_data['termination_step'][start_idx:end_idx]
 
     # Reuse the main aggregation function for consistency
     return _compute_aggregated_metrics(
@@ -2135,6 +2170,8 @@ def _compute_range_metrics(
         contact_pos_counts=contact_pos_counts,
         no_contact_force_counts=no_contact_force_counts,
         no_contact_pos_counts=no_contact_pos_counts,
+        success_step=success_step,
+        termination_step=termination_step,
     )
 
 
@@ -2214,6 +2251,8 @@ def compute_run_metrics(
             contact_pos_counts=rollout_data['contact_pos_counts'],
             no_contact_force_counts=rollout_data['no_contact_force_counts'],
             no_contact_pos_counts=rollout_data['no_contact_pos_counts'],
+            success_step=rollout_data['success_step'],
+            termination_step=rollout_data['termination_step'],
         )
         return prefix_metrics_by_category(base_metrics, "Eval_Core", "Eval_Contact")
 
