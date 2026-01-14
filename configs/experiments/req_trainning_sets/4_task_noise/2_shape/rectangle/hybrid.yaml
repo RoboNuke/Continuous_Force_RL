@@ -4,9 +4,10 @@
 base_config: "configs/base/PiH_base.yaml"
 
 primary:
-  agents_per_break_force: 5 # Number of agents per break force condition
-  num_envs_per_agent: 256   # Environments per individual agent
-  max_steps: 7500064 #25000192
+  agents_per_break_force: 5
+  num_envs_per_agent: 256
+  break_forces: [10]
+  max_steps: 10000500
 
 # Model configuration for hybrid agent
 model:
@@ -28,7 +29,7 @@ wrappers:
   # Custom keypoint offset patterns for non-default peg shapes
   keypoint_offset:
     enabled: true
-    mode: 'polygon'  # 'axis' or 'polygon'
+    mode: 'axis'  # 'axis' or 'polygon'
     # Axis mode parameters
     num_keypoints: 4
     x_scale: 0.015
@@ -55,10 +56,18 @@ agent:
 environment:
   task:
     asset_variant: rect_short_small
+
+    # Yaw initialization for ±90° max peg-hole difference
+    fixed_asset_init_orn_deg: -87
+    fixed_asset_init_orn_range_deg: 174
+    hand_init_orn_noise: [0.0, 0.0, 0.0524]  # ±3° peg noise
+
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
-    fixed_asset_pos: [0.001, 0.001, 0.001]  
-    
+    fixed_asset_pos: [0.001, 0.001, 0.001]
+    use_yaw_noise: true
+    fixed_asset_yaw: 0.0523599
+
 # Experiment metadata
 experiment:
   name: &exp_name "basic-hybrid_rect"

@@ -67,8 +67,8 @@ environment:
     # Asset variant selection (optional - defaults to IsaacLab built-in assets)
     # Set both fields to use custom peg/hole assets from manifest
     asset_variant: null          # e.g., "forge_8mm", "custom_10mm"
-    asset_manifest_path: "/nfs/stak/users/brownhun/hpc-share/Continuous_Force_RL/assets/peg_hole/manifest.json"    # e.g., "/path/to/assets/peg_hole/manifest.json"
-    #asset_manifest_path: "/home/hunter/Continuous_Force_RL/assets/peg_hole/manifest.json"    # e.g., "/path/to/assets/peg_hole/manifest.json"
+    #asset_manifest_path: "/nfs/stak/users/brownhun/hpc-share/Continuous_Force_RL/assets/peg_hole/manifest.json"    # e.g., "/path/to/assets/peg_hole/manifest.json"
+    asset_manifest_path: "/home/hunter/Continuous_Force_RL/assets/peg_hole/manifest.json"    # e.g., "/path/to/assets/peg_hole/manifest.json"
     fixed_asset:
       spawn:
         rigid_props:
@@ -120,6 +120,7 @@ environment:
     fingertip_pos: "fingertip_midpoint_pos"
     fingertip_pos_rel_fixed: "fingertip_pos_rel_fixed"
     fingertip_quat: "fingertip_midpoint_quat"
+    fingertip_yaw_rel_fixed: "fingertip_yaw_rel_fixed"
     ee_linvel: "ee_linvel_fd"
     ee_angvel: "ee_angvel_fd"
     joint_pos: "joint_pos"
@@ -134,6 +135,8 @@ environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
     fixed_asset_pos: [0.0025, 0.0025, 0.0025]  # 2.5mm default from FORGE
+    fixed_asset_yaw: 0.0523599  # 3 degrees in radians
+    use_yaw_noise: false  # Set to true to add fingertip_yaw_rel_fixed observation
     ee_pos: [0.00025, 0.00025, 0.00025]
     force_torque: [1.0, 1.0, 1.0, 0.2, 0.2, 0.2]  # Force (N) and Torque (Nm) noise - applied per step
 

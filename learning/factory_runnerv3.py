@@ -475,6 +475,16 @@ def main(
     print("[INFO]: Step 3 - Applying wrapper stack")
     env = lUtils.apply_wrappers(env, configs)
 
+    # Print yaw initialization config if set
+    task_cfg = configs['environment'].task
+    if hasattr(task_cfg, 'fixed_asset_init_orn_deg') and hasattr(task_cfg, 'fixed_asset_init_orn_range_deg'):
+        hole_min = task_cfg.fixed_asset_init_orn_deg
+        hole_max = hole_min + task_cfg.fixed_asset_init_orn_range_deg
+        peg_noise_rad = task_cfg.hand_init_orn_noise[2] if hasattr(task_cfg, 'hand_init_orn_noise') else 0
+        peg_noise_deg = peg_noise_rad * 180 / 3.14159
+        max_diff = (task_cfg.fixed_asset_init_orn_range_deg / 2) + peg_noise_deg
+        print(f"[INFO]:   Yaw init: hole=[{hole_min}°, {hole_max}°], peg=±{peg_noise_deg:.1f}°, max_diff=±{max_diff:.1f}°")
+
     # Apply physics debug wrapper if debug_mode is enabled
     if configs['primary'].debug_mode:
         from wrappers.debug.physics_debug_wrapper import PhysicsDebugWrapper

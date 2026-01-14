@@ -16,7 +16,17 @@ Key Features:
 """
 
 import torch
+import numpy as np
 import gymnasium as gym
+
+# Import Isaac Lab utilities with version compatibility
+try:
+    import omni.isaac.lab.utils.torch as torch_utils
+except ImportError:
+    try:
+        import isaacsim.core.utils.torch as torch_utils
+    except ImportError:
+        raise ImportError("Could not import Isaac Lab utilities")
 
 
 class EEPoseNoiseWrapper(gym.Wrapper):
@@ -71,6 +81,25 @@ class EEPoseNoiseWrapper(gym.Wrapper):
             device=self.device
         )
 
+        # Get yaw noise scale from config (default 3 degrees = 0.0523599 radians)
+        self.fixed_asset_yaw_noise_scale = getattr(
+            self.unwrapped.cfg.obs_rand, 'fixed_asset_yaw', 0.0523599
+        )
+
+        # Initialize yaw observation noise tensor (per-env, sampled at reset)
+        self.init_fixed_yaw_obs_noise = torch.zeros(
+            (self.num_envs,), dtype=torch.float32, device=self.device
+        )
+
+        # Check if yaw noise observation is enabled
+        self.use_yaw_noise = getattr(
+            self.unwrapped.cfg.obs_rand, 'use_yaw_noise', False
+        )
+
+        # If yaw noise is enabled, add fingertip_yaw_rel_fixed to obs_order and state_order
+        if self.use_yaw_noise:
+            self._add_yaw_observation_to_config()
+
         # Initialize previous noisy position for FD calculation
         # Will be properly initialized on first reset
         self.prev_noisy_ee_pos = torch.zeros(
@@ -93,6 +122,9 @@ class EEPoseNoiseWrapper(gym.Wrapper):
 
         print(f" EE Pose Noise Wrapper initialized")
         print(f"  - Noise scale (ee_pos): {self.unwrapped.cfg.obs_rand.ee_pos}")
+        print(f"  - Yaw noise enabled: {self.use_yaw_noise}")
+        if self.use_yaw_noise:
+            print(f"  - Noise scale (fixed_asset_yaw): {np.rad2deg(self.fixed_asset_yaw_noise_scale):.1f} degrees")
         print(f"  - Noise timing: per-step (in _compute_intermediate_values)")
         print(f"  - FD velocity: computed from noisy positions")
         print(f"  - Style: Forge-style separate noisy tensors")
@@ -127,6 +159,40 @@ class EEPoseNoiseWrapper(gym.Wrapper):
                 current_env = current_env.env
             else:
                 break
+
+    def _add_yaw_observation_to_config(self):
+        """
+        Add fingertip_yaw_rel_fixed to obs_order, state_order, and update observation spaces.
+
+        Called during initialization when use_yaw_noise is True.
+        """
+        env_cfg = self.unwrapped.cfg
+
+        # Check that obs_order and state_order exist
+        if not hasattr(env_cfg, 'obs_order'):
+            raise ValueError(
+                "Environment config missing 'obs_order'. Cannot add yaw observation."
+            )
+        if not hasattr(env_cfg, 'state_order'):
+            raise ValueError(
+                "Environment config missing 'state_order'. Cannot add yaw observation."
+            )
+
+        # Add to obs_order if not already present
+        if 'fingertip_yaw_rel_fixed' not in env_cfg.obs_order:
+            env_cfg.obs_order.append('fingertip_yaw_rel_fixed')
+            # Update observation_space size (+1 for yaw)
+            if hasattr(env_cfg, 'observation_space'):
+                env_cfg.observation_space += 1
+
+        # Add to state_order if not already present
+        if 'fingertip_yaw_rel_fixed' not in env_cfg.state_order:
+            env_cfg.state_order.append('fingertip_yaw_rel_fixed')
+            # Update state_space size (+1 for yaw)
+            if hasattr(env_cfg, 'state_space'):
+                env_cfg.state_space += 1
+
+        print(f"  - Yaw noise enabled: added fingertip_yaw_rel_fixed to obs_order and state_order")
 
     def reset(self, **kwargs):
         """
@@ -241,6 +307,48 @@ class EEPoseNoiseWrapper(gym.Wrapper):
         # Update previous noisy position for next step
         self.prev_noisy_ee_pos = self.unwrapped.noisy_fingertip_pos.clone()
 
+    def _compute_fingertip_yaw_rel_fixed(self, noisy=True):
+        """
+        Compute fingertip yaw relative to fixed object (optionally with noise).
+
+        Args:
+            noisy: If True, apply yaw noise to fixed object orientation
+
+        Returns:
+            Tensor of shape [num_envs, 1] with relative yaw in radians
+        """
+        # Get fixed object yaw from quaternion
+        fixed_yaw_clean = torch_utils.get_euler_xyz(self.unwrapped.fixed_quat)[-1]
+        fixed_yaw = fixed_yaw_clean.clone()
+
+        # Add noise if requested
+        if noisy:
+            fixed_yaw = fixed_yaw + self.init_fixed_yaw_obs_noise
+
+        # Get fingertip yaw (from upright reference frame, accounting for gripper pointing down)
+        # The gripper is inverted (pointing down), so we need to unrotate by 180 degrees around X
+        unrot_180_euler = torch.tensor(
+            [-np.pi, 0.0, 0.0], device=self.device
+        ).repeat(self.num_envs, 1)
+        unrot_quat = torch_utils.quat_from_euler_xyz(
+            roll=unrot_180_euler[:, 0],
+            pitch=unrot_180_euler[:, 1],
+            yaw=unrot_180_euler[:, 2]
+        )
+        fingertip_quat_unrot = torch_utils.quat_mul(
+            unrot_quat, self.unwrapped.fingertip_midpoint_quat
+        )
+        fingertip_yaw = torch_utils.get_euler_xyz(fingertip_quat_unrot)[-1]
+
+        # Compute relative yaw
+        rel_yaw = fingertip_yaw - fixed_yaw
+
+        # Wrap to [-pi, pi]
+        rel_yaw = torch.where(rel_yaw > torch.pi, rel_yaw - 2 * torch.pi, rel_yaw)
+        rel_yaw = torch.where(rel_yaw < -torch.pi, rel_yaw + 2 * torch.pi, rel_yaw)
+
+        return rel_yaw.unsqueeze(-1)  # Shape: [num_envs, 1]
+
     def _wrapped_get_observations(self):
         """
         Override _get_observations to use noisy EE position and velocity.
@@ -286,6 +394,11 @@ class EEPoseNoiseWrapper(gym.Wrapper):
             "prev_actions": prev_actions,
         }
 
+        # Add yaw observation only if enabled
+        if self.use_yaw_noise:
+            obs_dict["fingertip_yaw_rel_fixed"] = self._compute_fingertip_yaw_rel_fixed(noisy=True)
+            state_dict["fingertip_yaw_rel_fixed"] = self._compute_fingertip_yaw_rel_fixed(noisy=False)
+
         # Add force_torque if it exists in obs/state order
         if hasattr(self.unwrapped.cfg, 'obs_order') and 'force_torque' in self.unwrapped.cfg.obs_order:
             if hasattr(self.unwrapped, 'robot_force_torque'):
@@ -318,7 +431,7 @@ class EEPoseNoiseWrapper(gym.Wrapper):
         Reset wrapper state for specified environments.
 
         This method wraps the environment's original _reset_idx method and
-        additionally initializes prev_noisy_ee_pos for reset environments.
+        additionally initializes prev_noisy_ee_pos and yaw noise for reset environments.
 
         Args:
             env_ids (torch.Tensor): Indices of environments to reset
@@ -331,7 +444,7 @@ class EEPoseNoiseWrapper(gym.Wrapper):
         # Use clean position + initial noise as starting point
         num_reset_envs = len(env_ids)
 
-        # Generate initial noise for reset environments
+        # Generate initial EE position noise for reset environments
         initial_noise = torch.randn(
             (num_reset_envs, 3),
             dtype=torch.float32,
@@ -343,6 +456,23 @@ class EEPoseNoiseWrapper(gym.Wrapper):
         # Note: fingertip_midpoint_pos has already been updated by original _reset_idx
         clean_ee_pos = self.unwrapped.fingertip_midpoint_pos[env_ids]
         self.prev_noisy_ee_pos[env_ids] = clean_ee_pos + initial_noise
+
+        # Generate fresh yaw noise for reset environments
+        if self.use_yaw_noise:
+            yaw_noise = torch.randn(
+                (num_reset_envs,), dtype=torch.float32, device=self.device
+            )
+            yaw_noise = yaw_noise * self.fixed_asset_yaw_noise_scale
+            self.init_fixed_yaw_obs_noise[env_ids] = yaw_noise
+
+            # Log clean rel_yaw stats for all envs on any reset
+            # if num_reset_envs > 0:
+            #     clean_rel_yaw = self._compute_fingertip_yaw_rel_fixed(noisy=False)
+            #     clean_rel_yaw_deg = clean_rel_yaw.squeeze(-1) * 180 / np.pi
+            #     print(f"[EEPoseNoiseWrapper] Reset {num_reset_envs} envs - "
+            #           f"Clean rel_yaw (all envs): mean={clean_rel_yaw_deg.mean().item():.2f}°, "
+            #           f"std={clean_rel_yaw_deg.std().item():.2f}°, "
+            #           f"range=[{clean_rel_yaw_deg.min().item():.2f}°, {clean_rel_yaw_deg.max().item():.2f}°]")
 
 
 # Example usage

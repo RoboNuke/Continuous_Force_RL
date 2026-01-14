@@ -19,6 +19,12 @@ class ExtendedObsRandCfg:
     fixed_asset_pos: list = [0.001, 0.001, 0.001]
     """Position noise for fixed asset (meters) - default 1mm per axis"""
 
+    fixed_asset_yaw: float = 0.0523599
+    """Yaw noise for fixed asset (radians) - default 3 degrees"""
+
+    use_yaw_noise: bool = False
+    """Enable yaw observation noise - automatically adds fingertip_yaw_rel_fixed to observations"""
+
     ee_pos: list = [0.00025, 0.00025, 0.00025]
     """Position noise for end-effector (meters) - default 0.25mm per axis"""
 

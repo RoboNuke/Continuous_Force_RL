@@ -164,6 +164,7 @@ class ForceTorqueWrapper(gym.Wrapper):
                     "fingertip_pos": 3,
                     "fingertip_pos_rel_fixed": 3,
                     "fingertip_quat": 4,
+                    "fingertip_yaw_rel_fixed": 1,
                     "ee_linvel": 3,
                     "ee_angvel": 3,
                     "joint_pos": 7,
@@ -174,6 +175,7 @@ class ForceTorqueWrapper(gym.Wrapper):
                     "fingertip_pos": 3,
                     "fingertip_pos_rel_fixed": 3,
                     "fingertip_quat": 4,
+                    "fingertip_yaw_rel_fixed": 1,
                     "ee_linvel": 3,
                     "ee_angvel": 3,
                     "joint_pos": 7,
@@ -197,6 +199,12 @@ class ForceTorqueWrapper(gym.Wrapper):
             OBS_DIM_CFG['in_contact'] = 3
         if 'in_contact' not in STATE_DIM_CFG:
             STATE_DIM_CFG['in_contact'] = 3
+
+        # Add fingertip_yaw_rel_fixed dimension to the configs if not already present
+        if 'fingertip_yaw_rel_fixed' not in OBS_DIM_CFG:
+            OBS_DIM_CFG['fingertip_yaw_rel_fixed'] = 1
+        if 'fingertip_yaw_rel_fixed' not in STATE_DIM_CFG:
+            STATE_DIM_CFG['fingertip_yaw_rel_fixed'] = 1
 
         # Verify required config attributes exist
         if not hasattr(env_cfg, 'obs_order'):
@@ -636,6 +644,7 @@ class ForceTorqueWrapper(gym.Wrapper):
                 'fingertip_pos': 3,
                 'fingertip_pos_rel_fixed': 3,
                 'fingertip_quat': 4,
+                'fingertip_yaw_rel_fixed': 1,
                 'ee_linvel': 3,
                 'ee_angvel': 3,
                 'joint_pos': 7,
