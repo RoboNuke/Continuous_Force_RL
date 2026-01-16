@@ -29,18 +29,21 @@ wrappers:
   # Custom keypoint offset patterns for non-default peg shapes
   keypoint_offset:
     enabled: true
-    mode: 'polygon'  # 'axis' or 'polygon'
+    #mode: 'polygon'  # 'axis' or 'polygon'
+    mode: 'axis'
     # Axis mode parameters
+
+    # 4 keypoints with 0.5 xy scale => 30deg error = 0.0496m error
     num_keypoints: 4
-    x_scale: 0.015
-    y_scale: 0.015
+    x_scale: 0.5
+    y_scale: 0.5
     z_scale: 0.15
 
     # Polygon mode parameters
     num_lines: 6
     num_keypoints_z: 4
     num_keypoints_radial: 4
-    xy_scale: 0.015
+    xy_scale: 0.34 # 30deg error = 0.0497m
 
   force_reward:
     
@@ -51,7 +54,7 @@ wrappers:
     enabled: true
     publish_to_wandb: true
     engagement_reward_scale: 1.0 #60.0  # Scale for engagement rewards (default 1.0 = no change)
-    success_reward_scale: 3.0 #40.0
+    success_reward_scale: 1.0 #40.0
 
 agent:
   supervised_selection_loss_weight: 1.0

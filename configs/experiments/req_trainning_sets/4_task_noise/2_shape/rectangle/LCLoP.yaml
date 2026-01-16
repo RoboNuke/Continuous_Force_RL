@@ -31,9 +31,10 @@ wrappers:
     enabled: true
     mode: 'axis'  # 'axis' or 'polygon'
     # Axis mode parameters
+    # 4 keypoints with x_scale = 0.14 => 90 deg error = 0.0496m error
     num_keypoints: 4
-    x_scale: 0.015
-    y_scale: 0.023 # ratio of y to x on rect is 32.43/20.85=1.555
+    x_scale: 0.14
+    y_scale: 0.22 # ratio of y to x on rect is 32.43/20.85=1.555
     z_scale: 0.15
 
     # Polygon mode parameters

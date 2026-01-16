@@ -199,13 +199,17 @@ class KeypointOffsetWrapper(gym.Wrapper):
 
     def _generate_polygon_keypoints(self) -> List[torch.Tensor]:
         """
-        Generate keypoints as radial lines arranged in a polygon pattern.
+        Generate keypoints as radial lines in XY plane plus a separate Z line.
 
-        Each radial line has keypoints from center (r=0) to edge (r=xy_scale),
-        with multiple z positions at each radial position.
+        Structure:
+        - XY radial pattern: num_lines radial lines at z=0, each with num_keypoints_radial points
+        - Z line: num_keypoints_z points along z-axis through center
+
+        Radial points are evenly spaced from 0 to xy_scale, excluding zero to avoid
+        overlapping points at center (uses linspace then skips first element).
 
         With num_lines=6, num_keypoints_radial=4, num_keypoints_z=4:
-        Total keypoints = 6 * 4 * 4 = 96
+        Total keypoints = 6 * 4 + 4 = 28
 
         Returns:
             List of torch.Tensor offsets, each of shape (3,)
@@ -218,24 +222,25 @@ class KeypointOffsetWrapper(gym.Wrapper):
 
         offsets = []
 
-        # Z positions: linspace from -0.5 to 0.5, scaled
-        z_vals = torch.linspace(-0.5, 0.5, num_keypoints_z, device=self.device) * z_scale
-
-        # Radial positions: from 0 to xy_scale
-        r_vals = torch.linspace(0, 1, num_keypoints_radial, device=self.device) * xy_scale
+        # Radial positions: evenly spaced from 0 to xy_scale, excluding zero
+        # linspace(0, xy_scale, n+1)[1:] gives n points that skip zero
+        r_vals = torch.linspace(0, xy_scale, num_keypoints_radial + 1, device=self.device)[1:]
 
         # Angles for polygon vertices (exclude 2*pi which equals 0)
         angles = torch.linspace(0, 2 * torch.pi, num_lines + 1, device=self.device)[:-1]
 
+        # XY radial pattern at z=0
         for angle in angles:
             for r in r_vals:
                 # Convert polar to cartesian
                 x = r * torch.cos(angle)
                 y = r * torch.sin(angle)
+                offsets.append(torch.tensor([x.item(), y.item(), 0.0], device=self.device))
 
-                # Create keypoints along this vertical line
-                for z in z_vals:
-                    offsets.append(torch.tensor([x.item(), y.item(), z.item()], device=self.device))
+        # Separate Z line through center
+        z_vals = torch.linspace(-0.5, 0.5, num_keypoints_z, device=self.device) * z_scale
+        for z in z_vals:
+            offsets.append(torch.tensor([0.0, 0.0, z.item()], device=self.device))
 
         return offsets
 
