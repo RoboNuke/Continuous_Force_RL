@@ -64,7 +64,7 @@ environment:
 
   task:
     #asset_variant: "arch_short_small"
-    asset_manifest_path: "/home/hunter/Continuous_Force_RL/assets/peg_hole/manifest.json"
+    asset_manifest_path: "assets/peg_hole/manifest.json"
     fixed_asset:
       spawn:
         rigid_props:

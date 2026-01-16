@@ -5,9 +5,31 @@ This module defines ExtendedFactoryTaskPegInsertCfg which extends Isaac Lab's
 FactoryTaskPegInsertCfg with our custom parameters.
 """
 
+import os
+from pathlib import Path
 from typing import Optional
 
 from .version_compat import get_isaac_lab_task_imports
+
+
+def _get_project_root() -> str:
+    """
+    Find project root by looking for .git directory.
+
+    Returns:
+        Absolute path to project root
+
+    Raises:
+        RuntimeError: If no .git directory found in parent hierarchy
+    """
+    current = Path(__file__).resolve()
+    for parent in [current] + list(current.parents):
+        if (parent / '.git').exists():
+            return str(parent)
+    raise RuntimeError(
+        "Could not find project root (no .git directory found). "
+        "Ensure you are running from within the git repository."
+    )
 
 # Get Isaac Lab imports with version compatibility
 configclass, PegInsert, _, _ = get_isaac_lab_task_imports()
@@ -111,9 +133,20 @@ class ExtendedFactoryTaskPegInsertCfg(PegInsert):
                 f"You must specify both asset_variant and asset_manifest_path in your config."
             )
 
+        # Normalize path for backward compatibility:
+        # Strip everything before "assets/" to handle old absolute paths from other machines
+        manifest_path = self.asset_manifest_path
+        if "assets/" in manifest_path:
+            manifest_path = "assets/" + manifest_path.split("assets/", 1)[1]
+
+        # Resolve relative paths against project root
+        if not os.path.isabs(manifest_path):
+            project_root = _get_project_root()
+            manifest_path = os.path.join(project_root, manifest_path)
+
         from configs.asset_variant_loader import AssetVariantLoader
 
-        loader = AssetVariantLoader(self.asset_manifest_path)
+        loader = AssetVariantLoader(manifest_path)
         variant = loader.load_variant(self.asset_variant)
 
         # Update held asset config (peg) - used by factory_env.py for runtime calculations
