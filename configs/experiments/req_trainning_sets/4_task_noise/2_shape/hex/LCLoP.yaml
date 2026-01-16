@@ -43,9 +43,14 @@ wrappers:
     xy_scale: 0.015
 
   force_reward:
+    enable_contact_reward: false
+    contact_reward_weight: 2.0  
     
-    enable_contact_reward: true
-    contact_reward_weight: 2.0
+  factory_metrics:
+    enabled: true
+    publish_to_wandb: true
+    engagement_reward_scale: 1.0 #60.0  # Scale for engagement rewards (default 1.0 = no change)
+    success_reward_scale: 3.0 #40.0
 
 agent:
   supervised_selection_loss_weight: 1.0
@@ -69,6 +74,6 @@ environment:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "LCLoP_hex_zCon-2"
+  name: &exp_name "LCLoP_hex_sr-3"
   tags: ['exp_task_shape']
   group: *exp_name
