@@ -71,6 +71,6 @@ environment:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "LCLoP_rect"
+  name: &exp_name "LCLoP_rect_degMap"
   tags: ['exp_task_shape']
   group: *exp_name

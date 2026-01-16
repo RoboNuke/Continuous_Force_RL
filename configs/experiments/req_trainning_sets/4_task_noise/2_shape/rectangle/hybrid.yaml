@@ -71,6 +71,6 @@ environment:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "basic-hybrid_rect"
+  name: &exp_name "basic-hybrid_rect_degMap"
   tags: ['exp_task_shape']
   group: *exp_name
