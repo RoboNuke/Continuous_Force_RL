@@ -1,0 +1,25 @@
+# Hybrid Agent Control Experiment Configuration 
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+
+primary:
+  agents_per_break_force: 5 # Number of agents per break force condition
+  num_envs_per_agent: 256   # Environments per individual agent
+  break_forces: [20]  # Break force conditions (-1 = unbreakable)
+  max_steps: 5000064 #25000192
+
+# Model configuration for hybrid agent
+model:
+  use_hybrid_agent: false
+
+environment:
+  # OBSERVATION RANDOMIZATION CONFIGURATION
+  obs_rand:
+    fixed_asset_pos: [0.0075, 0.0075, 0.0075]  
+    
+# Experiment metadata
+experiment:
+  name: &exp_name "pose_75mm-noise"
+  tags: ['high_noise']
+  group: *exp_name
