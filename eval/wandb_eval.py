@@ -708,7 +708,7 @@ def get_completed_checkpoint_steps(eval_run: wandb.Run) -> Set[int]:
     """
     Query an eval run's history to find which checkpoint steps have already been logged.
 
-    Uses wandb's scan_history to efficiently iterate through logged steps.
+    Uses wandb's history() method which returns a DataFrame directly.
     Looks for 'total_steps' metric which corresponds to checkpoint numbers.
 
     Returns:
@@ -718,11 +718,15 @@ def get_completed_checkpoint_steps(eval_run: wandb.Run) -> Set[int]:
     completed_steps = set()
 
     try:
-        # scan_history is memory-efficient for large runs
-        # Use 'total_steps' which is the actual checkpoint number logged with metrics
-        for row in eval_run.scan_history(keys=["total_steps"], page_size=1000):
-            if "total_steps" in row and row["total_steps"] is not None:
-                completed_steps.add(int(row["total_steps"]))
+        # Use history() which returns DataFrame directly - much faster than scan_history
+        # samples parameter set high to get all checkpoints (typically <100 checkpoints)
+        history_df = eval_run.history(keys=["total_steps"], samples=5000)
+
+        if "total_steps" in history_df.columns:
+            # Drop NaN values and convert to int
+            valid_steps = history_df["total_steps"].dropna()
+            completed_steps = set(int(s) for s in valid_steps)
+
         print(f"found {len(completed_steps)} completed")
     except Exception as e:
         print(f"FAILED: {e}")
