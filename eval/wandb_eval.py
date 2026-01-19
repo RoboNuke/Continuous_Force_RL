@@ -59,6 +59,8 @@ def parse_arguments():
                         help="Output directory for trajectory evaluation .pkl files (only used with --eval_mode trajectory)")
     parser.add_argument("--override", action="append",
                         help="Override config values (e.g., --override environment.task.asset_variant=hex_short_small)")
+    parser.add_argument("--resume", action="store_true", default=False,
+                        help="Resume existing eval runs if found (matches by source_run tag, excludes runs tagged old_eval)")
 
     # Append AppLauncher args
     AppLauncher.add_app_launcher_args(parser)
@@ -98,8 +100,9 @@ import time
 import re
 import tempfile
 import shutil
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Set
 from collections import defaultdict
+from dataclasses import dataclass
 
 # Enable camera view lighting mode (camera headlight)
 import carb
@@ -631,6 +634,102 @@ class FixedDynamicsWrapper(gym.Wrapper):
 
         held_asset.root_physx_view.set_masses(masses, env_ids_cpu)
         held_asset.root_physx_view.set_inertias(inertias, env_ids_cpu)
+
+
+# ===== EVAL RUN RESUME SUPPORT =====
+
+@dataclass
+class EvalRunState:
+    """Tracks eval run state for a single source training run."""
+    source_run: wandb.Run
+    eval_run: Optional[wandb.Run]  # None if creating new
+    eval_run_id: Optional[str]     # ID to resume, None if creating new
+    completed_steps: Set[int]      # Steps already logged
+    is_resuming: bool              # True if resuming existing run
+
+
+def find_existing_eval_run(
+    source_run: wandb.Run,
+    eval_mode: str,
+    entity: str
+) -> Optional[wandb.Run]:
+    """
+    Search for an existing eval run that corresponds to a source training run.
+
+    Searches for runs with:
+    - Tag: "source_run:{source_run.id}"
+    - Tag: "eval_{eval_mode}"
+    - NOT tagged: "old_{eval_mode}_eval" or "old_eval"
+
+    Args:
+        source_run: The source training run
+        eval_mode: The evaluation mode (performance, noise, etc.)
+        entity: WandB entity
+
+    Returns:
+        The existing eval run if found, None otherwise
+    """
+    print(f"    [{source_run.id}] Querying WandB for existing eval runs...", end=" ", flush=True)
+
+    api = wandb.Api()
+
+    # Search in the same project as the source run
+    target_project = source_run.project
+
+    # Query for runs with both required tags, excluding old eval runs
+    filters = {
+        "$and": [
+            {"tags": {"$all": [f"source_run:{source_run.id}", f"eval_{eval_mode}"]}},
+            {"tags": {"$ne": f"old_{eval_mode}_eval"}},
+            {"tags": {"$ne": "old_eval"}}
+        ]
+    }
+
+    matching_runs = list(api.runs(
+        path=f"{entity}/{target_project}",
+        filters=filters
+    ))
+
+    print(f"found {len(matching_runs)} match(es)")
+
+    if len(matching_runs) == 0:
+        return None
+    elif len(matching_runs) == 1:
+        return matching_runs[0]
+    else:
+        # Multiple matches - take most recent, warn user
+        print(f"    WARNING: Found {len(matching_runs)} eval runs for source {source_run.id}, using most recent")
+        # Sort by created_at descending
+        matching_runs.sort(key=lambda r: r.created_at, reverse=True)
+        return matching_runs[0]
+
+
+def get_completed_checkpoint_steps(eval_run: wandb.Run) -> Set[int]:
+    """
+    Query an eval run's history to find which checkpoint steps have already been logged.
+
+    Uses wandb's scan_history to efficiently iterate through logged steps.
+    Looks for 'total_steps' metric which corresponds to checkpoint numbers.
+
+    Returns:
+        Set of checkpoint steps that have metrics logged
+    """
+    print(f"      Querying history for completed checkpoints...", end=" ", flush=True)
+    completed_steps = set()
+
+    try:
+        # scan_history is memory-efficient for large runs
+        # Use 'total_steps' which is the actual checkpoint number logged with metrics
+        for row in eval_run.scan_history(keys=["total_steps"], page_size=1000):
+            if "total_steps" in row and row["total_steps"] is not None:
+                completed_steps.add(int(row["total_steps"]))
+        print(f"found {len(completed_steps)} completed")
+    except Exception as e:
+        print(f"FAILED: {e}")
+        # Return empty set - will re-evaluate all checkpoints
+        return set()
+
+    return completed_steps
 
 
 # ===== CHECKPOINT DISCOVERY =====
@@ -3200,57 +3299,137 @@ def _run_parallel_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
     print(f"  - Max rollout steps: {max_rollout_steps}")
     print(f"  - Policy Hz: {policy_hz}")
 
-    # Get checkpoint steps from representative run (all runs have same checkpoints)
+    # Get all possible checkpoint steps from representative run
     representative_run = runs[0]
-    checkpoint_steps = get_checkpoint_steps(representative_run, args_cli)
-    print(f"\nCheckpoints to evaluate: {checkpoint_steps}")
+    all_checkpoint_steps = get_checkpoint_steps(representative_run, args_cli)
+    print(f"\nAll checkpoints available: {all_checkpoint_steps}")
 
-    # Initialize all WandB eval runs upfront (using reinit="create_new" for concurrent runs)
-    eval_wandb_runs = []  # List of (run, wandb_run_object) tuples
+    # Determine eval run state for each source run
+    eval_run_states: List[EvalRunState] = []
+
+    if args_cli.resume:
+        print(f"\n[RESUME MODE] Searching for existing eval runs ({num_runs} source runs)...")
+        for run_idx, run in enumerate(runs):
+            existing_eval_run = find_existing_eval_run(
+                source_run=run,
+                eval_mode=args_cli.eval_mode,
+                entity=args_cli.entity
+            )
+
+            if existing_eval_run:
+                completed = get_completed_checkpoint_steps(existing_eval_run)
+                print(f"      -> Will resume {existing_eval_run.id}, {len(completed)} checkpoints already done")
+                eval_run_states.append(EvalRunState(
+                    source_run=run,
+                    eval_run=existing_eval_run,
+                    eval_run_id=existing_eval_run.id,
+                    completed_steps=completed,
+                    is_resuming=True
+                ))
+            else:
+                print(f"      -> Will create new eval run")
+                eval_run_states.append(EvalRunState(
+                    source_run=run,
+                    eval_run=None,
+                    eval_run_id=None,
+                    completed_steps=set(),
+                    is_resuming=False
+                ))
+    else:
+        # Normal mode - always create new
+        for run in runs:
+            eval_run_states.append(EvalRunState(
+                source_run=run,
+                eval_run=None,
+                eval_run_id=None,
+                completed_steps=set(),
+                is_resuming=False
+            ))
+
+    # Filter checkpoint steps: only evaluate checkpoints that at least one run needs
+    if args_cli.resume:
+        checkpoint_steps = []
+        for step in all_checkpoint_steps:
+            runs_needing_step = [s for s in eval_run_states if step not in s.completed_steps]
+            if runs_needing_step:
+                checkpoint_steps.append(step)
+
+        skipped = len(all_checkpoint_steps) - len(checkpoint_steps)
+        if skipped > 0:
+            print(f"\n[RESUME] Skipping {skipped} checkpoints already completed by all runs")
+        print(f"[RESUME] Checkpoints to evaluate: {checkpoint_steps}")
+
+        if len(checkpoint_steps) == 0:
+            print(f"\n[RESUME] All checkpoints already completed for all runs. Nothing to do.")
+            return
+    else:
+        checkpoint_steps = all_checkpoint_steps
+        print(f"\nCheckpoints to evaluate: {checkpoint_steps}")
+
+    # Initialize all WandB eval runs upfront
+    eval_wandb_runs = []  # List of (run, wandb_run_object, state) tuples
     if not args_cli.no_wandb and not args_cli.report_to_base_run and args_cli.eval_mode != "trajectory":
         if args_cli.debug_project:
             print(f"\n[DEBUG MODE] Initializing {num_runs} WandB eval runs in 'debug' project...")
+        elif args_cli.resume:
+            print(f"\n[RESUME MODE] Initializing/resuming {num_runs} WandB eval runs...")
         else:
             print(f"\nInitializing {num_runs} WandB eval runs...")
-        for run_idx, run in enumerate(runs):
+
+        for run_idx, state in enumerate(eval_run_states):
+            run = state.source_run
             try:
-                eval_tags = [f"eval_{args_cli.eval_mode}", f"source_run:{run.id}"] + list(run.tags)
-
-                if args_cli.debug_project:
-                    target_project = "debug"
+                if state.is_resuming:
+                    # Resume existing eval run
+                    print(f"  Resuming eval run {state.eval_run_id} for source {run.id}...")
+                    wandb_run = wandb.init(
+                        project=run.project,
+                        entity=args_cli.entity,
+                        id=state.eval_run_id,
+                        resume="must",
+                        reinit="create_new"
+                    )
+                    print(f"  Resumed eval run {run_idx + 1}/{num_runs}: {state.eval_run_id}")
                 else:
-                    target_project = run.project
+                    # Create new eval run
+                    eval_tags = [f"eval_{args_cli.eval_mode}", f"source_run:{run.id}"] + list(run.tags)
 
-                eval_run_name = f"Eval_{args_cli.eval_mode}_{run.name}"
-                eval_group_name = f"Eval_{args_cli.eval_mode}_{run.group}_{args_cli.tag}" if run.group else None
+                    if args_cli.debug_project:
+                        target_project = "debug"
+                    else:
+                        target_project = run.project
 
-                wandb_run = wandb.init(
-                    project=target_project,
-                    entity=args_cli.entity,
-                    name=eval_run_name,
-                    group=eval_group_name,
-                    tags=eval_tags,
-                    reinit="create_new",  # Key: allows multiple concurrent runs
-                    config={
-                        "source_run_id": run.id,
-                        "source_run_name": run.name,
-                        "source_run_group": run.group,
-                        "source_project": run.project,
-                        "eval_mode": args_cli.eval_mode,
-                        "eval_seed": args_cli.eval_seed,
-                        "num_checkpoints": len(checkpoint_steps),
-                        "parallel_mode": True,
-                    }
-                )
-                eval_wandb_runs.append((run, wandb_run))
-                print(f"  Initialized eval run {run_idx + 1}/{num_runs}: {eval_run_name}")
+                    eval_run_name = f"Eval_{args_cli.eval_mode}_{run.name}"
+                    eval_group_name = f"Eval_{args_cli.eval_mode}_{run.group}_{args_cli.tag}" if run.group else None
+
+                    wandb_run = wandb.init(
+                        project=target_project,
+                        entity=args_cli.entity,
+                        name=eval_run_name,
+                        group=eval_group_name,
+                        tags=eval_tags,
+                        reinit="create_new",
+                        config={
+                            "source_run_id": run.id,
+                            "source_run_name": run.name,
+                            "source_run_group": run.group,
+                            "source_project": run.project,
+                            "eval_mode": args_cli.eval_mode,
+                            "eval_seed": args_cli.eval_seed,
+                            "num_checkpoints": len(checkpoint_steps),
+                            "parallel_mode": True,
+                        }
+                    )
+                    print(f"  Initialized eval run {run_idx + 1}/{num_runs}: {eval_run_name}")
+
+                eval_wandb_runs.append((run, wandb_run, state))
             except Exception as e:
-                print(f"  WARNING: Failed to initialize eval run for {run.id}: {e}")
+                print(f"  WARNING: Failed to initialize/resume eval run for {run.id}: {e}")
                 # Continue without this run's wandb logging
-                eval_wandb_runs.append((run, None))
+                eval_wandb_runs.append((run, None, state))
     else:
         # No wandb logging - just track runs without wandb objects
-        eval_wandb_runs = [(run, None) for run in runs]
+        eval_wandb_runs = [(state.source_run, None, state) for state in eval_run_states]
 
     # Checkpoint loop (OUTERMOST)
     for step_idx, step in enumerate(checkpoint_steps):
@@ -3305,7 +3484,12 @@ def _run_parallel_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
             per_agent_data = split_rollout_data_by_agent(rollout_data, num_runs, envs_per_agent)
 
             # Compute and log metrics for each run (INNERMOST loop)
-            for run_idx, (run, wandb_run) in enumerate(eval_wandb_runs):
+            for run_idx, (run, wandb_run, state) in enumerate(eval_wandb_runs):
+                # Skip if this run already has this checkpoint (resume mode)
+                if step in state.completed_steps:
+                    print(f"\n  [{run.id}] Checkpoint {step} already logged, skipping")
+                    continue
+
                 print(f"\n  Processing results for run {run_idx + 1}/{num_runs}: {run.id}")
 
                 # Compute metrics for this run's slice
@@ -3344,7 +3528,7 @@ def _run_parallel_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
 
     # Finish all WandB runs
     print(f"\nFinishing {len(eval_wandb_runs)} WandB eval runs...")
-    for run, wandb_run in eval_wandb_runs:
+    for run, wandb_run, state in eval_wandb_runs:
         if wandb_run is not None:
             wandb_run.finish()
             print(f"  Finished eval run for {run.id}")
@@ -3426,49 +3610,95 @@ def _run_sequential_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
         print(f"Evaluating run {run_idx + 1}/{len(runs)}: {run.project}/{run.id}")
         print(f"{'=' * 80}")
 
-        # Get checkpoint steps for this run
-        checkpoint_steps = get_checkpoint_steps(run, args_cli)
+        # Get all checkpoint steps for this run
+        all_checkpoint_steps = get_checkpoint_steps(run, args_cli)
+
+        # Check for existing eval run if resume mode
+        existing_eval_run = None
+        completed_steps: Set[int] = set()
+        is_resuming = False
+
+        if args_cli.resume:
+            print(f"\n[RESUME MODE] Searching for existing eval run...")
+            existing_eval_run = find_existing_eval_run(
+                source_run=run,
+                eval_mode=args_cli.eval_mode,
+                entity=args_cli.entity
+            )
+            if existing_eval_run:
+                completed_steps = get_completed_checkpoint_steps(existing_eval_run)
+                print(f"      -> Will resume {existing_eval_run.id}, {len(completed_steps)} checkpoints already done")
+                is_resuming = True
+            else:
+                print(f"      -> Will create new eval run")
+
+        # Filter checkpoint steps if in resume mode
+        if args_cli.resume and completed_steps:
+            checkpoint_steps = [s for s in all_checkpoint_steps if s not in completed_steps]
+            skipped = len(all_checkpoint_steps) - len(checkpoint_steps)
+            if skipped > 0:
+                print(f"[RESUME] Skipping {skipped} already completed checkpoints")
+            print(f"[RESUME] Checkpoints to evaluate: {checkpoint_steps}")
+
+            if len(checkpoint_steps) == 0:
+                print(f"[RESUME] All checkpoints already completed for this run. Skipping.")
+                continue
+        else:
+            checkpoint_steps = all_checkpoint_steps
 
         # Initialize WandB eval run once for all checkpoints
         eval_run_initialized = False
         if not args_cli.no_wandb and not args_cli.report_to_base_run and args_cli.eval_mode != "trajectory":
             try:
-                eval_tags = [f"eval_{args_cli.eval_mode}", f"source_run:{run.id}"] + list(run.tags)
-
-                if args_cli.debug_project:
-                    target_project = "debug"
-                    eval_run_name = f"Eval_{args_cli.eval_mode}_{run.name}"
-                    eval_group_name = f"Eval_{args_cli.eval_mode}_{run.group}_{args_cli.tag}" if run.group else None
-                    print(f"\n[DEBUG MODE] Initializing eval run in 'debug' project: {eval_run_name}")
+                if is_resuming:
+                    # Resume existing eval run
+                    print(f"\n[RESUME MODE] Resuming eval run {existing_eval_run.id}...")
+                    wandb.init(
+                        project=run.project,
+                        entity=args_cli.entity,
+                        id=existing_eval_run.id,
+                        resume="must"
+                    )
+                    eval_run_initialized = True
+                    print(f"  Eval run resumed successfully")
                 else:
-                    target_project = run.project
-                    eval_run_name = f"Eval_{args_cli.eval_mode}_{run.name}"
-                    eval_group_name = f"Eval_{args_cli.eval_mode}_{run.group}_{args_cli.tag}" if run.group else None
-                    print(f"\nInitializing eval run: {eval_run_name}")
-                    print(f"  Project: {target_project}")
-                    if eval_group_name:
-                        print(f"  Group: {eval_group_name}")
+                    # Create new eval run
+                    eval_tags = [f"eval_{args_cli.eval_mode}", f"source_run:{run.id}"] + list(run.tags)
 
-                wandb.init(
-                    project=target_project,
-                    entity=args_cli.entity,
-                    name=eval_run_name,
-                    group=eval_group_name,
-                    tags=eval_tags,
-                    config={
-                        "source_run_id": run.id,
-                        "source_run_name": run.name,
-                        "source_run_group": run.group,
-                        "source_project": run.project,
-                        "eval_mode": args_cli.eval_mode,
-                        "eval_seed": args_cli.eval_seed,
-                        "num_checkpoints": len(checkpoint_steps),
-                    }
-                )
-                eval_run_initialized = True
-                print(f"  Eval run initialized successfully")
+                    if args_cli.debug_project:
+                        target_project = "debug"
+                        eval_run_name = f"Eval_{args_cli.eval_mode}_{run.name}"
+                        eval_group_name = f"Eval_{args_cli.eval_mode}_{run.group}_{args_cli.tag}" if run.group else None
+                        print(f"\n[DEBUG MODE] Initializing eval run in 'debug' project: {eval_run_name}")
+                    else:
+                        target_project = run.project
+                        eval_run_name = f"Eval_{args_cli.eval_mode}_{run.name}"
+                        eval_group_name = f"Eval_{args_cli.eval_mode}_{run.group}_{args_cli.tag}" if run.group else None
+                        print(f"\nInitializing eval run: {eval_run_name}")
+                        print(f"  Project: {target_project}")
+                        if eval_group_name:
+                            print(f"  Group: {eval_group_name}")
+
+                    wandb.init(
+                        project=target_project,
+                        entity=args_cli.entity,
+                        name=eval_run_name,
+                        group=eval_group_name,
+                        tags=eval_tags,
+                        config={
+                            "source_run_id": run.id,
+                            "source_run_name": run.name,
+                            "source_run_group": run.group,
+                            "source_project": run.project,
+                            "eval_mode": args_cli.eval_mode,
+                            "eval_seed": args_cli.eval_seed,
+                            "num_checkpoints": len(checkpoint_steps),
+                        }
+                    )
+                    eval_run_initialized = True
+                    print(f"  Eval run initialized successfully")
             except Exception as e:
-                print(f"  WARNING: Failed to initialize eval run: {e}")
+                print(f"  WARNING: Failed to initialize/resume eval run: {e}")
                 print(f"  Continuing without WandB logging...")
                 args_cli.no_wandb = True
 
