@@ -128,7 +128,7 @@ def apply_wrappers(env, configs):
         print("  - Applying Hybrid Force Position Wrapper")
         env = HybridForcePositionWrapper(
             env,
-            ctrl_torque=configs['primary'].ctrl_torque,
+            ctrl_mode=configs['primary'].ctrl_mode,
             reward_type=wrappers_config.hybrid_control.reward_type,
             ctrl_cfg=configs['environment'].ctrl,
             task_cfg=configs['environment'].hybrid_task,
@@ -342,8 +342,8 @@ def _configure_hybrid_agent_parameters(configs):
     configs['model'].hybrid_agent.force_scale = env_cfg.ctrl.default_task_force_gains[0] * env_cfg.ctrl.force_action_threshold[0]
     configs['model'].hybrid_agent.torque_scale = env_cfg.ctrl.default_task_force_gains[-1] * env_cfg.ctrl.torque_action_bounds[0]
 
-    # Extract ctrl_torque from wrappers_config
-    configs['model'].hybrid_agent.ctrl_torque = configs['primary'].ctrl_torque
+    # Extract ctrl_mode from primary config
+    configs['model'].hybrid_agent.ctrl_mode = configs['primary'].ctrl_mode
 
     print("  - Hybrid agent parameters configured")
 
@@ -351,8 +351,8 @@ def _create_standard_policy_model(env, configs):
     """Create standard SimBa policy model."""
     sigma_idx = 0
     if configs['wrappers'].hybrid_control.enabled:
-        ctrl_torque = configs['primary'].ctrl_torque
-        sigma_idx = 6 if ctrl_torque else 3
+        # sigma_idx = force_size (3 for force_only, 4 for force_tz, 6 for force_torque)
+        sigma_idx = configs['primary'].force_size
 
     return BlockSimBaActor(
         observation_space=env.cfg.observation_space,
@@ -404,9 +404,8 @@ def create_block_ppo_agents(env, configs, models, memory):
         else:
             print(f"  - WARNING: Unknown learning_rate_scheduler: {scheduler_name}")
 
-    # Determine force_size based on ctrl_torque configuration
-    force_size = 6 if configs['primary'].ctrl_torque else 3
-    configs['agent'].force_size = force_size
+    # Determine force_size based on ctrl_mode configuration
+    configs['agent'].force_size = configs['primary'].force_size
 
     # Create BlockPPO agent
 

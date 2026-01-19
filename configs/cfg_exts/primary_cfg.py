@@ -10,6 +10,7 @@ from typing import List, Union, Optional
 from dataclasses import dataclass
 
 from .version_compat import get_isaac_lab_ctrl_imports
+from .ctrl_mode import get_force_size, validate_ctrl_mode, VALID_CTRL_MODES
 
 # Get configclass decorator with version compatibility
 configclass, _ = get_isaac_lab_ctrl_imports()
@@ -59,9 +60,21 @@ class PrimaryConfig:
     """Path to checkpoint tracker file"""
 
     # Control mode
-    ctrl_torque: bool = False
-    """Use torque control instead of position control"""
+    ctrl_mode: str = "force_only"
+    """Control mode: 'force_only' (3DOF), 'force_tz' (4DOF), 'force_torque' (6DOF)."""
 
+    def __post_init__(self):
+        """Validate configuration after initialization."""
+        # Validate ctrl_mode is one of the valid options
+        if self.ctrl_mode not in VALID_CTRL_MODES:
+            raise ValueError(
+                f"Invalid ctrl_mode: '{self.ctrl_mode}'. Must be one of: {VALID_CTRL_MODES}"
+            )
+
+    @property
+    def force_size(self) -> int:
+        """Number of force/torque dimensions based on control mode."""
+        return get_force_size(self.ctrl_mode)
 
     @property
     def total_agents(self) -> int:

@@ -21,7 +21,7 @@ primary:
   debug_mode: false
   seed: 42
   ckpt_tracker_path: "/tmp/manual_control_ckpt_tracker.txt"
-  ctrl_torque: false
+  ctrl_mode: "force_only"
 
 # ENVIRONMENT OVERRIDES
 environment:
@@ -138,7 +138,7 @@ model:
     latent_size: 1024
 
   hybrid_agent:
-    ctrl_torque: false
+    ctrl_mode: "force_only"
     unit_std_init: false
     unit_factor_std_init: 1.0
     pos_init_std: 1.0

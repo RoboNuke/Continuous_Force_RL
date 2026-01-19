@@ -567,13 +567,13 @@ This repository contains reinforcement learning implementations for continuous f
 
 #### Public Methods
 
-##### `__init__(env, ctrl_torque=False, reward_type="simp", ctrl_cfg=None, task_cfg=None)`
+##### `__init__(env, ctrl_mode, reward_type="simp", ctrl_cfg=None, task_cfg=None)`
 
 **Purpose:** Initialize hybrid force-position control wrapper with configuration validation and action space management.
 
 **Parameters:**
 - `env`: Base environment to wrap (must have force-torque sensor data)
-- `ctrl_torque` (bool): Whether to control torques (6DOF) or just forces (3DOF) (default: False)
+- `ctrl_mode` (str): Control mode - "force_only" (3DOF), "force_tz" (4DOF), or "force_torque" (6DOF). Required, no default.
 - `reward_type` (str): Reward computation strategy: "simp", "dirs", "delta", "base", "pos_simp", "wrench_norm" (default: "simp")
 - `ctrl_cfg` (HybridCtrlCfg): Control configuration with EMA parameters and thresholds (required)
 - `task_cfg` (HybridTaskCfg): Task configuration with reward parameters and thresholds (required)

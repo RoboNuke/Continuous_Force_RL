@@ -17,6 +17,7 @@ import torch
 import gymnasium as gym
 import numpy as np
 from .factory_control_utils import compute_pose_task_wrench, compute_force_task_wrench, compute_dof_torque_from_wrench
+from configs.cfg_exts.ctrl_mode import validate_ctrl_mode, get_force_size, VALID_CTRL_MODES
 
 
 try:
@@ -43,7 +44,7 @@ class HybridForcePositionWrapper(gym.Wrapper):
     def __init__(
             self,
             env,
-            ctrl_torque=False,
+            ctrl_mode: str,
             reward_type="simp",
             ctrl_cfg=None,
             task_cfg=None,
@@ -55,7 +56,10 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
         Args:
             env: Base environment to wrap
-            ctrl_torque: Whether to control torques (6DOF) or just forces (3DOF)
+            ctrl_mode: Control mode - REQUIRED. One of:
+                - "force_only": 3DOF (Fx, Fy, Fz)
+                - "force_tz": 4DOF (Fx, Fy, Fz, Tz)
+                - "force_torque": 6DOF (Fx, Fy, Fz, Tx, Ty, Tz)
             reward_type: Reward computation strategy
                 - "simp": Simple force activity reward
                 - "dirs": Direction-specific force rewards
@@ -68,6 +72,9 @@ class HybridForcePositionWrapper(gym.Wrapper):
             num_agents: Number of agents for static environment assignment.
             use_ground_truth_selection: If True, override selection actions with ground truth contact state.
         """
+        # Validate ctrl_mode (required, no default)
+        validate_ctrl_mode(ctrl_mode)
+
         # Store original action space size before modification
         self._original_action_size = getattr(env.unwrapped.cfg, 'action_space', 6)
 
@@ -82,9 +89,6 @@ class HybridForcePositionWrapper(gym.Wrapper):
             raise ValueError(f"Number of environments ({self.num_envs}) must be divisible by number of agents ({self.num_agents})")
 
         self.envs_per_agent = self.num_envs // self.num_agents
-
-        # Store control configuration for action space calculation
-        self.ctrl_torque = ctrl_torque
 
         # Require explicit configuration - no fallback defaults
         if ctrl_cfg is None:
@@ -105,8 +109,9 @@ class HybridForcePositionWrapper(gym.Wrapper):
             )
         self.torch_utils = torch_utils
 
-        self.ctrl_torque = ctrl_torque
-        self.force_size = 6 if ctrl_torque else 3
+        # Store control mode and derive force_size
+        self.ctrl_mode = ctrl_mode
+        self.force_size = get_force_size(ctrl_mode)
         self.reward_type = reward_type
 
         # Store explicit configuration (no fallbacks)
@@ -189,9 +194,11 @@ class HybridForcePositionWrapper(gym.Wrapper):
             )
         self.kp = torch.tensor(self.ctrl_cfg.default_task_force_gains, device=self.device).repeat((self.num_envs, 1))
 
-        # Zero out torque gains if not controlling torques
-        if not ctrl_torque:
-            self.kp[:, 3:] = 0.0
+        # Zero out torque gains based on ctrl_mode
+        if self.ctrl_mode == "force_only":
+            self.kp[:, 3:] = 0.0  # No torque control
+        elif self.ctrl_mode == "force_tz":
+            self.kp[:, 3:5] = 0.0  # Zero Tx, Ty - only Tz is controlled
 
         # Initialize integral gains if enabled
         if self.enable_force_integral:
@@ -204,9 +211,11 @@ class HybridForcePositionWrapper(gym.Wrapper):
                 self.ctrl_cfg.default_task_force_integ_gains,
                 device=self.device
             ).unsqueeze(0).repeat(self.num_envs, 1)
-            # Zero out torque integral gains if not controlling torques
-            if not ctrl_torque:
+            # Zero out torque integral gains based on ctrl_mode
+            if self.ctrl_mode == "force_only":
                 self.ki[:, 3:] = 0.0
+            elif self.ctrl_mode == "force_tz":
+                self.ki[:, 3:5] = 0.0
         else:
             self.ki = None
 
@@ -215,9 +224,11 @@ class HybridForcePositionWrapper(gym.Wrapper):
             # kd = force_deriv_scale * 2 * sqrt(kp) for critical damping
             self.force_deriv_scale = getattr(self.ctrl_cfg, 'force_deriv_scale', 1.0)
             self.kd = self.force_deriv_scale * 2.0 * torch.sqrt(self.kp)
-            # Zero out torque derivative gains if not controlling torques
-            if not ctrl_torque:
+            # Zero out torque derivative gains based on ctrl_mode
+            if self.ctrl_mode == "force_only":
                 self.kd[:, 3:] = 0.0
+            elif self.ctrl_mode == "force_tz":
+                self.kd[:, 3:5] = 0.0
             # print(f"[DEBUG] Force derivative control enabled")
             # print(f"[DEBUG]   kp (force gains): {self.kp[0, :3].tolist()}")
             # print(f"[DEBUG]   force_deriv_scale: {self.force_deriv_scale}")
@@ -241,15 +252,15 @@ class HybridForcePositionWrapper(gym.Wrapper):
             )
         self.force_threshold = torch.tensor(force_thresh_val, device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
 
-        # Torque threshold (if controlling torques)
-        if self.ctrl_torque:
+        # Torque threshold (if controlling torques - force_tz or force_torque mode)
+        if self.ctrl_mode in ["force_tz", "force_torque"]:
             if self.ctrl_cfg.torque_action_threshold is not None:
                 torque_thresh_val = self.ctrl_cfg.torque_action_threshold
             elif hasattr(self.unwrapped.cfg.ctrl, 'torque_action_threshold'):
                 torque_thresh_val = self.unwrapped.cfg.ctrl.torque_action_threshold
             else:
                 raise ValueError(
-                    "torque_action_threshold must be provided in ctrl_cfg or env cfg.ctrl when ctrl_torque=True"
+                    f"torque_action_threshold must be provided in ctrl_cfg or env cfg.ctrl for ctrl_mode='{self.ctrl_mode}'"
                 )
             self.torque_threshold = torch.tensor(torque_thresh_val, device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
 
@@ -272,14 +283,14 @@ class HybridForcePositionWrapper(gym.Wrapper):
             raise ValueError("force_action_bounds must be provided in ctrl_cfg or env cfg.ctrl")
         self.force_bounds = torch.tensor(force_bounds_val, device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
 
-        # Torque bounds (if controlling torques)
-        if self.ctrl_torque:
+        # Torque bounds (if controlling torques - force_tz or force_torque mode)
+        if self.ctrl_mode in ["force_tz", "force_torque"]:
             if self.ctrl_cfg.torque_action_bounds is not None:
                 torque_bounds_val = self.ctrl_cfg.torque_action_bounds
             elif hasattr(self.unwrapped.cfg.ctrl, 'torque_action_bounds'):
                 torque_bounds_val = self.unwrapped.cfg.ctrl.torque_action_bounds
             else:
-                raise ValueError("torque_action_bounds must be provided in ctrl_cfg or env cfg.ctrl when ctrl_torque=True")
+                raise ValueError(f"torque_action_bounds must be provided in ctrl_cfg or env cfg.ctrl for ctrl_mode='{self.ctrl_mode}'")
             self.torque_bounds = torch.tensor(torque_bounds_val, device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
 
         # Flag to control wrench logging once per step
@@ -300,9 +311,11 @@ class HybridForcePositionWrapper(gym.Wrapper):
         self._prev_step_force = torch.zeros((self.num_envs, 3), device=self.device)
         self._first_step_set = False
 
-        # Calculate new action space size based on control configuration
-        # Action space: 6 (pose) + 6 (force) + 0/6 (torque selection if ctrl_torque)
-        self._new_action_size = 12 if not ctrl_torque else 18
+        # Calculate new action space size based on control mode
+        # Action space = force_size (selection) + 6 (pose) + force_size (force/torque)
+        #              = 2 * force_size + 6
+        # force_only: 2*3+6=12, force_tz: 2*4+6=14, force_torque: 2*6+6=18
+        self._new_action_size = 2 * self.force_size + 6
 
         # Per-agent cumulative termination tracking by control mode
         self.termination_counts = {
@@ -624,35 +637,57 @@ class HybridForcePositionWrapper(gym.Wrapper):
 
     def _compute_control_targets(self):
         """Compute control targets from current state + EMA actions (Isaac Lab style)."""
-        # 1. Selection matrix from EMA'd selection actions
-        self.sel_matrix[:, :self.force_size] = torch.where(
-            self.ema_actions[:, :self.force_size] > 0.5, 1.0, 0.0
-        )
+        # 1. Selection matrix from EMA'd selection actions - map based on ctrl_mode
+        if self.ctrl_mode == "force_tz":
+            # 4DOF: selections are [X, Y, Z, Rz] (4 dims)
+            self.sel_matrix[:, :3] = torch.where(
+                self.ema_actions[:, :3] > 0.5, 1.0, 0.0
+            )
+            self.sel_matrix[:, 3:5] = 0.0  # Rx, Ry ALWAYS position control
+            self.sel_matrix[:, 5] = torch.where(
+                self.ema_actions[:, 3] > 0.5, 1.0, 0.0
+            )
+        elif self.ctrl_mode == "force_torque":
+            # 6DOF: direct mapping
+            self.sel_matrix[:, :6] = torch.where(
+                self.ema_actions[:, :6] > 0.5, 1.0, 0.0
+            )
+        else:  # force_only
+            # 3DOF: only translation
+            self.sel_matrix[:, :3] = torch.where(
+                self.ema_actions[:, :3] > 0.5, 1.0, 0.0
+            )
+            self.sel_matrix[:, 3:] = 0.0  # All rotation is position control
 
         # Log selection matrix
         if hasattr(self.unwrapped, 'extras'):
-            sel_mat = self.sel_matrix[:,:self.force_size].clone()
+            sel_mat = self.sel_matrix.clone()
             self.unwrapped.extras['to_log']['Control Mode / Force Control X'] = sel_mat[:, 0]
             self.unwrapped.extras['to_log']['Control Mode / Force Control Y'] = sel_mat[:, 1]
             self.unwrapped.extras['to_log']['Control Mode / Force Control Z'] = sel_mat[:, 2]
-            if self.force_size > 3:
+            if self.ctrl_mode == "force_tz":
+                # 4DOF: log Rz only (Rx, Ry are always 0)
+                self.unwrapped.extras['to_log']['Control Mode / Force Control RZ'] = sel_mat[:, 5]
+            elif self.ctrl_mode == "force_torque":
+                # 6DOF: log all rotation
                 self.unwrapped.extras['to_log']['Control Mode / Force Control RX'] = sel_mat[:, 3]
                 self.unwrapped.extras['to_log']['Control Mode / Force Control RY'] = sel_mat[:, 4]
                 self.unwrapped.extras['to_log']['Control Mode / Force Control RZ'] = sel_mat[:, 5]
 
             # Log 4-case control mode statistics for precision/recall analysis
-            in_contact = self.unwrapped.in_contact[:, :self.force_size]
-            force_control = self.sel_matrix[:, :self.force_size] > 0.5
-            pos_control = self.sel_matrix[:, :self.force_size] < 0.5
+            # Use 6D contact for comparison against 6D selection matrix
+            in_contact_6d = self.unwrapped.in_contact[:, :6]
+            force_control = self.sel_matrix > 0.5
+            pos_control = self.sel_matrix < 0.5
 
             # Case 1: In contact + Force control
-            case_contact_force = torch.logical_and(in_contact, force_control).float()
+            case_contact_force = torch.logical_and(in_contact_6d, force_control).float()
             # Case 2: In contact + Position control
-            case_contact_pos = torch.logical_and(in_contact, pos_control).float()
+            case_contact_pos = torch.logical_and(in_contact_6d, pos_control).float()
             # Case 3: No contact + Force control
-            case_no_contact_force = torch.logical_and(~in_contact, force_control).float()
+            case_no_contact_force = torch.logical_and(~in_contact_6d, force_control).float()
             # Case 4: No contact + Position control
-            case_no_contact_pos = torch.logical_and(~in_contact, pos_control).float()
+            case_no_contact_pos = torch.logical_and(~in_contact_6d, pos_control).float()
 
             # Log translational axes
             self.unwrapped.extras['to_log']['Control Mode / Contact+Force X summed_total'] = case_contact_force[:, 0]
@@ -670,8 +705,15 @@ class HybridForcePositionWrapper(gym.Wrapper):
             self.unwrapped.extras['to_log']['Control Mode / NoContact+Force Z summed_total'] = case_no_contact_force[:, 2]
             self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos Z summed_total'] = case_no_contact_pos[:, 2]
 
-            # Log rotational axes if controlling torques
-            if self.force_size > 3:
+            # Log rotational axes based on ctrl_mode
+            if self.ctrl_mode == "force_tz":
+                # 4DOF: only log Rz
+                self.unwrapped.extras['to_log']['Control Mode / Contact+Force RZ summed_total'] = case_contact_force[:, 5]
+                self.unwrapped.extras['to_log']['Control Mode / Contact+Pos RZ summed_total'] = case_contact_pos[:, 5]
+                self.unwrapped.extras['to_log']['Control Mode / NoContact+Force RZ summed_total'] = case_no_contact_force[:, 5]
+                self.unwrapped.extras['to_log']['Control Mode / NoContact+Pos RZ summed_total'] = case_no_contact_pos[:, 5]
+            elif self.ctrl_mode == "force_torque":
+                # 6DOF: log all rotation
                 self.unwrapped.extras['to_log']['Control Mode / Contact+Force RX summed_total'] = case_contact_force[:, 3]
                 self.unwrapped.extras['to_log']['Control Mode / Contact+Pos RX summed_total'] = case_contact_pos[:, 3]
                 self.unwrapped.extras['to_log']['Control Mode / NoContact+Force RX summed_total'] = case_no_contact_force[:, 3]
@@ -764,11 +806,24 @@ class HybridForcePositionWrapper(gym.Wrapper):
             self.target_force_for_control[:,2] = (self.target_force_for_control[:,2] - self.force_bounds[:, 2])/2.0
 
 
-        # Handle torque if enabled
-        if self.force_size > 3:
+        # Handle torque based on ctrl_mode
+        if self.ctrl_mode == "force_tz":
+            # 4DOF: Only Tz (force_actions[:, 3] -> target[:, 5])
+            if self.use_delta_force:
+                # Delta mode for Tz only
+                tz_delta = force_actions[:, 3] * self.torque_threshold[:, 2] / self.force_threshold[:, 0]
+                self.target_force_for_control[:, 5] = torch.clip(
+                    tz_delta + self.robot_force_torque[:, 5],
+                    -self.torque_bounds[:, 2], self.torque_bounds[:, 2]
+                )
+            else:
+                # Absolute mode for Tz
+                self.target_force_for_control[:, 5] = force_actions[:, 3] * self.torque_bounds[:, 2]
+        elif self.ctrl_mode == "force_torque":
+            # 6DOF: All torques
             if self.use_delta_force:
                 # Delta mode for torque
-                torque_delta = force_actions[:, 3:] * self.torque_threshold / self.force_threshold
+                torque_delta = force_actions[:, 3:] * self.torque_threshold / self.force_threshold[:, :3]
                 self.target_force_for_control[:, 3:] = torch.clip(
                     torque_delta + self.robot_force_torque[:, 3:],
                     -self.torque_bounds, self.torque_bounds
@@ -1088,11 +1143,11 @@ class HybridForcePositionWrapper(gym.Wrapper):
                 if not torch.all(torch.isnan(pose_wrench_per_agent)):
                     self.unwrapped.extras['to_log'][f'Controller Output / Active Pos Wrench {axis_names[i]}'] = pose_wrench_per_agent
 
-            # Future: Add logging for torque/rotation wrenches when ctrl_torque is enabled
-            if self.force_size > 3:
-                # TODO: Add logging for rotational axes (RX, RY, RZ)
-                # - Active Torque Wrench RX/RY/RZ (when sel_matrix[:, 3:] == 1.0)
-                # - Active Rotation Wrench RX/RY/RZ (when sel_matrix[:, 3:] == 0.0)
+            # Future: Add logging for torque/rotation wrenches when ctrl_mode includes torque
+            if self.ctrl_mode in ["force_tz", "force_torque"]:
+                # TODO: Add logging for rotational axes
+                # - force_tz: only RZ (when sel_matrix[:, 5] == 1.0)
+                # - force_torque: RX/RY/RZ (when sel_matrix[:, 3:] == 1.0)
                 pass
 
             # Disable wrench logging for subsequent apply_action calls this step
@@ -1122,9 +1177,14 @@ class HybridForcePositionWrapper(gym.Wrapper):
             pos_wrench = task_wrench[:, i] > 0
             task_wrench[:, i] = torch.where(at_pos_bound & pos_wrench, 0.0, task_wrench[:, i])
 
-        # For torque, always use position control (if not controlling torques)
-        if not self.ctrl_torque:
+        # For rotation axes, override with pose_wrench based on ctrl_mode
+        # - force_only: all rotation axes [3:6] use position control
+        # - force_tz: Rx, Ry [3:5] use position control, Rz [5] controlled by sel_matrix
+        # - force_torque: all rotation axes controlled by sel_matrix (no override)
+        if self.ctrl_mode == "force_only":
             task_wrench[:, 3:] = pose_wrench[:, 3:]
+        elif self.ctrl_mode == "force_tz":
+            task_wrench[:, 3:5] = pose_wrench[:, 3:5]  # Rx, Ry always position control
 
         # Compute joint torques
         self.unwrapped.joint_torque, task_wrench = compute_dof_torque_from_wrench(

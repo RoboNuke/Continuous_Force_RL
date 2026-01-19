@@ -450,14 +450,27 @@ class ForceTorqueWrapper(gym.Wrapper):
         # Compute contact state AFTER scene.update() for current-step data
         # Moved from _wrapped_pre_physics_step to read sensor data at correct time
         if self.use_contact_sensor:
-            # Use ContactSensor for contact detection
+            # Use ContactSensor for translational contact detection
             self._contact_detected_in_range()
             self.unwrapped.in_contact[:, :3] = self.real_contact
-            self.unwrapped.in_contact[:, 3:] = False
         else:
-            # Use force-torque thresholds for contact detection
+            # Use force-torque thresholds for translational contact detection
             self.unwrapped.in_contact[:, :3] = torch.abs(self.unwrapped.robot_force_torque[:, :3]) > self.contact_force_threshold
-            self.unwrapped.in_contact[:, 3:] = torch.abs(self.unwrapped.robot_force_torque[:, 3:]) > self.contact_torque_threshold
+
+        # Rotational contact inferred from perpendicular linear contacts
+        # Physical intuition: can apply torque about an axis if in contact perpendicular to it
+        # Tx (index 3) = Fy OR Fz contact
+        # Ty (index 4) = Fx OR Fz contact
+        # Tz (index 5) = Fx OR Fy contact
+        self.unwrapped.in_contact[:, 3] = self.unwrapped.in_contact[:, 1] | self.unwrapped.in_contact[:, 2]  # Tx = Fy | Fz
+        self.unwrapped.in_contact[:, 4] = self.unwrapped.in_contact[:, 0] | self.unwrapped.in_contact[:, 2]  # Ty = Fx | Fz
+        self.unwrapped.in_contact[:, 5] = self.unwrapped.in_contact[:, 0] | self.unwrapped.in_contact[:, 1]  # Tz = Fx | Fy
+
+        # DEBUG: Print force contacts and inferred Rz contact state (mean across envs)
+        fx_contact_pct = self.unwrapped.in_contact[:, 0].float().mean().item() * 100
+        fy_contact_pct = self.unwrapped.in_contact[:, 1].float().mean().item() * 100
+        rz_contact_pct = self.unwrapped.in_contact[:, 5].float().mean().item() * 100
+        print(f"[DEBUG] Fx contact: {fx_contact_pct:.1f}% | Fy contact: {fy_contact_pct:.1f}% | Rz contact (Fx|Fy): {rz_contact_pct:.1f}%")
 
         # Log contact state if enabled
         if self.log_contact_state and hasattr(self.unwrapped, 'extras'):
@@ -466,6 +479,7 @@ class ForceTorqueWrapper(gym.Wrapper):
             self.unwrapped.extras['to_log']['Contact / In-Contact X'] = self.unwrapped.in_contact[:, 0].float()
             self.unwrapped.extras['to_log']['Contact / In-Contact Y'] = self.unwrapped.in_contact[:, 1].float()
             self.unwrapped.extras['to_log']['Contact / In-Contact Z'] = self.unwrapped.in_contact[:, 2].float()
+            self.unwrapped.extras['to_log']['Contact / In-Contact Rz'] = self.unwrapped.in_contact[:, 5].float()
 
     def _contact_detected_in_range(self):
         # get true state from directly-held contact sensor (not from scene)

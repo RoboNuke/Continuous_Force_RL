@@ -21,7 +21,7 @@ primary:
   debug_mode: false
   seed: -1
   ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/voltron_baseline_tracker.txt" #"/home/hunter/ckpt_tracker.txt" #
-  ctrl_torque: false
+  ctrl_mode: "force_only"
 
 # ENVIRONMENT OVERRIDES (Direct Isaac Lab FactoryEnvCfg parameters)
 environment:
@@ -94,7 +94,7 @@ model:
 
   # Hybrid agent specific parameters
   hybrid_agent:
-    ctrl_torque: false  # Match primary.ctrl_torque
+    ctrl_mode: "force_only"  # Match primary.ctrl_mode
     unit_std_init: false
     unit_factor_std_init: 1.0
     pos_init_std: 1.0
@@ -186,7 +186,7 @@ wrappers:
   # Hybrid force-position control
   hybrid_control:
     enabled: false
-    # ctrl_torque is computed from primary config automatically
+    # ctrl_mode is computed from primary config automatically
     reward_type: "none" #"simp"
     use_ground_truth_selection: false
 

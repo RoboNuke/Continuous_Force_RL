@@ -484,7 +484,8 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
                     else:
                         raise ValueError("force_action_threshold not found in cfg.ctrl. Required for hybrid control.")
 
-                if hasattr(hybrid_wrapper, 'ctrl_torque') and hybrid_wrapper.ctrl_torque:
+                # Check if torque control is enabled (force_tz or force_torque mode)
+                if hasattr(hybrid_wrapper, 'ctrl_mode') and hybrid_wrapper.ctrl_mode in ["force_tz", "force_torque"]:
                     if not hasattr(hybrid_wrapper, 'torque_threshold'):
                         if hasattr(self.unwrapped.cfg.ctrl, 'torque_action_threshold'):
                             torque_thresh = self.unwrapped.cfg.ctrl.torque_action_threshold

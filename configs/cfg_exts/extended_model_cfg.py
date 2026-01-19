@@ -75,8 +75,8 @@ class ExtendedHybridAgentConfig:
     """List of selection adjustment types ('none', 'l2_norm', 'bias', 'scale', etc.)"""
 
     # Control mode
-    ctrl_torque: bool = False
-    """Use torque control instead of position control"""
+    ctrl_mode: str = None
+    """Control mode: 'force_only' (3DOF), 'force_tz' (4DOF), 'force_torque' (6DOF). Set from primary config."""
 
     # Initialization parameters
     unit_std_init: bool = True

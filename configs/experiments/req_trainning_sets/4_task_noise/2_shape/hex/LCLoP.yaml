@@ -8,7 +8,7 @@ primary:
   num_envs_per_agent: 256
   break_forces: [10]
   max_steps: 10000500
-
+  ctrl_mode: "force_tz"
 # Model configuration for hybrid agent
 model:
   use_hybrid_agent: true
@@ -53,11 +53,11 @@ wrappers:
     enabled: true
     publish_to_wandb: true
     engagement_reward_scale: 1.0 #60.0  # Scale for engagement rewards (default 1.0 = no change)
-    success_reward_scale: 10.0 #40.0
+    success_reward_scale: 1.0 #40.0
 
 agent:
   supervised_selection_loss_weight: 1.0
-  entropy_loss_scale: 0.01
+  #entropy_loss_scale: 0.01
 #  policy_learning_rate: 5.0e-4
 #  critic_learning_rate: 1.0e-4
 #  #learning_epochs: 1
@@ -78,6 +78,6 @@ environment:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "LCLoP_hex_degMap_sucRew10_ent-01"
+  name: &exp_name "LCLoP_hex_degMap_Tz-Ctrl"
   tags: ['exp_task_shape']
   group: *exp_name

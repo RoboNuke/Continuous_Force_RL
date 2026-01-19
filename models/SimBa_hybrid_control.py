@@ -10,6 +10,7 @@ from models.SimBa import SimBaNet, ScaleLayer, MultiSimBaNet
 from torch.distributions.distribution import Distribution
 import torch.nn.functional as F
 from models.block_simba import BlockSimBa
+from configs.cfg_exts.ctrl_mode import validate_ctrl_mode, get_force_size, VALID_CTRL_MODES
 
 class HybridActionGMM(Distribution): #MixtureSameFamily):
     def __init__(
@@ -22,17 +23,20 @@ class HybridActionGMM(Distribution): #MixtureSameFamily):
             force_weight: float = 1.0,
             torque_weight: float = 1.0,
             uniform_rate: float = 0.01,
-            ctrl_torque: bool = False,
+            ctrl_mode: str = None,
             learn_selection: bool = True
     ) -> None:
+        # Validate ctrl_mode (required, no default)
+        validate_ctrl_mode(ctrl_mode)
+
         self.mixture_distribution = mixture_distribution
         self.component_distribution = component_distribution
-        #super().__init__(mixture_distribution, component_distribution, validate_args)
         self.f_w = force_weight
         self.p_w = pos_weight
         self.r_w = rot_weight
         self.t_w = torque_weight
-        self.force_size = 6 if ctrl_torque else 3
+        self.ctrl_mode = ctrl_mode
+        self.force_size = get_force_size(ctrl_mode)
         self.uniform_rate = uniform_rate
         self.sample_uniform = (self.uniform_rate > 0.0)
         self.learn_sel = learn_selection
@@ -47,68 +51,110 @@ class HybridActionGMM(Distribution): #MixtureSameFamily):
                 mix_sample[uniform_mask] = (torch.rand_like(mix_sample[uniform_mask]) > 0.5).float()
             # component samples [n, B, k, E] [n, 2]
             comp_samples = self.component_distribution.sample(sample_shape)
+
+            # Build force/torque samples based on ctrl_mode
+            # comp_samples shape: (batch, 6, 2) where dim 1 is [X,Y,Z,Rx,Ry,Rz]
+            if self.ctrl_mode == "force_tz":
+                # 4DOF: Fx, Fy, Fz, Tz - sample indices 0,1,2,5 from force component
+                force_samples = torch.cat([
+                    comp_samples[..., :3, 1],  # Fx, Fy, Fz
+                    comp_samples[..., 5:6, 1]  # Tz (index 5)
+                ], dim=-1)
+            elif self.ctrl_mode == "force_torque":
+                # 6DOF: all force/torque
+                force_samples = comp_samples[..., :6, 1]
+            else:  # force_only
+                # 3DOF: Fx, Fy, Fz only
+                force_samples = comp_samples[..., :3, 1]
+
             out_samples = torch.cat(
                 (
-                    mix_sample[...,:self.force_size],
-                    comp_samples[...,:,0],
-                    comp_samples[...,:self.force_size,1]
+                    mix_sample[..., :self.force_size],  # selections
+                    comp_samples[..., :, 0],             # position/rotation (6)
+                    force_samples                        # force/torque (3, 4, or 6)
                 ), dim=-1
             )
             # scale everything
             out_samples[..., self.force_size:self.force_size+3] /= self.p_w
-            out_samples[...,self.force_size+3:self.force_size+6] /= self.r_w
-            out_samples[...,self.force_size+6:9+self.force_size] /= self.f_w # 12 or 15
-            if self.force_size > 3:
-                out_samples[...,self.force_size+9:] /= self.t_w
+            out_samples[..., self.force_size+3:self.force_size+6] /= self.r_w
+            out_samples[..., self.force_size+6:self.force_size+9] /= self.f_w
+
+            if self.ctrl_mode == "force_tz":
+                # 4DOF: index force_size+9 is Tz
+                out_samples[..., self.force_size+9:self.force_size+10] /= self.t_w
+            elif self.ctrl_mode == "force_torque":
+                # 6DOF: indices force_size+9 to end are Tx, Ty, Tz
+                out_samples[..., self.force_size+9:] /= self.t_w
+
             return out_samples
         
     def log_prob(self, action):
-        #print(f"log_prob called with action shape: {action.shape}")
         # Extract components from action
         batch_size = action.shape[0]
-        selections = action[:, :self.force_size]  # (batch, 3) - values are 0 or 1
+        selections = action[:, :self.force_size]  # (batch, force_size) - values are 0 or 1
         pos_rot = action[:, self.force_size:self.force_size+6]  # (batch, 6)
         force_torque = action[:, self.force_size+6:2*self.force_size+6]  # (batch, force_size)
-        
+
         # === SELECTION LOG PROBS (Independent Bernoulli) ===
         sel_log_prob = self.mixture_distribution.log_prob(selections)  # (batch,)
-        
+
         # === CONTINUOUS COMPONENT LOG PROBS ===
         # Scale the values to match what the component distributions expect
         # Position component expects scaled pos/rot values
         pos_scaled = torch.zeros(batch_size, 6, device=action.device)
         pos_scaled[:, :3] = pos_rot[:, :3] * self.p_w
         pos_scaled[:, 3:6] = pos_rot[:, 3:6] * self.r_w
-        
-        # Force component expects scaled force/torque values  
+
+        # Force component expects scaled force/torque values
+        # Map based on ctrl_mode
         force_scaled = torch.zeros(batch_size, 6, device=action.device)
-        force_scaled[:, :self.force_size] = force_torque * self.f_w
-        if self.force_size > 3:
-            force_scaled[:, 3:6] *= self.t_w
-        else:
+
+        if self.ctrl_mode == "force_tz":
+            # 4DOF: force_torque is [Fx, Fy, Fz, Tz]
+            force_scaled[:, :3] = force_torque[:, :3] * self.f_w  # Fx, Fy, Fz
+            force_scaled[:, 5] = force_torque[:, 3] * self.t_w    # Tz -> index 5
+            force_scaled[:, 3:5] = pos_scaled[:, 3:5]             # Rx, Ry use position
+        elif self.ctrl_mode == "force_torque":
+            # 6DOF: force_torque is [Fx, Fy, Fz, Tx, Ty, Tz]
+            force_scaled[:, :3] = force_torque[:, :3] * self.f_w
+            force_scaled[:, 3:6] = force_torque[:, 3:6] * self.t_w
+        else:  # force_only
+            # 3DOF: force_torque is [Fx, Fy, Fz]
+            force_scaled[:, :3] = force_torque * self.f_w
             force_scaled[:, 3:6] = pos_scaled[:, 3:6]  # Use pos for rotation
-        
+
         # Stack position and force into shape (batch, 6, 2) to match component_distribution
         values = torch.stack([pos_scaled, force_scaled], dim=-1)  # (batch, 6, 2)
-        
+
         # Evaluate component distribution at these values
         comp_log_prob = self.component_distribution.log_prob(values)  # (batch, 6, 2)
-        
+
         # For each dimension, select the log prob corresponding to what was selected
         use_force = selections > 0.5  # (batch, force_size)
-        
-        # Expand to (batch, 6) for all dimensions
+
+        # Expand to (batch, 6) for all dimensions - KEY 4DOF MAPPING
         use_force_expanded = torch.zeros(batch_size, 6, dtype=torch.bool, device=action.device)
-        use_force_expanded[:, :self.force_size] = use_force
+
+        if self.ctrl_mode == "force_tz":
+            # 4DOF: selections are [X, Y, Z, Rz]
+            use_force_expanded[:, :3] = use_force[:, :3]   # X, Y, Z
+            use_force_expanded[:, 3:5] = False             # Rx, Ry ALWAYS position
+            use_force_expanded[:, 5] = use_force[:, 3]     # Rz from selection[3]
+        elif self.ctrl_mode == "force_torque":
+            # 6DOF: direct mapping
+            use_force_expanded[:, :6] = use_force
+        else:  # force_only
+            # 3DOF: only translation
+            use_force_expanded[:, :3] = use_force
+
         self.force_sel = use_force_expanded.clone()
+
         # Select position (index 0) or force (index 1) component log prob
-        # comp_log_prob[:, :, 0] is position, comp_log_prob[:, :, 1] is force
         continuous_log_prob = torch.where(
             use_force_expanded,
             comp_log_prob[:, :, 1],  # Force component
             comp_log_prob[:, :, 0]   # Position component
         ).sum(dim=-1)  # Sum over all 6 dimensions -> (batch,)
-        #print(f"sel_log_prob shape: {sel_log_prob.shape}, continuous_log_prob shape: {continuous_log_prob.shape}")
 
         if self.learn_sel:
             return sel_log_prob + continuous_log_prob
@@ -157,12 +203,12 @@ class CLoPHybridActionGMM(HybridActionGMM):
             force_weight: float = 1.0,
             torque_weight: float = 1.0,
             uniform_rate: float = 0.01,
-            ctrl_torque: bool = False,
+            ctrl_mode: str = None,
             learn_selection: bool = True
     ) -> None:
         super().__init__(mixture_distribution, component_distribution, validate_args,
                          pos_weight, rot_weight, force_weight, torque_weight,
-                         uniform_rate, ctrl_torque, learn_selection)
+                         uniform_rate, ctrl_mode, learn_selection)
 
     def log_prob(self, action):
         """
@@ -179,17 +225,26 @@ class CLoPHybridActionGMM(HybridActionGMM):
         # mixture_distribution is Independent(Bernoulli(probs=selection_probs))
         sel_probs = self.mixture_distribution.base_dist.probs  # (batch, force_size)
 
-        # Scale continuous values (same as parent class)
+        # Scale continuous values
         pos_scaled = torch.zeros(batch_size, 6, device=action.device)
         pos_scaled[:, :3] = pos_rot[:, :3] * self.p_w
         pos_scaled[:, 3:6] = pos_rot[:, 3:6] * self.r_w
 
-        # Force component expects scaled force/torque values
+        # Force component expects scaled force/torque values - map based on ctrl_mode
         force_scaled = torch.zeros(batch_size, 6, device=action.device)
-        force_scaled[:, :self.force_size] = force_torque * self.f_w
-        if self.force_size > 3:
-            force_scaled[:, 3:6] *= self.t_w
-        else:
+
+        if self.ctrl_mode == "force_tz":
+            # 4DOF: force_torque is [Fx, Fy, Fz, Tz]
+            force_scaled[:, :3] = force_torque[:, :3] * self.f_w  # Fx, Fy, Fz
+            force_scaled[:, 5] = force_torque[:, 3] * self.t_w    # Tz -> index 5
+            force_scaled[:, 3:5] = pos_scaled[:, 3:5]             # Rx, Ry use position
+        elif self.ctrl_mode == "force_torque":
+            # 6DOF: force_torque is [Fx, Fy, Fz, Tx, Ty, Tz]
+            force_scaled[:, :3] = force_torque[:, :3] * self.f_w
+            force_scaled[:, 3:6] = force_torque[:, 3:6] * self.t_w
+        else:  # force_only
+            # 3DOF: force_torque is [Fx, Fy, Fz]
+            force_scaled[:, :3] = force_torque * self.f_w
             force_scaled[:, 3:6] = pos_scaled[:, 3:6]  # Use pos for rotation
 
         # Stack position and force into shape (batch, 6, 2) to match component_distribution
@@ -199,9 +254,21 @@ class CLoPHybridActionGMM(HybridActionGMM):
         comp_log_prob = self.component_distribution.log_prob(values)  # (batch, 6, 2)
         comp_prob = comp_log_prob.exp()  # (batch, 6, 2)
 
-        # Expand selection probs to match 6 dimensions
+        # Expand selection probs to match 6 dimensions - KEY 4DOF MAPPING
         sel_probs_expanded = torch.zeros(batch_size, 6, device=action.device)
-        sel_probs_expanded[:, :self.force_size] = sel_probs
+
+        if self.ctrl_mode == "force_tz":
+            # 4DOF: sel_probs are [X, Y, Z, Rz]
+            sel_probs_expanded[:, :3] = sel_probs[:, :3]   # X, Y, Z
+            sel_probs_expanded[:, 3:5] = 0.0               # Rx, Ry always position (prob=0)
+            sel_probs_expanded[:, 5] = sel_probs[:, 3]     # Rz from sel_probs[3]
+        elif self.ctrl_mode == "force_torque":
+            # 6DOF: direct mapping
+            sel_probs_expanded[:, :6] = sel_probs
+        else:  # force_only
+            # 3DOF: only translation
+            sel_probs_expanded[:, :3] = sel_probs
+            sel_probs_expanded[:, 3:6] = 0.0
 
         # Compute GMM probability for each dimension
         # p(x) = (1 - sel_prob) * p_pos(x) + sel_prob * p_force(x)
@@ -244,14 +311,17 @@ class HybridGMMMixin(GaussianMixin):
             force_scale=1.0,
             torque_scale=1.0,
             uniform_rate=0.0,
-            ctrl_torque=False,
+            ctrl_mode: str = None,
             learn_selection = True,
             full_CLoP = False
     ) -> None:
         super().__init__(clip_actions, clip_log_std, min_log_std, max_log_std, reduction, role)
-        self.force_size = 6 if ctrl_torque else 3
+        # Validate ctrl_mode (required, no default)
+        validate_ctrl_mode(ctrl_mode)
+        self.ctrl_mode = ctrl_mode
+        self.force_size = get_force_size(ctrl_mode)
         self.force_scale = force_scale
-        self.torque_scale= torque_scale
+        self.torque_scale = torque_scale
         self.pos_scale = pos_scale
         self.rot_scale = rot_scale
         self.uniform_rate = uniform_rate
@@ -266,64 +336,94 @@ class HybridGMMMixin(GaussianMixin):
         """Act stochastically in response to the state of the environment"""
         # map from states/observations to mean actions and log standard deviations
         mean_actions, log_std, outputs = self.compute(inputs, role)
-        #print("Pos Actions:", torch.max(action[:,3:6]).item(), torch.min(action[:,3:6]).item(), torch.median(action[:,3:6]).item())
         # clamp log standard deviations
         if self._g_clip_log_std:
             log_std = torch.clamp(log_std, self._g_log_std_min, self._g_log_std_max)
 
         batch_size = mean_actions.shape[0]
-        selection_probs = mean_actions[:,:self.force_size].float()
+        selection_probs = mean_actions[:, :self.force_size].float()
 
         # Create independent Bernoulli for selections
-        selection_dist = Independent(Bernoulli(probs=selection_probs), 1) #Bernoulli(probs=selection_probs) #
-        # For GMM compatibility, still create categorical-style probs
-        mix_probs = torch.zeros((batch_size, 6, 2), device=mean_actions.device)
-        mix_probs[:, :self.force_size, 0] = 1.0 - selection_probs
-        mix_probs[:, :self.force_size, 1] = selection_probs
-        if self.force_size < 6:
-            mix_probs[:, self.force_size:, 0] = 1.0
-            mix_probs[:, self.force_size:, 1] = 0.0
+        selection_dist = Independent(Bernoulli(probs=selection_probs), 1)
 
-        # But pass the Bernoulli distribution to GMM instead of Categorical
-        mix_dist = selection_dist  # Store the actual Bernoulli
-        self._selection_probs = selection_probs  # Store for log_prob use
+        # For GMM compatibility, create categorical-style probs (batch, 6, 2)
+        # Map selection probs based on ctrl_mode
+        mix_probs = torch.zeros((batch_size, 6, 2), device=mean_actions.device)
+
+        if self.ctrl_mode == "force_tz":
+            # 4DOF: sel_probs are [X, Y, Z, Rz]
+            mix_probs[:, :3, 0] = 1.0 - selection_probs[:, :3]
+            mix_probs[:, :3, 1] = selection_probs[:, :3]
+            mix_probs[:, 3:5, 0] = 1.0  # Rx, Ry always position
+            mix_probs[:, 3:5, 1] = 0.0
+            mix_probs[:, 5, 0] = 1.0 - selection_probs[:, 3]  # Rz
+            mix_probs[:, 5, 1] = selection_probs[:, 3]
+        elif self.ctrl_mode == "force_torque":
+            # 6DOF: direct mapping
+            mix_probs[:, :6, 0] = 1.0 - selection_probs
+            mix_probs[:, :6, 1] = selection_probs
+        else:  # force_only
+            # 3DOF: only translation
+            mix_probs[:, :3, 0] = 1.0 - selection_probs
+            mix_probs[:, :3, 1] = selection_probs
+            mix_probs[:, 3:, 0] = 1.0
+            mix_probs[:, 3:, 1] = 0.0
+
+        # Pass the Bernoulli distribution to GMM
+        mix_dist = selection_dist
+        self._selection_probs = selection_probs
 
         # Store the raw policy mean BEFORE scaling for logging
-        # These are the tanh'd outputs bounded to [-1, 1] for pos/rot/force components
-        # and sigmoid outputs [0, 1] for selections
         outputs["policy_mean_unscaled"] = mean_actions.clone().detach()
 
         # NOTE: mean1 is a VIEW of mean_actions, so *= modifies mean_actions in-place
         # This is intentional for the Gaussian parameterization
         mean1 = mean_actions[:, self.force_size:self.force_size+6]
-        mean1[:,:3] *= self.pos_scale            # (batch, 6)
-        mean1[:,3:6] *= self.rot_scale
+        mean1[:, :3] *= self.pos_scale
+        mean1[:, 3:6] *= self.rot_scale
 
-        mean2 = torch.zeros_like(mean1)
-        mean2[:,:self.force_size] = mean_actions[:, 6+self.force_size:6+2*self.force_size]
-        mean2[:,:3] *= self.force_scale    # (batch, 6)
-        if self.force_size > 3:
-            mean2[:,3:6] *= self.torque_scale
-        else:
-            mean2[:,3:6] = mean1[:,3:6] #set to position values to make mixture work
-            
+        # Build mean2 (force component) based on ctrl_mode
+        mean2 = torch.zeros_like(mean1)  # (batch, 6)
+        force_actions = mean_actions[:, self.force_size+6:2*self.force_size+6]
+
+        if self.ctrl_mode == "force_tz":
+            # 4DOF: force_actions is [Fx, Fy, Fz, Tz]
+            mean2[:, :3] = force_actions[:, :3] * self.force_scale  # Fx, Fy, Fz
+            mean2[:, 5] = force_actions[:, 3] * self.torque_scale   # Tz -> index 5
+            mean2[:, 3:5] = mean1[:, 3:5]  # Rx, Ry from position
+        elif self.ctrl_mode == "force_torque":
+            # 6DOF: force_actions is [Fx, Fy, Fz, Tx, Ty, Tz]
+            mean2[:, :3] = force_actions[:, :3] * self.force_scale
+            mean2[:, 3:6] = force_actions[:, 3:6] * self.torque_scale
+        else:  # force_only
+            # 3DOF: force_actions is [Fx, Fy, Fz]
+            mean2[:, :3] = force_actions * self.force_scale
+            mean2[:, 3:6] = mean1[:, 3:6]  # Set to position values to make mixture work
+
         # Combine means and expand to component axis
-        means = torch.stack([mean1, mean2], dim=2)  # (batch, 3 dims, 2 components)
+        means = torch.stack([mean1, mean2], dim=2)  # (batch, 6, 2 components)
 
-        # std
+        # Build std tensor
         std = torch.ones_like(means)
         # when you scale a normal distribution by c, the std dev is scaled by c only!
-        std[:, :3, 0] = log_std[:, 0:3].exp() * (self.pos_scale) # ** 2) #    36
-        std[:, 3:, 0] = log_std[:, 3:6].exp() * (self.rot_scale) # ** 2) #   8.5
-        std[:, :3, 1] = log_std[:, 6:9].exp() * (self.force_scale) # ** 2) # 1
-        if self.force_size > 3:
-            std[:, 3:, 1] = log_std[:, 9:].exp() * (self.torque_scale ** 2) #0.25
-        else:
+        std[:, :3, 0] = log_std[:, 0:3].exp() * self.pos_scale
+        std[:, 3:, 0] = log_std[:, 3:6].exp() * self.rot_scale
+        std[:, :3, 1] = log_std[:, 6:9].exp() * self.force_scale
+
+        if self.ctrl_mode == "force_tz":
+            # 4DOF: Tz std at index 5, Rx/Ry use position std
+            std[:, 3:5, 1] = std[:, 3:5, 0]  # Rx, Ry use position std
+            std[:, 5, 1] = log_std[:, 9].exp() * (self.torque_scale ** 2)  # Tz std
+        elif self.ctrl_mode == "force_torque":
+            # 6DOF: full torque std
+            std[:, 3:, 1] = log_std[:, 9:].exp() * (self.torque_scale ** 2)
+        else:  # force_only
+            # 3DOF: rotation uses position std
             std[:, 3:, 1] = std[:, 3:, 0]
 
         # Create component Gaussians: Normal(loc, scale)
         components = Normal(loc=means, scale=std)  # (batch, 6, 2)
-        
+
         if self.full_CLoP:
             self._g_distribution = CLoPHybridActionGMM(
                 mix_dist, components,
@@ -331,7 +431,7 @@ class HybridGMMMixin(GaussianMixin):
                 torque_weight=self.torque_scale,
                 pos_weight=self.pos_scale,
                 rot_weight=self.rot_scale,
-                ctrl_torque=self.force_size > 3,
+                ctrl_mode=self.ctrl_mode,
                 uniform_rate=self.uniform_rate,
                 learn_selection=self.learn_sel
             )
@@ -342,7 +442,7 @@ class HybridGMMMixin(GaussianMixin):
                 torque_weight=self.torque_scale,
                 pos_weight=self.pos_scale,
                 rot_weight=self.rot_scale,
-                ctrl_torque=self.force_size > 3,
+                ctrl_mode=self.ctrl_mode,
                 uniform_rate=self.uniform_rate,
                 learn_selection=self.learn_sel
             )
@@ -436,21 +536,21 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
             self,
             observation_space,
             action_space,
-            device, 
+            device,
             hybrid_agent_parameters={},
             learn_selection = True,
 
             actor_n = 2,
-            actor_latent=512,            
+            actor_latent=512,
             clip_actions=False,
-            clip_log_std=True, 
-            min_log_std=-20, 
-            max_log_std=2, 
+            clip_log_std=True,
+            min_log_std=-20,
+            max_log_std=2,
             reduction="sum",
             num_agents=1
     ):
 
-        # unpack cfg paramters
+        # unpack cfg parameters
         pos_init_std = hybrid_agent_parameters['pos_init_std']
         rot_init_std = hybrid_agent_parameters['rot_init_std']
         force_init_std = hybrid_agent_parameters['force_init_std']
@@ -459,7 +559,7 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
         rot_scale = hybrid_agent_parameters['rot_scale']
         force_scale = hybrid_agent_parameters['force_scale']
         torque_scale = hybrid_agent_parameters['torque_scale']
-        ctrl_torque = hybrid_agent_parameters['ctrl_torque']
+        ctrl_mode = hybrid_agent_parameters['ctrl_mode']  # Required, no fallback
         uniform_rate = hybrid_agent_parameters['uniform_sampling_rate']
         full_clop = hybrid_agent_parameters['full_clop']
 
@@ -477,16 +577,14 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
             rot_scale=rot_scale,
             force_scale=force_scale,
             torque_scale=torque_scale,
-            ctrl_torque=ctrl_torque,
+            ctrl_mode=ctrl_mode,
             uniform_rate=uniform_rate,
             learn_selection=learn_selection,
             full_CLoP=full_clop
         )
         print("[INFO]: Clipping Log STD" if clip_log_std else "[INFO]: No Lot STD Clipping")
         print("[INFO]: Using full CLoP (soft GMM mixture)" if full_clop else "[INFO]: Using LCLoP (hard selection)")
-        #self.end_tanh = force_bias_type in ['none', 'bias_sel']
-        self.force_size = 6 if ctrl_torque else 3
-        print("[INFO]: Controlling Torque" if self.force_size==6 else "[INFO]: Not Controlling Torque")
+        print(f"[INFO]: Control mode: {ctrl_mode} (force_size={self.force_size})")
 
         self.num_agents = num_agents
         if self.num_agents <= 0:

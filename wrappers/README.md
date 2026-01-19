@@ -203,10 +203,10 @@ EfficientResetWrapper(env)
 
 #### Constructor
 ```python
-HybridForcePositionWrapper(env, ctrl_torque=False, reward_type="simp")
+HybridForcePositionWrapper(env, ctrl_mode="force_only", reward_type="simp")
 ```
 - `env`: Base environment to wrap
-- `ctrl_torque`: Whether to control torques (6DOF) or just forces (3DOF)
+- `ctrl_mode`: Control mode - "force_only" (3DOF), "force_tz" (4DOF), "force_torque" (6DOF)
 - `reward_type`: Reward strategy - "simp", "dirs", "delta", "base", "pos_simp", "wrench_norm"
 
 #### Action Space

@@ -9,7 +9,7 @@ primary:
   num_envs_per_agent: 1  # Single environment for tuning
   agents_per_break_force: 1
   break_forces: [10000]  # Unbreakable peg for tuning
-  ctrl_torque: false  # 3DOF force control only
+  ctrl_mode: "force_only"  # 3DOF force control only
 
 # Enable hybrid control wrapper
 wrappers:
