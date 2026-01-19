@@ -93,13 +93,13 @@ environment:
     apply_ema_force: true
     async_z_force_bounds: true
     force_action_bounds: [20.0, 20.0, 20.0] #
-    torque_action_bounds: [0.5, 0.5, 0.5]
+    torque_action_bounds: [0.25, 0.25, 0.25]
     force_action_threshold: [2.0, 2.0, 2.0] #
-    torque_action_threshold: [0.1, 0.1, 0.1]
+    torque_action_threshold: [0.01, 0.01, 0.01]
 
     #default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
     default_task_prop_gains: [100, 100, 100, 30, 30, 30]
-    default_task_force_gains: [0.5, 0.5, 0.5, 0.001, 0.001, 0.001]
+    default_task_force_gains: [0.5, 0.5, 0.5, 0.1, 0.1, 0.1]
 
     no_sel_ema: true
     use_delta_force: false  # false=absolute (action*bounds), true=delta (action*threshold+current)
