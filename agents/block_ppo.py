@@ -760,11 +760,16 @@ class BlockPPO(PPO):
 
                         agent_kls = torch.mean(agent_kls, (0,2)) # assumes sample_size x num_agents x num_envs_per_agent x 1
 
+                        # Save mask state BEFORE violation check for logging
+                        # This allows us to report KL stats including the violation point
+                        stats_mask = keep_mask.clone()
+
                         if self._kl_threshold:
                             keep_mask = ~torch.logical_or( ~keep_mask, agent_kls > self._kl_threshold)
 
-                        # Increment minibatch count for agents still active (not yet violated KL)
-                        minibatch_count += keep_mask.long()
+                        # Increment minibatch count using pre-violation mask
+                        # (counts this minibatch for agents that were active at start)
+                        minibatch_count += stats_mask.long()
 
                     # compute entropy loss
                     #print(self._entropy_loss_scale)
@@ -846,7 +851,7 @@ class BlockPPO(PPO):
                 # COLLECT NETWORK STATES BEFORE ANY OPTIMIZER STEP (Problem 1 Fix)
                 # Store policy and critic states while gradients still exist
                 self._log_minibatch_update(
-                    keep_mask = keep_mask,
+                    keep_mask = stats_mask,
                     advantages = sampled_advantages,
                     old_log_probs = sampled_log_prob,
                     new_log_probs = next_log_prob,
@@ -880,7 +885,7 @@ class BlockPPO(PPO):
 
                     # Log final results - network states already collected
                     self._log_minibatch_update(
-                        keep_mask = keep_mask,
+                        keep_mask = stats_mask,
                         returns = sampled_returns,
                         values = predicted_values,
                         value_losses = value_losses,
@@ -889,7 +894,7 @@ class BlockPPO(PPO):
                 else:
                     # Log all metrics - network states already collected
                     self._log_minibatch_update(
-                        keep_mask = keep_mask,
+                        keep_mask = stats_mask,
                         returns=sampled_returns,
                         values=predicted_values,
                         advantages = sampled_advantages,
