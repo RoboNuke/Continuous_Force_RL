@@ -53,7 +53,7 @@ wrappers:
     enabled: true
     publish_to_wandb: true
     engagement_reward_scale: 1.0 #60.0  # Scale for engagement rewards (default 1.0 = no change)
-    success_reward_scale: 1.0 #40.0
+    success_reward_scale: 10.0 #40.0
 
 agent:
   supervised_selection_loss_weight: 1.0
@@ -78,6 +78,6 @@ environment:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "LCLoP_hex_Fstd-01"
+  name: &exp_name "LCLoP_hex_Fstd-01_succRew-10"
   tags: ['exp_task_shape']
   group: *exp_name

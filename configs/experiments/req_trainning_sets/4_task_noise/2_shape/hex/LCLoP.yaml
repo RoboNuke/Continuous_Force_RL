@@ -7,8 +7,8 @@ primary:
   agents_per_break_force: 5
   num_envs_per_agent: 256
   break_forces: [10]
-  max_steps: 10000500
-  ctrl_mode: "force_tz"
+  max_steps: 5000500
+  ctrl_mode: "force_only"
 # Model configuration for hybrid agent
 model:
   use_hybrid_agent: true
@@ -78,6 +78,6 @@ environment:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "LCLoP_hex_degMap_Tz-Ctrl"
+  name: &exp_name "LCLoP_hex_degMap"
   tags: ['exp_task_shape']
   group: *exp_name
