@@ -466,12 +466,6 @@ class ForceTorqueWrapper(gym.Wrapper):
         self.unwrapped.in_contact[:, 4] = self.unwrapped.in_contact[:, 0] | self.unwrapped.in_contact[:, 2]  # Ty = Fx | Fz
         self.unwrapped.in_contact[:, 5] = self.unwrapped.in_contact[:, 0] | self.unwrapped.in_contact[:, 1]  # Tz = Fx | Fy
 
-        # DEBUG: Print force contacts and inferred Rz contact state (mean across envs)
-        fx_contact_pct = self.unwrapped.in_contact[:, 0].float().mean().item() * 100
-        fy_contact_pct = self.unwrapped.in_contact[:, 1].float().mean().item() * 100
-        rz_contact_pct = self.unwrapped.in_contact[:, 5].float().mean().item() * 100
-        print(f"[DEBUG] Fx contact: {fx_contact_pct:.1f}% | Fy contact: {fy_contact_pct:.1f}% | Rz contact (Fx|Fy): {rz_contact_pct:.1f}%")
-
         # Log contact state if enabled
         if self.log_contact_state and hasattr(self.unwrapped, 'extras'):
             if 'to_log' not in self.unwrapped.extras:
