@@ -6,14 +6,13 @@ base_config: "configs/base/PiH_base.yaml"
 primary:
   agents_per_break_force: 5
   num_envs_per_agent: 256
-  break_forces: [10]
-  max_steps: 10000500
+  break_forces: [15]
+  max_steps: 7000500
 
 # Model configuration for hybrid agent
 model:
   use_hybrid_agent: false
-  hybrid_agent:
-    force_init_std: 0.1 # implies a 96% range [-2.5, 2.5] 
+  act_init_std: 0.6
 
 # Enable hybrid control wrapper and related systems
 wrappers:
@@ -70,6 +69,6 @@ environment:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "basic-hybrid_arch"
+  name: &exp_name "basic-hybrid_arch(1mm)"
   tags: ['exp_task_shape']
   group: *exp_name

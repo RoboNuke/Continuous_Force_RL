@@ -6,8 +6,8 @@ base_config: "configs/base/PiH_base.yaml"
 primary:
   agents_per_break_force: 5
   num_envs_per_agent: 256
-  break_forces: [10]
-  max_steps: 10000500
+  break_forces: [15]
+  max_steps: 7000500
 
 # Model configuration for hybrid agent
 model:
@@ -70,6 +70,6 @@ environment:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "LCLoP_arch"
+  name: &exp_name "MATCH_arch(1mm)"
   tags: ['exp_task_shape']
   group: *exp_name

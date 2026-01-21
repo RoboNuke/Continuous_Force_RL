@@ -6,14 +6,14 @@ base_config: "configs/base/PiH_base.yaml"
 primary:
   agents_per_break_force: 5
   num_envs_per_agent: 256
-  break_forces: [10]
-  max_steps: 5000500
+  break_forces: [15]
+  max_steps: 7000500
   ctrl_mode: "force_only"
 # Model configuration for hybrid agent
 model:
   use_hybrid_agent: true
-  #hybrid_agent:
-  #  force_init_std: 0.1 # implies a 96% range [-2.5, 2.5] 
+  hybrid_agent:
+    force_init_std: 0.5 # implies a 96% range [-2.5, 2.5] 
 
 # Enable hybrid control wrapper and related systems
 wrappers:
@@ -78,6 +78,6 @@ environment:
 
 # Experiment metadata
 experiment:
-  name: &exp_name "LCLoP_hex_degMap"
+  name: &exp_name "MATCH_hex(1mm)"
   tags: ['exp_task_shape']
   group: *exp_name
