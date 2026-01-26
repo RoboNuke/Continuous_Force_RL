@@ -11,23 +11,8 @@ primary:
 # Model configuration for hybrid agent
 model:
   use_hybrid_agent: false
-
-# Enable hybrid control wrapper and related systems
-wrappers:
-  # Enable hybrid control wrapper
-  hybrid_control:
-    enabled: true
-    reward_type: "none"
-    use_ground_truth_selection: false
-    
-  pose_contact_logging:
-    enabled: false
-
-agent:
-  supervised_selection_loss_weight: 1.0
-#  policy_learning_rate: 5.0e-4
-#  critic_learning_rate: 1.0e-4
-#  #learning_epochs: 1
+  actor:
+    use_state_dependent_std: true
 
 environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
@@ -36,6 +21,6 @@ environment:
     
 # Experiment metadata
 experiment:
-  name: &exp_name "basic-hybrid_perf-comp"
-  tags: ['exp_perf-comp']
+  name: &exp_name "pose_state-std"
+  tags: []
   group: *exp_name

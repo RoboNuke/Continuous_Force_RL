@@ -111,7 +111,8 @@ class BlockSimBa(nn.Module):
             use_separate_heads=False,
             selection_head_hidden_dim=64,
             component_head_hidden_dim=128,
-            force_size=3
+            force_size=3,
+            use_state_dependent_std=False,
         ):
         super().__init__()
         self.device=device
@@ -123,6 +124,15 @@ class BlockSimBa(nn.Module):
         self.use_tanh = tanh
         self.use_separate_heads = use_separate_heads
         self.force_size = force_size
+        self.use_state_dependent_std = use_state_dependent_std
+
+        # Calculate std_out_dim: number of continuous components (act_dim - force_size)
+        self.std_out_dim = (act_dim - force_size) if use_state_dependent_std else 0
+
+        # DEBUG: Print configuration
+        print(f"[DEBUG BlockSimBa] use_state_dependent_std={use_state_dependent_std}")
+        print(f"[DEBUG BlockSimBa] act_dim={act_dim}, force_size={force_size}, std_out_dim={self.std_out_dim}")
+        print(f"[DEBUG BlockSimBa] use_separate_heads={use_separate_heads}")
 
         self.fc_in = BlockLinear(num_agents, obs_dim, hidden_dim, name="fc_in")
         self.resblocks = nn.ModuleList(
@@ -143,11 +153,27 @@ class BlockSimBa(nn.Module):
             # Force/torque component head
             self.force_torque_head = BlockMLP(num_agents, hidden_dim, component_head_hidden_dim, force_size,
                                              activation='tanh', name="force_torque_head")
+            # Optional std head for state-dependent std
+            if self.std_out_dim > 0:
+                self.std_head = BlockMLP(num_agents, hidden_dim, component_head_hidden_dim, self.std_out_dim,
+                                        activation=None, name="std_head")
+                print(f"[DEBUG BlockSimBa] Created std_head with output_dim={self.std_out_dim}")
+            else:
+                self.std_head = None
+                print(f"[DEBUG BlockSimBa] No std_head (std_out_dim=0)")
         else:
-            self.fc_out = BlockLinear(num_agents, hidden_dim, act_dim, name="fc_out")
+            # fc_out outputs mean + std (if use_state_dependent_std)
+            total_out_dim = act_dim + self.std_out_dim
+            self.fc_out = BlockLinear(num_agents, hidden_dim, total_out_dim, name="fc_out")
+            self.std_head = None
+            print(f"[DEBUG BlockSimBa] fc_out total_out_dim={total_out_dim} (act_dim={act_dim} + std_out_dim={self.std_out_dim})")
+    # Debug counter to limit prints
+    _debug_forward_count = 0
+
     def forward(self, obs, num_envs):
         """
         obs: (num_agents * num_envs, obs_dim)
+        Returns: (actions, log_std) where log_std is None if use_state_dependent_std=False
         """
         num_agents = self.fc_in.weight.shape[0]
         obs = obs.view(num_agents, num_envs, -1)
@@ -170,12 +196,45 @@ class BlockSimBa(nn.Module):
             # Concatenate all outputs: [selections, pos_rot, force_torque]
             actions = torch.cat([selections, pos_rot_out, force_torque_out], dim=-1)
             # Shape: (num_agents, num_envs, 2*force_size + 6)
+
+            # Optional std head
+            if self.std_head is not None:
+                log_std = self.std_head(ln_out)
+                log_std = log_std.view(-1, log_std.shape[-1])
+            else:
+                log_std = None
         else:
-            actions = self.fc_out(ln_out)
+            raw_out = self.fc_out(ln_out)
+
+            if self.std_out_dim > 0:
+                # Split: first act_dim are mean, rest are log_std
+                actions = raw_out[..., :self.act_dim]
+                log_std = raw_out[..., self.act_dim:]
+                log_std = log_std.view(-1, log_std.shape[-1])
+            else:
+                actions = raw_out
+                log_std = None
+
             if self.use_tanh:
                 actions = torch.tanh(actions)
 
-        return actions.view(-1, actions.shape[-1])  # flatten back
+        # DEBUG: Print shapes and stats (only first 3 calls)
+        BlockSimBa._debug_forward_count += 1
+        if BlockSimBa._debug_forward_count <= 3:
+            actions_flat = actions.view(-1, actions.shape[-1])
+            print(f"[DEBUG BlockSimBa.forward #{BlockSimBa._debug_forward_count}]")
+            print(f"  obs.shape={obs.shape}, num_envs={num_envs}")
+            print(f"  actions.shape={actions_flat.shape}")
+            if log_std is not None:
+                print(f"  log_std.shape={log_std.shape}")
+                print(f"  log_std min={log_std.min().item():.4f}, max={log_std.max().item():.4f}, mean={log_std.mean().item():.4f}")
+                # Check if std varies across batch (state-dependent)
+                std_variance = log_std.var(dim=0).mean().item()
+                print(f"  log_std variance across batch (should be >0 if state-dependent): {std_variance:.6f}")
+            else:
+                print(f"  log_std=None (not state-dependent)")
+
+        return actions.view(-1, actions.shape[-1]), log_std
 
 
 class BlockSimBaActor(GaussianMixin, Model):
@@ -185,7 +244,7 @@ class BlockSimBaActor(GaussianMixin, Model):
             action_space,
             device,
             num_agents=1,
-            act_init_std = 0.60653066, # -0.5 value used in maniskill 
+            act_init_std = 0.60653066, # -0.5 value used in maniskill
             actor_n = 2,
             actor_latent=512,
             action_gain=1.0,
@@ -193,55 +252,78 @@ class BlockSimBaActor(GaussianMixin, Model):
             init_sel_bias=0.0,
 
             clip_actions=False,
-            clip_log_std=True, 
-            min_log_std=-20, 
-            max_log_std=2, 
+            clip_log_std=True,
+            min_log_std=-20,
+            max_log_std=2,
             reduction="sum",
-            sigma_idx=0
+            sigma_idx=0,
+            use_state_dependent_std=False,
         ):
         print("[INFO]: \t\tInstantiating Block SimBa Actor")
         Model.__init__(self, observation_space, action_space, device)
         GaussianMixin.__init__(self, clip_actions, clip_log_std, min_log_std, max_log_std, reduction)
 
         self.num_agents = num_agents
-
         self.sigma_idx = sigma_idx
+        self.use_state_dependent_std = use_state_dependent_std
 
         # Compute number of component dimensions (exclude selection terms)
         # sigma_idx is the count of selection terms, Bernoulli doesn't need std dev
-        num_component_dims = self.num_actions - self.sigma_idx 
-
-        self.actor_logstd = nn.ParameterList(
-            [
-                nn.Parameter(
-                    torch.ones(1, num_component_dims) * math.log(act_init_std), requires_grad=True
-                )
-                for _ in range(num_agents)
-            ]
-        ).to(device)
-
-        print(f"[INFO]: \t\tInit Std Dev:{act_init_std}, num_component_dims:{num_component_dims}")
-        for i in range(num_agents):
-            self.actor_logstd[i]._agent_id = i
-            self.actor_logstd[i]._name=f"logstd_{i}"
+        num_component_dims = self.num_actions - self.sigma_idx
 
         self.actor_mean = BlockSimBa(
             num_agents = self.num_agents,
             obs_dim = self.num_observations,
             hidden_dim = actor_latent,
-            act_dim = self.num_actions,  # No extra outputs - first sigma_idx outputs are selection logits
+            act_dim = self.num_actions,
             device=device,
             num_blocks = actor_n,
-            tanh = (self.sigma_idx == 0)
+            tanh = (self.sigma_idx == 0),
+            force_size = self.sigma_idx,  # Pass sigma_idx as force_size for std_out_dim calculation
+            use_state_dependent_std = use_state_dependent_std,
         ).to(device)
+
+        if use_state_dependent_std:
+            print(f"[INFO]: \t\tUsing STATE-DEPENDENT std (std_out_dim={self.actor_mean.std_out_dim})")
+            # Initialize std portion of fc_out.bias
+            with torch.no_grad():
+                self.actor_mean.fc_out.bias[:, self.num_actions:] = math.log(act_init_std)
+                # Scale std weights to 0.1: small enough for stable initial std values,
+                # but large enough for meaningful state-dependent variation and faster learning.
+                # Log-std clamping [-20, 2] provides safety bounds regardless of weight scale.
+                self.actor_mean.fc_out.weight[:, self.num_actions:, :] *= 0.1
+
+            # DEBUG: Verify initialization
+            print(f"[DEBUG BlockSimBaActor] Initialized std bias to log({act_init_std})={math.log(act_init_std):.4f}")
+            print(f"[DEBUG BlockSimBaActor] fc_out.bias shape: {self.actor_mean.fc_out.bias.shape}")
+            print(f"[DEBUG BlockSimBaActor] fc_out.weight shape: {self.actor_mean.fc_out.weight.shape}")
+            print(f"[DEBUG BlockSimBaActor] std bias values: {self.actor_mean.fc_out.bias[:, self.num_actions:].mean().item():.4f}")
+            print(f"[DEBUG BlockSimBaActor] std weight magnitude: {self.actor_mean.fc_out.weight[:, self.num_actions:, :].abs().mean().item():.6f}")
+
+            self.actor_logstd = None
+        else:
+            self.actor_logstd = nn.ParameterList(
+                [
+                    nn.Parameter(
+                        torch.ones(1, num_component_dims) * math.log(act_init_std), requires_grad=True
+                    )
+                    for _ in range(num_agents)
+                ]
+            ).to(device)
+
+            print(f"[INFO]: \t\tInit Std Dev:{act_init_std}, num_component_dims:{num_component_dims}")
+            for i in range(num_agents):
+                self.actor_logstd[i]._agent_id = i
+                self.actor_logstd[i]._name=f"logstd_{i}"
 
         self.component_activation = nn.Tanh().to(device)
         if self.sigma_idx > 0:
             self.selection_activation = nn.Sigmoid().to(device)
 
         with torch.no_grad():
-            self.actor_mean.fc_out.weight *= last_layer_scale
-            print(f"[INFO]: \t\tScaled model last layer by {last_layer_scale}")
+            # Scale weights for action mean portion only
+            self.actor_mean.fc_out.weight[:, :self.num_actions, :] *= last_layer_scale
+            print(f"[INFO]: \t\tScaled model last layer (action portion) by {last_layer_scale}")
             if sigma_idx > 0:
                 print(f"[INFO]: \t\tSigma Idx={sigma_idx} so last layer bias[:{sigma_idx}] -= {init_sel_bias}")
                 # sigma_idx is count of selection terms, single logit per selection
@@ -301,9 +383,15 @@ class BlockSimBaActor(GaussianMixin, Model):
         outputs["mean_actions"] = mean_actions
         return actions, log_prob, outputs
 
+    # Debug counter for compute
+    _debug_compute_count = 0
+
     def compute(self, inputs, role):
         num_envs = inputs['states'].size()[0] // self.num_agents
-        action_mean = self.actor_mean(inputs['states'][:,:self.num_observations], num_envs)
+
+        # Backbone returns (action_mean, log_std) where log_std is None if not state-dependent
+        action_mean, log_std = self.actor_mean(inputs['states'][:,:self.num_observations], num_envs)
+
         if self.sigma_idx > 0:
             # sigma_idx is count of selection terms
             selection_logits = action_mean[..., :self.sigma_idx]
@@ -311,15 +399,32 @@ class BlockSimBaActor(GaussianMixin, Model):
             components = self.component_activation(action_mean[..., self.sigma_idx:])
             action_mean = torch.cat([selection_probs, components], dim=-1)
 
-        # Build log_std tensor - only for component dimensions (not selections)
-        logstds = []
-        batch_size = int(action_mean.size()[0] // self.num_agents)
-        num_components = action_mean.size()[1] - self.sigma_idx if self.sigma_idx > 0 else action_mean.size()[1]
-        for i, log_std in enumerate(self.actor_logstd):
-            # log_std has shape (1, num_components), expand to (batch_size, num_components)
-            logstds.append(log_std.expand(batch_size, num_components))
-        logstds = torch.cat(logstds, dim=0)
-        return action_mean, logstds, {}
+        if not self.use_state_dependent_std:
+            # Build log_std tensor from parameters - only for component dimensions (not selections)
+            logstds = []
+            batch_size = int(action_mean.size()[0] // self.num_agents)
+            num_components = action_mean.size()[1] - self.sigma_idx if self.sigma_idx > 0 else action_mean.size()[1]
+            for i, log_std_param in enumerate(self.actor_logstd):
+                # log_std has shape (1, num_components), expand to (batch_size, num_components)
+                logstds.append(log_std_param.expand(batch_size, num_components))
+            log_std = torch.cat(logstds, dim=0)
+
+        # DEBUG: Print shapes and stats (only first 3 calls)
+        BlockSimBaActor._debug_compute_count += 1
+        if BlockSimBaActor._debug_compute_count <= 3:
+            print(f"[DEBUG BlockSimBaActor.compute #{BlockSimBaActor._debug_compute_count}]")
+            print(f"  use_state_dependent_std={self.use_state_dependent_std}")
+            print(f"  action_mean.shape={action_mean.shape}")
+            print(f"  log_std.shape={log_std.shape}")
+            print(f"  log_std min={log_std.min().item():.4f}, max={log_std.max().item():.4f}, mean={log_std.mean().item():.4f}")
+            if self.use_state_dependent_std:
+                # Verify variance across batch (should be > 0 for state-dependent)
+                std_variance = log_std.var(dim=0).mean().item()
+                print(f"  log_std variance across batch: {std_variance:.6f}")
+                if std_variance < 1e-8:
+                    print(f"  WARNING: log_std variance is very low - may not be state-dependent!")
+
+        return action_mean, log_std, {}
 
     def get_entropy(self, role=""):
         if self.sigma_idx == 0:
@@ -366,7 +471,8 @@ class BlockSimBaCritic(DeterministicMixin, Model):
 
     def compute(self, inputs, role):
         num_envs = inputs['states'].size()[0] // self.num_agents
-        return self.critic(inputs['states'][:,-self.num_observations:], num_envs), {}
+        value, _ = self.critic(inputs['states'][:,-self.num_observations:], num_envs)
+        return value, {}
 
     
 # -----------------------------
@@ -404,21 +510,30 @@ def export_policies(block_model, stds, save_paths, preprocessor_states=None):
       Save each agent's parameters separately with preprocessor states.
       save_paths: list of file paths, length = num_agents
       preprocessor_states: dict with state_preprocessor and value_preprocessor state_dicts
+      stds: None for critic, ParameterList for non-state-dependent policy, or None for state-dependent policy
       """
       num_agents = block_model.fc_in.weight.shape[0]
+      use_state_dependent_std = getattr(block_model, 'use_state_dependent_std', False)
 
       for i in range(num_agents):
           agent = extract_agent(block_model, i)
 
           # Create save dictionary
-          if stds is not None:
-              # policy
+          if use_state_dependent_std:
+              # State-dependent std: std is in the network, no separate log_std
               save_dict = {
                   'net_state_dict': agent.state_dict(),
-                  'log_std': stds[i]
+                  'use_state_dependent_std': True
+              }
+          elif stds is not None:
+              # policy with parameter-based log_std
+              save_dict = {
+                  'net_state_dict': agent.state_dict(),
+                  'log_std': stds[i],
+                  'use_state_dependent_std': False
               }
           else:
-              # critic 
+              # critic
               save_dict = {
                   'net_state_dict': agent.state_dict()
               }
@@ -440,21 +555,25 @@ def export_policies(block_model, stds, save_paths, preprocessor_states=None):
 def extract_agent(block_model: nn.Module, agent_idx: int):
     """
     Extract a single-agent network from a block-parallel model.
-    
+
     Args:
         block_model: block-parallel model (with tagged params)
         agent_idx: which agent to extract
         single_agent_class: class constructor for single-agent net (e.g., SimBaNet)
         *args, **kwargs: arguments to construct the single-agent network
-    
+
     Returns:
         A single-agent model with weights/biases copied from block_model[agent_idx].
     """
+    # Include std_out_dim in output size if state-dependent std
+    std_out_dim = getattr(block_model, 'std_out_dim', 0)
+    total_out_size = block_model.act_dim + std_out_dim
+
     # Build a fresh single-agent network
     agent_model = SimBaNet(
         n=len(block_model.resblocks),
         in_size=block_model.obs_dim,
-        out_size=block_model.act_dim,
+        out_size=total_out_size,
         latent_size=block_model.hidden_dim,
         device=block_model.device,
         tan_out=block_model.use_tanh

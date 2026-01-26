@@ -11,6 +11,8 @@ primary:
 # Model configuration for hybrid agent
 model:
   use_hybrid_agent: false
+  actor:
+    use_state_dependent_std: true
 
 # Enable hybrid control wrapper and related systems
 wrappers:
@@ -36,6 +38,6 @@ environment:
     
 # Experiment metadata
 experiment:
-  name: &exp_name "basic-hybrid_perf-comp"
-  tags: ['exp_perf-comp']
+  name: &exp_name "basic-hybrid_state-std"
+  tags: []
   group: *exp_name

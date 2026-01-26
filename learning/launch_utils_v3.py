@@ -322,7 +322,8 @@ def _create_hybrid_policy_model(env, configs):
         actor_n=configs['model'].actor.n,
         actor_latent=configs['model'].actor.latent_size,
         num_agents=configs['primary'].total_agents,
-        learn_selection=configs['wrappers'].hybrid_control.use_ground_truth_selection
+        learn_selection=configs['wrappers'].hybrid_control.use_ground_truth_selection,
+        use_state_dependent_std=configs['model'].actor.use_state_dependent_std
     )
 
 def _configure_hybrid_agent_parameters(configs):
@@ -364,7 +365,8 @@ def _create_standard_policy_model(env, configs):
         sigma_idx=sigma_idx,
         init_sel_bias = configs['model'].hybrid_agent.init_bias,
         num_agents=configs['primary'].total_agents,
-        last_layer_scale=configs['model'].last_layer_scale
+        last_layer_scale=configs['model'].last_layer_scale,
+        use_state_dependent_std=configs['model'].actor.use_state_dependent_std
     )
 
 

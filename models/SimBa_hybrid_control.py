@@ -707,6 +707,7 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
     
 class HybridControlBlockSimBaActor(HybridControlSimBaActor):
     def __init__(self, **kwargs):
+        self.use_state_dependent_std = kwargs.pop('use_state_dependent_std', False)
         super().__init__(**kwargs)
 
     def create_net(self, actor_n, actor_latent, hybrid_agent_parameters, device):
@@ -725,7 +726,8 @@ class HybridControlBlockSimBaActor(HybridControlSimBaActor):
             use_separate_heads=use_separate_heads,
             selection_head_hidden_dim=hybrid_agent_parameters['selection_head_hidden_dim'],
             component_head_hidden_dim=hybrid_agent_parameters['component_head_hidden_dim'],
-            force_size=self.force_size
+            force_size=self.force_size,
+            use_state_dependent_std=self.use_state_dependent_std,
         )
 
         if hybrid_agent_parameters['init_scale_last_layer']:
@@ -738,7 +740,54 @@ class HybridControlBlockSimBaActor(HybridControlSimBaActor):
                     self.actor_mean.pos_rot_head.fc2.weight *= scale_factor
                     self.actor_mean.force_torque_head.fc2.weight *= scale_factor
                 else:
-                    self.actor_mean.fc_out.weight *= scale_factor
+                    # Scale action portion only (not std portion)
+                    self.actor_mean.fc_out.weight[:, :self.num_actions, :] *= scale_factor
+
+        # Initialize std portion if state-dependent
+        if self.use_state_dependent_std:
+            print(f"[INFO]: Using STATE-DEPENDENT std (std_out_dim={self.actor_mean.std_out_dim})")
+            pos_init_std = hybrid_agent_parameters['pos_init_std']
+            rot_init_std = hybrid_agent_parameters['rot_init_std']
+            force_init_std = hybrid_agent_parameters['force_init_std']
+
+            with torch.no_grad():
+                if use_separate_heads:
+                    # Initialize std_head
+                    self.actor_mean.std_head.fc2.bias[:, :3] = math.log(pos_init_std)
+                    self.actor_mean.std_head.fc2.bias[:, 3:6] = math.log(rot_init_std)
+                    self.actor_mean.std_head.fc2.bias[:, 6:] = math.log(force_init_std)
+                    # Scale std weights to 0.1: small enough for stable initial std values,
+                    # but large enough for meaningful state-dependent variation and faster learning.
+                    # Log-std clamping [-20, 2] provides safety bounds regardless of weight scale.
+                    self.actor_mean.std_head.fc2.weight *= 0.1
+
+                    # DEBUG: Verify std_head initialization
+                    print(f"[DEBUG HybridControlBlockSimBaActor] Initialized std_head for separate_heads mode")
+                    print(f"[DEBUG HybridControlBlockSimBaActor] std_head.fc2.bias shape: {self.actor_mean.std_head.fc2.bias.shape}")
+                    print(f"[DEBUG HybridControlBlockSimBaActor] Expected log_stds: pos={math.log(pos_init_std):.4f}, rot={math.log(rot_init_std):.4f}, force={math.log(force_init_std):.4f}")
+                    print(f"[DEBUG HybridControlBlockSimBaActor] Actual bias[:3]={self.actor_mean.std_head.fc2.bias[:, :3].mean().item():.4f}")
+                    print(f"[DEBUG HybridControlBlockSimBaActor] Actual bias[3:6]={self.actor_mean.std_head.fc2.bias[:, 3:6].mean().item():.4f}")
+                    print(f"[DEBUG HybridControlBlockSimBaActor] Actual bias[6:]={self.actor_mean.std_head.fc2.bias[:, 6:].mean().item():.4f}")
+                    print(f"[DEBUG HybridControlBlockSimBaActor] std_head weight magnitude: {self.actor_mean.std_head.fc2.weight.abs().mean().item():.6f}")
+                else:
+                    # Initialize std portion of fc_out
+                    self.actor_mean.fc_out.bias[:, self.num_actions:self.num_actions+3] = math.log(pos_init_std)
+                    self.actor_mean.fc_out.bias[:, self.num_actions+3:self.num_actions+6] = math.log(rot_init_std)
+                    self.actor_mean.fc_out.bias[:, self.num_actions+6:] = math.log(force_init_std)
+                    # Scale std weights to 0.1: small enough for stable initial std values,
+                    # but large enough for meaningful state-dependent variation and faster learning.
+                    # Log-std clamping [-20, 2] provides safety bounds regardless of weight scale.
+                    self.actor_mean.fc_out.weight[:, self.num_actions:, :] *= 0.1
+
+                    # DEBUG: Verify fc_out std portion initialization
+                    print(f"[DEBUG HybridControlBlockSimBaActor] Initialized fc_out std portion")
+                    print(f"[DEBUG HybridControlBlockSimBaActor] fc_out.bias shape: {self.actor_mean.fc_out.bias.shape}")
+                    print(f"[DEBUG HybridControlBlockSimBaActor] Expected log_stds: pos={math.log(pos_init_std):.4f}, rot={math.log(rot_init_std):.4f}, force={math.log(force_init_std):.4f}")
+                    std_bias = self.actor_mean.fc_out.bias[:, self.num_actions:]
+                    print(f"[DEBUG HybridControlBlockSimBaActor] Actual std bias pos={std_bias[:, :3].mean().item():.4f}")
+                    print(f"[DEBUG HybridControlBlockSimBaActor] Actual std bias rot={std_bias[:, 3:6].mean().item():.4f}")
+                    print(f"[DEBUG HybridControlBlockSimBaActor] Actual std bias force={std_bias[:, 6:].mean().item():.4f}")
+                    print(f"[DEBUG HybridControlBlockSimBaActor] std weight magnitude: {self.actor_mean.fc_out.weight[:, self.num_actions:, :].abs().mean().item():.6f}")
 
         self.selection_activation = nn.Sigmoid().to(device)
         self.component_activation = nn.Tanh().to(device)
@@ -779,11 +828,14 @@ class HybridControlBlockSimBaActor(HybridControlSimBaActor):
     
     def get_zout(self, inputs):
         num_envs = inputs['states'].size()[0] // self.num_agents
-        #print("Num envs:", num_envs)
+        # BlockSimBa now returns (actions, log_std)
         return self.actor_mean(inputs['states'][:,:self.num_observations], num_envs)
 
+    # Debug counter for compute
+    _debug_compute_count = 0
+
     def compute(self, inputs, role):
-        zout = self.get_zout(inputs)
+        zout, log_std = self.get_zout(inputs)
         # first force_size are logits/probs, remaining is components
         sels = zout[:, :self.force_size]
         not_sels = zout[:, self.force_size:]
@@ -802,5 +854,23 @@ class HybridControlBlockSimBaActor(HybridControlSimBaActor):
 
         action_mean = torch.cat([final_sels, final_not_sels], dim=-1)
 
-        return action_mean, self.get_logstds(action_mean), {}
+        if not self.use_state_dependent_std:
+            log_std = self.get_logstds(action_mean)
+
+        # DEBUG: Print shapes and stats (only first 3 calls)
+        HybridControlBlockSimBaActor._debug_compute_count += 1
+        if HybridControlBlockSimBaActor._debug_compute_count <= 3:
+            print(f"[DEBUG HybridControlBlockSimBaActor.compute #{HybridControlBlockSimBaActor._debug_compute_count}]")
+            print(f"  use_state_dependent_std={self.use_state_dependent_std}")
+            print(f"  action_mean.shape={action_mean.shape}")
+            print(f"  log_std.shape={log_std.shape}")
+            print(f"  log_std min={log_std.min().item():.4f}, max={log_std.max().item():.4f}, mean={log_std.mean().item():.4f}")
+            if self.use_state_dependent_std:
+                # Verify variance across batch (should be > 0 for state-dependent)
+                std_variance = log_std.var(dim=0).mean().item()
+                print(f"  log_std variance across batch: {std_variance:.6f}")
+                if std_variance < 1e-8:
+                    print(f"  WARNING: log_std variance is very low - may not be state-dependent!")
+
+        return action_mean, log_std, {}
     

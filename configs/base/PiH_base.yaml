@@ -16,7 +16,7 @@ experiment:
 primary:
   agents_per_break_force: 2 # Number of agents per break force condition
   num_envs_per_agent: 16   # Environments per individual agent
-  break_forces: [10]  # Break force conditions (-1 = unbreakable)
+  break_forces: [15]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
   max_steps: 3000064 #25000192
@@ -147,7 +147,6 @@ model:
   last_layer_scale: 0.1
   act_init_std: 1.0
   critic_output_init_mean: 50
-
   use_separate_heads: false
   selection_head_hidden_dim: 2
   component_head_hidden_dim: 256
@@ -155,6 +154,7 @@ model:
   actor:
     n: 2  # Number of SimBa layers
     latent_size: 512  # Hidden dimension
+    use_state_dependent_std: false
 
   # Critic architecture (SimBa value network)
   critic:
