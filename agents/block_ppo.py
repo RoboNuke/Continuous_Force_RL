@@ -605,11 +605,13 @@ class BlockPPO(PPO):
                 wrapper.publish()
 
         # Debug: Print log_std values periodically to check divergence
-        if original_timestep > 0 and self.write_interval > 0 and not original_timestep % self.write_interval:
-            print("\n=== Log Std Values After Training ===")
-            for i in range(self.num_agents):
-                print(f"Agent {i}: {self.policy.actor_logstd[i].data}")
-            print("=" * 50)
+        # Skip when using state-dependent std (actor_logstd is None)
+        if self.policy.actor_logstd is not None:
+            if original_timestep > 0 and self.write_interval > 0 and not original_timestep % self.write_interval:
+                print("\n=== Log Std Values After Training ===")
+                for i in range(self.num_agents):
+                    print(f"Agent {i}: {self.policy.actor_logstd[i].data}")
+                print("=" * 50)
 
     def _update(self, timestep: int, timesteps: int):
         #super()._update(timestep, timesteps) def _update(self, timestep: int, timesteps: int) -> None:
