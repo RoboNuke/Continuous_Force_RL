@@ -1387,6 +1387,11 @@ class BlockPPO(PPO):
         if not wrapper:
             return
 
+        # Skip logging when using state-dependent std (actor_logstd is None)
+        # State-dependent std varies per observation, so fixed parameter logging doesn't apply
+        if self.policy.actor_logstd is None:
+            return
+
         # Detect if using BlockSimBaActor with hybrid control (has sigma_idx)
         sigma_offset = 0
         if hasattr(self.policy, 'sigma_idx') and self.policy.sigma_idx > 0:
