@@ -47,8 +47,8 @@ def parse_arguments():
     parser.add_argument("--show_progress", action="store_true", default=True,
                         help="Show progress bar during evaluation rollout")
     parser.add_argument("--eval_mode", type=str, required=True,
-                        choices=["performance", "noise", "rotation", "gain", "dynamics", "trajectory"],
-                        help="Evaluation mode: 'performance' (100 envs, videos), 'noise' (500 envs, noise analysis), 'rotation' (500 envs, rotation analysis), 'gain' (500 envs, gain robustness), 'dynamics' (1200 envs, friction/mass robustness), or 'trajectory' (100 envs, detailed trajectory data)")
+                        choices=["performance", "noise", "rotation", "gain", "dynamics", "trajectory", "yaw"],
+                        help="Evaluation mode: 'performance' (100 envs, videos), 'noise' (400 envs, noise analysis), 'rotation' (500 envs, rotation analysis), 'gain' (500 envs, gain robustness), 'dynamics' (1200 envs, friction/mass robustness), 'trajectory' (100 envs, detailed trajectory data), or 'yaw' (400 envs, yaw rotation robustness)")
     parser.add_argument("--no_wandb", action="store_true", default=False,
                         help="Disable WandB logging and save results locally for debugging")
     parser.add_argument("--debug_project", action="store_true", default=False,
@@ -195,6 +195,24 @@ ENVS_PER_NOISE_RANGE = 100
 
 # Total environments for noise mode
 NOISE_MODE_TOTAL_ENVS = len(NOISE_RANGES) * ENVS_PER_NOISE_RANGE
+
+
+# ===== YAW EVALUATION CONSTANTS =====
+
+# Define yaw ranges for yaw robustness evaluation (in degrees)
+# Format: (min_val_degrees, max_val_degrees, display_name)
+YAW_RANGES_DEG = [
+    (0.0, 1.0, "0deg-1deg"),
+    (1.0, 2.5, "1deg-2.5deg"),
+    (2.5, 5.0, "2.5deg-5deg"),
+    (5.0, 7.5, "5deg-7.5deg"),
+]
+
+# Number of environments per yaw range
+ENVS_PER_YAW_RANGE = 100
+
+# Total environments for yaw mode
+YAW_MODE_TOTAL_ENVS = len(YAW_RANGES_DEG) * ENVS_PER_YAW_RANGE
 
 
 # ===== ROTATION EVALUATION CONSTANTS =====
@@ -481,6 +499,54 @@ class FixedAssetRotationWrapper(gym.Wrapper):
         fixed_asset.reset()
 
         # The observations don't need to be recomputed - the agent is unaware of rotation
+        return observations, info
+
+
+class FixedYawRotationWrapper(gym.Wrapper):
+    """
+    Wrapper to rotate the fixed asset by predetermined yaw angles (Z-axis rotation).
+    Used for yaw robustness evaluation.
+    """
+    def __init__(self, env, yaw_assignments: torch.Tensor):
+        """
+        Initialize the fixed yaw rotation wrapper.
+
+        Args:
+            env: Base environment to wrap
+            yaw_assignments: [num_envs] tensor with yaw angle in radians for each environment
+                            (positive = CCW when viewed from above, negative = CW)
+        """
+        super().__init__(env)
+        self.yaw_assignments = yaw_assignments
+
+        import isaacsim.core.utils.torch as torch_utils
+        self.torch_utils = torch_utils
+
+    def reset(self, **kwargs):
+        """Reset environment and apply yaw rotation to fixed asset."""
+        observations, info = super().reset(**kwargs)
+
+        fixed_asset = self.unwrapped._fixed_asset
+        current_state = fixed_asset.data.root_state_w.clone()
+
+        # Z-axis unit vector for all environments
+        z_axis = torch.zeros((self.unwrapped.num_envs, 3), device=self.unwrapped.device)
+        z_axis[:, 2] = 1.0
+
+        # Create rotation quaternion from yaw angles about Z-axis
+        rotation_quat = self.torch_utils.quat_from_angle_axis(self.yaw_assignments, z_axis)
+
+        # Compose rotation with current orientation
+        current_quat = current_state[:, 3:7]
+        new_quat = self.torch_utils.quat_mul(rotation_quat, current_quat)
+        current_state[:, 3:7] = new_quat
+
+        # Write the rotated pose to simulation
+        env_ids = torch.arange(self.unwrapped.num_envs, device=self.unwrapped.device)
+        fixed_asset.write_root_pose_to_sim(current_state[:, 0:7], env_ids=env_ids)
+        fixed_asset.write_root_velocity_to_sim(current_state[:, 7:13], env_ids=env_ids)
+        fixed_asset.reset()
+
         return observations, info
 
 
@@ -814,7 +880,7 @@ def setup_environment_once(
     args: argparse.Namespace,
     num_runs: int = 1,
     parallel_mode: bool = False
-) -> Tuple[Any, Any, int, float, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], int]:
+) -> Tuple[Any, Any, int, float, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], int]:
     """
     Create environment and agent once for all evaluations.
 
@@ -827,9 +893,10 @@ def setup_environment_once(
     Returns:
         Tuple of (env, agent, max_rollout_steps, policy_hz, noise_assignments,
                   rotation_assignments, gain_assignments, friction_assignments,
-                  mass_assignments, envs_per_agent)
+                  mass_assignments, yaw_assignments, envs_per_agent)
         - noise_assignments is None except for noise mode ([num_envs, 3] tensor)
         - rotation_assignments is None except for rotation mode ([num_envs, 5] tensor)
+        - yaw_assignments is None except for yaw mode ([num_envs] tensor, radians)
         - envs_per_agent: Number of environments per agent (for metrics splitting)
 
     Raises:
@@ -887,6 +954,8 @@ def setup_environment_once(
         num_envs_per_agent = DYNAMICS_MODE_TOTAL_ENVS
     elif args.eval_mode == "trajectory":
         num_envs_per_agent = TRAJECTORY_MODE_TOTAL_ENVS
+    elif args.eval_mode == "yaw":
+        num_envs_per_agent = YAW_MODE_TOTAL_ENVS
     else:
         raise RuntimeError(f"Unknown eval_mode: {args.eval_mode}")
 
@@ -1154,6 +1223,48 @@ def setup_environment_once(
         print("  - FixedDynamicsWrapper for dynamics mode")
         env = FixedDynamicsWrapper(env, friction_assignments, mass_assignments)
 
+    # Generate yaw assignments for yaw mode
+    yaw_assignments = None
+    if args.eval_mode == "yaw":
+        print("  Generating yaw assignments for yaw mode...")
+
+        base_yaw_assignments_list = []
+        for min_deg, max_deg, range_name in YAW_RANGES_DEG:
+            # Convert to radians
+            min_rad = min_deg * 3.14159265359 / 180.0
+            max_rad = max_deg * 3.14159265359 / 180.0
+
+            # Sample magnitude uniformly from [min_rad, max_rad]
+            magnitude = torch.rand(ENVS_PER_YAW_RANGE, device=env.device) * (max_rad - min_rad) + min_rad
+
+            # Randomly assign sign (symmetric sampling)
+            sign = (torch.rand(ENVS_PER_YAW_RANGE, device=env.device) > 0.5).float() * 2 - 1
+            yaw_angles = magnitude * sign
+
+            print(f"    Yaw statistics for {range_name}:")
+            print(f"      mean={yaw_angles.mean().item()*180/3.14159265359:.4f}deg, "
+                  f"std={yaw_angles.std().item()*180/3.14159265359:.4f}deg, "
+                  f"min={yaw_angles.min().item()*180/3.14159265359:.4f}deg, "
+                  f"max={yaw_angles.max().item()*180/3.14159265359:.4f}deg")
+
+            base_yaw_assignments_list.append(yaw_angles)
+
+        base_yaw_assignments = torch.cat(base_yaw_assignments_list, dim=0)  # [YAW_MODE_TOTAL_ENVS]
+
+        # Replicate for all agents in parallel mode
+        if parallel_mode:
+            yaw_assignments = base_yaw_assignments.repeat(num_runs)
+            print(f"    Generated {yaw_assignments.shape[0]} yaw assignments "
+                  f"({len(YAW_RANGES_DEG)} ranges × {ENVS_PER_YAW_RANGE} envs × {num_runs} agents)")
+        else:
+            yaw_assignments = base_yaw_assignments
+            print(f"    Generated {yaw_assignments.shape[0]} yaw assignments "
+                  f"({len(YAW_RANGES_DEG)} ranges × {ENVS_PER_YAW_RANGE} envs)")
+
+        # Apply FixedYawRotationWrapper
+        print("  - FixedYawRotationWrapper for yaw mode")
+        env = FixedYawRotationWrapper(env, yaw_assignments)
+
     # Apply TrajectoryEvalWrapper for trajectory mode
     if args.eval_mode == "trajectory":
         print("  - TrajectoryEvalWrapper for trajectory mode")
@@ -1194,7 +1305,7 @@ def setup_environment_once(
     print(f"  Created BlockPPO agent with {configs['primary'].total_agents} agents")
     print("  Setup complete!")
 
-    return env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, gain_assignments, friction_assignments, mass_assignments, num_envs_per_agent
+    return env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, gain_assignments, friction_assignments, mass_assignments, yaw_assignments, num_envs_per_agent
 
 
 # ===== WANDB LOGGING =====
@@ -1249,6 +1360,8 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
                 local_media_path = f"./eval_results/gain_step_{step}{ext}"
             elif args.eval_mode == "dynamics":
                 local_media_path = f"./eval_results/dynamics_step_{step}{ext}"
+            elif args.eval_mode == "yaw":
+                local_media_path = f"./eval_results/yaw_step_{step}{ext}"
             elif args.eval_mode == "trajectory":
                 os.makedirs(f"./eval_results/{run.id}", exist_ok=True)
                 local_media_path = f"./eval_results/{run.id}/traj_step_{step}{ext}"
@@ -2071,6 +2184,78 @@ def run_rotation_evaluation(
     return split_metrics, rollout_data_for_viz
 
 
+def run_yaw_evaluation(
+    env: Any,
+    agent: Any,
+    configs: Dict[str, Any],
+    max_rollout_steps: int,
+    yaw_assignments: torch.Tensor,
+    show_progress: bool = False,
+    eval_seed: int = None
+) -> Tuple[Dict[str, float], Dict[str, Any]]:
+    """
+    Run yaw robustness evaluation with environments across yaw ranges.
+
+    Args:
+        env: Environment instance (wrapped with metrics wrappers and FixedYawRotationWrapper)
+        agent: Agent instance with loaded checkpoint
+        configs: Configuration dictionary
+        max_rollout_steps: Maximum steps per episode
+        yaw_assignments: [YAW_MODE_TOTAL_ENVS] tensor with yaw angle in radians for each environment
+        show_progress: Whether to show progress bar
+        eval_seed: Seed for deterministic evaluation
+
+    Returns:
+        Tuple of (metrics_dict, rollout_data_dict)
+            - metrics_dict: Aggregated metrics split by yaw range
+            - rollout_data_dict: Contains success/failure data per environment for visualization
+    """
+    print("  Running yaw robustness evaluation...")
+
+    # Run basic evaluation (no video)
+    metrics, rollout_data = run_basic_evaluation(
+        env=env,
+        agent=agent,
+        configs=configs,
+        max_rollout_steps=max_rollout_steps,
+        enable_video=False,  # No video in yaw mode
+        show_progress=show_progress,
+        eval_seed=eval_seed
+    )
+
+    # Split metrics by yaw range
+    split_metrics = {}
+    for range_idx, (min_deg, max_deg, range_name) in enumerate(YAW_RANGES_DEG):
+        start_idx = range_idx * ENVS_PER_YAW_RANGE
+        end_idx = start_idx + ENVS_PER_YAW_RANGE
+
+        # Extract data for this yaw range
+        range_metrics = _compute_range_metrics(
+            rollout_data=rollout_data,
+            start_idx=start_idx,
+            end_idx=end_idx,
+            range_name=range_name
+        )
+
+        # Add to split metrics with category-based prefixes
+        prefixed_range_metrics = prefix_metrics_by_category(
+            range_metrics,
+            core_prefix=f"Yaw_Eval({range_name})_Core",
+            contact_prefix=f"Yaw_Eval({range_name})_Contact"
+        )
+        split_metrics.update(prefixed_range_metrics)
+
+    # Prepare rollout data for visualization
+    rollout_data_for_viz = {
+        'yaw_assignments': yaw_assignments,
+        'episode_succeeded': rollout_data['episode_succeeded'],
+        'termination_step': rollout_data['termination_step'],
+        'truncation_step': rollout_data['truncation_step'],
+    }
+
+    return split_metrics, rollout_data_for_viz
+
+
 def run_gain_evaluation(
     env: Any,
     agent: Any,
@@ -2330,7 +2515,7 @@ def compute_run_metrics(
 
     Args:
         rollout_data: Per-environment data from run_basic_evaluation for one agent
-        eval_mode: Evaluation mode (performance, noise, rotation, gain, dynamics, trajectory)
+        eval_mode: Evaluation mode (performance, noise, rotation, gain, dynamics, trajectory, yaw)
 
     Returns:
         Dictionary of prefixed metrics ready for WandB logging
@@ -2421,6 +2606,21 @@ def compute_run_metrics(
                 )
                 split_metrics.update(prefixed)
                 combo_idx += 1
+        return split_metrics
+
+    elif eval_mode == "yaw":
+        # Split by yaw range
+        split_metrics = {}
+        for range_idx, (min_deg, max_deg, range_name) in enumerate(YAW_RANGES_DEG):
+            start_idx = range_idx * ENVS_PER_YAW_RANGE
+            end_idx = start_idx + ENVS_PER_YAW_RANGE
+            range_metrics = _compute_range_metrics(rollout_data, start_idx, end_idx, range_name)
+            prefixed = prefix_metrics_by_category(
+                range_metrics,
+                f"Yaw_Eval({range_name})_Core",
+                f"Yaw_Eval({range_name})_Contact"
+            )
+            split_metrics.update(prefixed)
         return split_metrics
 
     elif eval_mode == "trajectory":
@@ -2912,7 +3112,8 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
                        rotation_assignments: Optional[torch.Tensor] = None,
                        gain_assignments: Optional[torch.Tensor] = None,
                        friction_assignments: Optional[torch.Tensor] = None,
-                       mass_assignments: Optional[torch.Tensor] = None) -> Tuple[Dict[str, float], Optional[str]]:
+                       mass_assignments: Optional[torch.Tensor] = None,
+                       yaw_assignments: Optional[torch.Tensor] = None) -> Tuple[Dict[str, float], Optional[str]]:
     """
     Evaluate a single checkpoint.
 
@@ -3190,6 +3391,24 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
             # No visualization for dynamics mode
             media_path = None
 
+        elif args.eval_mode == "yaw":
+            # Run yaw evaluation (no video)
+            if yaw_assignments is None:
+                raise RuntimeError("yaw_assignments is None in yaw mode evaluation")
+
+            eval_metrics, rollout_data = run_yaw_evaluation(
+                env=env,
+                agent=agent,
+                configs=configs,
+                max_rollout_steps=max_rollout_steps,
+                yaw_assignments=yaw_assignments,
+                show_progress=args.show_progress,
+                eval_seed=args.eval_seed
+            )
+
+            # No visualization for yaw mode
+            media_path = None
+
         elif args.eval_mode == "trajectory":
             # Run trajectory evaluation
             trajectory_data = run_trajectory_evaluation(
@@ -3257,6 +3476,13 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
                     successes = eval_metrics.get(f'Dyn_Eval({combo_name})_Core/num_successful_completions', 0)
                     success_rate = successes / total if total > 0 else 0.0
                     print(f"    ({combo_name}): {success_rate:.2%} ({successes}/{total})")
+        elif args.eval_mode == "yaw":
+            # Print summary for each yaw range
+            for min_deg, max_deg, range_name in YAW_RANGES_DEG:
+                total = eval_metrics.get(f'Yaw_Eval({range_name})_Core/total_episodes', 0)
+                successes = eval_metrics.get(f'Yaw_Eval({range_name})_Core/num_successful_completions', 0)
+                success_rate = successes / total if total > 0 else 0.0
+                print(f"    {range_name}: {success_rate:.2%} ({successes}/{total})")
         elif args.eval_mode == "trajectory":
             # Print summary for trajectory mode
             total_rollouts = eval_metrics.get('Traj_Eval/total_rollouts', 0)
@@ -3294,7 +3520,7 @@ def _run_parallel_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
         parallel_mode=True
     )
     env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, \
-        gain_assignments, friction_assignments, mass_assignments, envs_per_agent = result
+        gain_assignments, friction_assignments, mass_assignments, yaw_assignments, envs_per_agent = result
 
     print(f"\nEnvironment configured (parallel mode):")
     print(f"  - Number of runs/agents: {num_runs}")
@@ -3467,7 +3693,7 @@ def _run_parallel_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
                     save_trajectory_data(trajectory_data, media_path)
                     print(f"    Saved trajectory data for {run.id} to: {media_path}")
                 continue  # Skip the per-run metrics computation for trajectory mode
-            elif args_cli.eval_mode in ("performance", "noise", "rotation", "gain", "dynamics"):
+            elif args_cli.eval_mode in ("performance", "noise", "rotation", "gain", "dynamics", "yaw"):
                 # All standard modes use run_basic_evaluation in parallel mode
                 # This returns full rollout_data that can be split by agent
                 eval_metrics, rollout_data = run_basic_evaluation(
@@ -3571,6 +3797,12 @@ def _print_run_summary(metrics: Dict[str, float], eval_mode: str, run_id: str):
                 successes = metrics.get(f'Dyn_Eval({combo_name})_Core/num_successful_completions', 0)
                 success_rate = successes / total if total > 0 else 0.0
                 print(f"    [{run_id}] ({combo_name}): {success_rate:.2%}")
+    elif eval_mode == "yaw":
+        for min_deg, max_deg, range_name in YAW_RANGES_DEG:
+            total = metrics.get(f'Yaw_Eval({range_name})_Core/total_episodes', 0)
+            successes = metrics.get(f'Yaw_Eval({range_name})_Core/num_successful_completions', 0)
+            success_rate = successes / total if total > 0 else 0.0
+            print(f"    [{run_id}] {range_name}: {success_rate:.2%}")
 
 
 def _run_sequential_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
@@ -3590,7 +3822,7 @@ def _run_sequential_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
         parallel_mode=False
     )
     env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, \
-        gain_assignments, friction_assignments, mass_assignments, envs_per_agent = result
+        gain_assignments, friction_assignments, mass_assignments, yaw_assignments, envs_per_agent = result
 
     print(f"\nEnvironment configured (sequential mode):")
     if args_cli.eval_mode == "performance":
@@ -3605,6 +3837,8 @@ def _run_sequential_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
         print(f"  - Environments per agent: {DYNAMICS_MODE_TOTAL_ENVS}")
     elif args_cli.eval_mode == "trajectory":
         print(f"  - Environments per agent: {TRAJECTORY_MODE_TOTAL_ENVS}")
+    elif args_cli.eval_mode == "yaw":
+        print(f"  - Environments per agent: {YAW_MODE_TOTAL_ENVS}")
     print(f"  - Max rollout steps: {max_rollout_steps}")
     print(f"  - Policy Hz: {policy_hz}")
 
@@ -3715,7 +3949,7 @@ def _run_sequential_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
                 metrics, media_path = evaluate_checkpoint(
                     run, step, env, agent, configs, args_cli,
                     max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, gain_assignments,
-                    friction_assignments, mass_assignments
+                    friction_assignments, mass_assignments, yaw_assignments
                 )
 
                 # Log results to WandB (skip for trajectory mode)

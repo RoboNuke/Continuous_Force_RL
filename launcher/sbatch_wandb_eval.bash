@@ -58,8 +58,8 @@ read -ra EVAL_MODE_ARRAY <<< "$EVAL_MODES"
 
 # Validate each eval_mode
 for eval_mode in "${EVAL_MODE_ARRAY[@]}"; do
-    if [[ "$eval_mode" != "performance" && "$eval_mode" != "noise" && "$eval_mode" != "rotation" && "$eval_mode" != "dynamics" && "$eval_mode" != "gain" ]]; then
-        echo "Error: Invalid eval_mode '$eval_mode'. Must be 'performance', 'noise', or 'rotation'"
+    if [[ "$eval_mode" != "performance" && "$eval_mode" != "noise" && "$eval_mode" != "rotation" && "$eval_mode" != "dynamics" && "$eval_mode" != "gain" && "$eval_mode" != "yaw" ]]; then
+        echo "Error: Invalid eval_mode '$eval_mode'. Must be 'performance', 'noise', 'rotation', 'dynamics', 'gain', or 'yaw'"
         exit 1
     fi
 done

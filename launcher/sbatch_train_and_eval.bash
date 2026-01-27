@@ -178,7 +178,7 @@ echo ""
 
 # Submit evaluation jobs
 echo "=== Submitting Evaluation Jobs ==="
-#EVAL_MODES=("performance" "noise" "rotation")
+#EVAL_MODES=("performance" "noise" "rotation" "yaw")
 EVAL_MODES=("performance" "noise")
 TOTAL_EVAL_JOBS=0
 
@@ -190,7 +190,7 @@ for i in "${!TRAINING_JOB_IDS[@]}"; do
 
     echo "Submitting eval jobs for training job $training_job_id (eval_tag: $eval_tag):"
 
-    # Submit 3 eval jobs (performance, noise, rotation) for this training job
+    # Submit eval jobs for this training job
     for eval_mode in "${EVAL_MODES[@]}"; do
         # Create job name
         eval_job_name="EVAL_${eval_mode}_${EXPERIMENT_TAG}_idx${i}"

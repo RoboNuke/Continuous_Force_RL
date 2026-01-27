@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # WandB Eval by Run ID Launch Script for HPC
-# Usage: ./launcher/sbatch_wandb_eval_by_run.bash --run_ids "run_id1 run_id2 run_id3" --tag "tag_name" --eval_mode "performance|noise|rotation|dynamics|gain" [--video/--no-video]
+# Usage: ./launcher/sbatch_wandb_eval_by_run.bash --run_ids "run_id1 run_id2 run_id3" --tag "tag_name" --eval_mode "performance|noise|rotation|dynamics|gain|yaw" [--video/--no-video]
 
 # Default values
 RUN_IDS=""
@@ -60,8 +60,8 @@ if [[ -z "$EVAL_MODE" ]]; then
 fi
 
 # Validate eval_mode
-if [[ "$EVAL_MODE" != "performance" && "$EVAL_MODE" != "noise" && "$EVAL_MODE" != "rotation" && "$EVAL_MODE" != "dynamics" && "$EVAL_MODE" != "gain" ]]; then
-    echo "Error: --eval_mode must be one of: 'performance', 'noise', 'rotation', 'dynamics', 'gain'"
+if [[ "$EVAL_MODE" != "performance" && "$EVAL_MODE" != "noise" && "$EVAL_MODE" != "rotation" && "$EVAL_MODE" != "dynamics" && "$EVAL_MODE" != "gain" && "$EVAL_MODE" != "yaw" ]]; then
+    echo "Error: --eval_mode must be one of: 'performance', 'noise', 'rotation', 'dynamics', 'gain', 'yaw'"
     exit 1
 fi
 
