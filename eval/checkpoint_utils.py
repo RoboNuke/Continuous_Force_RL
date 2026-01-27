@@ -223,14 +223,16 @@ def load_checkpoints_parallel(
             raise RuntimeError(f"Policy checkpoint for run {run.id} missing 'state_preprocessor'")
         if 'value_preprocessor' not in critic_checkpoint:
             raise RuntimeError(f"Critic checkpoint for run {run.id} missing 'value_preprocessor'")
-        if 'log_std' not in policy_checkpoint:
+        use_state_dependent_std = policy_checkpoint.get('use_state_dependent_std', False)
+        if not use_state_dependent_std and 'log_std' not in policy_checkpoint:
             raise RuntimeError(f"Policy checkpoint for run {run.id} missing 'log_std'")
 
         # Create single-agent SimBaNet for policy
+        std_out_dim = getattr(agent.policy.actor_mean, 'std_out_dim', 0)
         policy_agent = SimBaNet(
             n=len(agent.policy.actor_mean.resblocks),
             in_size=agent.policy.actor_mean.obs_dim,
-            out_size=agent.policy.actor_mean.act_dim,
+            out_size=agent.policy.actor_mean.act_dim + std_out_dim,
             latent_size=agent.policy.actor_mean.hidden_dim,
             device=agent.device,
             tan_out=agent.policy.actor_mean.use_tanh
@@ -252,8 +254,9 @@ def load_checkpoints_parallel(
         pack_agents_into_block(agent.policy.actor_mean, {agent_idx: policy_agent})
         pack_agents_into_block(agent.value.critic, {agent_idx: critic_agent})
 
-        # Load log_std
-        agent.policy.actor_logstd[agent_idx].data.copy_(policy_checkpoint['log_std'].data)
+        # Load log_std (only for non-state-dependent std)
+        if not use_state_dependent_std:
+            agent.policy.actor_logstd[agent_idx].data.copy_(policy_checkpoint['log_std'].data)
 
         # Load state preprocessor for this agent
         obs_size = policy_checkpoint['state_preprocessor']['running_mean'].shape[0]
