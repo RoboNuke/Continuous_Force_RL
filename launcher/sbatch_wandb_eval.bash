@@ -1,13 +1,14 @@
 #!/bin/bash
 
 # WandB Eval Launch Script for HPC
-# Usage: ./launcher/sbatch_wandb_eval.bash --tags "tag1 tag2 tag3" --eval_modes "performance noise rotation" [--video/--no-video]
+# Usage: ./launcher/sbatch_wandb_eval.bash --tags "tag1 tag2 tag3" --eval_modes "performance noise rotation" [--video/--no-video] [--checkpoint_range start:end:step]
 
 # Default values
 TAGS=""
 VIDEO_ENABLED="false"
 EVAL_MODES=""
 PROJECT=""
+CHECKPOINT_RANGE=""
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -32,9 +33,13 @@ while [[ $# -gt 0 ]]; do
             PROJECT="$2"
             shift 2
             ;;
+        --checkpoint_range)
+            CHECKPOINT_RANGE="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 --tags \"tag1 tag2 tag3\" --eval_modes \"performance noise rotation\" [--video/--no-video]"
+            echo "Usage: $0 --tags \"tag1 tag2 tag3\" --eval_modes \"performance noise rotation\" [--video/--no-video] [--checkpoint_range start:end:step]"
             exit 1
             ;;
     esac
@@ -43,13 +48,13 @@ done
 # Validate required arguments
 if [[ -z "$TAGS" ]]; then
     echo "Error: --tags is required"
-    echo "Usage: $0 --tags \"tag1 tag2 tag3\" --eval_modes \"performance noise rotation\" [--video/--no-video]"
+    echo "Usage: $0 --tags \"tag1 tag2 tag3\" --eval_modes \"performance noise rotation\" [--video/--no-video] [--checkpoint_range start:end:step]"
     exit 1
 fi
 
 if [[ -z "$EVAL_MODES" ]]; then
     echo "Error: --eval_modes is required"
-    echo "Usage: $0 --tags \"tag1 tag2 tag3\" --eval_modes \"performance noise rotation\" [--video/--no-video]"
+    echo "Usage: $0 --tags \"tag1 tag2 tag3\" --eval_modes \"performance noise rotation\" [--video/--no-video] [--checkpoint_range start:end:step]"
     exit 1
 fi
 
@@ -69,6 +74,7 @@ echo "Tags: $TAGS"
 echo "Eval Modes: $EVAL_MODES"
 echo "Video Enabled: $VIDEO_ENABLED"
 echo "Project: ${PROJECT:-<default>}"
+echo "Checkpoint Range: ${CHECKPOINT_RANGE:-<all>}"
 echo ""
 
 # Convert tags string to array
@@ -90,7 +96,7 @@ for tag in "${TAG_ARRAY[@]}"; do
         sbatch -J "$job_name" \
                -o "exp_logs/wandb_eval/${output_name}_%j.out" \
                -e "exp_logs/wandb_eval/${output_name}_%j.err" \
-               launcher/hpc_wandb_eval_batch.bash "$tag" "$VIDEO_ENABLED" "$eval_mode" "$PROJECT"
+               launcher/hpc_wandb_eval_batch.bash "$tag" "$VIDEO_ENABLED" "$eval_mode" "$PROJECT" "$CHECKPOINT_RANGE"
 
         echo "  Job submitted successfully"
         echo ""

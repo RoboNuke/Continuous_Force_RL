@@ -13,6 +13,7 @@ TAG=$1
 VIDEO_FLAG=$2
 EVAL_MODE=$3
 PROJECT=$4
+CHECKPOINT_RANGE=$5
 
 echo "=== HPC WandB Eval Batch Script Started ==="
 echo "Job Name: $SLURM_JOB_NAME"
@@ -21,6 +22,7 @@ echo "Tag: $TAG"
 echo "Video Enabled: $VIDEO_FLAG"
 echo "Eval Mode: $EVAL_MODE"
 echo "Project: ${PROJECT:-<default>}"
+echo "Checkpoint Range: ${CHECKPOINT_RANGE:-<all>}"
 echo ""
 
 # Create log directory if it doesn't exist
@@ -53,6 +55,11 @@ fi
 # Add project if specified
 if [[ -n "$PROJECT" ]]; then
     python_cmd="$python_cmd --project $PROJECT"
+fi
+
+# Add checkpoint_range if specified
+if [[ -n "$CHECKPOINT_RANGE" ]]; then
+    python_cmd="$python_cmd --checkpoint_range $CHECKPOINT_RANGE"
 fi
 
 # Add headless flag
