@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH -J WANDB_EVAL_JOB		    # job name (will be overridden by sbatch -J)
 #SBATCH -A virl-grp	                # sponsored account name
-#SBATCH -p tiamat,gpu,eecs2         # partition names
-#SBATCH --time=0-11:59:59           # time limit: 4 hours
+#SBATCH -p tiamat,gpu,dgx2,dgxh,eecs2         # partition names
+#SBATCH --time=0-02:59:59           # time limit: 4 hours
 #SBATCH --gres=gpu:1                # number of GPUs to request
 #SBATCH --mem=32G                   # request 32 gigabytes memory
 #SBATCH -c 12                       # number of cores/threads per task

@@ -62,10 +62,10 @@ environment:
     fixed_asset_pos: [0.001, 0.001, 0.001]     
 
     use_yaw_noise: true                                                  
-    fixed_asset_yaw: 0.0523599  # 3 degrees in radians (change this value if needed) 
+    fixed_asset_yaw: 0.2618 # 3 degrees in radians (change this value if needed) 
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_hex(1mm)_state-std"
+  name: &exp_name "pose_hex_15deg_state-std"
   tags: []
   group: *exp_name

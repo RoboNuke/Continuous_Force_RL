@@ -75,10 +75,10 @@ environment:
   obs_rand:
     fixed_asset_pos: [0.001, 0.001, 0.001]
     use_yaw_noise: true
-    fixed_asset_yaw: 0.0523599
+    fixed_asset_yaw: 0.2618
 
 # Experiment metadata
 experiment:
-  name: &exp_name "basic-hybrid_hex(1mm)_state-std"
+  name: &exp_name "basic-hybrid_hex_15deg_state-std"
   tags: []
   group: *exp_name
