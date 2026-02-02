@@ -12,8 +12,8 @@ primary:
 # Model configuration for hybrid agent
 model:
   use_hybrid_agent: true
-  hybrid_agent:
-    init_bias: 1.1
+  #hybrid_agent:
+  #  force_init_std: 0.1 # implies a 96% range [-2.5, 2.5] 
 
 # Enable hybrid control wrapper and related systems
 wrappers:
@@ -35,10 +35,10 @@ agent:
 environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
-    fixed_asset_pos: [0.001, 0.001, 0.001]  
+    fixed_asset_pos: [0.0025, 0.0025, 0.0025]  
     
 # Experiment metadata
 experiment:
-  name: &exp_name "ablate_bias-25"
-  tags: ['exp_ablation', 'noZCon']
+  name: &exp_name "MATCH_25mm"
+  tags: ['base-case', 'unbreakable', '2.5mm_noise', 'noZCon']
   group: *exp_name

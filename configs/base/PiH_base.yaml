@@ -371,7 +371,7 @@ wrappers:
     force_ratio_reward_weight: 1.0
     #############################################################
     
-    enable_contact_reward: true
+    enable_contact_reward: false
     contact_reward_weight: 2.0
 
     enable_square_vel: False

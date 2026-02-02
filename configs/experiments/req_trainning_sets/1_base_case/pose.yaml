@@ -11,26 +11,7 @@ primary:
 
 # Model configuration for hybrid agent
 model:
-  use_hybrid_agent: true
-  hybrid_agent:
-    init_bias: 1.1
-
-# Enable hybrid control wrapper and related systems
-wrappers:
-  # Enable hybrid control wrapper
-  hybrid_control:
-    enabled: true
-    reward_type: "none"
-    use_ground_truth_selection: false
-    
-  pose_contact_logging:
-    enabled: false
-
-agent:
-  supervised_selection_loss_weight: 1.0
-#  policy_learning_rate: 5.0e-4
-#  critic_learning_rate: 1.0e-4
-#  #learning_epochs: 1
+  use_hybrid_agent: false
 
 environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
@@ -39,6 +20,6 @@ environment:
     
 # Experiment metadata
 experiment:
-  name: &exp_name "ablate_bias-25"
-  tags: ['exp_ablation', 'noZCon']
+  name: &exp_name "pose_base-case"
+  tags: ['base-case', 'unbreakable', 'noZCon']
   group: *exp_name
