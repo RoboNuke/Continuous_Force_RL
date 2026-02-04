@@ -45,41 +45,65 @@ class SimpleEpisodeTracker:
         # Only initialize wandb if logging is enabled
         if not self.disable_logging:
             wandb_kwargs = agent_config['experiment']['wandb_kwargs']
-            self.run = wandb.init(
-                entity=wandb_kwargs.get('entity'),
-                project=wandb_kwargs.get('project'),
-                name=wandb_kwargs.get('run_name'),
-                reinit="create_new",
-                config=complete_config,
-                group=wandb_kwargs.get('group'),
-                tags=wandb_kwargs.get('tags'),
-                #settings=wandb.Settings(
-                #    _disable_stats=True,  # Reduce wandb overhead
-                #    _disable_meta=True,   # Reduce metadata collection
-                #    console="off",        # Reduce console spam
-                #    _service_wait=300     # Longer service timeout
-                #)
 
-            )
+            # Check if we're resuming an existing run
+            resume_run_id = wandb_kwargs.get('resume_run_id')
+            resume_step = wandb_kwargs.get('resume_step', 0)
+
+            if resume_run_id is not None:
+                # RESUME MODE: Resume existing WandB run
+                print(f"  Resuming WandB run: {resume_run_id}")
+                self.run = wandb.init(
+                    id=resume_run_id,
+                    project=wandb_kwargs.get('project'),
+                    entity=wandb_kwargs.get('entity'),
+                    resume="must",  # Fail if run doesn't exist
+                )
+                self.is_resumed = True
+
+                # Initialize step counters from checkpoint
+                # resume_step is total environment interactions for this agent
+                self.env_steps = resume_step // num_envs
+                self.total_steps = resume_step
+                print(f"    Resuming from env_steps={self.env_steps}, total_steps={self.total_steps}")
+            else:
+                # NEW RUN MODE: Create new WandB run
+                self.run = wandb.init(
+                    entity=wandb_kwargs.get('entity'),
+                    project=wandb_kwargs.get('project'),
+                    name=wandb_kwargs.get('run_name'),
+                    reinit="create_new",
+                    config=complete_config,
+                    group=wandb_kwargs.get('group'),
+                    tags=wandb_kwargs.get('tags'),
+                )
+                self.is_resumed = False
+
+                # Initialize step counters from zero
+                self.env_steps = 0
+                self.total_steps = 0
 
             # Store run directory path for cleanup
             # run.dir points to the files/ subdirectory, we want the parent (the actual run directory)
             import os
             self.run_dir = os.path.dirname(self.run.dir)
 
-            # Upload config YAML files to WandB
-            print(f"  Uploading config files to WandB...")
-            self.upload_config_files()
+            # Upload config YAML files to WandB (only for new runs)
+            if not self.is_resumed:
+                print(f"  Uploading config files to WandB...")
+                self.upload_config_files()
+            else:
+                print(f"  Skipping config upload (resuming existing run)")
         else:
             self.run = None
+            self.is_resumed = False
+            # Initialize step counters
+            self.env_steps = 0
+            self.total_steps = 0
 
         # Metric storage
         self.accumulated_metrics = {}
         self.episode_count = 0
-
-        # Step tracking for x-axis
-        self.env_steps = 0  # Number of environment steps taken
-        self.total_steps = 0  # env_steps * num_envs
 
     def _convert_to_dict(self, obj, max_depth=10, _current_depth=0):
         """

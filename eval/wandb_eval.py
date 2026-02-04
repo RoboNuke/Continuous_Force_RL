@@ -3974,6 +3974,8 @@ def main():
     print("WandB Tag-Based Evaluation Script")
     print("=" * 80)
 
+    config_temp_dir = None  # Track for cleanup in finally block
+
     try:
         # Query runs by tag
         runs = query_runs_by_tag(args_cli.tag, args_cli.entity, args_cli.project, args_cli.run_id)
@@ -3983,7 +3985,8 @@ def main():
         print(f"\nUsing run {representative_run.id} as configuration source")
 
         # Reconstruct config from WandB
-        configs = reconstruct_config_from_wandb(representative_run)
+        # Returns tuple of (configs, temp_dir) - temp_dir cleaned up in finally block
+        configs, config_temp_dir = reconstruct_config_from_wandb(representative_run)
 
         # Apply CLI overrides if provided
         if args_cli.override:
@@ -4024,6 +4027,11 @@ def main():
         traceback.print_exc()
         sys.exit(1)
     finally:
+        # Clean up config temp directory
+        if config_temp_dir is not None:
+            import shutil
+            shutil.rmtree(config_temp_dir, ignore_errors=True)
+
         # Clean up simulation
         simulation_app.close()
 

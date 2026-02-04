@@ -94,7 +94,7 @@ def query_runs_by_tag(tag: str, entity: str, project: str, run_id: Optional[str]
     raise RuntimeError(f"Failed to query WandB runs after all retries")
 
 
-def reconstruct_config_from_wandb(run: wandb.Run) -> Dict[str, Any]:
+def reconstruct_config_from_wandb(run: wandb.Run) -> Tuple[Dict[str, Any], str]:
     """Reconstruct configuration from WandB run using config files.
 
     Downloads config YAML files and uses ConfigManagerV3 to load them.
@@ -103,7 +103,10 @@ def reconstruct_config_from_wandb(run: wandb.Run) -> Dict[str, Any]:
         run: WandB run object
 
     Returns:
-        Dictionary with config instances compatible with setup_environment_once
+        Tuple of (configs, temp_dir) where:
+        - configs: Dictionary with config instances compatible with setup_environment_once
+        - temp_dir: Path to temporary directory containing downloaded config files.
+                   Caller is responsible for cleanup after configs are no longer needed.
 
     Raises:
         RuntimeError: If config files missing or loading fails
@@ -112,10 +115,157 @@ def reconstruct_config_from_wandb(run: wandb.Run) -> Dict[str, Any]:
 
     # Use ConfigManagerV3's new config_from_wandb method
     config_manager = ConfigManagerV3()
-    configs = config_manager.config_from_wandb(run)
+    configs, temp_dir = config_manager.config_from_wandb(run)
 
     print(f"  Successfully reconstructed {len(configs)} config sections")
-    return configs
+    return configs, temp_dir
+
+
+def get_available_checkpoint_steps(run: wandb.Run) -> List[int]:
+    """Query WandB for all available checkpoint steps in a run.
+
+    Lists files matching 'ckpts/policies/*.pt' and extracts step numbers
+    from filenames.
+
+    Args:
+        run: WandB run object
+
+    Returns:
+        Sorted list of available checkpoint step numbers (ascending order)
+
+    Raises:
+        RuntimeError: If query fails or no checkpoints found
+    """
+    print(f"  Querying available checkpoints for run {run.id}...")
+
+    try:
+        # List all files in the run
+        files = run.files()
+
+        # Filter for policy checkpoint files and extract step numbers
+        checkpoint_steps = []
+        for f in files:
+            # Match pattern: ckpts/policies/{step}.pt
+            if f.name.startswith('ckpts/policies/') and f.name.endswith('.pt'):
+                # Extract step number from filename
+                filename = os.path.basename(f.name)
+                step_str = filename[:-3]  # Remove '.pt'
+                try:
+                    step = int(step_str)
+                    checkpoint_steps.append(step)
+                except ValueError:
+                    # Skip files that don't have numeric step names
+                    continue
+
+        if not checkpoint_steps:
+            raise RuntimeError(f"No checkpoints found in run {run.id}")
+
+        checkpoint_steps.sort()
+        print(f"    Found {len(checkpoint_steps)} checkpoints: {checkpoint_steps[0]} to {checkpoint_steps[-1]}")
+        return checkpoint_steps
+
+    except Exception as e:
+        if "No checkpoints found" in str(e):
+            raise
+        raise RuntimeError(f"Failed to query checkpoints for run {run.id}: {e}")
+
+
+def get_latest_common_checkpoint_step(runs: List[wandb.Run]) -> int:
+    """Find the highest checkpoint step that exists in ALL runs.
+
+    Queries each run for available checkpoints, finds the intersection,
+    and returns the maximum step from that intersection.
+
+    Args:
+        runs: List of WandB run objects
+
+    Returns:
+        The highest checkpoint step available in all runs
+
+    Raises:
+        RuntimeError: If no common checkpoint exists across all runs
+    """
+    if not runs:
+        raise RuntimeError("No runs provided to get_latest_common_checkpoint_step")
+
+    print(f"Finding latest common checkpoint across {len(runs)} runs...")
+
+    # Get available steps for each run
+    all_steps = []
+    for run in runs:
+        steps = get_available_checkpoint_steps(run)
+        all_steps.append(set(steps))
+
+    # Find intersection of all step sets
+    common_steps = all_steps[0]
+    for steps in all_steps[1:]:
+        common_steps = common_steps.intersection(steps)
+
+    if not common_steps:
+        raise RuntimeError(
+            f"No common checkpoint step found across {len(runs)} runs. "
+            f"Each run may have different checkpoint steps."
+        )
+
+    latest_step = max(common_steps)
+    print(f"  Latest common checkpoint step: {latest_step}")
+    return latest_step
+
+
+def sort_runs_by_agent_index(runs: List[wandb.Run]) -> List[wandb.Run]:
+    """Sort WandB runs by agent index extracted from run name.
+
+    Run names are expected to follow the format:
+    {exp_name}_f({break_force})_{agent_idx}
+
+    This ensures runs are loaded into the correct agent slots.
+
+    Args:
+        runs: List of WandB run objects
+
+    Returns:
+        List of runs sorted by agent index (ascending)
+
+    Raises:
+        RuntimeError: If agent index cannot be extracted from any run name
+    """
+    import re
+
+    def extract_agent_index(run: wandb.Run) -> int:
+        """Extract agent index from run name."""
+        # Pattern: anything_f(number)_agentidx
+        # The agent index is the last number after the last underscore
+        match = re.search(r'_(\d+)$', run.name)
+        if match:
+            return int(match.group(1))
+
+        # Fallback: try to find pattern _f(...)_N
+        match = re.search(r'_f\([^)]+\)_(\d+)', run.name)
+        if match:
+            return int(match.group(1))
+
+        raise RuntimeError(
+            f"Could not extract agent index from run name: '{run.name}'. "
+            f"Expected format: '{{exp_name}}_f({{break_force}})_{{agent_idx}}'"
+        )
+
+    # Extract indices and sort
+    try:
+        runs_with_indices = [(run, extract_agent_index(run)) for run in runs]
+        runs_with_indices.sort(key=lambda x: x[1])
+
+        sorted_runs = [run for run, _ in runs_with_indices]
+
+        print(f"  Sorted {len(runs)} runs by agent index:")
+        for run, idx in runs_with_indices:
+            print(f"    Agent {idx}: {run.name} ({run.id})")
+
+        return sorted_runs
+
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(f"Failed to sort runs by agent index: {e}")
 
 
 def download_checkpoint_pair(run: wandb.Run, step: int) -> Tuple[str, str]:
@@ -167,6 +317,7 @@ def load_checkpoints_parallel(
     step: int,
     env: Any,
     agent: Any,
+    for_training: bool = False,
 ) -> List[str]:
     """
     Download and load checkpoints from all runs into their respective agent slots.
@@ -176,6 +327,8 @@ def load_checkpoints_parallel(
         step: Checkpoint step number
         env: Environment instance
         agent: Agent instance with num_agents = len(runs)
+        for_training: If True, leave agent in training mode after loading.
+                     If False (default), set agent to eval mode for evaluation.
 
     Returns:
         List of download directories (for cleanup after evaluation)
@@ -283,8 +436,11 @@ def load_checkpoints_parallel(
     agent._state_preprocessor = PerAgentPreprocessorWrapper(agent, agent._per_agent_state_preprocessors)
     agent._value_preprocessor = PerAgentPreprocessorWrapper(agent, agent._per_agent_value_preprocessors)
 
-    # Set agent to eval mode
-    agent.set_running_mode("eval")
-    print(f"  All {len(runs)} checkpoints loaded successfully!")
+    # Set agent mode based on intended use
+    if for_training:
+        print(f"  All {len(runs)} checkpoints loaded successfully! (training mode)")
+    else:
+        agent.set_running_mode("eval")
+        print(f"  All {len(runs)} checkpoints loaded successfully! (eval mode)")
 
     return download_dirs

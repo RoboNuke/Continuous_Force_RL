@@ -231,7 +231,15 @@ def add_wandb_tracking_tags(configs):
         configs['experiment'].tags.append('basic-agent')
 
 
-def define_agent_configs(configs, eval_tag=None):
+def define_agent_configs(configs, eval_tag=None, resume_info=None):
+    """Define agent-specific configurations for training.
+
+    Args:
+        configs: Dictionary of configuration objects
+        eval_tag: Optional evaluation tag for tracking training runs
+        resume_info: Optional dict with keys 'run_ids' (list of WandB run IDs) and 'step' (checkpoint step)
+                    When provided, configures agents to resume existing WandB runs instead of creating new ones.
+    """
     configs['agent'].write_interval = configs['primary'].rollout_steps(configs['environment'].episode_length_s) #max rollouts
     configs['agent'].checkpoint_interval = configs['agent'].checkpoint_interval_multiplier * configs['agent'].write_interval
 
@@ -239,6 +247,9 @@ def define_agent_configs(configs, eval_tag=None):
     print(f"  -Checkpoint Interval:{configs['agent'].checkpoint_interval}")
     print(f"  -Episode Length: {configs['environment'].episode_length_s}s")
     print(f"  -Decimation: {configs['primary'].decimation}")
+
+    if resume_info is not None:
+        print(f"  -Resume Mode: Resuming from step {resume_info['step']} with {len(resume_info['run_ids'])} runs")
 
     agent_idx = 0
     configs['agent'].agent_exp_cfgs = []
@@ -263,25 +274,37 @@ def define_agent_configs(configs, eval_tag=None):
 
             # Set up wandb configuration
             configs['agent'].agent_exp_cfgs[agent_idx]['experiment']['wandb'] = True
-            wandb_kwargs = {
-                "project": configs['experiment'].wandb_project,
-                "entity": configs['experiment'].wandb_entity,
-                "api_key": '-1',
-                "tags": configs['experiment'].tags,
-                "group": configs['experiment'].group + f"_f({break_force})",
-                "run_name": log_dir
-            }
 
-            # Generate timestamp tag for evaluation discovery
-            from datetime import datetime
-            if eval_tag is not None:
-                experiment_tag = eval_tag
+            if resume_info is not None:
+                # RESUME MODE: Configure to resume existing WandB run
+                wandb_kwargs = {
+                    "project": configs['experiment'].wandb_project,
+                    "entity": configs['experiment'].wandb_entity,
+                    "resume_run_id": resume_info['run_ids'][agent_idx],
+                    "resume_step": resume_info['step'],
+                }
+                print(f"    Agent {agent_idx}: Resuming run {resume_info['run_ids'][agent_idx]}")
             else:
-                timestamp = datetime.now().strftime("%Y-%m-%d_%H:%M")
-                experiment_tag = f"{configs['experiment'].group}:{timestamp}"
+                # NEW RUN MODE: Create new WandB run
+                wandb_kwargs = {
+                    "project": configs['experiment'].wandb_project,
+                    "entity": configs['experiment'].wandb_entity,
+                    "api_key": '-1',
+                    "tags": configs['experiment'].tags,
+                    "group": configs['experiment'].group + f"_f({break_force})",
+                    "run_name": log_dir
+                }
 
-            # Add experiment tag to the tags list
-            wandb_kwargs["tags"] = wandb_kwargs["tags"] + [experiment_tag]
+                # Generate timestamp tag for evaluation discovery
+                from datetime import datetime
+                if eval_tag is not None:
+                    experiment_tag = eval_tag
+                else:
+                    timestamp = datetime.now().strftime("%Y-%m-%d_%H:%M")
+                    experiment_tag = f"{configs['experiment'].group}:{timestamp}"
+
+                # Add experiment tag to the tags list
+                wandb_kwargs["tags"] = wandb_kwargs["tags"] + [experiment_tag]
 
             configs['agent'].agent_exp_cfgs[agent_idx]['experiment']["wandb_kwargs"] = wandb_kwargs
             agent_idx += 1

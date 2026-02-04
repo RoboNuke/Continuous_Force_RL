@@ -319,29 +319,52 @@ def cleanup_wandb(signum=None, frame=None):
 def main(
     args_cli
 ):
-    # Track WandB runs if loading from checkpoint (used later for checkpoint loading)
+    # Track WandB runs and resume info if loading from checkpoint
     checkpoint_runs = None
+    checkpoint_step = None
+    resume_info = None
+    config_temp_dir = None  # Track temp directory for cleanup
 
     # Load configuration - either from WandB checkpoint or from local config file
     if args_cli.checkpoint_tag is not None:
-        # Validate checkpoint arguments
-        if args_cli.checkpoint_step is None:
-            raise ValueError("--checkpoint_step is required when using --checkpoint_tag")
-
         print(f"[INFO]: Loading config from WandB checkpoint tag '{args_cli.checkpoint_tag}'")
+
+        # Import checkpoint utilities
+        from eval.checkpoint_utils import (
+            get_latest_common_checkpoint_step,
+            sort_runs_by_agent_index
+        )
 
         # Query WandB for runs with the specified tag
         checkpoint_runs = query_runs_by_tag(
             tag=args_cli.checkpoint_tag,
-            entity=args_cli.checkpoint_entity,  # Can be None, will use default
+            entity=args_cli.checkpoint_entity,
             project=args_cli.checkpoint_project
         )
 
         if len(checkpoint_runs) == 0:
             raise ValueError(f"No runs found with tag '{args_cli.checkpoint_tag}'")
 
+        # Sort runs by agent index to ensure correct ordering
+        checkpoint_runs = sort_runs_by_agent_index(checkpoint_runs)
+
+        # Auto-discover checkpoint step if not provided
+        if args_cli.checkpoint_step is None:
+            checkpoint_step = get_latest_common_checkpoint_step(checkpoint_runs)
+            print(f"[INFO]: Auto-discovered latest checkpoint step: {checkpoint_step}")
+        else:
+            checkpoint_step = args_cli.checkpoint_step
+            print(f"[INFO]: Using specified checkpoint step: {checkpoint_step}")
+
         # Download config from the first run (all runs should have same config)
-        configs = reconstruct_config_from_wandb(checkpoint_runs[0])
+        # Returns tuple of (configs, temp_dir)
+        configs, config_temp_dir = reconstruct_config_from_wandb(checkpoint_runs[0])
+
+        # Create resume_info for passing to define_agent_configs
+        resume_info = {
+            'run_ids': [r.id for r in checkpoint_runs],
+            'step': checkpoint_step,
+        }
 
         # Apply any CLI overrides on top of the downloaded config
         if args_cli.override:
@@ -377,8 +400,8 @@ def main(
     lUtils.add_wandb_tracking_tags(configs)
     print(configs['experiment'].tags)
 
-    # create agent specific configs
-    lUtils.define_agent_configs(configs, eval_tag=args_cli.eval_tag)
+    # create agent specific configs (pass resume_info if continuing from checkpoint)
+    lUtils.define_agent_configs(configs, eval_tag=args_cli.eval_tag, resume_info=resume_info)
 
     # Should not matter but removes annoying warning message
     configs["environment"].sim.render_interval = configs["primary"].decimation
@@ -413,7 +436,10 @@ def main(
         )
         print("[INFO]:   Camera configured: 240x180, RGB")
 
-    print(f"[INFO]: Environment Configured from {args_cli.config}")
+    if args_cli.checkpoint_tag is not None:
+        print(f"[INFO]: Environment Configured from WandB checkpoint tag '{args_cli.checkpoint_tag}'")
+    else:
+        print(f"[INFO]: Environment Configured from {args_cli.config}")
     print(f"[INFO]: Task: {configs['experiment'].task_name}")
     print(f"[INFO]: Episode length: {configs['environment'].episode_length_s}s")
     print(f"[INFO]: Decimation: {configs['environment'].decimation}")
@@ -520,6 +546,13 @@ def main(
     signal.signal(signal.SIGTERM, cleanup_wandb)
     signal.signal(signal.SIGINT, cleanup_wandb)
     print("[INFO]: Signal handlers registered (SIGTERM, SIGINT)")
+
+    # Clean up config temp directory now that configs are fully loaded and wrappers applied
+    if config_temp_dir is not None:
+        import shutil
+        shutil.rmtree(config_temp_dir, ignore_errors=True)
+        print(f"[INFO]: Cleaned up config temp directory: {config_temp_dir}")
+
     print("=" * 100)
 
     #print_configs(configs)
@@ -575,7 +608,7 @@ def main(
 
     # Load from WandB checkpoint if specified
     if checkpoint_runs is not None:
-        print(f"[INFO]: Loading checkpoints from WandB at step {args_cli.checkpoint_step}")
+        print(f"[INFO]: Loading checkpoints from WandB at step {checkpoint_step}")
 
         # Verify number of runs matches expected agents
         num_agents = configs['primary'].total_agents
@@ -586,11 +619,13 @@ def main(
             )
 
         # Download and load checkpoints into agent
+        # for_training=True keeps agent in training mode instead of setting eval mode
         download_dirs = load_checkpoints_parallel(
             runs=checkpoint_runs,
-            step=args_cli.checkpoint_step,
+            step=checkpoint_step,
             env=env,
-            agent=agents
+            agent=agents,
+            for_training=True
         )
 
         # Clean up temporary download directories
@@ -883,8 +918,29 @@ def main(
         # Trainer uses pre-configured parameters from Step 1
         print("[INFO]: Step 5 - Creating trainer")
 
+        # Calculate timesteps - account for already-completed steps when resuming
+        total_target_steps = configs['primary'].max_steps
+        if checkpoint_step is not None:
+            # Resuming from checkpoint - only train remaining steps
+            starting_step = checkpoint_step
+            remaining_steps = total_target_steps - starting_step
+
+            if remaining_steps <= 0:
+                print(f"[INFO]: Checkpoint step ({starting_step}) >= max_steps ({total_target_steps})")
+                print(f"[INFO]: Training already complete, nothing to do")
+                cleanup_wandb()
+                return
+
+            timesteps = configs['primary'].total_agents * remaining_steps // configs['primary'].total_num_envs
+            print(f"[INFO]: Resuming from step {starting_step}/{total_target_steps}")
+            print(f"[INFO]: Training for {remaining_steps} more steps ({timesteps} trainer timesteps)")
+        else:
+            # Fresh training - train full duration
+            timesteps = configs['primary'].total_agents * total_target_steps // configs['primary'].total_num_envs
+            print(f"[INFO]: Training for {total_target_steps} steps ({timesteps} trainer timesteps)")
+
         cfg_trainer = {
-            "timesteps": configs['primary'].total_agents * configs['primary'].max_steps // (configs['primary'].total_num_envs),
+            "timesteps": timesteps,
             "headless": True,
             "close_environment_at_exit": True,
             "disable_progressbar": configs['agent'].disable_progressbar

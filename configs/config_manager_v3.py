@@ -244,7 +244,7 @@ class ConfigManagerV3:
 
         return configs
 
-    def config_from_wandb(self, run) -> Dict[str, Any]:
+    def config_from_wandb(self, run) -> Tuple[Dict[str, Any], str]:
         """Load configuration from WandB run by downloading config files.
 
         Downloads base and experiment config YAML files from a WandB run,
@@ -255,7 +255,10 @@ class ConfigManagerV3:
             run: WandB run object (from wandb.Api().run(path))
 
         Returns:
-            Dictionary containing config instances and metadata
+            Tuple of (configs, temp_dir) where:
+            - configs: Dictionary containing config instances and metadata
+            - temp_dir: Path to temporary directory containing downloaded config files.
+                       Caller is responsible for cleanup after configs are no longer needed.
 
         Raises:
             RuntimeError: If config files not found in run or download fails
@@ -326,7 +329,8 @@ class ConfigManagerV3:
                 }
 
             print(f"  Successfully loaded config from WandB")
-            return configs
+            # Return configs and temp_dir - caller is responsible for cleanup
+            return configs, temp_dir
 
         except Exception as e:
             # Clean up temp directory on error
