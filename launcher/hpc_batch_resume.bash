@@ -59,6 +59,9 @@ echo "Executing command:"
 echo "$python_cmd"
 echo ""
 
+# Force unbuffered Python output so logs are written immediately
+export PYTHONUNBUFFERED=1
+
 # Use exec to replace bash process with Python process
 # This ensures SLURM's SIGTERM goes directly to Python (no forwarding needed)
 # Python's signal handler will handle cleanup on SIGTERM
