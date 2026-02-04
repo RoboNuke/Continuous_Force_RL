@@ -11,12 +11,14 @@
 
 # Script arguments
 CHECKPOINT_TAG=$1
-OVERRIDES=$2
+CHECKPOINT_STEP=$2
+OVERRIDES=$3
 
 echo "=== HPC Resume Batch Script Started ==="
 echo "Job Name: $SLURM_JOB_NAME"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Checkpoint Tag: $CHECKPOINT_TAG"
+echo "Checkpoint Step: ${CHECKPOINT_STEP:-"(auto-discover)"}"
 echo "Overrides: $OVERRIDES"
 echo ""
 
@@ -35,6 +37,11 @@ echo ""
 # Build the python command
 python_cmd="python -m learning.factory_runnerv3"
 python_cmd="$python_cmd --checkpoint_tag $CHECKPOINT_TAG"
+
+# Add checkpoint_step if provided
+if [[ -n "$CHECKPOINT_STEP" ]]; then
+    python_cmd="$python_cmd --checkpoint_step $CHECKPOINT_STEP"
+fi
 
 # Add additional overrides if provided
 if [[ -n "$OVERRIDES" ]]; then

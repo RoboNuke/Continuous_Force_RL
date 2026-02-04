@@ -176,7 +176,12 @@ class BlockPPO(PPO):
         self.set_mode("eval")
 
         ## NEW PER-AGENT PREPROCESSOR SETUP ##
-        self._setup_per_agent_preprocessors()
+        # Skip if resuming from checkpoint - preprocessors were already loaded
+        is_resuming = self.agent_exp_cfgs[0]['experiment'].get('wandb_kwargs', {}).get('resume_run_id') is not None
+        if is_resuming:
+            print("  Skipping preprocessor setup - resuming from checkpoint")
+        else:
+            self._setup_per_agent_preprocessors()
 
         ## VALIDATE WRAPPER INTEGRATION FOR LOGGING ##
         # self._validate_wrapper_integration()  # Disabled - wandb logging is optional

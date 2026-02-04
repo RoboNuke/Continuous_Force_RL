@@ -1,10 +1,11 @@
 #!/bin/bash
 
 # Resume Training Launch Script for HPC
-# Usage: ./launcher/sbatch_resume.bash --tags "tag1 tag2 tag3" [--overrides "key=value key2=value2"]
+# Usage: ./launcher/sbatch_resume.bash --tags "tag1 tag2 tag3" [--checkpoint_step STEP] [--overrides "key=value key2=value2"]
 
 # Default values
 TAGS=""
+CHECKPOINT_STEP=""
 OVERRIDES=""
 
 # Parse command line arguments
@@ -14,13 +15,17 @@ while [[ $# -gt 0 ]]; do
             TAGS="$2"
             shift 2
             ;;
+        --checkpoint_step)
+            CHECKPOINT_STEP="$2"
+            shift 2
+            ;;
         --overrides)
             OVERRIDES="$2"
             shift 2
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 --tags \"tag1 tag2 tag3\" [--overrides \"key=value key2=value2\"]"
+            echo "Usage: $0 --tags \"tag1 tag2 tag3\" [--checkpoint_step STEP] [--overrides \"key=value key2=value2\"]"
             exit 1
             ;;
     esac
@@ -29,12 +34,17 @@ done
 # Validate required arguments
 if [[ -z "$TAGS" ]]; then
     echo "Error: --tags is required"
-    echo "Usage: $0 --tags \"tag1 tag2 tag3\" [--overrides \"key=value key2=value2\"]"
+    echo "Usage: $0 --tags \"tag1 tag2 tag3\" [--checkpoint_step STEP] [--overrides \"key=value key2=value2\"]"
     exit 1
 fi
 
 echo "=== Resume Training Launch Script ==="
 echo "Tags: $TAGS"
+if [[ -n "$CHECKPOINT_STEP" ]]; then
+    echo "Checkpoint Step: $CHECKPOINT_STEP"
+else
+    echo "Checkpoint Step: (auto-discover latest)"
+fi
 echo "Overrides: $OVERRIDES"
 echo ""
 
@@ -51,6 +61,9 @@ for tag_name in "${TAG_ARRAY[@]}"; do
 
     echo "Submitting job: $job_name"
     echo "  Checkpoint Tag: $tag_name"
+    if [[ -n "$CHECKPOINT_STEP" ]]; then
+        echo "  Checkpoint Step: $CHECKPOINT_STEP"
+    fi
     if [[ -n "$OVERRIDES" ]]; then
         echo "  Overrides: $OVERRIDES"
     fi
@@ -59,7 +72,7 @@ for tag_name in "${TAG_ARRAY[@]}"; do
     sbatch -J "$job_name" \
            -o "exp_logs/resume/${tag_name}_%j.out" \
            -e "exp_logs/resume/${tag_name}_%j.err" \
-           launcher/hpc_batch_resume.bash "$tag_name" "$OVERRIDES"
+           launcher/hpc_batch_resume.bash "$tag_name" "$CHECKPOINT_STEP" "$OVERRIDES"
 
     echo "  Job submitted successfully"
     echo ""
