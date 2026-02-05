@@ -57,7 +57,7 @@ class SimpleEpisodeTracker:
                     id=resume_run_id,
                     project=wandb_kwargs.get('project'),
                     entity=wandb_kwargs.get('entity'),
-                    resume="must",  # Fail if run doesn't exist
+                    resume="allow",  # Resume if initialized, adopt if uninitialized
                     reinit="create_new",  # Allow multiple runs in same process
                 )
                 self.is_resumed = True
