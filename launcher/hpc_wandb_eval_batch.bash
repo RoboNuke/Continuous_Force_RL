@@ -22,8 +22,8 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Tag: $TAG"
 echo "Video Enabled: $VIDEO_FLAG"
 echo "Eval Mode: $EVAL_MODE"
-echo "Project: ${PROJECT:-<default>}"
-echo "Checkpoint Range: ${CHECKPOINT_RANGE:-<all>}"
+echo "Project: $(if [[ "$PROJECT" == "NONE" ]]; then echo "<default>"; else echo "$PROJECT"; fi)"
+echo "Checkpoint Range: $(if [[ "$CHECKPOINT_RANGE" == "NONE" ]]; then echo "<all>"; else echo "$CHECKPOINT_RANGE"; fi)"
 echo "Resume: ${RESUME:-false}"
 echo ""
 
@@ -54,13 +54,13 @@ if [[ "$VIDEO_FLAG" == "true" ]]; then
     python_cmd="$python_cmd --enable_video"
 fi
 
-# Add project if specified
-if [[ -n "$PROJECT" ]]; then
+# Add project if specified (check for "NONE" placeholder)
+if [[ -n "$PROJECT" && "$PROJECT" != "NONE" ]]; then
     python_cmd="$python_cmd --project $PROJECT"
 fi
 
-# Add checkpoint_range if specified
-if [[ -n "$CHECKPOINT_RANGE" ]]; then
+# Add checkpoint_range if specified (check for "NONE" placeholder)
+if [[ -n "$CHECKPOINT_RANGE" && "$CHECKPOINT_RANGE" != "NONE" ]]; then
     python_cmd="$python_cmd --checkpoint_range $CHECKPOINT_RANGE"
 fi
 

@@ -99,11 +99,12 @@ for tag in "${TAG_ARRAY[@]}"; do
         echo "  Resume: $RESUME"
 
         # Submit SLURM job with dynamic output file paths
+        # Use "NONE" as placeholder for empty optional arguments to avoid positional confusion
         output_name="eval_$(echo "${tag}" | tr ':/' '__')_${eval_mode}"
         sbatch -J "$job_name" \
                -o "exp_logs/wandb_eval/${output_name}_%j.out" \
                -e "exp_logs/wandb_eval/${output_name}_%j.err" \
-               launcher/hpc_wandb_eval_batch.bash "$tag" "$VIDEO_ENABLED" "$eval_mode" "$PROJECT" "$CHECKPOINT_RANGE" "$RESUME"
+               launcher/hpc_wandb_eval_batch.bash "$tag" "$VIDEO_ENABLED" "$eval_mode" "${PROJECT:-NONE}" "${CHECKPOINT_RANGE:-NONE}" "$RESUME"
 
         echo "  Job submitted successfully"
         echo ""
