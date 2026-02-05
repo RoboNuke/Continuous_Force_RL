@@ -12,7 +12,9 @@ Usage:
         get_best_checkpoint_per_run,
         download_eval_data,
         plot_rate_figure,
+        plot_rate_figure_by_method,
         COLORS,
+        NOISE_LEVEL_COLORS,
     )
 """
 
@@ -84,6 +86,14 @@ COLORS = {
     "MATCH(15deg)": "#1f77b4",
     "Hybrid-Basic(3deg)": "#b4aa1f",
     "Hybrid-Basic(15deg)": "#ff7f0e",
+}
+
+# Noise level colors (for plot_rate_figure_by_method)
+NOISE_LEVEL_COLORS = {
+    "1mm": "#2ca02c",      # Green (low noise)
+    "2.5mm": "#1f77b4",    # Blue
+    "5mm": "#ff7f0e",      # Orange
+    "7.5mm": "#d62728",    # Red (high noise)
 }
 
 # =============================================================================
@@ -259,6 +269,12 @@ def download_eval_data(
         best_step = checkpoint_by_agent[agent_num]
         history = run.history()
 
+        # Check for empty history or missing total_steps column
+        if history.empty or "total_steps" not in history.columns:
+            if verbose:
+                print(f"Warning: Run {run.name} has no history data")
+            continue
+
         if best_step not in history["total_steps"].values:
             if verbose:
                 print(f"Warning: Checkpoint {best_step} not found in {run.name}")
@@ -314,6 +330,12 @@ def download_eval_performance_data(
 
         best_step = best_checkpoints[run.id]["best_step"]
         history = run.history()
+
+        # Check for empty history or missing total_steps column
+        if history.empty or "total_steps" not in history.columns:
+            if verbose:
+                print(f"Warning: Run {run.name} has no history data")
+            continue
 
         if best_step not in history["total_steps"].values:
             if verbose:
@@ -871,6 +893,122 @@ def plot_rate_figure(
     return fig, ax
 
 
+def plot_rate_figure_by_method(
+    data: Dict[str, pd.DataFrame],
+    method_names: List[str],
+    level_labels: List[str],
+    level_col: str,
+    metric: str = "success",
+    total_col: str = "total",
+    title: str = "",
+    x_label: str = "",
+    y_label: str = "",
+    y_lim: Tuple[float, float] = (0, 100),
+    y_ticks: Optional[List[float]] = None,
+    figsize: Tuple[float, float] = DEFAULT_FIGSIZE,
+    dpi: int = DEFAULT_DPI,
+    error_type: str = "ci",
+    level_colors: Optional[Dict[str, str]] = None,
+    show_labels: bool = True,
+    label_decimal: int = 1,
+    filter_top_n: Optional[int] = None,
+    best_checkpoints: Optional[Dict[str, Dict]] = None,
+    legend_loc: str = "best",
+) -> Tuple[plt.Figure, plt.Axes]:
+    """
+    Create rate comparison figure with methods on x-axis and levels as grouped bars.
+
+    This is a transposed view of plot_rate_figure():
+    - X-axis: method names
+    - Grouped bars: levels (e.g., noise levels), colored by level_colors
+
+    Args:
+        data: dict[method_name] -> DataFrame with level_col and metric columns
+        method_names: List of method names (determines x-axis order)
+        level_labels: List of level values (determines bar grouping and legend)
+        level_col: Column name in DataFrames containing level values
+        metric: Column name for the metric ("success" or "breaks")
+        total_col: Column name for total count
+        title: Plot title
+        x_label: X-axis label
+        y_label: Y-axis label
+        y_lim: Y-axis limits
+        y_ticks: Y-axis tick values (auto if None)
+        figsize: Figure size
+        dpi: Figure DPI
+        error_type: "ci" (95% CI) or "binary_se"
+        level_colors: Color dictionary for levels (default: NOISE_LEVEL_COLORS)
+        show_labels: Show rotated value labels on bars
+        label_decimal: Decimal places for labels
+        filter_top_n: Filter to top N runs by score (requires best_checkpoints)
+        best_checkpoints: dict[method] -> checkpoints dict (required if filter_top_n set)
+        legend_loc: Legend location
+
+    Returns:
+        (fig, ax)
+    """
+    if level_colors is None:
+        level_colors = NOISE_LEVEL_COLORS
+
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+
+    # Reorganize data: for each level, compute rates across all methods
+    # data_by_level[level_label] = (means_per_method, errors_lower, errors_upper)
+    data_by_level = {}
+
+    for level_label in level_labels:
+        means = []
+        errors_lower = []
+        errors_upper = []
+
+        for method_name in method_names:
+            if method_name not in data:
+                means.append(0.0)
+                errors_lower.append(0.0)
+                errors_upper.append(0.0)
+                continue
+
+            df = data[method_name]
+
+            # Filter if requested
+            if filter_top_n is not None and best_checkpoints is not None:
+                if method_name in best_checkpoints:
+                    df = filter_top_n_runs(df, best_checkpoints[method_name], filter_top_n)
+
+            # Compute rate for this single level
+            level_means, level_errors, level_errors_lower, level_errors_upper = compute_rates(
+                df, [level_label], level_col, metric, total_col, error_type
+            )
+            means.append(level_means[0])
+            errors_lower.append(level_errors_lower[0])
+            errors_upper.append(level_errors_upper[0])
+
+        data_by_level[level_label] = (means, errors_lower, errors_upper)
+
+    # Plot bars using plot_grouped_bars
+    # Here, x positions are methods, and "methods" in plot_grouped_bars are actually levels
+    x = np.arange(len(method_names))
+    plot_grouped_bars(
+        ax, x, data_by_level, level_labels, level_colors,
+        show_labels=show_labels, label_decimal=label_decimal, y_lim=y_lim
+    )
+
+    # Configure axes
+    ax.set_xlabel(x_label, fontsize=FONT_AXIS_LABEL)
+    ax.set_ylabel(y_label, fontsize=FONT_AXIS_LABEL)
+    ax.set_title(title, fontsize=FONT_TITLE)
+    ax.set_xticks(x)
+    ax.set_xticklabels(method_names, fontsize=FONT_TICK)
+    ax.set_ylim(y_lim)
+    if y_ticks is not None:
+        ax.set_yticks(y_ticks)
+    ax.tick_params(axis="y", labelsize=FONT_TICK)
+    ax.legend(fontsize=FONT_LEGEND, loc=legend_loc)
+
+    plt.tight_layout()
+    return fig, ax
+
+
 def plot_multi_panel_grid(
     data: Dict[str, Dict[str, pd.DataFrame]],
     panel_keys: List[str],
@@ -1063,6 +1201,7 @@ def plot_training_curves(
     title: str = "",
     x_label: str = "Total Steps",
     y_label: str = "Success Rate (%)",
+    x_lim: Optional[Tuple[float, float]] = None,
     y_lim: Tuple[float, float] = (0, 100),
     y_ticks: Optional[List[float]] = None,
     figsize: Tuple[float, float] = (10, 6),
@@ -1082,6 +1221,7 @@ def plot_training_curves(
         title: Plot title
         x_label: X-axis label
         y_label: Y-axis label
+        x_lim: X-axis limits (min, max), or None for auto
         y_lim: Y-axis limits
         y_ticks: Y-axis tick values
         figsize: Figure size
@@ -1140,6 +1280,8 @@ def plot_training_curves(
     ax.set_xlabel(x_label, fontsize=FONT_AXIS_LABEL)
     ax.set_ylabel(y_label, fontsize=FONT_AXIS_LABEL)
     ax.set_title(title, fontsize=FONT_TITLE)
+    if x_lim is not None:
+        ax.set_xlim(x_lim)
     ax.set_ylim(y_lim)
     if y_ticks is not None:
         ax.set_yticks(y_ticks)
@@ -1182,6 +1324,9 @@ def print_data_summary(
 
     for method_name, df in data.items():
         print(f"\n{method_name}:")
+        if df.empty:
+            print("  No data")
+            continue
         for level in level_labels:
             subset = df[df[level_col] == level]
             if not subset.empty:

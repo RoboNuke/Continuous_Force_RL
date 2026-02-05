@@ -61,6 +61,10 @@ def parse_arguments():
                         help="Override config values (e.g., --override environment.task.asset_variant=hex_short_small)")
     parser.add_argument("--resume", action="store_true", default=False,
                         help="Resume existing eval runs if found (matches by source_run tag, excludes runs tagged old_eval)")
+    parser.add_argument("--eval_best_policies", action="store_true", default=False,
+                        help="Evaluate only the best checkpoint for each agent (determined from eval_performance data). "
+                             "Requires eval_performance to have been run first. Cannot be used with --checkpoint, "
+                             "--checkpoint_range, --resume, or --eval_mode=performance.")
 
     # Append AppLauncher args
     AppLauncher.add_app_launcher_args(parser)
@@ -273,8 +277,9 @@ def is_parallel_mode(args: argparse.Namespace) -> bool:
     """
     Determine if parallel evaluation mode should be used.
 
-    Returns True for ALL cases EXCEPT performance mode with video enabled,
-    which has memory constraints due to video frame capture for multiple agents.
+    Returns True for ALL cases EXCEPT:
+    - performance mode with video enabled (memory constraints)
+    - eval_best_policies mode (each agent has different checkpoint)
 
     Args:
         args: Command-line arguments namespace
@@ -282,6 +287,8 @@ def is_parallel_mode(args: argparse.Namespace) -> bool:
     Returns:
         True if parallel mode should be used, False for sequential mode
     """
+    if args.eval_best_policies:
+        return False
     if args.eval_mode == "performance" and args.enable_video:
         return False
     return True
@@ -800,6 +807,127 @@ def get_completed_checkpoint_steps(eval_run: wandb.Run) -> Set[int]:
         return set()
 
     return completed_steps
+
+
+# ===== BEST CHECKPOINT DISCOVERY =====
+
+def get_best_checkpoints_for_runs(
+    api: wandb.Api,
+    runs: List[wandb.Run],
+    method_tag: str,
+    entity: str,
+    project: str
+) -> Dict[str, int]:
+    """
+    Determine the best checkpoint for each run based on eval_performance data.
+
+    Uses the same logic as analysis_utils.get_best_checkpoint_per_run():
+    score = num_successful_completions - num_breaks
+
+    Args:
+        api: WandB API instance
+        runs: List of training runs to find best checkpoints for
+        method_tag: Tag identifying the method/experiment (e.g., "MATCH:2024-01-15_10:00")
+        entity: WandB entity name
+        project: WandB project name
+
+    Returns:
+        Dict mapping source_run_id -> best_checkpoint_step
+
+    Raises:
+        RuntimeError: If no eval_performance data found for any run
+    """
+    print(f"\n{'=' * 80}")
+    print("BEST CHECKPOINT DISCOVERY")
+    print(f"{'=' * 80}")
+    print(f"Querying eval_performance runs with tags: '{method_tag}' AND 'eval_performance'")
+
+    # Query for eval_performance runs with both tags
+    eval_perf_runs = api.runs(
+        f"{entity}/{project}",
+        filters={"$and": [{"tags": method_tag}, {"tags": "eval_performance"}]}
+    )
+    eval_perf_runs = list(eval_perf_runs)
+
+    if len(eval_perf_runs) == 0:
+        raise RuntimeError(
+            f"No eval_performance runs found with tags '{method_tag}' AND 'eval_performance'. "
+            f"You must run eval_mode=performance first before using --eval_best_policies."
+        )
+
+    print(f"Found {len(eval_perf_runs)} eval_performance runs")
+
+    # Build mapping from eval run to source training run
+    # Eval runs have tag "source_run:{source_run_id}"
+    eval_run_to_source = {}
+    for eval_run in eval_perf_runs:
+        for tag in eval_run.tags:
+            if tag.startswith("source_run:"):
+                source_id = tag.split(":", 1)[1]
+                eval_run_to_source[eval_run.id] = source_id
+                break
+
+    # Build set of training run IDs we need best checkpoints for
+    training_run_ids = {run.id for run in runs}
+
+    # Find best checkpoint for each training run
+    best_checkpoints = {}
+    missing_runs = []
+
+    for training_run in runs:
+        # Find the eval_performance run for this training run
+        matching_eval_run = None
+        for eval_run in eval_perf_runs:
+            if eval_run_to_source.get(eval_run.id) == training_run.id:
+                matching_eval_run = eval_run
+                break
+
+        if matching_eval_run is None:
+            missing_runs.append(training_run)
+            continue
+
+        # Get history and find best checkpoint
+        history = matching_eval_run.history()
+        if history.empty:
+            missing_runs.append(training_run)
+            continue
+
+        # Check required columns exist
+        success_col = "Eval_Core/num_successful_completions"
+        breaks_col = "Eval_Core/num_breaks"
+        steps_col = "total_steps"
+
+        if success_col not in history.columns or breaks_col not in history.columns:
+            raise RuntimeError(
+                f"eval_performance run {matching_eval_run.id} missing required columns. "
+                f"Expected '{success_col}' and '{breaks_col}'. "
+                f"Available columns: {list(history.columns)}"
+            )
+
+        if steps_col not in history.columns:
+            raise RuntimeError(
+                f"eval_performance run {matching_eval_run.id} missing '{steps_col}' column."
+            )
+
+        # Calculate score: successes - breaks
+        history["_score"] = history[success_col] - history[breaks_col]
+        best_idx = history["_score"].idxmax()
+        best_step = int(history.loc[best_idx, steps_col])
+        best_score = history.loc[best_idx, "_score"]
+
+        best_checkpoints[training_run.id] = best_step
+        print(f"  {training_run.name}: best checkpoint at step {best_step} (score: {best_score:.0f})")
+
+    # Error if any runs are missing eval_performance data
+    if missing_runs:
+        missing_names = [r.name for r in missing_runs]
+        raise RuntimeError(
+            f"No eval_performance data found for {len(missing_runs)} run(s): {missing_names}. "
+            f"All runs must have eval_performance data before using --eval_best_policies."
+        )
+
+    print(f"\nFound best checkpoints for all {len(best_checkpoints)} runs")
+    return best_checkpoints
 
 
 # ===== CHECKPOINT DISCOVERY =====
@@ -3968,11 +4096,163 @@ def _run_sequential_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
             wandb.finish()
 
 
+def _run_best_policies_evaluation(
+    runs: List[wandb.Run],
+    configs: Dict[str, Any],
+    best_checkpoints: Dict[str, int]
+):
+    """
+    Run evaluation using only the best checkpoint for each agent.
+
+    Each agent is evaluated at its own best checkpoint (determined from eval_performance data).
+    Metrics are logged to WandB with the agent's unique best checkpoint step.
+
+    Args:
+        runs: List of training runs to evaluate
+        configs: Configuration dictionary
+        best_checkpoints: Dict mapping run_id -> best_checkpoint_step
+    """
+    print(f"\n{'=' * 80}")
+    print(f"BEST POLICIES MODE: Evaluating {len(runs)} runs at their best checkpoints")
+    print(f"{'=' * 80}")
+
+    # Setup environment with 1 agent (sequential evaluation)
+    print("\nSetting up environment with single agent...")
+    result = setup_environment_once(
+        configs=configs,
+        args=args_cli,
+        num_runs=1,
+        parallel_mode=False
+    )
+    env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, \
+        gain_assignments, friction_assignments, mass_assignments, yaw_assignments, envs_per_agent = result
+
+    print(f"\nEnvironment configured (best policies mode):")
+    if args_cli.eval_mode == "noise":
+        print(f"  - Environments per agent: {NOISE_MODE_TOTAL_ENVS}")
+    elif args_cli.eval_mode == "rotation":
+        print(f"  - Environments per agent: {ROTATION_MODE_TOTAL_ENVS}")
+    elif args_cli.eval_mode == "gain":
+        print(f"  - Environments per agent: {GAIN_MODE_TOTAL_ENVS}")
+    elif args_cli.eval_mode == "dynamics":
+        print(f"  - Environments per agent: {DYNAMICS_MODE_TOTAL_ENVS}")
+    elif args_cli.eval_mode == "trajectory":
+        print(f"  - Environments per agent: {TRAJECTORY_MODE_TOTAL_ENVS}")
+    elif args_cli.eval_mode == "yaw":
+        print(f"  - Environments per agent: {YAW_MODE_TOTAL_ENVS}")
+    print(f"  - Max rollout steps: {max_rollout_steps}")
+    print(f"  - Policy Hz: {policy_hz}")
+
+    # Evaluate each run at its best checkpoint
+    for run_idx, run in enumerate(runs):
+        best_step = best_checkpoints[run.id]
+
+        print(f"\n{'=' * 80}")
+        print(f"Evaluating run {run_idx + 1}/{len(runs)}: {run.name}")
+        print(f"Best checkpoint: step {best_step}")
+        print(f"{'=' * 80}")
+
+        # Initialize WandB eval run
+        eval_run_initialized = False
+        if not args_cli.no_wandb and not args_cli.report_to_base_run and args_cli.eval_mode != "trajectory":
+            try:
+                # Create new eval run with best_policy tag
+                eval_tags = [
+                    f"eval_{args_cli.eval_mode}",
+                    f"source_run:{run.id}",
+                    "best_policy"
+                ] + list(run.tags)
+
+                if args_cli.debug_project:
+                    target_project = "debug"
+                    eval_run_name = f"Eval_{args_cli.eval_mode}_best_{run.name}"
+                    eval_group_name = f"Eval_{args_cli.eval_mode}_best_{run.group}_{args_cli.tag}" if run.group else None
+                    print(f"\n[DEBUG MODE] Initializing eval run in 'debug' project: {eval_run_name}")
+                else:
+                    target_project = run.project
+                    eval_run_name = f"Eval_{args_cli.eval_mode}_best_{run.name}"
+                    eval_group_name = f"Eval_{args_cli.eval_mode}_best_{run.group}_{args_cli.tag}" if run.group else None
+                    print(f"\nInitializing eval run: {eval_run_name}")
+                    print(f"  Project: {target_project}")
+                    if eval_group_name:
+                        print(f"  Group: {eval_group_name}")
+
+                wandb.init(
+                    project=target_project,
+                    entity=args_cli.entity,
+                    name=eval_run_name,
+                    group=eval_group_name,
+                    tags=eval_tags,
+                    config={
+                        "source_run_id": run.id,
+                        "source_run_name": run.name,
+                        "source_run_group": run.group,
+                        "source_project": run.project,
+                        "eval_mode": args_cli.eval_mode,
+                        "eval_seed": args_cli.eval_seed,
+                        "best_checkpoint_step": best_step,
+                        "eval_best_policies": True,
+                    }
+                )
+                eval_run_initialized = True
+                print(f"  Eval run initialized successfully")
+            except Exception as e:
+                print(f"  WARNING: Failed to initialize eval run: {e}")
+                print(f"  Continuing without WandB logging...")
+                args_cli.no_wandb = True
+
+        # Evaluate the best checkpoint
+        try:
+            metrics, media_path = evaluate_checkpoint(
+                run, best_step, env, agent, configs, args_cli,
+                max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, gain_assignments,
+                friction_assignments, mass_assignments, yaw_assignments
+            )
+
+            # Log results to WandB with the agent's unique best_step
+            if args_cli.eval_mode != "trajectory":
+                log_results_to_wandb(run, best_step, metrics, media_path, args_cli)
+
+        except Exception as e:
+            print(f"  ERROR: Failed to evaluate checkpoint at step {best_step}: {e}")
+            import traceback
+            traceback.print_exc()
+
+        # Finish eval run
+        if eval_run_initialized:
+            print(f"\nFinishing eval run")
+            wandb.finish()
+
+
 def main():
     """Main execution function."""
     print("=" * 80)
     print("WandB Tag-Based Evaluation Script")
     print("=" * 80)
+
+    # Validate --eval_best_policies constraints
+    if args_cli.eval_best_policies:
+        if args_cli.eval_mode == "performance":
+            raise RuntimeError(
+                "--eval_best_policies cannot be used with --eval_mode=performance. "
+                "Performance evaluation is used to DETERMINE best checkpoints, not evaluate them."
+            )
+        if args_cli.checkpoint is not None:
+            raise RuntimeError(
+                "--eval_best_policies cannot be used with --checkpoint. "
+                "Best checkpoints are determined automatically from eval_performance data."
+            )
+        if args_cli.checkpoint_range is not None:
+            raise RuntimeError(
+                "--eval_best_policies cannot be used with --checkpoint_range. "
+                "Best checkpoints are determined automatically from eval_performance data."
+            )
+        if args_cli.resume:
+            raise RuntimeError(
+                "--eval_best_policies cannot be used with --resume. "
+                "Best policy evaluation always runs fresh."
+            )
+        print("\n[BEST POLICIES MODE] Will evaluate only the best checkpoint for each agent")
 
     config_temp_dir = None  # Track for cleanup in finally block
 
@@ -4010,12 +4290,24 @@ def main():
             print("  Overrides applied successfully")
 
         # Determine execution mode
-        parallel_mode = is_parallel_mode(args_cli)
-
-        if parallel_mode:
-            _run_parallel_evaluation(runs, configs)
+        if args_cli.eval_best_policies:
+            # Best policies mode: get best checkpoints and run specialized evaluation
+            api = wandb.Api()
+            best_checkpoints = get_best_checkpoints_for_runs(
+                api=api,
+                runs=runs,
+                method_tag=args_cli.tag,
+                entity=args_cli.entity,
+                project=args_cli.project
+            )
+            _run_best_policies_evaluation(runs, configs, best_checkpoints)
         else:
-            _run_sequential_evaluation(runs, configs)
+            # Standard mode: parallel or sequential
+            parallel_mode = is_parallel_mode(args_cli)
+            if parallel_mode:
+                _run_parallel_evaluation(runs, configs)
+            else:
+                _run_sequential_evaluation(runs, configs)
 
         print(f"\n{'=' * 80}")
         print("Evaluation complete!")

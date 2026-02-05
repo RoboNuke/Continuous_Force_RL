@@ -301,7 +301,7 @@ def define_agent_configs(configs, eval_tag=None, resume_info=None):
                     experiment_tag = eval_tag
                 else:
                     timestamp = datetime.now().strftime("%Y-%m-%d_%H:%M")
-                    experiment_tag = f"{configs['experiment'].group}:{timestamp}"
+                    experiment_tag = f"{configs['experiment'].group}_f{break_force}:{timestamp}"
 
                 # Add experiment tag to the tags list
                 wandb_kwargs["tags"] = wandb_kwargs["tags"] + [experiment_tag]

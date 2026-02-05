@@ -9,6 +9,7 @@ VIDEO_ENABLED="false"
 EVAL_MODES=""
 PROJECT=""
 CHECKPOINT_RANGE=""
+RESUME="false"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -37,9 +38,13 @@ while [[ $# -gt 0 ]]; do
             CHECKPOINT_RANGE="$2"
             shift 2
             ;;
+        --resume)
+            RESUME="true"
+            shift 1
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 --tags \"tag1 tag2 tag3\" --eval_modes \"performance noise rotation\" [--video/--no-video] [--checkpoint_range start:end:step]"
+            echo "Usage: $0 --tags \"tag1 tag2 tag3\" --eval_modes \"performance noise rotation\" [--video/--no-video] [--checkpoint_range start:end:step] [--resume]"
             exit 1
             ;;
     esac
@@ -73,6 +78,7 @@ echo "=== WandB Eval Launch Script ==="
 echo "Tags: $TAGS"
 echo "Eval Modes: $EVAL_MODES"
 echo "Video Enabled: $VIDEO_ENABLED"
+echo "Resume: $RESUME"
 echo "Project: ${PROJECT:-<default>}"
 echo "Checkpoint Range: ${CHECKPOINT_RANGE:-<all>}"
 echo ""
@@ -90,13 +96,14 @@ for tag in "${TAG_ARRAY[@]}"; do
         echo "  Tag: $tag"
         echo "  Eval Mode: $eval_mode"
         echo "  Video: $VIDEO_ENABLED"
+        echo "  Resume: $RESUME"
 
         # Submit SLURM job with dynamic output file paths
         output_name="eval_$(echo "${tag}" | tr ':/' '__')_${eval_mode}"
         sbatch -J "$job_name" \
                -o "exp_logs/wandb_eval/${output_name}_%j.out" \
                -e "exp_logs/wandb_eval/${output_name}_%j.err" \
-               launcher/hpc_wandb_eval_batch.bash "$tag" "$VIDEO_ENABLED" "$eval_mode" "$PROJECT" "$CHECKPOINT_RANGE"
+               launcher/hpc_wandb_eval_batch.bash "$tag" "$VIDEO_ENABLED" "$eval_mode" "$PROJECT" "$CHECKPOINT_RANGE" "$RESUME"
 
         echo "  Job submitted successfully"
         echo ""
