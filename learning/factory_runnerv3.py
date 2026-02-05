@@ -370,7 +370,11 @@ def main(
         if args_cli.override:
             configManager = ConfigManagerV3()
             parsed_overrides = configManager.parse_cli_overrides(args_cli.override)
+            print(f"[DEBUG]: CLI overrides received: {args_cli.override}")
+            print(f"[DEBUG]: Parsed overrides: {parsed_overrides}")
+            print(f"[DEBUG]: configs['primary'].max_steps BEFORE override: {configs['primary'].max_steps}")
             configManager.apply_cli_overrides(configs, parsed_overrides)
+            print(f"[DEBUG]: configs['primary'].max_steps AFTER override: {configs['primary'].max_steps}")
             # Re-apply primary config to propagate changes (e.g., num_envs_per_agent -> scene.num_envs)
             configManager._apply_primary_config_to_all(configs)
     else:

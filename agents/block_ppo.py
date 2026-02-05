@@ -177,11 +177,16 @@ class BlockPPO(PPO):
 
         ## NEW PER-AGENT PREPROCESSOR SETUP ##
         # Skip if resuming from checkpoint - preprocessors were already loaded
-        is_resuming = self.agent_exp_cfgs[0]['experiment'].get('wandb_kwargs', {}).get('resume_run_id') is not None
+        wandb_kwargs = self.agent_exp_cfgs[0]['experiment'].get('wandb_kwargs', {})
+        is_resuming = wandb_kwargs.get('resume_run_id') is not None
         if is_resuming:
             print("  Skipping preprocessor setup - resuming from checkpoint")
+            # Store the starting step offset for checkpoint naming
+            self.starting_step_offset = wandb_kwargs.get('resume_step', 0)
+            print(f"  Checkpoint step offset set to: {self.starting_step_offset}")
         else:
             self._setup_per_agent_preprocessors()
+            self.starting_step_offset = 0
 
         ## VALIDATE WRAPPER INTEGRATION FOR LOGGING ##
         # self._validate_wrapper_integration()  # Disabled - wandb logging is optional
@@ -216,11 +221,14 @@ class BlockPPO(PPO):
         ckpt_paths = []
         critic_paths = []
         vid_paths = []
+        # Calculate absolute step number (accounting for resume offset)
+        step_offset = getattr(self, 'starting_step_offset', 0)
+        absolute_step = timestep * self.num_envs // self.num_agents + step_offset
         for i in range(self.num_agents):
             exp_args = self.agent_exp_cfgs[i]['experiment'] #self.cfg[f'agent_{i}']['experiment']
-            ckpt_paths.append(os.path.join(exp_args['directory'], exp_args['experiment_name'], "checkpoints", f"agent_{i}_{timestep*self.num_envs // self.num_agents}.pt"))
-            vid_paths.append( os.path.join(exp_args['directory'], exp_args['experiment_name'], "eval_videos", f"agent_{i}_{timestep* self.num_envs // self.num_agents}.gif"))
-            critic_paths.append(os.path.join(exp_args['directory'], exp_args['experiment_name'], "checkpoints", f"critic_{i}_{timestep*self.num_envs // self.num_agents}.pt"))
+            ckpt_paths.append(os.path.join(exp_args['directory'], exp_args['experiment_name'], "checkpoints", f"agent_{i}_{absolute_step}.pt"))
+            vid_paths.append( os.path.join(exp_args['directory'], exp_args['experiment_name'], "eval_videos", f"agent_{i}_{absolute_step}.gif"))
+            critic_paths.append(os.path.join(exp_args['directory'], exp_args['experiment_name'], "checkpoints", f"critic_{i}_{absolute_step}.pt"))
 
         ## ORIGINAL SHARED PREPROCESSOR STATES ##
         # preprocessor_states = {
