@@ -47,8 +47,8 @@ def parse_arguments():
     parser.add_argument("--show_progress", action="store_true", default=True,
                         help="Show progress bar during evaluation rollout")
     parser.add_argument("--eval_mode", type=str, required=True,
-                        choices=["performance", "noise", "rotation", "gain", "dynamics", "trajectory", "yaw"],
-                        help="Evaluation mode: 'performance' (100 envs, videos), 'noise' (400 envs, noise analysis), 'rotation' (500 envs, rotation analysis), 'gain' (500 envs, gain robustness), 'dynamics' (1200 envs, friction/mass robustness), 'trajectory' (100 envs, detailed trajectory data), or 'yaw' (400 envs, yaw rotation robustness)")
+                        choices=["performance", "noise", "forge_noise", "rotation", "gain", "dynamics", "trajectory", "yaw", "fragile"],
+                        help="Evaluation mode: 'performance' (100 envs, videos), 'noise' (400 envs, noise analysis, cubic sampling), 'forge_noise' (400 envs, noise analysis, spherical sampling), 'rotation' (500 envs, rotation analysis), 'gain' (500 envs, gain robustness), 'dynamics' (1200 envs, friction/mass robustness), 'trajectory' (100 envs, detailed trajectory data), 'yaw' (400 envs, yaw rotation robustness), or 'fragile' (500 envs, break force robustness)")
     parser.add_argument("--no_wandb", action="store_true", default=False,
                         help="Disable WandB logging and save results locally for debugging")
     parser.add_argument("--debug_project", action="store_true", default=False,
@@ -195,7 +195,7 @@ NOISE_RANGES = [
 ]
 
 # Number of environments per noise range
-ENVS_PER_NOISE_RANGE = 100
+ENVS_PER_NOISE_RANGE = 500
 
 # Total environments for noise mode
 NOISE_MODE_TOTAL_ENVS = len(NOISE_RANGES) * ENVS_PER_NOISE_RANGE
@@ -258,6 +258,19 @@ ENVS_PER_DYNAMICS_COMBO = 100
 # Total environments for dynamics mode (friction-major ordering)
 # 3 friction × 4 mass × 100 envs = 1200 total
 DYNAMICS_MODE_TOTAL_ENVS = len(DYNAMICS_FRICTION_MULTIPLIERS) * len(DYNAMICS_MASS_MULTIPLIERS) * ENVS_PER_DYNAMICS_COMBO
+
+
+# ===== FRAGILE GENERALIZATION EVALUATION CONSTANTS =====
+
+# Break force thresholds to test (in Newtons)
+# 10000 represents "unbreakable" for practical purposes
+FRAGILE_BREAK_FORCES = [5, 10, 15, 20]
+
+# Number of environments per break force condition
+ENVS_PER_BREAK_FORCE = 100
+
+# Total environments for fragile mode
+FRAGILE_MODE_TOTAL_ENVS = len(FRAGILE_BREAK_FORCES) * ENVS_PER_BREAK_FORCE
 
 
 # ===== TRAJECTORY EVALUATION CONSTANTS =====
@@ -709,6 +722,44 @@ class FixedDynamicsWrapper(gym.Wrapper):
         held_asset.root_physx_view.set_inertias(inertias, env_ids_cpu)
 
 
+class FixedBreakForceWrapper(gym.Wrapper):
+    """
+    Wrapper to override break force thresholds for fragile generalization evaluation.
+
+    Finds the FragileObjectWrapper in the wrapper chain and overrides its break_force
+    tensor with predetermined values for each environment.
+    """
+    def __init__(self, env, break_force_assignments: torch.Tensor):
+        """
+        Args:
+            env: Base environment (should have FragileObjectWrapper in chain)
+            break_force_assignments: [num_envs] tensor with break force for each env
+        """
+        super().__init__(env)
+        self.break_force_assignments = break_force_assignments
+        self._apply_break_forces()
+
+    def _apply_break_forces(self):
+        """Find FragileObjectWrapper and override its break_force tensor."""
+        wrapper = self.env
+        fragile_wrapper = None
+        while wrapper is not None:
+            if isinstance(wrapper, FragileObjectWrapper):
+                fragile_wrapper = wrapper
+                break
+            wrapper = getattr(wrapper, 'env', None)
+
+        if fragile_wrapper is None:
+            raise RuntimeError(
+                "FixedBreakForceWrapper requires FragileObjectWrapper in the wrapper chain. "
+                "Ensure fragile_objects wrapper is enabled in config."
+            )
+
+        # Override break_force tensor
+        fragile_wrapper.break_force = self.break_force_assignments.clone()
+        print(f"    FixedBreakForceWrapper: Override break forces for {len(self.break_force_assignments)} envs")
+
+
 # ===== EVAL RUN RESUME SUPPORT =====
 
 @dataclass
@@ -1072,7 +1123,7 @@ def setup_environment_once(
     # Set num_envs based on eval mode
     if args.eval_mode == "performance":
         num_envs_per_agent = 100
-    elif args.eval_mode == "noise":
+    elif args.eval_mode in ("noise", "forge_noise"):
         num_envs_per_agent = NOISE_MODE_TOTAL_ENVS
     elif args.eval_mode == "rotation":
         num_envs_per_agent = ROTATION_MODE_TOTAL_ENVS
@@ -1084,6 +1135,8 @@ def setup_environment_once(
         num_envs_per_agent = TRAJECTORY_MODE_TOTAL_ENVS
     elif args.eval_mode == "yaw":
         num_envs_per_agent = YAW_MODE_TOTAL_ENVS
+    elif args.eval_mode == "fragile":
+        num_envs_per_agent = FRAGILE_MODE_TOTAL_ENVS
     else:
         raise RuntimeError(f"Unknown eval_mode: {args.eval_mode}")
 
@@ -1184,30 +1237,39 @@ def setup_environment_once(
 
     # Generate noise assignments for noise mode
     noise_assignments = None
-    if args.eval_mode == "noise":
-        print("  Generating noise assignments for noise mode...")
+    if args.eval_mode in ("noise", "forge_noise"):
+        sampling_method = "spherical" if args.eval_mode == "forge_noise" else "cubic"
+        print(f"  Generating noise assignments for {args.eval_mode} mode ({sampling_method} sampling)...")
 
         # Generate base noise assignments for one agent
         base_noise_assignments_list = []
         for min_val, max_val, range_name in NOISE_RANGES:
-            # Sample each dimension independently from [-max_val, -min_val] ∪ [min_val, max_val]
-            # 1. Sample magnitude uniformly from [min_val, max_val]
-            # 2. Randomly assign sign with 50/50 probability
+            if args.eval_mode == "forge_noise":
+                # Spherical sampling: uniform direction on unit sphere, uniform radius
+                direction = torch.randn(ENVS_PER_NOISE_RANGE, 3, device=env.device)
+                direction = direction / direction.norm(dim=1, keepdim=True)
+                radius = torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) * (max_val - min_val) + min_val
+                noise = direction * radius.unsqueeze(1)
+                x_noise, y_noise, z_noise = noise[:, 0], noise[:, 1], noise[:, 2]
+            else:
+                # Cubic sampling: sample each dimension independently from [-max_val, -min_val] ∪ [min_val, max_val]
+                # 1. Sample magnitude uniformly from [min_val, max_val]
+                # 2. Randomly assign sign with 50/50 probability
 
-            # X-axis noise
-            x_magnitude = torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) * (max_val - min_val) + min_val
-            x_sign = (torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) > 0.5).float() * 2 - 1  # -1 or +1
-            x_noise = x_magnitude * x_sign
+                # X-axis noise
+                x_magnitude = torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) * (max_val - min_val) + min_val
+                x_sign = (torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) > 0.5).float() * 2 - 1  # -1 or +1
+                x_noise = x_magnitude * x_sign
 
-            # Y-axis noise
-            y_magnitude = torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) * (max_val - min_val) + min_val
-            y_sign = (torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) > 0.5).float() * 2 - 1
-            y_noise = y_magnitude * y_sign
+                # Y-axis noise
+                y_magnitude = torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) * (max_val - min_val) + min_val
+                y_sign = (torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) > 0.5).float() * 2 - 1
+                y_noise = y_magnitude * y_sign
 
-            # Z-axis noise
-            z_magnitude = torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) * (max_val - min_val) + min_val
-            z_sign = (torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) > 0.5).float() * 2 - 1
-            z_noise = z_magnitude * z_sign
+                # Z-axis noise
+                z_magnitude = torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) * (max_val - min_val) + min_val
+                z_sign = (torch.rand(ENVS_PER_NOISE_RANGE, device=env.device) > 0.5).float() * 2 - 1
+                z_noise = z_magnitude * z_sign
 
             # Debug: Print statistics for each dimension
             print(f"    Noise statistics for {range_name}:")
@@ -1233,7 +1295,7 @@ def setup_environment_once(
                   f"({len(NOISE_RANGES)} ranges × {ENVS_PER_NOISE_RANGE} envs)")
 
         # Apply FixedNoiseWrapper
-        print("  - FixedNoiseWrapper for noise mode")
+        print(f"  - FixedNoiseWrapper for {args.eval_mode} mode")
         env = FixedNoiseWrapper(env, noise_assignments)
 
     # Generate rotation assignments for rotation mode
@@ -1393,6 +1455,36 @@ def setup_environment_once(
         print("  - FixedYawRotationWrapper for yaw mode")
         env = FixedYawRotationWrapper(env, yaw_assignments)
 
+    # Generate break force assignments for fragile mode
+    break_force_assignments = None
+    if args.eval_mode == "fragile":
+        print("  Generating break force assignments for fragile mode...")
+
+        base_break_force_list = []
+        for bf in FRAGILE_BREAK_FORCES:
+            bf_tensor = torch.full(
+                (ENVS_PER_BREAK_FORCE,),
+                float(bf),
+                device=env.device,
+                dtype=torch.float32
+            )
+            base_break_force_list.append(bf_tensor)
+
+        base_break_force_assignments = torch.cat(base_break_force_list, dim=0)
+
+        if parallel_mode:
+            break_force_assignments = base_break_force_assignments.repeat(num_runs)
+            print(f"    Generated {break_force_assignments.shape[0]} break force assignments "
+                  f"({len(FRAGILE_BREAK_FORCES)} thresholds x {ENVS_PER_BREAK_FORCE} envs x {num_runs} agents)")
+        else:
+            break_force_assignments = base_break_force_assignments
+            print(f"    Generated {break_force_assignments.shape[0]} break force assignments "
+                  f"({len(FRAGILE_BREAK_FORCES)} thresholds x {ENVS_PER_BREAK_FORCE} envs)")
+
+        # Apply FixedBreakForceWrapper
+        print("  - FixedBreakForceWrapper for fragile mode")
+        env = FixedBreakForceWrapper(env, break_force_assignments)
+
     # Apply TrajectoryEvalWrapper for trajectory mode
     if args.eval_mode == "trajectory":
         print("  - TrajectoryEvalWrapper for trajectory mode")
@@ -1433,7 +1525,7 @@ def setup_environment_once(
     print(f"  Created BlockPPO agent with {configs['primary'].total_agents} agents")
     print("  Setup complete!")
 
-    return env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, gain_assignments, friction_assignments, mass_assignments, yaw_assignments, num_envs_per_agent
+    return env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, gain_assignments, friction_assignments, mass_assignments, yaw_assignments, break_force_assignments, num_envs_per_agent
 
 
 # ===== WANDB LOGGING =====
@@ -1480,8 +1572,8 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
             # Create descriptive filename
             if args.eval_mode == "performance":
                 local_media_path = f"./eval_results/performance_step_{step}{ext}"
-            elif args.eval_mode == "noise":
-                local_media_path = f"./eval_results/noise_step_{step}{ext}"
+            elif args.eval_mode in ("noise", "forge_noise"):
+                local_media_path = f"./eval_results/{args.eval_mode}_step_{step}{ext}"
             elif args.eval_mode == "rotation":
                 local_media_path = f"./eval_results/rotation_step_{step}{ext}"
             elif args.eval_mode == "gain":
@@ -1490,6 +1582,8 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
                 local_media_path = f"./eval_results/dynamics_step_{step}{ext}"
             elif args.eval_mode == "yaw":
                 local_media_path = f"./eval_results/yaw_step_{step}{ext}"
+            elif args.eval_mode == "fragile":
+                local_media_path = f"./eval_results/fragile_step_{step}{ext}"
             elif args.eval_mode == "trajectory":
                 os.makedirs(f"./eval_results/{run.id}", exist_ok=True)
                 local_media_path = f"./eval_results/{run.id}/traj_step_{step}{ext}"
@@ -1524,10 +1618,10 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
                 caption = f"Evaluation at step {step}"
                 metrics_to_log['Eval/Checkpoint Videos'] = wandb.Video(media_path, caption=caption)
                 media_uploaded = True
-        elif args.eval_mode == "noise":
+        elif args.eval_mode in ("noise", "forge_noise"):
             # Add noise visualization image
             if media_path is not None and os.path.exists(media_path):
-                caption = f"Noise Evaluation at step {step}"
+                caption = f"{args.eval_mode.replace('_', ' ').title()} Evaluation at step {step}"
                 metrics_to_log['eval_media/noise_images'] = wandb.Image(media_path, caption=caption)
                 media_uploaded = True
         elif args.eval_mode == "rotation":
@@ -1553,7 +1647,7 @@ def log_results_to_wandb(run: wandb.Run, step: int, metrics: Dict[str, float],
             if media_uploaded:
                 if args.eval_mode == "performance":
                     print(f"    Logged metrics and video for step {step}")
-                elif args.eval_mode == "noise":
+                elif args.eval_mode in ("noise", "forge_noise"):
                     print(f"    Logged metrics and noise visualization for step {step}")
                 elif args.eval_mode == "rotation":
                     print(f"    Logged metrics and rotation visualization for step {step}")
@@ -2384,6 +2478,84 @@ def run_yaw_evaluation(
     return split_metrics, rollout_data_for_viz
 
 
+def run_fragile_evaluation(
+    env: Any,
+    agent: Any,
+    configs: Dict[str, Any],
+    max_rollout_steps: int,
+    break_force_assignments: torch.Tensor,
+    show_progress: bool = False,
+    eval_seed: int = None
+) -> Tuple[Dict[str, float], Dict[str, Any]]:
+    """
+    Run fragile generalization evaluation with environments across break force thresholds.
+
+    Args:
+        env: Environment instance (wrapped with metrics wrappers and FixedBreakForceWrapper)
+        agent: Agent instance with loaded checkpoint
+        configs: Configuration dictionary
+        max_rollout_steps: Maximum steps per episode
+        break_force_assignments: [FRAGILE_MODE_TOTAL_ENVS] tensor with break force for each env
+        show_progress: Whether to show progress bar
+        eval_seed: Seed for deterministic evaluation
+
+    Returns:
+        Tuple of (metrics_dict, rollout_data_dict)
+            - metrics_dict: Aggregated metrics split by break force threshold
+            - rollout_data_dict: Contains success/failure data per environment
+    """
+    print("  Running fragile generalization evaluation...")
+
+    # Run basic evaluation (no video)
+    metrics, rollout_data = run_basic_evaluation(
+        env=env,
+        agent=agent,
+        configs=configs,
+        max_rollout_steps=max_rollout_steps,
+        enable_video=False,  # No video in fragile mode
+        show_progress=show_progress,
+        eval_seed=eval_seed
+    )
+
+    # Split metrics by break force threshold
+    split_metrics = {}
+    for bf_idx, bf in enumerate(FRAGILE_BREAK_FORCES):
+        start_idx = bf_idx * ENVS_PER_BREAK_FORCE
+        end_idx = start_idx + ENVS_PER_BREAK_FORCE
+
+        # Format name: "5N", "10N", etc. or "unbreakable" for 10000
+        if bf >= 10000:
+            bf_name = "unbreakable"
+        else:
+            bf_name = f"{bf}N"
+
+        # Extract data for this break force threshold
+        bf_metrics = _compute_range_metrics(
+            rollout_data=rollout_data,
+            start_idx=start_idx,
+            end_idx=end_idx,
+            range_name=bf_name
+        )
+
+        # Add to split metrics with category-based prefixes
+        prefixed_bf_metrics = prefix_metrics_by_category(
+            bf_metrics,
+            core_prefix=f"Fragile_Eval({bf_name})_Core",
+            contact_prefix=f"Fragile_Eval({bf_name})_Contact"
+        )
+        split_metrics.update(prefixed_bf_metrics)
+
+    # Prepare rollout data for return
+    rollout_data_for_return = {
+        'break_force_assignments': break_force_assignments,
+        'episode_succeeded': rollout_data['episode_succeeded'],
+        'termination_step': rollout_data['termination_step'],
+        'truncation_step': rollout_data['truncation_step'],
+    }
+
+    return split_metrics, rollout_data_for_return
+
+
 def run_gain_evaluation(
     env: Any,
     agent: Any,
@@ -2672,7 +2844,7 @@ def compute_run_metrics(
         )
         return prefix_metrics_by_category(base_metrics, "Eval_Core", "Eval_Contact")
 
-    elif eval_mode == "noise":
+    elif eval_mode in ("noise", "forge_noise"):
         # Split by noise range
         split_metrics = {}
         for range_idx, (min_val, max_val, range_name) in enumerate(NOISE_RANGES):
@@ -2747,6 +2919,28 @@ def compute_run_metrics(
                 range_metrics,
                 f"Yaw_Eval({range_name})_Core",
                 f"Yaw_Eval({range_name})_Contact"
+            )
+            split_metrics.update(prefixed)
+        return split_metrics
+
+    elif eval_mode == "fragile":
+        # Split by break force threshold
+        split_metrics = {}
+        for bf_idx, bf in enumerate(FRAGILE_BREAK_FORCES):
+            start_idx = bf_idx * ENVS_PER_BREAK_FORCE
+            end_idx = start_idx + ENVS_PER_BREAK_FORCE
+
+            # Format name: "5N", "10N", etc. or "unbreakable" for 10000
+            if bf >= 10000:
+                bf_name = "unbreakable"
+            else:
+                bf_name = f"{bf}N"
+
+            bf_metrics = _compute_range_metrics(rollout_data, start_idx, end_idx, bf_name)
+            prefixed = prefix_metrics_by_category(
+                bf_metrics,
+                f"Fragile_Eval({bf_name})_Core",
+                f"Fragile_Eval({bf_name})_Contact"
             )
             split_metrics.update(prefixed)
         return split_metrics
@@ -3241,7 +3435,8 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
                        gain_assignments: Optional[torch.Tensor] = None,
                        friction_assignments: Optional[torch.Tensor] = None,
                        mass_assignments: Optional[torch.Tensor] = None,
-                       yaw_assignments: Optional[torch.Tensor] = None) -> Tuple[Dict[str, float], Optional[str]]:
+                       yaw_assignments: Optional[torch.Tensor] = None,
+                       break_force_assignments: Optional[torch.Tensor] = None) -> Tuple[Dict[str, float], Optional[str]]:
     """
     Evaluate a single checkpoint.
 
@@ -3430,10 +3625,10 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
                 contact_prefix="Eval_Contact"
             )
 
-        elif args.eval_mode == "noise":
+        elif args.eval_mode in ("noise", "forge_noise"):
             # Run noise evaluation (no video)
             if noise_assignments is None:
-                raise RuntimeError("noise_assignments is None in noise mode evaluation")
+                raise RuntimeError(f"noise_assignments is None in {args.eval_mode} mode evaluation")
 
             eval_metrics, rollout_data = run_noise_evaluation(
                 env=env,
@@ -3537,6 +3732,24 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
             # No visualization for yaw mode
             media_path = None
 
+        elif args.eval_mode == "fragile":
+            # Run fragile generalization evaluation (no video)
+            if break_force_assignments is None:
+                raise RuntimeError("break_force_assignments is None in fragile mode evaluation")
+
+            eval_metrics, rollout_data = run_fragile_evaluation(
+                env=env,
+                agent=agent,
+                configs=configs,
+                max_rollout_steps=max_rollout_steps,
+                break_force_assignments=break_force_assignments,
+                show_progress=args.show_progress,
+                eval_seed=args.eval_seed
+            )
+
+            # No visualization for fragile mode
+            media_path = None
+
         elif args.eval_mode == "trajectory":
             # Run trajectory evaluation
             trajectory_data = run_trajectory_evaluation(
@@ -3574,7 +3787,7 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
             successes = eval_metrics.get('Eval_Core/num_successful_completions', 0)
             success_rate = successes / total if total > 0 else 0.0
             print(f"    Success rate: {success_rate:.2%} ({successes}/{total})")
-        elif args.eval_mode == "noise":
+        elif args.eval_mode in ("noise", "forge_noise"):
             # Print summary for each noise range
             for min_val, max_val, range_name in NOISE_RANGES:
                 total = eval_metrics.get(f'Noise_Eval({range_name})_Core/total_episodes', 0)
@@ -3611,6 +3824,14 @@ def evaluate_checkpoint(run: wandb.Run, step: int, env: Any, agent: Any,
                 successes = eval_metrics.get(f'Yaw_Eval({range_name})_Core/num_successful_completions', 0)
                 success_rate = successes / total if total > 0 else 0.0
                 print(f"    {range_name}: {success_rate:.2%} ({successes}/{total})")
+        elif args.eval_mode == "fragile":
+            # Print summary for each break force threshold
+            for bf in FRAGILE_BREAK_FORCES:
+                bf_name = "unbreakable" if bf >= 10000 else f"{bf}N"
+                total = eval_metrics.get(f'Fragile_Eval({bf_name})_Core/total_episodes', 0)
+                successes = eval_metrics.get(f'Fragile_Eval({bf_name})_Core/num_successful_completions', 0)
+                success_rate = successes / total if total > 0 else 0.0
+                print(f"    {bf_name}: {success_rate:.2%} ({successes}/{total})")
         elif args.eval_mode == "trajectory":
             # Print summary for trajectory mode
             total_rollouts = eval_metrics.get('Traj_Eval/total_rollouts', 0)
@@ -3648,7 +3869,8 @@ def _run_parallel_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
         parallel_mode=True
     )
     env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, \
-        gain_assignments, friction_assignments, mass_assignments, yaw_assignments, envs_per_agent = result
+        gain_assignments, friction_assignments, mass_assignments, yaw_assignments, \
+        break_force_assignments, envs_per_agent = result
 
     print(f"\nEnvironment configured (parallel mode):")
     print(f"  - Number of runs/agents: {num_runs}")
@@ -3821,7 +4043,7 @@ def _run_parallel_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
                     save_trajectory_data(trajectory_data, media_path)
                     print(f"    Saved trajectory data for {run.id} to: {media_path}")
                 continue  # Skip the per-run metrics computation for trajectory mode
-            elif args_cli.eval_mode in ("performance", "noise", "rotation", "gain", "dynamics", "yaw"):
+            elif args_cli.eval_mode in ("performance", "noise", "forge_noise", "rotation", "gain", "dynamics", "yaw", "fragile"):
                 # All standard modes use run_basic_evaluation in parallel mode
                 # This returns full rollout_data that can be split by agent
                 eval_metrics, rollout_data = run_basic_evaluation(
@@ -3899,7 +4121,7 @@ def _print_run_summary(metrics: Dict[str, float], eval_mode: str, run_id: str):
         successes = metrics.get('Eval_Core/num_successful_completions', 0)
         success_rate = successes / total if total > 0 else 0.0
         print(f"    [{run_id}] Success rate: {success_rate:.2%} ({successes}/{total})")
-    elif eval_mode == "noise":
+    elif eval_mode in ("noise", "forge_noise"):
         for min_val, max_val, range_name in NOISE_RANGES:
             total = metrics.get(f'Noise_Eval({range_name})_Core/total_episodes', 0)
             successes = metrics.get(f'Noise_Eval({range_name})_Core/num_successful_completions', 0)
@@ -3931,6 +4153,13 @@ def _print_run_summary(metrics: Dict[str, float], eval_mode: str, run_id: str):
             successes = metrics.get(f'Yaw_Eval({range_name})_Core/num_successful_completions', 0)
             success_rate = successes / total if total > 0 else 0.0
             print(f"    [{run_id}] {range_name}: {success_rate:.2%}")
+    elif eval_mode == "fragile":
+        for bf in FRAGILE_BREAK_FORCES:
+            bf_name = "unbreakable" if bf >= 10000 else f"{bf}N"
+            total = metrics.get(f'Fragile_Eval({bf_name})_Core/total_episodes', 0)
+            successes = metrics.get(f'Fragile_Eval({bf_name})_Core/num_successful_completions', 0)
+            success_rate = successes / total if total > 0 else 0.0
+            print(f"    [{run_id}] {bf_name}: {success_rate:.2%}")
 
 
 def _run_sequential_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
@@ -3950,12 +4179,13 @@ def _run_sequential_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
         parallel_mode=False
     )
     env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, \
-        gain_assignments, friction_assignments, mass_assignments, yaw_assignments, envs_per_agent = result
+        gain_assignments, friction_assignments, mass_assignments, yaw_assignments, \
+        break_force_assignments, envs_per_agent = result
 
     print(f"\nEnvironment configured (sequential mode):")
     if args_cli.eval_mode == "performance":
         print(f"  - Environments per agent: 100")
-    elif args_cli.eval_mode == "noise":
+    elif args_cli.eval_mode in ("noise", "forge_noise"):
         print(f"  - Environments per agent: {NOISE_MODE_TOTAL_ENVS}")
     elif args_cli.eval_mode == "rotation":
         print(f"  - Environments per agent: {ROTATION_MODE_TOTAL_ENVS}")
@@ -3967,6 +4197,8 @@ def _run_sequential_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
         print(f"  - Environments per agent: {TRAJECTORY_MODE_TOTAL_ENVS}")
     elif args_cli.eval_mode == "yaw":
         print(f"  - Environments per agent: {YAW_MODE_TOTAL_ENVS}")
+    elif args_cli.eval_mode == "fragile":
+        print(f"  - Environments per agent: {FRAGILE_MODE_TOTAL_ENVS}")
     print(f"  - Max rollout steps: {max_rollout_steps}")
     print(f"  - Policy Hz: {policy_hz}")
 
@@ -4077,7 +4309,7 @@ def _run_sequential_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
                 metrics, media_path = evaluate_checkpoint(
                     run, step, env, agent, configs, args_cli,
                     max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, gain_assignments,
-                    friction_assignments, mass_assignments, yaw_assignments
+                    friction_assignments, mass_assignments, yaw_assignments, break_force_assignments
                 )
 
                 # Log results to WandB (skip for trajectory mode)
@@ -4125,10 +4357,11 @@ def _run_best_policies_evaluation(
         parallel_mode=False
     )
     env, agent, max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, \
-        gain_assignments, friction_assignments, mass_assignments, yaw_assignments, envs_per_agent = result
+        gain_assignments, friction_assignments, mass_assignments, yaw_assignments, \
+        break_force_assignments, envs_per_agent = result
 
     print(f"\nEnvironment configured (best policies mode):")
-    if args_cli.eval_mode == "noise":
+    if args_cli.eval_mode in ("noise", "forge_noise"):
         print(f"  - Environments per agent: {NOISE_MODE_TOTAL_ENVS}")
     elif args_cli.eval_mode == "rotation":
         print(f"  - Environments per agent: {ROTATION_MODE_TOTAL_ENVS}")
@@ -4140,6 +4373,8 @@ def _run_best_policies_evaluation(
         print(f"  - Environments per agent: {TRAJECTORY_MODE_TOTAL_ENVS}")
     elif args_cli.eval_mode == "yaw":
         print(f"  - Environments per agent: {YAW_MODE_TOTAL_ENVS}")
+    elif args_cli.eval_mode == "fragile":
+        print(f"  - Environments per agent: {FRAGILE_MODE_TOTAL_ENVS}")
     print(f"  - Max rollout steps: {max_rollout_steps}")
     print(f"  - Policy Hz: {policy_hz}")
 
@@ -4206,7 +4441,7 @@ def _run_best_policies_evaluation(
             metrics, media_path = evaluate_checkpoint(
                 run, best_step, env, agent, configs, args_cli,
                 max_rollout_steps, policy_hz, noise_assignments, rotation_assignments, gain_assignments,
-                friction_assignments, mass_assignments, yaw_assignments
+                friction_assignments, mass_assignments, yaw_assignments, break_force_assignments
             )
 
             # Log results to WandB with the agent's unique best_step

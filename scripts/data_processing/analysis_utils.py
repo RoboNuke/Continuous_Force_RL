@@ -39,7 +39,7 @@ PROJECT = "SG_Exps"
 # EVALUATION TAGS
 # =============================================================================
 TAG_EVAL_PERFORMANCE = "eval_performance"
-TAG_EVAL_NOISE = "eval_noise"
+TAG_EVAL_NOISE = "eval_forge_noise" #"eval_noise"
 TAG_EVAL_DYNAMICS = "eval_dynamics"
 TAG_EVAL_GAIN = "eval_gain"
 TAG_EVAL_YAW = "eval_yaw"
