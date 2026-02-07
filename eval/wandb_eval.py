@@ -206,14 +206,14 @@ NOISE_MODE_TOTAL_ENVS = len(NOISE_RANGES) * ENVS_PER_NOISE_RANGE
 # Define yaw ranges for yaw robustness evaluation (in degrees)
 # Format: (min_val_degrees, max_val_degrees, display_name)
 YAW_RANGES_DEG = [
-    (0.0, 1.0, "0deg-1deg"),
-    (1.0, 2.5, "1deg-2.5deg"),
-    (2.5, 5.0, "2.5deg-5deg"),
-    (5.0, 7.5, "5deg-7.5deg"),
+    (0.0, 15.0, "0deg-15deg"),
+    (15.0, 30.0, "15deg-30deg"),
+    (30.0, 45.0, "30deg-45deg"),
+    (45.0, 60.0, "45deg-60deg"),
 ]
 
 # Number of environments per yaw range
-ENVS_PER_YAW_RANGE = 100
+ENVS_PER_YAW_RANGE = 500
 
 # Total environments for yaw mode
 YAW_MODE_TOTAL_ENVS = len(YAW_RANGES_DEG) * ENVS_PER_YAW_RANGE
@@ -522,52 +522,55 @@ class FixedAssetRotationWrapper(gym.Wrapper):
         return observations, info
 
 
-class FixedYawRotationWrapper(gym.Wrapper):
+class FixedYawObsNoiseWrapper(gym.Wrapper):
     """
-    Wrapper to rotate the fixed asset by predetermined yaw angles (Z-axis rotation).
+    Wrapper to override yaw observation noise with predetermined values.
     Used for yaw robustness evaluation.
+
+    This wrapper overrides the random Gaussian yaw noise sampled by EEPoseNoiseWrapper
+    with fixed, predetermined values for controlled evaluation of yaw robustness.
+
+    Note: This does NOT physically rotate the hole - it only affects what the policy
+    observes about the hole's yaw orientation.
     """
-    def __init__(self, env, yaw_assignments: torch.Tensor):
+    def __init__(self, env, yaw_noise_assignments: torch.Tensor):
         """
-        Initialize the fixed yaw rotation wrapper.
+        Initialize the fixed yaw observation noise wrapper.
 
         Args:
             env: Base environment to wrap
-            yaw_assignments: [num_envs] tensor with yaw angle in radians for each environment
-                            (positive = CCW when viewed from above, negative = CW)
+            yaw_noise_assignments: [num_envs] tensor with yaw observation noise in radians
+                                   for each environment (added to observed fixed asset yaw)
         """
         super().__init__(env)
-        self.yaw_assignments = yaw_assignments
+        self.yaw_noise_assignments = yaw_noise_assignments
+        self._init_wrapper()
 
-        import isaacsim.core.utils.torch as torch_utils
-        self.torch_utils = torch_utils
+    def _init_wrapper(self):
+        """Monkey-patch _reset_idx to override yaw noise after reset."""
+        if hasattr(self.unwrapped, '_reset_idx'):
+            self._original_reset_idx = self.unwrapped._reset_idx
+            self.unwrapped._reset_idx = self._wrapped_reset_idx
+        else:
+            raise RuntimeError(
+                "FixedYawObsNoiseWrapper requires unwrapped environment to have _reset_idx method. "
+                "Ensure EEPoseNoiseWrapper is applied before this wrapper."
+            )
 
-    def reset(self, **kwargs):
-        """Reset environment and apply yaw rotation to fixed asset."""
-        observations, info = super().reset(**kwargs)
+        # Verify that EEPoseNoiseWrapper has been applied (init_fixed_yaw_obs_noise should exist)
+        if not hasattr(self.unwrapped, 'init_fixed_yaw_obs_noise'):
+            raise RuntimeError(
+                "FixedYawObsNoiseWrapper requires init_fixed_yaw_obs_noise attribute. "
+                "Ensure EEPoseNoiseWrapper is applied with use_yaw_noise=True before this wrapper."
+            )
 
-        fixed_asset = self.unwrapped._fixed_asset
-        current_state = fixed_asset.data.root_state_w.clone()
+    def _wrapped_reset_idx(self, env_ids):
+        """Reset environment and override yaw noise with predetermined values."""
+        # Let the full chain run (including EEPoseNoiseWrapper sampling random noise)
+        self._original_reset_idx(env_ids)
 
-        # Z-axis unit vector for all environments
-        z_axis = torch.zeros((self.unwrapped.num_envs, 3), device=self.unwrapped.device)
-        z_axis[:, 2] = 1.0
-
-        # Create rotation quaternion from yaw angles about Z-axis
-        rotation_quat = self.torch_utils.quat_from_angle_axis(self.yaw_assignments, z_axis)
-
-        # Compose rotation with current orientation
-        current_quat = current_state[:, 3:7]
-        new_quat = self.torch_utils.quat_mul(rotation_quat, current_quat)
-        current_state[:, 3:7] = new_quat
-
-        # Write the rotated pose to simulation
-        env_ids = torch.arange(self.unwrapped.num_envs, device=self.unwrapped.device)
-        fixed_asset.write_root_pose_to_sim(current_state[:, 0:7], env_ids=env_ids)
-        fixed_asset.write_root_velocity_to_sim(current_state[:, 7:13], env_ids=env_ids)
-        fixed_asset.reset()
-
-        return observations, info
+        # Override the yaw noise with our predetermined values
+        self.unwrapped.init_fixed_yaw_obs_noise[env_ids] = self.yaw_noise_assignments[env_ids]
 
 
 class FixedGainWrapper(gym.Wrapper):
@@ -1413,10 +1416,10 @@ def setup_environment_once(
         print("  - FixedDynamicsWrapper for dynamics mode")
         env = FixedDynamicsWrapper(env, friction_assignments, mass_assignments)
 
-    # Generate yaw assignments for yaw mode
+    # Generate yaw observation noise assignments for yaw mode
     yaw_assignments = None
     if args.eval_mode == "yaw":
-        print("  Generating yaw assignments for yaw mode...")
+        print("  Generating yaw observation noise assignments for yaw mode...")
 
         base_yaw_assignments_list = []
         for min_deg, max_deg, range_name in YAW_RANGES_DEG:
@@ -1429,31 +1432,31 @@ def setup_environment_once(
 
             # Randomly assign sign (symmetric sampling)
             sign = (torch.rand(ENVS_PER_YAW_RANGE, device=env.device) > 0.5).float() * 2 - 1
-            yaw_angles = magnitude * sign
+            yaw_noise = magnitude * sign
 
-            print(f"    Yaw statistics for {range_name}:")
-            print(f"      mean={yaw_angles.mean().item()*180/3.14159265359:.4f}deg, "
-                  f"std={yaw_angles.std().item()*180/3.14159265359:.4f}deg, "
-                  f"min={yaw_angles.min().item()*180/3.14159265359:.4f}deg, "
-                  f"max={yaw_angles.max().item()*180/3.14159265359:.4f}deg")
+            print(f"    Yaw obs noise statistics for {range_name}:")
+            print(f"      mean={yaw_noise.mean().item()*180/3.14159265359:.4f}deg, "
+                  f"std={yaw_noise.std().item()*180/3.14159265359:.4f}deg, "
+                  f"min={yaw_noise.min().item()*180/3.14159265359:.4f}deg, "
+                  f"max={yaw_noise.max().item()*180/3.14159265359:.4f}deg")
 
-            base_yaw_assignments_list.append(yaw_angles)
+            base_yaw_assignments_list.append(yaw_noise)
 
         base_yaw_assignments = torch.cat(base_yaw_assignments_list, dim=0)  # [YAW_MODE_TOTAL_ENVS]
 
         # Replicate for all agents in parallel mode
         if parallel_mode:
             yaw_assignments = base_yaw_assignments.repeat(num_runs)
-            print(f"    Generated {yaw_assignments.shape[0]} yaw assignments "
+            print(f"    Generated {yaw_assignments.shape[0]} yaw obs noise assignments "
                   f"({len(YAW_RANGES_DEG)} ranges × {ENVS_PER_YAW_RANGE} envs × {num_runs} agents)")
         else:
             yaw_assignments = base_yaw_assignments
-            print(f"    Generated {yaw_assignments.shape[0]} yaw assignments "
+            print(f"    Generated {yaw_assignments.shape[0]} yaw obs noise assignments "
                   f"({len(YAW_RANGES_DEG)} ranges × {ENVS_PER_YAW_RANGE} envs)")
 
-        # Apply FixedYawRotationWrapper
-        print("  - FixedYawRotationWrapper for yaw mode")
-        env = FixedYawRotationWrapper(env, yaw_assignments)
+        # Apply FixedYawObsNoiseWrapper (overrides yaw observation noise, not physical rotation)
+        print("  - FixedYawObsNoiseWrapper for yaw mode (observation noise only)")
+        env = FixedYawObsNoiseWrapper(env, yaw_assignments)
 
     # Generate break force assignments for fragile mode
     break_force_assignments = None
@@ -2419,11 +2422,11 @@ def run_yaw_evaluation(
     Run yaw robustness evaluation with environments across yaw ranges.
 
     Args:
-        env: Environment instance (wrapped with metrics wrappers and FixedYawRotationWrapper)
+        env: Environment instance (wrapped with metrics wrappers and FixedYawObsNoiseWrapper)
         agent: Agent instance with loaded checkpoint
         configs: Configuration dictionary
         max_rollout_steps: Maximum steps per episode
-        yaw_assignments: [YAW_MODE_TOTAL_ENVS] tensor with yaw angle in radians for each environment
+        yaw_assignments: [YAW_MODE_TOTAL_ENVS] tensor with yaw observation noise in radians for each environment
         show_progress: Whether to show progress bar
         eval_seed: Seed for deterministic evaluation
 
