@@ -86,8 +86,9 @@ class EEPoseNoiseWrapper(gym.Wrapper):
             self.unwrapped.cfg.obs_rand, 'fixed_asset_yaw', 0.0523599
         )
 
-        # Initialize yaw observation noise tensor (per-env, sampled at reset)
-        self.init_fixed_yaw_obs_noise = torch.zeros(
+        # Initialize yaw observation noise tensor on unwrapped env (per-env, sampled at reset)
+        # Stored on unwrapped so other wrappers (e.g., FixedYawObsNoiseWrapper) can access it
+        self.unwrapped.init_fixed_yaw_obs_noise = torch.zeros(
             (self.num_envs,), dtype=torch.float32, device=self.device
         )
 
@@ -323,7 +324,7 @@ class EEPoseNoiseWrapper(gym.Wrapper):
 
         # Add noise if requested
         if noisy:
-            fixed_yaw = fixed_yaw + self.init_fixed_yaw_obs_noise
+            fixed_yaw = fixed_yaw + self.unwrapped.init_fixed_yaw_obs_noise
 
         # Get fingertip yaw (from upright reference frame, accounting for gripper pointing down)
         # The gripper is inverted (pointing down), so we need to unrotate by 180 degrees around X
@@ -463,7 +464,7 @@ class EEPoseNoiseWrapper(gym.Wrapper):
                 (num_reset_envs,), dtype=torch.float32, device=self.device
             )
             yaw_noise = yaw_noise * self.fixed_asset_yaw_noise_scale
-            self.init_fixed_yaw_obs_noise[env_ids] = yaw_noise
+            self.unwrapped.init_fixed_yaw_obs_noise[env_ids] = yaw_noise
 
             # Log clean rel_yaw stats for all envs on any reset
             # if num_reset_envs > 0:
