@@ -43,6 +43,7 @@ TAG_EVAL_NOISE = "eval_forge_noise" #"eval_noise"
 TAG_EVAL_DYNAMICS = "eval_dynamics"
 TAG_EVAL_GAIN = "eval_gain"
 TAG_EVAL_YAW = "eval_yaw"
+TAG_EVAL_FRAGILE = "eval_fragile"
 TAG_OLD_NOISE_EVAL = "old_noise_eval"
 
 # =============================================================================
@@ -775,13 +776,13 @@ def plot_grouped_bars(
 
                     # Determine label position (inside bar if fits, above otherwise)
                     space_inside = bar.get_height() - err_lo
-                    threshold = label_height_estimate + (2 if y_lim[1] >= 50 else 0.2)
+                    threshold = label_height_estimate + (8 if y_lim[1] >= 50 else 0.5)
 
                     if space_inside > threshold:
                         label_y = bar.get_height() - err_lo - (1 if y_lim[1] >= 50 else 0.1)
                         va = "top"
                     else:
-                        label_y = bar.get_height() + err_hi + (1 if y_lim[1] >= 50 else 0.1)
+                        label_y = bar.get_height() + err_hi + (3 if y_lim[1] >= 50 else 0.2)
                         va = "bottom"
 
                     ax.text(
@@ -1147,7 +1148,10 @@ def plot_multi_panel_grid(
 
             # Only show legend on first plot
             if idx == 0:
-                ax.legend(fontsize=FONT_LEGEND - 1, loc="upper right")
+                handles, labels = ax.get_legend_handles_labels()
+                # Strip "(1mm)" suffix from legend labels for cleaner display
+                labels = [l.replace("(1mm)", "").strip() for l in labels]
+                ax.legend(handles, labels, fontsize=FONT_LEGEND - 1, loc="upper right")
 
         # X-axis label only on bottom row
         if row == n_rows - 1:
