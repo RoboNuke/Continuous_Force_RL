@@ -61,17 +61,21 @@ COLORS = {
     # Base method names
     "Pose": "#2ca02c",           # Green
     "Hybrid-Basic": "#ff7f0e",   # Orange
+    "Hybrid": "#ff7f0e",   # Orange
     "MATCH": "#1f77b4",          # Blue
     "SWISH": "#1f77b4",          # Blue (alias)
     "LCLoP": "#1f77b4",          # Blue (alias)
 
     # 1mm noise variants
     "Pose(1mm)": "#2ca02c",
+    "Pose-1": "#2ca02c",
     "MATCH(1mm)": "#1f77b4",
     "Hybrid-Basic(1mm)": "#ff7f0e",
 
     # 2.5mm noise variants
     "Pose(2.5mm)": "#781fb4",    # Purple
+    "Pose-2.5": "#781fb4",    # Purple
+    "Pose-2.5mm": "#781fb4",    # Purple
     "SWISH(2.5mm)": "#b41f1f",   # Red
     "Hybrid-Basic(2.5mm)": "#b4aa1f",  # Yellow-green
 
@@ -101,16 +105,16 @@ NOISE_LEVEL_COLORS = {
 # DEFAULT PLOT STYLING
 # =============================================================================
 DEFAULT_DPI = 150
-DEFAULT_FIGSIZE = (6, 4.5)
+DEFAULT_FIGSIZE = (3.5, 2.6)
 DEFAULT_FIGSIZE_GRID_CELL = (4.25, 3)
 
 # Font sizes
 FONT_SUPTITLE = 16
 FONT_TITLE = 14
-FONT_AXIS_LABEL = 12
-FONT_TICK = 10
-FONT_LEGEND = 10
-FONT_BAR_LABEL = 7
+FONT_AXIS_LABEL = 10 #12
+FONT_TICK = 7 #10
+FONT_LEGEND = 7 #10
+FONT_BAR_LABEL = 6 #7
 FONT_NA = 12
 
 # Error bar defaults
@@ -123,7 +127,38 @@ HIGHLIGHT_COLOR = "gold"
 HIGHLIGHT_LINEWIDTH = 3
 
 # Bar plot defaults
-DEFAULT_GROUP_WIDTH = 0.8
+# DEFAULT_GROUP_WIDTH controls how much of each unit (0-1) the bars occupy
+# Gap between groups = 1.0 - DEFAULT_GROUP_WIDTH (e.g., 0.8 width = 0.2 gap)
+DEFAULT_GROUP_WIDTH = 0.9
+
+# Bar label positioning (space between label and bar/error bar)
+BAR_LABEL_OFFSET_ABOVE = 1.5  # Space above bar when label is on top (for y_lim >= 50)
+BAR_LABEL_OFFSET_ABOVE_SMALL = 0.2  # Space above bar when label is on top (for y_lim < 50)
+BAR_LABEL_OFFSET_INSIDE = 1  # Space inside bar when label fits inside (for y_lim >= 50)
+BAR_LABEL_OFFSET_INSIDE_SMALL = 0.1  # Space inside bar when label fits inside (for y_lim < 50)
+
+# Legend styling
+LEGEND_HANDLE_LENGTH = 1.9  # Width of color indicator in legend (default ~2.0)5
+
+# Spacing/padding defaults
+AXIS_LABEL_PAD_X = 1  # Padding between x-axis tick labels and axis label (default ~4-6)
+AXIS_LABEL_PAD_Y = 0  # Padding between y-axis tick labels and axis label (default ~4-6)
+TICK_PAD_X = 2  # Padding between x-axis tick marks and tick labels (default ~4)
+TICK_PAD_Y = 0  # Padding between y-axis tick marks and tick labels (default ~4)
+
+# Figure margins (for subplots_adjust)
+MARGIN_LEFT = 0.15
+MARGIN_RIGHT = 0.98
+MARGIN_BOTTOM = 0.15
+MARGIN_TOP = 0.92
+
+# Tight layout padding
+TIGHT_PAD = 0.5  # Overall padding (default 1.08)
+TIGHT_W_PAD = 0.5  # Width padding between subplots
+TIGHT_H_PAD = 0.5  # Height padding between subplots
+
+# Axis margins (space at edges of data)
+AXIS_MARGIN_X = 0.005  # Horizontal margin (default 0.05, set to 0 for no edge space)
 
 # =============================================================================
 # SHAPE ICON CONFIGURATION (for shape_comparison plots)
@@ -779,10 +814,12 @@ def plot_grouped_bars(
                     threshold = label_height_estimate + (8 if y_lim[1] >= 50 else 0.5)
 
                     if space_inside > threshold:
-                        label_y = bar.get_height() - err_lo - (1 if y_lim[1] >= 50 else 0.1)
+                        offset = BAR_LABEL_OFFSET_INSIDE if y_lim[1] >= 50 else BAR_LABEL_OFFSET_INSIDE_SMALL
+                        label_y = bar.get_height() - err_lo - offset
                         va = "top"
                     else:
-                        label_y = bar.get_height() + err_hi + (3 if y_lim[1] >= 50 else 0.2)
+                        offset = BAR_LABEL_OFFSET_ABOVE if y_lim[1] >= 50 else BAR_LABEL_OFFSET_ABOVE_SMALL
+                        label_y = bar.get_height() + err_hi + offset
                         va = "bottom"
 
                     ax.text(
@@ -879,18 +916,21 @@ def plot_rate_figure(
     )
 
     # Configure axes
-    ax.set_xlabel(x_label, fontsize=FONT_AXIS_LABEL)
-    ax.set_ylabel(y_label, fontsize=FONT_AXIS_LABEL)
+    ax.set_xlabel(x_label, fontsize=FONT_AXIS_LABEL, labelpad=AXIS_LABEL_PAD_X)
+    ax.set_ylabel(y_label, fontsize=FONT_AXIS_LABEL, labelpad=AXIS_LABEL_PAD_Y)
     ax.set_title(title, fontsize=FONT_TITLE)
     ax.set_xticks(x)
     ax.set_xticklabels(level_labels, fontsize=FONT_TICK)
     ax.set_ylim(y_lim)
     if y_ticks is not None:
         ax.set_yticks(y_ticks)
-    ax.tick_params(axis="y", labelsize=FONT_TICK)
-    ax.legend(fontsize=FONT_LEGEND, loc=legend_loc)
+    ax.tick_params(axis="x", labelsize=FONT_TICK, pad=TICK_PAD_X)
+    ax.tick_params(axis="y", labelsize=FONT_TICK, pad=TICK_PAD_Y)
+    ax.margins(x=AXIS_MARGIN_X)
+    ax.legend(fontsize=FONT_LEGEND, loc=legend_loc, handlelength=LEGEND_HANDLE_LENGTH)
 
-    plt.tight_layout()
+    plt.subplots_adjust(left=MARGIN_LEFT, right=MARGIN_RIGHT, bottom=MARGIN_BOTTOM, top=MARGIN_TOP)
+    plt.tight_layout(pad=TIGHT_PAD, w_pad=TIGHT_W_PAD, h_pad=TIGHT_H_PAD)
     return fig, ax
 
 
@@ -995,18 +1035,21 @@ def plot_rate_figure_by_method(
     )
 
     # Configure axes
-    ax.set_xlabel(x_label, fontsize=FONT_AXIS_LABEL)
-    ax.set_ylabel(y_label, fontsize=FONT_AXIS_LABEL)
+    ax.set_xlabel(x_label, fontsize=FONT_AXIS_LABEL, labelpad=AXIS_LABEL_PAD_X)
+    ax.set_ylabel(y_label, fontsize=FONT_AXIS_LABEL, labelpad=AXIS_LABEL_PAD_Y)
     ax.set_title(title, fontsize=FONT_TITLE)
     ax.set_xticks(x)
     ax.set_xticklabels(method_names, fontsize=FONT_TICK)
     ax.set_ylim(y_lim)
     if y_ticks is not None:
         ax.set_yticks(y_ticks)
-    ax.tick_params(axis="y", labelsize=FONT_TICK)
-    ax.legend(fontsize=FONT_LEGEND, loc=legend_loc)
+    ax.tick_params(axis="x", labelsize=FONT_TICK, pad=TICK_PAD_X)
+    ax.tick_params(axis="y", labelsize=FONT_TICK, pad=TICK_PAD_Y)
+    ax.margins(x=AXIS_MARGIN_X)
+    ax.legend(fontsize=FONT_LEGEND, loc=legend_loc, handlelength=LEGEND_HANDLE_LENGTH)
 
-    plt.tight_layout()
+    plt.subplots_adjust(left=MARGIN_LEFT, right=MARGIN_RIGHT, bottom=MARGIN_BOTTOM, top=MARGIN_TOP)
+    plt.tight_layout(pad=TIGHT_PAD, w_pad=TIGHT_W_PAD, h_pad=TIGHT_H_PAD)
     return fig, ax
 
 
@@ -1144,22 +1187,24 @@ def plot_multi_panel_grid(
             ax.set_ylim(y_lim)
             if y_ticks is not None:
                 ax.set_yticks(y_ticks)
-            ax.tick_params(axis="y", labelsize=FONT_TICK)
+            ax.tick_params(axis="x", labelsize=FONT_TICK, pad=TICK_PAD_X)
+            ax.tick_params(axis="y", labelsize=FONT_TICK, pad=TICK_PAD_Y)
+            ax.margins(x=AXIS_MARGIN_X)
 
             # Only show legend on first plot
             if idx == 0:
                 handles, labels = ax.get_legend_handles_labels()
                 # Strip "(1mm)" suffix from legend labels for cleaner display
                 labels = [l.replace("(1mm)", "").strip() for l in labels]
-                ax.legend(handles, labels, fontsize=FONT_LEGEND - 1, loc="upper right")
+                ax.legend(handles, labels, fontsize=FONT_LEGEND - 1, loc="upper right", handlelength=LEGEND_HANDLE_LENGTH)
 
         # X-axis label only on bottom row
         if row == n_rows - 1:
-            ax.set_xlabel(x_label, fontsize=FONT_AXIS_LABEL)
+            ax.set_xlabel(x_label, fontsize=FONT_AXIS_LABEL, labelpad=AXIS_LABEL_PAD_X)
 
         # Y-axis label only on left column
         if col == 0:
-            ax.set_ylabel(y_label, fontsize=FONT_AXIS_LABEL)
+            ax.set_ylabel(y_label, fontsize=FONT_AXIS_LABEL, labelpad=AXIS_LABEL_PAD_Y)
 
         # Highlight border
         if highlight_panel is not None and panel_key == highlight_panel:
@@ -1173,7 +1218,7 @@ def plot_multi_panel_grid(
         col = idx % n_cols
         axes[row, col].axis("off")
 
-    plt.tight_layout(rect=[0, 0, 1, 0.95] if suptitle else None)
+    plt.tight_layout(pad=TIGHT_PAD, w_pad=TIGHT_W_PAD, h_pad=TIGHT_H_PAD, rect=[0, 0, 1, 0.95] if suptitle else None)
 
     # Draw shape icons if requested
     if show_shape_icons:
@@ -1281,20 +1326,23 @@ def plot_training_curves(
                     fontsize=9, color="black", ha="left", va="bottom")
 
     # Configure axes
-    ax.set_xlabel(x_label, fontsize=FONT_AXIS_LABEL)
-    ax.set_ylabel(y_label, fontsize=FONT_AXIS_LABEL)
+    ax.set_xlabel(x_label, fontsize=FONT_AXIS_LABEL, labelpad=AXIS_LABEL_PAD_X)
+    ax.set_ylabel(y_label, fontsize=FONT_AXIS_LABEL, labelpad=AXIS_LABEL_PAD_Y)
     ax.set_title(title, fontsize=FONT_TITLE)
     if x_lim is not None:
         ax.set_xlim(x_lim)
     ax.set_ylim(y_lim)
     if y_ticks is not None:
         ax.set_yticks(y_ticks)
-    ax.tick_params(axis="both", labelsize=FONT_TICK)
+    ax.tick_params(axis="x", labelsize=FONT_TICK, pad=TICK_PAD_X)
+    ax.tick_params(axis="y", labelsize=FONT_TICK, pad=TICK_PAD_Y)
+    ax.margins(x=AXIS_MARGIN_X)
     ax.ticklabel_format(axis="x", style="scientific", scilimits=(6, 6))
-    ax.legend(fontsize=FONT_LEGEND, loc=legend_loc)
+    ax.legend(fontsize=FONT_LEGEND, loc=legend_loc, handlelength=LEGEND_HANDLE_LENGTH)
     ax.grid(True, alpha=0.3)
 
-    plt.tight_layout()
+    plt.subplots_adjust(left=MARGIN_LEFT, right=MARGIN_RIGHT, bottom=MARGIN_BOTTOM, top=MARGIN_TOP)
+    plt.tight_layout(pad=TIGHT_PAD, w_pad=TIGHT_W_PAD, h_pad=TIGHT_H_PAD)
 
     return fig, ax, threshold_crossings
 
