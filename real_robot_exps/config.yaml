@@ -1,0 +1,46 @@
+# Real Robot Evaluation Configuration
+# Training-specific parameters (gains, action bounds, EMA factor, obs_order) are loaded
+# automatically from WandB training config - do NOT duplicate them here.
+
+robot:
+  control_rate_hz: 15.0          # Must match training policy_hz
+
+task:
+  # Fixed asset position (hole position in world frame, meters)
+  # This is "fixed_pos" in sim - used for OBSERVATIONS (fingertip_pos_rel_fixed = ee_pos - this)
+  fixed_asset_position: [0.0, 0.0, 0.0]
+  fixed_asset_orientation_quat: [1.0, 0.0, 0.0, 0.0]  # [w, x, y, z]
+
+  # Target peg base position (where peg base should be when fully inserted)
+  # This is "target_held_base_pos" in sim - used for SUCCESS/ENGAGEMENT DETECTION
+  # May differ from fixed_asset_position depending on geometry
+  target_peg_base_position: [0.0, 0.0, 0.0]
+
+  # Offset from EE (fingertip midpoint) to peg base (grasped object root)
+  # Needed to compute peg_base_pos = ee_pos + this offset for detection
+  # Must be measured for your specific peg + gripper setup
+  ee_to_peg_base_offset: [0.0, 0.0, -0.05]  # Example: peg extends 50mm below EE
+
+  # Detection thresholds (matching IsaacLab factory env logic exactly)
+  # Success: xy_dist < xy_centering_threshold AND z_disp < hole_height * success_threshold
+  # Engagement: xy_dist < xy_centering_threshold AND z_disp < hole_height * engage_threshold
+  xy_centering_threshold: 0.0025   # 2.5mm - HARDCODED in IsaacLab _get_curr_successes()
+  hole_height: 0.025               # 25mm - asset-specific, used to scale Z thresholds
+  success_threshold: 0.04          # Multiplied by hole_height -> 1mm Z threshold
+  engage_threshold: 0.9            # Multiplied by hole_height -> 22.5mm Z threshold
+
+  # Break detection (matches FragileObjectWrapper)
+  break_force_threshold: 15.0      # N - L2 norm of force (Fx,Fy,Fz) >= this triggers break
+
+  # Episode parameters
+  episode_timeout_steps: 150       # Max steps per episode
+  terminate_on_success: true       # True for real robot (no point continuing), False in sim
+
+ros2:
+  joint_states_topic: "/joint_states"
+  ft_sensor_topic: "/ft_sensor/data"
+  # Control mode TBD - stubs for all three options:
+  effort_commands_topic: "/effort_controller/commands"
+  cartesian_impedance_topic: "/cartesian_impedance_controller/commands"
+  position_commands_topic: "/joint_trajectory_controller/joint_trajectory"
+  control_mode: "effort"   # "effort", "cartesian_impedance", or "position"
