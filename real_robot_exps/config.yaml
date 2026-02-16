@@ -3,7 +3,31 @@
 # automatically from WandB training config - do NOT duplicate them here.
 
 robot:
-  control_rate_hz: 15.0          # Must match training policy_hz
+  ip: "192.168.1.11"
+  use_mock: true              # Set false for real robot
+  control_rate_hz: 15.0       # Must match training policy_hz
+  reset_duration_sec: 3.0     # Duration for Cartesian reset motion
+
+  # Standard Franka Hand NE_T_EE: 45deg Z rotation + 103.4mm Z offset (flange -> fingertip midpoint)
+  # Column-major 4x4 homogeneous transform [R|t; 0 0 0 1]
+  NE_T_EE: [
+    0.7071, -0.7071, 0.0, 0.0,
+    0.7071,  0.7071, 0.0, 0.0,
+    0.0,     0.0,    1.0, 0.0,
+    0.0,     0.0,    0.1034, 1.0
+  ]
+
+  # Stiffness frame = EE frame (identity) - forces measured at fingertip
+  EE_T_K: [
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    0.0, 0.0, 0.0, 1.0
+  ]
+
+  # F/T EMA low-pass filter coefficient (applied at 1kHz inside read_state)
+  # alpha=0.2 at 1kHz ~ 32Hz cutoff frequency (-3dB)
+  ft_ema_alpha: 0.2
 
 task:
   # Fixed asset position (hole position in world frame, meters)
@@ -36,11 +60,18 @@ task:
   episode_timeout_steps: 150       # Max steps per episode
   terminate_on_success: true       # True for real robot (no point continuing), False in sim
 
-ros2:
-  joint_states_topic: "/joint_states"
-  ft_sensor_topic: "/ft_sensor/data"
-  # Control mode TBD - stubs for all three options:
-  effort_commands_topic: "/effort_controller/commands"
-  cartesian_impedance_topic: "/cartesian_impedance_controller/commands"
-  position_commands_topic: "/joint_trajectory_controller/joint_trajectory"
-  control_mode: "effort"   # "effort", "cartesian_impedance", or "position"
+noise:
+  # When true, use noise values defined below instead of WandB training config.
+  # When false, load noise from WandB training config (matching sim exactly).
+  use_rr_noise: false
+
+  # Goal observation noise (Gaussian, sampled once per episode)
+  goal_pos_noise: [0.001, 0.001, 0.001]   # meters, std per axis
+  goal_yaw_noise: 0.0524                    # radians, std (~3 degrees)
+  use_yaw_noise: false
+
+  # Start pose (offset from fixed_asset_position)
+  hand_init_pos: [0.0, 0.0, 0.047]         # meters, nominal EE offset above hole
+  hand_init_pos_noise: [0.02, 0.02, 0.01]  # meters, uniform +/- range per axis
+  hand_init_orn: [3.1416, 0.0, 0.0]        # RPY radians, nominal orientation (pointing down)
+  hand_init_orn_noise: [0.0, 0.0, 0.785]   # RPY radians, uniform +/- range (~45 deg yaw)

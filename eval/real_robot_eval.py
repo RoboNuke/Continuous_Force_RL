@@ -2,7 +2,7 @@
 Real Robot Evaluation Script
 
 Evaluates trained RL policies on a physical Franka Panda for peg-in-hole insertion.
-No Isaac Sim dependency - uses ROS2 robot interface and pure PyTorch control.
+No Isaac Sim dependency - uses pylibfranka robot interface and pure PyTorch control.
 
 Usage:
     python eval/real_robot_eval.py --tag "MATCH:2024-01-15_10:00" --num_episodes 20
@@ -16,6 +16,7 @@ import time
 import shutil
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import torch
 import yaml
 
@@ -23,7 +24,7 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.SimBa import SimBaNet
-from real_robot_exps.robot_interface import FrankaROS2Interface
+from real_robot_exps.robot_interface import FrankaInterface, make_ee_target_pose
 from real_robot_exps.observation_builder import ObservationBuilder, ObservationNormalizer
 from real_robot_exps.hybrid_controller import RealRobotController
 
@@ -395,13 +396,19 @@ def compute_real_robot_metrics(episode_results: List[dict]) -> Dict[str, float]:
 # ============================================================================
 
 def run_episode(
-    robot: FrankaROS2Interface,
+    robot: FrankaInterface,
     policy_net: SimBaNet,
     normalizer: ObservationNormalizer,
     model_info: dict,
     obs_builder: ObservationBuilder,
     controller: RealRobotController,
     real_config: dict,
+    goal_pos_noise_scale: torch.Tensor,
+    goal_yaw_noise_scale: float,
+    hand_init_pos: torch.Tensor,
+    hand_init_pos_noise: torch.Tensor,
+    hand_init_orn: list,
+    hand_init_orn_noise: list,
     device: str = "cpu",
 ) -> dict:
     """Run a single evaluation episode on the real robot.
@@ -414,6 +421,12 @@ def run_episode(
         obs_builder: Observation builder.
         controller: Hybrid/pose controller.
         real_config: Real robot config dict.
+        goal_pos_noise_scale: [3] per-episode goal position noise std.
+        goal_yaw_noise_scale: Per-episode goal yaw noise std (rad).
+        hand_init_pos: [3] nominal EE start offset relative to fixed_asset_position.
+        hand_init_pos_noise: [3] uniform noise range for start position.
+        hand_init_orn: [3] nominal EE start orientation (RPY).
+        hand_init_orn_noise: [3] uniform noise range for start orientation (RPY).
         device: Torch device.
 
     Returns:
@@ -430,13 +443,32 @@ def run_episode(
     break_force_threshold = task_cfg['break_force_threshold']
     max_steps = task_cfg['episode_timeout_steps']
     terminate_on_success = task_cfg['terminate_on_success']
-    control_rate_hz = real_config['robot']['control_rate_hz']
-    dt = 1.0 / control_rate_hz
 
-    # Reset
-    robot.reset_to_start_pose()
+    # --- Per-episode randomization ---
+
+    # 1. Sample per-episode goal noise (obs + action frame)
+    pos_noise = torch.randn(3, device=device) * goal_pos_noise_scale
+    noisy_goal = goal_position + pos_noise
+
+    yaw_offset = 0.0
+    if goal_yaw_noise_scale > 0:
+        yaw_offset = (torch.randn(1, device=device) * goal_yaw_noise_scale).item()
+
+    # 2. Sample per-episode start pose noise (matching IsaacLab's uniform sampling)
+    start_pos_noise = (2 * torch.rand(3, device=device) - 1) * hand_init_pos_noise
+    start_yaw_noise = (2 * torch.rand(1, device=device).item() - 1) * hand_init_orn_noise[2]
+
+    # 3. Compute target EE start pose in world frame
+    # hand_init_pos is relative to fixed_asset_position (hole tip)
+    target_ee_pos = goal_position + hand_init_pos + start_pos_noise
+    target_rpy = [hand_init_orn[0], hand_init_orn[1], hand_init_orn[2] + start_yaw_noise]
+    target_pose = make_ee_target_pose(target_ee_pos.cpu().numpy(), np.array(target_rpy))
+
+    # 4. Reset robot to start pose
+    robot.reset_to_start_pose(target_pose)
+
     ee_pos = robot.get_ee_position()
-    controller.reset(ee_pos, goal_position)
+    controller.reset(ee_pos, noisy_goal)
 
     prev_actions = torch.zeros(model_info['action_dim'], device=device)
 
@@ -455,13 +487,12 @@ def run_episode(
     contact_force_threshold = obs_builder.contact_force_threshold
 
     for step in range(max_steps):
-        step_start = time.time()
-
-        # Safety check
+        # read_state runs 1kHz loop for ~67ms, handles timing
+        robot.read_state()
         robot.check_safety()
 
-        # Build observation
-        obs = obs_builder.build_observation(robot, goal_position, prev_actions)
+        # Build observation (uses noisy_goal for obs frame, yaw_offset for yaw noise)
+        obs = obs_builder.build_observation(robot, noisy_goal, prev_actions, fixed_yaw_offset=yaw_offset)
 
         # Get action
         action = get_deterministic_action(policy_net, normalizer, obs, model_info)
@@ -477,33 +508,15 @@ def run_episode(
         jacobian = robot.get_jacobian()
         mass_matrix = robot.get_mass_matrix()
 
-        # Compute control
+        # Compute control (action frame uses noisy goal)
         ctrl_output = controller.compute_action(
             action, ee_pos, ee_quat, ee_linvel, ee_angvel,
             force_torque, joint_pos, joint_vel, jacobian, mass_matrix,
-            goal_position,
+            noisy_goal,
         )
 
-        # Send command based on control mode
-        robot_control_mode = real_config['ros2']['control_mode']
-        if robot_control_mode == "effort":
-            # Append zero gripper torques to get [9] tensor
-            full_torques = torch.zeros(9, device=device)
-            full_torques[:7] = ctrl_output['joint_torques']
-            robot.send_joint_torques(full_torques)
-        elif robot_control_mode == "cartesian_impedance":
-            robot.send_cartesian_impedance(
-                ctrl_output['target_pos'],
-                ctrl_output['target_quat'],
-                ctrl_output['target_force'],
-                stiffness=controller.task_prop_gains,
-                damping=controller.task_deriv_gains,
-            )
-        elif robot_control_mode == "position":
-            # Would need IK here - not implemented
-            raise NotImplementedError("Position control mode requires IK solver")
-        else:
-            raise ValueError(f"Unknown control mode: {robot_control_mode}")
+        # Direct torque command
+        robot.send_joint_torques(ctrl_output['joint_torques'])
 
         # Update prev_actions for next observation
         prev_actions = ctrl_output['ema_actions']
@@ -536,7 +549,7 @@ def run_episode(
 
         # ---- Check termination conditions ----
 
-        # Success check
+        # Success check (uses TRUE target position, not noisy goal)
         if not succeeded:
             is_success = check_success(
                 ee_pos, ee_to_peg_base_offset, target_peg_base_pos,
@@ -557,12 +570,6 @@ def run_episode(
                 termination_step = step
                 print(f"    BREAK at step {step} (force={force_magnitude:.2f}N)")
                 break
-
-        # Rate limiting
-        elapsed = time.time() - step_start
-        sleep_time = dt - elapsed
-        if sleep_time > 0:
-            time.sleep(sleep_time)
 
     episode_length = step + 1
 
@@ -656,6 +663,43 @@ def main():
     tanh_scale = getattr(ft_cfg, 'tanh_scale', 0.03)
     contact_threshold = getattr(ft_cfg, 'contact_force_threshold', 1.5)
 
+    # Per-episode noise config: real robot override or WandB training config
+    noise_cfg = real_config.get('noise', {})
+    use_rr_noise = noise_cfg.get('use_rr_noise', False)
+
+    if use_rr_noise:
+        # Load ALL noise values from real robot config (fail-fast if missing)
+        print("[main] Using REAL ROBOT noise config (noise.use_rr_noise=true)")
+        goal_pos_noise_scale = torch.tensor(noise_cfg['goal_pos_noise'], device=args.device, dtype=torch.float32)
+        use_yaw_noise = noise_cfg['use_yaw_noise']
+        goal_yaw_noise_scale = noise_cfg['goal_yaw_noise'] if use_yaw_noise else 0.0
+        hand_init_pos = torch.tensor(noise_cfg['hand_init_pos'], device=args.device, dtype=torch.float32)
+        hand_init_pos_noise = torch.tensor(noise_cfg['hand_init_pos_noise'], device=args.device, dtype=torch.float32)
+        hand_init_orn = list(noise_cfg['hand_init_orn'])
+        hand_init_orn_noise = list(noise_cfg['hand_init_orn_noise'])
+    else:
+        # Load noise from WandB training config (matching sim exactly)
+        print("[main] Using WANDB training noise config (noise.use_rr_noise=false)")
+        obs_rand = configs['environment'].obs_rand
+        goal_pos_noise_scale = torch.tensor(obs_rand.fixed_asset_pos, device=args.device, dtype=torch.float32)
+        use_yaw_noise = hasattr(obs_rand, 'use_yaw_noise') and obs_rand.use_yaw_noise
+        goal_yaw_noise_scale = obs_rand.fixed_asset_yaw if use_yaw_noise else 0.0
+
+        # Get task config for start pose params (field is 'task' on ExtendedFactoryPegEnvCfg)
+        cfg_task = getattr(configs['environment'], 'task', None) or configs['environment']
+        hand_init_pos = torch.tensor(getattr(cfg_task, 'hand_init_pos', [0.0, 0.0, 0.047]),
+                                     device=args.device, dtype=torch.float32)
+        hand_init_pos_noise = torch.tensor(getattr(cfg_task, 'hand_init_pos_noise', [0.02, 0.02, 0.01]),
+                                           device=args.device, dtype=torch.float32)
+        hand_init_orn = list(getattr(cfg_task, 'hand_init_orn', [3.1416, 0.0, 0.0]))
+        hand_init_orn_noise = list(getattr(cfg_task, 'hand_init_orn_noise', [0.0, 0.0, 0.785]))
+
+    print(f"[main] goal_pos_noise_scale={goal_pos_noise_scale.tolist()}, "
+          f"goal_yaw_noise_scale={goal_yaw_noise_scale}")
+    print(f"[main] hand_init_pos={hand_init_pos.tolist()}, "
+          f"hand_init_pos_noise={hand_init_pos_noise.tolist()}")
+    print(f"[main] hand_init_orn={hand_init_orn}, hand_init_orn_noise={hand_init_orn_noise}")
+
     # 6. Initialize observation builder
     obs_builder = ObservationBuilder(
         obs_order=obs_order,
@@ -668,7 +712,7 @@ def main():
 
     # 7. Initialize robot interface
     print("\nInitializing robot interface...")
-    robot = FrankaROS2Interface(real_config, device=args.device)
+    robot = FrankaInterface(real_config, device=args.device)
 
     # 8. Initialize controller
     print("\nInitializing controller...")
@@ -705,7 +749,11 @@ def main():
 
                 result = run_episode(
                     robot, policy_net, normalizer, model_info,
-                    obs_builder, controller, real_config, args.device,
+                    obs_builder, controller, real_config,
+                    goal_pos_noise_scale, goal_yaw_noise_scale,
+                    hand_init_pos, hand_init_pos_noise,
+                    hand_init_orn, hand_init_orn_noise,
+                    args.device,
                 )
 
                 outcome = "SUCCESS" if result['succeeded'] and not result['terminated'] else \

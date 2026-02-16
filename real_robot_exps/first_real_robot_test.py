@@ -1,0 +1,484 @@
+"""
+First Real Robot Test — Safe, interactive validation of FrankaInterface on real FR3.
+
+Runs 5 sequential phases, printing all values for manual inspection.
+Waits for Enter between phases. Robot holds zero torques throughout.
+
+Usage:
+    python real_robot_exps/first_real_robot_test.py
+    python real_robot_exps/first_real_robot_test.py --config real_robot_exps/config.yaml
+"""
+
+import argparse
+import math
+import os
+import sys
+import time
+
+import numpy as np
+import torch
+import yaml
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from real_robot_exps.robot_interface import FrankaInterface, make_ee_target_pose, SafetyViolation
+
+
+def wait_for_enter(msg: str = "Press Enter to continue to next phase..."):
+    """Block until user presses Enter."""
+    input(f"\n>>> {msg}\n")
+
+
+def print_separator(phase: int, title: str):
+    print(f"\n{'=' * 70}")
+    print(f"  PHASE {phase}: {title}")
+    print(f"{'=' * 70}\n")
+
+
+def phase1_connect_and_read(config: dict):
+    """Phase 1: Connect to robot, read raw state (no motion)."""
+    print_separator(1, "CONNECT & READ RAW STATE (no motion)")
+
+    robot_cfg = config['robot']
+    ip = robot_cfg['ip']
+
+    # Import real pylibfranka (never mock for this test)
+    import pylibfranka
+    print(f"Connecting to robot at {ip}...")
+    raw_robot = pylibfranka.Robot(ip)
+
+    # Set frames
+    NE_T_EE = robot_cfg['NE_T_EE']
+    EE_T_K = robot_cfg['EE_T_K']
+    raw_robot.set_EE(NE_T_EE)
+    raw_robot.set_K(EE_T_K)
+    print("NE_T_EE and EE_T_K set.")
+
+    # Read raw state (outside control loop)
+    state = raw_robot.read_once()
+
+    print("\n--- Raw O_T_EE (column-major, 16 elements) ---")
+    T = state.O_T_EE
+    for row in range(4):
+        cols = [T[row + col * 4] for col in range(4)]
+        print(f"  [{cols[0]:+.6f}  {cols[1]:+.6f}  {cols[2]:+.6f}  {cols[3]:+.6f}]")
+
+    print(f"\n--- Raw joint positions q (7) ---")
+    print(f"  {[f'{v:+.4f}' for v in state.q]}")
+
+    print(f"\n--- Raw joint velocities dq (7) ---")
+    print(f"  {[f'{v:+.6f}' for v in state.dq]}")
+
+    print(f"\n--- Raw O_F_ext_hat_K (6) ---")
+    print(f"  {[f'{v:+.4f}' for v in state.O_F_ext_hat_K]}")
+
+    # Extract EE position
+    ee_pos = [T[12], T[13], T[14]]
+    print(f"\n--- EE position from O_T_EE[12:15] ---")
+    print(f"  x={ee_pos[0]:.4f}m, y={ee_pos[1]:.4f}m, z={ee_pos[2]:.4f}m")
+
+    # Sanity check: is position in reasonable workspace?
+    x, y, z = ee_pos
+    checks = []
+    checks.append(("x in [0.1, 0.8]", 0.1 <= x <= 0.8))
+    checks.append(("y in [-0.5, 0.5]", -0.5 <= y <= 0.5))
+    checks.append(("z in [0.0, 0.8]", 0.0 <= z <= 0.8))
+
+    print("\n--- Workspace sanity checks ---")
+    all_ok = True
+    for name, ok in checks:
+        status = "PASS" if ok else "FAIL"
+        if not ok:
+            all_ok = False
+        print(f"  {status}: {name} (value: {eval(name[0])})")
+
+    if not all_ok:
+        print("\n  WARNING: EE position outside expected workspace!")
+        print("  Visually confirm the robot is in a safe configuration before continuing.")
+
+    print("\n  MANUAL CHECK: Does the printed EE position match where the")
+    print("  fingertip midpoint physically is? Measure with a ruler if unsure.")
+
+    raw_robot.stop()
+    return ee_pos
+
+
+def phase2_frame_validation(config: dict):
+    """Phase 2: Validate frame setup and quaternion extraction."""
+    print_separator(2, "FRAME VALIDATION")
+
+    # Force use_mock=False for real robot
+    test_config = {**config, 'robot': {**config['robot'], 'use_mock': False}}
+    robot = FrankaInterface(test_config, device='cpu')
+
+    # We need a state to validate frames — do a minimal torque control start
+    # Just one readOnce/writeOnce to get state
+    import pylibfranka
+    raw_robot = pylibfranka.Robot(config['robot']['ip'])
+    raw_robot.set_EE(config['robot']['NE_T_EE'])
+    raw_robot.set_K(config['robot']['EE_T_K'])
+    state = raw_robot.read_once()
+
+    T = np.array(state.O_T_EE)
+
+    print("--- NE_T_EE (as set) ---")
+    ne = config['robot']['NE_T_EE']
+    for row in range(4):
+        cols = [ne[row + col * 4] for col in range(4)]
+        print(f"  [{cols[0]:+.6f}  {cols[1]:+.6f}  {cols[2]:+.6f}  {cols[3]:+.6f}]")
+
+    print("\n--- EE_T_K (as set) ---")
+    ek = config['robot']['EE_T_K']
+    for row in range(4):
+        cols = [ek[row + col * 4] for col in range(4)]
+        print(f"  [{cols[0]:+.6f}  {cols[1]:+.6f}  {cols[2]:+.6f}  {cols[3]:+.6f}]")
+
+    print(f"\n--- EE position from O_T_EE ---")
+    pos = [T[12], T[13], T[14]]
+    print(f"  position: [{pos[0]:.6f}, {pos[1]:.6f}, {pos[2]:.6f}]")
+
+    print(f"\n--- Rotation matrix from O_T_EE (column-major) ---")
+    R = np.array([
+        [T[0], T[4], T[8]],
+        [T[1], T[5], T[9]],
+        [T[2], T[6], T[10]],
+    ])
+    for row in range(3):
+        print(f"  [{R[row, 0]:+.6f}  {R[row, 1]:+.6f}  {R[row, 2]:+.6f}]")
+
+    # Check rotation matrix validity
+    det = np.linalg.det(R)
+    RtR = R.T @ R
+    ident_err = np.max(np.abs(RtR - np.eye(3)))
+    print(f"\n  det(R) = {det:.6f} (expected ~1.0)")
+    print(f"  max|R^T R - I| = {ident_err:.8f} (expected ~0.0)")
+    print(f"  {'PASS' if abs(det - 1.0) < 0.01 and ident_err < 0.01 else 'FAIL'}: valid rotation matrix")
+
+    # Quaternion via our conversion
+    R_torch = torch.tensor(R, dtype=torch.float32)
+    from real_robot_exps.robot_interface import _rotation_matrix_to_quat_wxyz
+    quat = _rotation_matrix_to_quat_wxyz(R_torch)
+    q_norm = torch.norm(quat).item()
+    print(f"\n--- Quaternion (w,x,y,z) ---")
+    print(f"  {quat.tolist()}")
+    print(f"  norm = {q_norm:.6f}")
+    print(f"  {'PASS' if abs(q_norm - 1.0) < 1e-5 else 'FAIL'}: unit quaternion")
+
+    # Extract Euler angles for interpretability
+    w, x, y, z = quat.tolist()
+    # Roll (X), Pitch (Y), Yaw (Z) from quaternion
+    sinr = 2 * (w * x + y * z)
+    cosr = 1 - 2 * (x * x + y * y)
+    roll = math.atan2(sinr, cosr)
+    sinp = 2 * (w * y - z * x)
+    sinp = max(-1.0, min(1.0, sinp))
+    pitch = math.asin(sinp)
+    siny = 2 * (w * z + x * y)
+    cosy = 1 - 2 * (y * y + z * z)
+    yaw = math.atan2(siny, cosy)
+
+    print(f"\n--- Euler angles (XYZ intrinsic) ---")
+    print(f"  roll  = {roll:.4f} rad ({math.degrees(roll):.2f} deg)")
+    print(f"  pitch = {pitch:.4f} rad ({math.degrees(pitch):.2f} deg)")
+    print(f"  yaw   = {yaw:.4f} rad ({math.degrees(yaw):.2f} deg)")
+    print(f"\n  For peg-in-hole, expect roll ~pi (~180 deg), pitch ~0, yaw varies.")
+
+    raw_robot.stop()
+
+
+def phase3_torque_control_read_state(config: dict):
+    """Phase 3: Start torque control, run read_state with zero torques, check timing."""
+    print_separator(3, "TORQUE CONTROL + READ_STATE (zero torques)")
+
+    test_config = {**config, 'robot': {**config['robot'], 'use_mock': False}}
+    robot = FrankaInterface(test_config, device='cpu')
+
+    # Start torque control manually (bypass reset_to_start_pose to avoid motion)
+    import pylibfranka
+    # We need to access the internal robot to start torque control directly
+    robot._ctrl = robot._robot.start_torque_control()
+    # Do one readOnce/writeOnce to initialize
+    state, _ = robot._ctrl.readOnce()
+    robot._ctrl.writeOnce(robot._Torques([0.0] * 7))
+    robot._parse_state(state)
+    robot._state_valid = True
+    robot._ft_ema = np.array(state.O_F_ext_hat_K)  # initialize EMA to current reading
+
+    n_iters = 5
+    print(f"Running {n_iters} read_state() iterations with zero torques...\n")
+
+    timings = []
+    for i in range(n_iters):
+        t0 = time.time()
+        robot.read_state()
+        dt = time.time() - t0
+        timings.append(dt)
+
+        print(f"--- Iteration {i+1}/{n_iters} (dt={dt*1000:.1f}ms) ---")
+        print(f"  ee_pos:     {robot.get_ee_position().tolist()}")
+        print(f"  ee_quat:    {[f'{v:.4f}' for v in robot.get_ee_orientation().tolist()]}")
+        print(f"  ee_linvel:  {[f'{v:.6f}' for v in robot.get_ee_linear_velocity().tolist()]}")
+        print(f"  ee_angvel:  {[f'{v:.6f}' for v in robot.get_ee_angular_velocity().tolist()]}")
+        print(f"  force_torque: {[f'{v:.4f}' for v in robot.get_force_torque().tolist()]}")
+        print(f"  joint_pos:  {[f'{v:.4f}' for v in robot.get_joint_positions().tolist()]}")
+        print(f"  joint_vel:  {[f'{v:.6f}' for v in robot.get_joint_velocities().tolist()]}")
+        print(f"  joint_torq: {[f'{v:.4f}' for v in robot.get_joint_torques().tolist()]}")
+
+        J = robot.get_jacobian()
+        M = robot.get_mass_matrix()
+        print(f"  jacobian shape: {J.shape}")
+        print(f"  mass_matrix shape: {M.shape}")
+
+        # Mass matrix symmetry check
+        sym_err = torch.max(torch.abs(M - M.T)).item()
+        print(f"  mass_matrix symmetry error: {sym_err:.8f} {'PASS' if sym_err < 0.01 else 'FAIL'}")
+
+        # Verify J @ dq matches ee velocities
+        dq = robot.get_joint_velocities()
+        ee_vel_from_J = J @ dq
+        ee_linvel_from_J = ee_vel_from_J[:3]
+        ee_angvel_from_J = ee_vel_from_J[3:]
+        linvel_err = torch.max(torch.abs(ee_linvel_from_J - robot.get_ee_linear_velocity())).item()
+        angvel_err = torch.max(torch.abs(ee_angvel_from_J - robot.get_ee_angular_velocity())).item()
+        print(f"  J@dq vs ee_linvel error: {linvel_err:.8f} {'PASS' if linvel_err < 1e-6 else 'FAIL'}")
+        print(f"  J@dq vs ee_angvel error: {angvel_err:.8f} {'PASS' if angvel_err < 1e-6 else 'FAIL'}")
+        print()
+
+    # Safety check
+    try:
+        robot.check_safety()
+        print("PASS: check_safety() passed")
+    except SafetyViolation as e:
+        print(f"FAIL: SafetyViolation: {e}")
+
+    # Timing summary
+    expected_dt = 1.0 / config['robot']['control_rate_hz']
+    avg_dt = sum(timings) / len(timings)
+    print(f"\n--- Timing summary ---")
+    print(f"  Expected dt: {expected_dt*1000:.1f}ms ({config['robot']['control_rate_hz']}Hz)")
+    print(f"  Avg dt:      {avg_dt*1000:.1f}ms")
+    print(f"  Min dt:      {min(timings)*1000:.1f}ms")
+    print(f"  Max dt:      {max(timings)*1000:.1f}ms")
+    timing_ok = abs(avg_dt - expected_dt) / expected_dt < 0.2  # within 20%
+    print(f"  {'PASS' if timing_ok else 'WARN'}: timing within 20% of target")
+
+    # Shutdown torque control
+    cmd = robot._Torques([0.0] * 7)
+    cmd.motion_finished = True
+    robot._ctrl.writeOnce(cmd)
+    robot._robot.stop()
+
+    return robot
+
+
+def phase4_force_torque_sign(config: dict):
+    """Phase 4: Validate F/T sign convention with manual push."""
+    print_separator(4, "FORCE/TORQUE SIGN CONVENTION")
+
+    test_config = {**config, 'robot': {**config['robot'], 'use_mock': False}}
+    robot = FrankaInterface(test_config, device='cpu')
+
+    # Start torque control directly (no motion)
+    robot._ctrl = robot._robot.start_torque_control()
+    state, _ = robot._ctrl.readOnce()
+    robot._ctrl.writeOnce(robot._Torques([0.0] * 7))
+    robot._parse_state(state)
+    robot._state_valid = True
+    robot._ft_ema = np.array(state.O_F_ext_hat_K)
+
+    # Read a few cycles to stabilize EMA
+    print("Stabilizing EMA filter (10 reads)...")
+    for _ in range(10):
+        robot.read_state()
+
+    raw_ft = np.array(state.O_F_ext_hat_K)
+    our_ft = robot.get_force_torque()
+
+    print(f"\n--- Baseline F/T (robot at rest) ---")
+    print(f"  Raw O_F_ext_hat_K:  {[f'{v:+.4f}' for v in raw_ft.tolist()]}")
+    print(f"  Our get_force_torque (negated EMA): {[f'{v:+.4f}' for v in our_ft.tolist()]}")
+    print(f"  Sign check: our = -raw?  {[f'{(-raw_ft[i]):+.4f}' for i in range(6)]}")
+
+    print(f"\n  INSTRUCTION: Gently push the end-effector in the POSITIVE X direction")
+    print(f"  (away from the robot base, toward the front of the workspace).")
+    print(f"  Hold the push steady and press Enter.\n")
+
+    wait_for_enter("Push EE in +X direction, then press Enter...")
+
+    # Read state after push
+    for _ in range(10):
+        robot.read_state()
+
+    # Get the latest raw state from the internal ctrl
+    pushed_state, _ = robot._ctrl.readOnce()
+    robot._ctrl.writeOnce(robot._Torques([0.0] * 7))
+    pushed_raw_ft = np.array(pushed_state.O_F_ext_hat_K)
+    pushed_our_ft = robot.get_force_torque()
+
+    print(f"\n--- F/T while pushing +X ---")
+    print(f"  Raw O_F_ext_hat_K:  {[f'{v:+.4f}' for v in pushed_raw_ft.tolist()]}")
+    print(f"  Our get_force_torque: {[f'{v:+.4f}' for v in pushed_our_ft.tolist()]}")
+
+    delta_raw = pushed_raw_ft - raw_ft
+    delta_our = pushed_our_ft.numpy() - our_ft.numpy()
+    print(f"\n  Delta raw Fx: {delta_raw[0]:+.4f}")
+    print(f"  Delta our Fx: {delta_our[0]:+.4f}")
+
+    print(f"\n  EXPECTED for training convention (force = -joint_forces):")
+    print(f"    Push +X -> raw O_F_ext_hat_K[0] should be NEGATIVE (reaction force)")
+    print(f"    Push +X -> our get_force_torque()[0] should be POSITIVE (negated reaction)")
+    print(f"\n  MANUAL CHECK: Do the signs above match the expected convention?")
+    print(f"  If our Fx delta is positive when pushing +X, the sign convention is correct.")
+
+    # Shutdown
+    cmd = robot._Torques([0.0] * 7)
+    cmd.motion_finished = True
+    robot._ctrl.writeOnce(cmd)
+    robot._robot.stop()
+
+
+def phase5_cartesian_reset(config: dict, initial_ee_pos: list):
+    """Phase 5: Small Cartesian reset motion (2cm up in Z)."""
+    print_separator(5, "CARTESIAN RESET MOTION (2cm up)")
+
+    test_config = {**config, 'robot': {**config['robot'], 'use_mock': False}}
+
+    # Target: current position + 2cm in Z
+    target_pos = np.array(initial_ee_pos)
+    target_pos[2] += 0.02  # 2cm up
+
+    # Use approximately downward-facing orientation (roll=pi, pitch=0, yaw=0)
+    target_rpy = np.array([math.pi, 0.0, 0.0])
+
+    print(f"  Current EE position (from Phase 1): {initial_ee_pos}")
+    print(f"  Target EE position:  {target_pos.tolist()}")
+    print(f"  Target RPY: {target_rpy.tolist()}")
+    print(f"  Motion: +2cm in Z (straight up)")
+    print(f"  Duration: {config['robot']['reset_duration_sec']}s")
+
+    target_pose = make_ee_target_pose(target_pos, target_rpy)
+    print(f"\n  Target 4x4 transform (row-major):")
+    for row in range(4):
+        print(f"    [{target_pose[row, 0]:+.6f}  {target_pose[row, 1]:+.6f}  "
+              f"{target_pose[row, 2]:+.6f}  {target_pose[row, 3]:+.6f}]")
+
+    print(f"\n  This will move the robot 2cm UPWARD. Ensure the path is clear.")
+    wait_for_enter("Press Enter to execute Cartesian reset motion...")
+
+    robot = FrankaInterface(test_config, device='cpu')
+    robot.reset_to_start_pose(target_pose)
+
+    print("\n  Reset complete. Reading state...")
+    robot.read_state()
+
+    new_pos = robot.get_ee_position()
+    print(f"\n--- Post-reset EE position ---")
+    print(f"  New position: {new_pos.tolist()}")
+    print(f"  Expected Z:   ~{target_pos[2]:.4f}")
+    print(f"  Actual Z:     {new_pos[2].item():.4f}")
+
+    z_err = abs(new_pos[2].item() - target_pos[2])
+    print(f"  Z error: {z_err*1000:.2f}mm")
+    print(f"  {'PASS' if z_err < 0.005 else 'WARN'}: Z within 5mm of target")
+
+    # Verify torque control is active
+    print("\n  Verifying torque control is active (one more read_state)...")
+    robot.read_state()
+    print(f"  PASS: read_state() works after reset")
+
+    # Print all state for inspection
+    print(f"\n--- Full state after reset ---")
+    print(f"  ee_pos:     {robot.get_ee_position().tolist()}")
+    print(f"  ee_quat:    {[f'{v:.4f}' for v in robot.get_ee_orientation().tolist()]}")
+    print(f"  joint_pos:  {[f'{v:.4f}' for v in robot.get_joint_positions().tolist()]}")
+    print(f"  force_torque: {[f'{v:.4f}' for v in robot.get_force_torque().tolist()]}")
+
+    # Shutdown
+    robot.shutdown()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="First Real Robot Test")
+    parser.add_argument("--config", type=str, default="real_robot_exps/config.yaml",
+                        help="Path to config.yaml")
+    parser.add_argument("--skip-to", type=int, default=1,
+                        help="Skip to phase N (1-5)")
+    args = parser.parse_args()
+
+    with open(args.config, 'r') as f:
+        config = yaml.safe_load(f)
+
+    # Override to real robot
+    if config['robot'].get('use_mock', False):
+        print("WARNING: config has use_mock=true. This test requires a REAL robot.")
+        print("Overriding to use_mock=false for this test.\n")
+        config['robot']['use_mock'] = False
+
+    print("=" * 70)
+    print("  FIRST REAL ROBOT TEST")
+    print("  Safe, interactive validation of FrankaInterface on real FR3")
+    print("  Robot IP:", config['robot']['ip'])
+    print("=" * 70)
+    print("\n  This test has 5 phases:")
+    print("  1. Connect & read raw state (no motion)")
+    print("  2. Frame validation (no motion)")
+    print("  3. Torque control + read_state (zero torques, no motion)")
+    print("  4. Force/torque sign convention (manual push)")
+    print("  5. Cartesian reset motion (2cm up)")
+    print("\n  Each phase waits for Enter before proceeding.")
+    print("  You can Ctrl+C at any time to abort.\n")
+
+    initial_ee_pos = None
+
+    try:
+        if args.skip_to <= 1:
+            wait_for_enter("Press Enter to start Phase 1...")
+            initial_ee_pos = phase1_connect_and_read(config)
+
+        if args.skip_to <= 2:
+            wait_for_enter("Press Enter to start Phase 2...")
+            phase2_frame_validation(config)
+
+        if args.skip_to <= 3:
+            wait_for_enter("Press Enter to start Phase 3...")
+            phase3_torque_control_read_state(config)
+
+        if args.skip_to <= 4:
+            wait_for_enter("Press Enter to start Phase 4...")
+            phase4_force_torque_sign(config)
+
+        if args.skip_to <= 5:
+            if initial_ee_pos is None:
+                # Need to read position if we skipped phase 1
+                import pylibfranka
+                raw_robot = pylibfranka.Robot(config['robot']['ip'])
+                raw_robot.set_EE(config['robot']['NE_T_EE'])
+                raw_robot.set_K(config['robot']['EE_T_K'])
+                state = raw_robot.read_once()
+                T = state.O_T_EE
+                initial_ee_pos = [T[12], T[13], T[14]]
+                raw_robot.stop()
+
+            wait_for_enter("Press Enter to start Phase 5 (will move robot 2cm up)...")
+            phase5_cartesian_reset(config, initial_ee_pos)
+
+        print("\n" + "=" * 70)
+        print("  ALL PHASES COMPLETE")
+        print("=" * 70)
+
+    except KeyboardInterrupt:
+        print("\n\nAborted by user (Ctrl+C). Robot should be safe.")
+        print("If torque control was active, the robot will stop on communication timeout.")
+
+    except SafetyViolation as e:
+        print(f"\n\nSAFETY VIOLATION: {e}")
+        print("Robot should stop automatically.")
+
+    except Exception as e:
+        print(f"\n\nERROR: {type(e).__name__}: {e}")
+        print("Robot should stop automatically on communication timeout.")
+        raise
+
+
+if __name__ == "__main__":
+    main()

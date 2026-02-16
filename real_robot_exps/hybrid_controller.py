@@ -13,7 +13,7 @@ Supports both control modes:
 - HYBRID (sigma_idx > 0): 12/14/18D actions [selection, position, rotation, force]
 
 Also outputs intermediate Cartesian targets for alternative robot control modes
-(Cartesian impedance, joint position) - selected by ros2.control_mode in config.
+(Cartesian impedance, joint position) via intermediate targets.
 """
 
 import math
@@ -387,9 +387,6 @@ class RealRobotController:
                     self.force_ki[3:5] = 0.0
             else:
                 self.force_ki = None
-
-        # Real robot control mode (effort, cartesian_impedance, position)
-        self.robot_control_mode = real_config['ros2']['control_mode']
 
         # State (initialized by reset())
         self.ema_actions = None
