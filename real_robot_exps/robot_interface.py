@@ -62,6 +62,63 @@ def _rotation_matrix_to_quat_wxyz(R: torch.Tensor) -> torch.Tensor:
     return q / torch.norm(q)  # ensure unit quaternion
 
 
+def _rotation_matrix_to_quat_wxyz_np(R: np.ndarray) -> np.ndarray:
+    """Convert 3x3 rotation matrix to (w, x, y, z) quaternion via Shepperd's method (numpy)."""
+    trace = R[0, 0] + R[1, 1] + R[2, 2]
+
+    if trace > 0:
+        s = 0.5 / math.sqrt(trace + 1.0)
+        w = 0.25 / s
+        x = (R[2, 1] - R[1, 2]) * s
+        y = (R[0, 2] - R[2, 0]) * s
+        z = (R[1, 0] - R[0, 1]) * s
+    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+        s = 2.0 * math.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
+        w = (R[2, 1] - R[1, 2]) / s
+        x = 0.25 * s
+        y = (R[0, 1] + R[1, 0]) / s
+        z = (R[0, 2] + R[2, 0]) / s
+    elif R[1, 1] > R[2, 2]:
+        s = 2.0 * math.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
+        w = (R[0, 2] - R[2, 0]) / s
+        x = (R[0, 1] + R[1, 0]) / s
+        y = 0.25 * s
+        z = (R[1, 2] + R[2, 1]) / s
+    else:
+        s = 2.0 * math.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
+        w = (R[1, 0] - R[0, 1]) / s
+        x = (R[0, 2] + R[2, 0]) / s
+        y = (R[1, 2] + R[2, 1]) / s
+        z = 0.25 * s
+
+    q = np.array([w, x, y, z])
+    return q / np.linalg.norm(q)
+
+
+def _quat_slerp(q0: np.ndarray, q1: np.ndarray, t: float) -> np.ndarray:
+    """Spherical linear interpolation between unit quaternions (w, x, y, z)."""
+    dot = np.dot(q0, q1)
+    if dot < 0:
+        q1 = -q1
+        dot = -dot
+    if dot > 0.9995:
+        result = q0 + t * (q1 - q0)
+        return result / np.linalg.norm(result)
+    theta = np.arccos(np.clip(dot, -1.0, 1.0))
+    sin_theta = np.sin(theta)
+    return (np.sin((1 - t) * theta) / sin_theta) * q0 + (np.sin(t * theta) / sin_theta) * q1
+
+
+def _quat_wxyz_to_rotation_matrix_np(q: np.ndarray) -> np.ndarray:
+    """Convert (w, x, y, z) quaternion to 3x3 rotation matrix (numpy)."""
+    w, x, y, z = q
+    return np.array([
+        [1 - 2*(y*y + z*z), 2*(x*y - w*z), 2*(x*z + w*y)],
+        [2*(x*y + w*z), 1 - 2*(x*x + z*z), 2*(y*z - w*x)],
+        [2*(x*z - w*y), 2*(y*z + w*x), 1 - 2*(x*x + y*y)],
+    ])
+
+
 def make_ee_target_pose(position: np.ndarray, rpy: np.ndarray) -> np.ndarray:
     """Construct 4x4 homogeneous transform from position [3] and RPY [3].
 
@@ -262,22 +319,55 @@ class FrankaInterface:
             self._pylibfranka.ControllerMode.JointImpedance
         )
 
-        # Convert row-major 4x4 to column-major flat (libfranka convention)
-        target_flat = target_pose_4x4.flatten(order='F')  # column-major
-
         state, _ = ctrl.readOnce()
-        start_pose = np.array(state.O_T_EE)  # already column-major flat
+        start_flat = np.array(state.O_T_EE)  # column-major flat [16]
+
+        # Extract start rotation and translation from column-major flat
+        start_R = np.array([
+            [start_flat[0], start_flat[4], start_flat[8]],
+            [start_flat[1], start_flat[5], start_flat[9]],
+            [start_flat[2], start_flat[6], start_flat[10]],
+        ])
+        start_t = start_flat[12:15]
+
+        # Extract target rotation and translation from row-major 4x4
+        target_R = target_pose_4x4[:3, :3]
+        target_t = target_pose_4x4[:3, 3]
+
+        # Convert rotations to quaternions for SLERP
+        start_q = _rotation_matrix_to_quat_wxyz_np(start_R)
+        target_q = _rotation_matrix_to_quat_wxyz_np(target_R)
 
         n_steps = int(self._reset_duration_sec * 1000)  # e.g. 3s = 3000 steps at 1kHz
         for i in range(n_steps):
-            alpha = min(1.0, (i + 1) / n_steps)
-            interp = (1.0 - alpha) * start_pose + alpha * target_flat
-            pose_cmd = self._pylibfranka.CartesianPose(interp.tolist())
+            # Cosine ramp: zero velocity/acceleration at start and end
+            alpha = 0.5 * (1.0 - math.cos(math.pi * (i + 1) / n_steps))
+
+            # Lerp translation, slerp rotation
+            interp_t = (1.0 - alpha) * start_t + alpha * target_t
+            interp_q = _quat_slerp(start_q, target_q, alpha)
+            interp_R = _quat_wxyz_to_rotation_matrix_np(interp_q)
+
+            # Reconstruct column-major flat [16]
+            interp_flat = np.array([
+                interp_R[0, 0], interp_R[1, 0], interp_R[2, 0], 0.0,
+                interp_R[0, 1], interp_R[1, 1], interp_R[2, 1], 0.0,
+                interp_R[0, 2], interp_R[1, 2], interp_R[2, 2], 0.0,
+                interp_t[0], interp_t[1], interp_t[2], 1.0,
+            ])
+            
+            pose_cmd = self._pylibfranka.CartesianPose(interp_flat.tolist())
+            
             if i == n_steps - 1:
                 pose_cmd.motion_finished = True
+                ctrl.writeOnce(pose_cmd)
+                self._robot.stop()
+                break
             ctrl.writeOnce(pose_cmd)
             state, _ = ctrl.readOnce()
-
+        
+        print("Completed for loop")
+        self.end_control()
         # Phase 2: Switch to torque control for rollout
         self._ctrl = self._robot.start_torque_control()
         state, _ = self._ctrl.readOnce()
@@ -325,12 +415,23 @@ class FrankaInterface:
                 f"Force magnitude {force_mag:.2f}N exceeds limit {_SAFETY_MARGIN_FORCE:.1f}N"
             )
 
-    def shutdown(self):
-        """Send motion_finished=True via Torques, call robot.stop()."""
+    def end_control(self):
+        """End the active control session. Keeps the robot connection alive.
+
+        Drops the ActiveControl handle and calls robot.stop() to cleanly
+        reset the robot to idle. No readOnce/writeOnce handshake needed —
+        stop() handles the transition regardless of control state.
+
+        No-op if no control session is active.
+        """
         if self._ctrl is not None:
-            cmd = self._Torques([0.0] * 7)
-            cmd.motion_finished = True
-            self._ctrl.writeOnce(cmd)
+            self._ctrl = None
+            self._robot.stop()
+            self._state_valid = False
+
+    def shutdown(self):
+        """End control session and close robot connection."""
+        self.end_control()
         self._robot.stop()
         print("[FrankaInterface] Shutdown complete.")
 

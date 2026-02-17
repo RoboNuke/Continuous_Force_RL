@@ -107,12 +107,7 @@ def phase2_frame_validation(config: dict):
     """Phase 2: Validate frame setup and quaternion extraction."""
     print_separator(2, "FRAME VALIDATION")
 
-    # Force use_mock=False for real robot
-    test_config = {**config, 'robot': {**config['robot'], 'use_mock': False}}
-    robot = FrankaInterface(test_config, device='cpu')
-
-    # We need a state to validate frames — do a minimal torque control start
-    # Just one readOnce/writeOnce to get state
+    # Raw pylibfranka connection for frame/quaternion validation (no FrankaInterface needed)
     import pylibfranka
     raw_robot = pylibfranka.Robot(config['robot']['ip'])
     raw_robot.set_EE(config['robot']['NE_T_EE'])
@@ -186,16 +181,11 @@ def phase2_frame_validation(config: dict):
     raw_robot.stop()
 
 
-def phase3_torque_control_read_state(config: dict):
+def phase3_torque_control_read_state(robot: FrankaInterface):
     """Phase 3: Start torque control, run read_state with zero torques, check timing."""
     print_separator(3, "TORQUE CONTROL + READ_STATE (zero torques)")
 
-    test_config = {**config, 'robot': {**config['robot'], 'use_mock': False}}
-    robot = FrankaInterface(test_config, device='cpu')
-
     # Start torque control manually (bypass reset_to_start_pose to avoid motion)
-    import pylibfranka
-    # We need to access the internal robot to start torque control directly
     robot._ctrl = robot._robot.start_torque_control()
     # Do one readOnce/writeOnce to initialize
     state, _ = robot._ctrl.readOnce()
@@ -252,33 +242,31 @@ def phase3_torque_control_read_state(config: dict):
         print(f"FAIL: SafetyViolation: {e}")
 
     # Timing summary
-    expected_dt = 1.0 / config['robot']['control_rate_hz']
+    control_rate = robot._control_rate_hz
+    expected_dt = 1.0 / control_rate
     avg_dt = sum(timings) / len(timings)
     print(f"\n--- Timing summary ---")
-    print(f"  Expected dt: {expected_dt*1000:.1f}ms ({config['robot']['control_rate_hz']}Hz)")
+    print(f"  Expected dt: {expected_dt*1000:.1f}ms ({control_rate}Hz)")
     print(f"  Avg dt:      {avg_dt*1000:.1f}ms")
     print(f"  Min dt:      {min(timings)*1000:.1f}ms")
     print(f"  Max dt:      {max(timings)*1000:.1f}ms")
     timing_ok = abs(avg_dt - expected_dt) / expected_dt < 0.2  # within 20%
     print(f"  {'PASS' if timing_ok else 'WARN'}: timing within 20% of target")
 
-    # Shutdown torque control
-    cmd = robot._Torques([0.0] * 7)
-    cmd.motion_finished = True
-    robot._ctrl.writeOnce(cmd)
-    robot._robot.stop()
-
-    return robot
+    # End torque control session (keep connection alive for next phase)
+    robot.end_control()
 
 
-def phase4_force_torque_sign(config: dict):
-    """Phase 4: Validate F/T sign convention with manual push."""
+def phase4_force_torque_sign(robot: FrankaInterface):
+    """Phase 4: Validate F/T sign convention with manual push.
+
+    Split into two torque-control sessions so we can safely block for user
+    input between them (pylibfranka requires continuous 1kHz communication
+    while a control session is active).
+    """
     print_separator(4, "FORCE/TORQUE SIGN CONVENTION")
 
-    test_config = {**config, 'robot': {**config['robot'], 'use_mock': False}}
-    robot = FrankaInterface(test_config, device='cpu')
-
-    # Start torque control directly (no motion)
+    # --- Session 1: Read baseline F/T at rest ---
     robot._ctrl = robot._robot.start_torque_control()
     state, _ = robot._ctrl.readOnce()
     robot._ctrl.writeOnce(robot._Torques([0.0] * 7))
@@ -299,13 +287,24 @@ def phase4_force_torque_sign(config: dict):
     print(f"  Our get_force_torque (negated EMA): {[f'{v:+.4f}' for v in our_ft.tolist()]}")
     print(f"  Sign check: our = -raw?  {[f'{(-raw_ft[i]):+.4f}' for i in range(6)]}")
 
+    # End torque control before waiting for user input (keep connection alive)
+    robot.end_control()
+
     print(f"\n  INSTRUCTION: Gently push the end-effector in the POSITIVE X direction")
     print(f"  (away from the robot base, toward the front of the workspace).")
     print(f"  Hold the push steady and press Enter.\n")
 
     wait_for_enter("Push EE in +X direction, then press Enter...")
 
-    # Read state after push
+    # --- Session 2: Read F/T while user is pushing (same connection) ---
+    robot._ctrl = robot._robot.start_torque_control()
+    state, _ = robot._ctrl.readOnce()
+    robot._ctrl.writeOnce(robot._Torques([0.0] * 7))
+    robot._parse_state(state)
+    robot._state_valid = True
+    robot._ft_ema = np.array(state.O_F_ext_hat_K)
+
+    # Read a few cycles to stabilize EMA under the applied force
     for _ in range(10):
         robot.read_state()
 
@@ -330,18 +329,13 @@ def phase4_force_torque_sign(config: dict):
     print(f"\n  MANUAL CHECK: Do the signs above match the expected convention?")
     print(f"  If our Fx delta is positive when pushing +X, the sign convention is correct.")
 
-    # Shutdown
-    cmd = robot._Torques([0.0] * 7)
-    cmd.motion_finished = True
-    robot._ctrl.writeOnce(cmd)
-    robot._robot.stop()
+    # End torque control session (keep connection alive for next phase)
+    robot.end_control()
 
 
-def phase5_cartesian_reset(config: dict, initial_ee_pos: list):
+def phase5_cartesian_reset(robot: FrankaInterface, initial_ee_pos: list):
     """Phase 5: Small Cartesian reset motion (2cm up in Z)."""
     print_separator(5, "CARTESIAN RESET MOTION (2cm up)")
-
-    test_config = {**config, 'robot': {**config['robot'], 'use_mock': False}}
 
     # Target: current position + 2cm in Z
     target_pos = np.array(initial_ee_pos)
@@ -354,7 +348,7 @@ def phase5_cartesian_reset(config: dict, initial_ee_pos: list):
     print(f"  Target EE position:  {target_pos.tolist()}")
     print(f"  Target RPY: {target_rpy.tolist()}")
     print(f"  Motion: +2cm in Z (straight up)")
-    print(f"  Duration: {config['robot']['reset_duration_sec']}s")
+    print(f"  Duration: {robot._reset_duration_sec}s")
 
     target_pose = make_ee_target_pose(target_pos, target_rpy)
     print(f"\n  Target 4x4 transform (row-major):")
@@ -365,7 +359,6 @@ def phase5_cartesian_reset(config: dict, initial_ee_pos: list):
     print(f"\n  This will move the robot 2cm UPWARD. Ensure the path is clear.")
     wait_for_enter("Press Enter to execute Cartesian reset motion...")
 
-    robot = FrankaInterface(test_config, device='cpu')
     robot.reset_to_start_pose(target_pose)
 
     print("\n  Reset complete. Reading state...")
@@ -393,8 +386,8 @@ def phase5_cartesian_reset(config: dict, initial_ee_pos: list):
     print(f"  joint_pos:  {[f'{v:.4f}' for v in robot.get_joint_positions().tolist()]}")
     print(f"  force_torque: {[f'{v:.4f}' for v in robot.get_force_torque().tolist()]}")
 
-    # Shutdown
-    robot.shutdown()
+    # End torque control (keep connection alive for shutdown in main)
+    robot.end_control()
 
 
 def main():
@@ -429,6 +422,7 @@ def main():
     print("  You can Ctrl+C at any time to abort.\n")
 
     initial_ee_pos = None
+    robot = None  # shared FrankaInterface for phases 3-5
 
     try:
         if args.skip_to <= 1:
@@ -439,28 +433,29 @@ def main():
             wait_for_enter("Press Enter to start Phase 2...")
             phase2_frame_validation(config)
 
+        # Create shared FrankaInterface for phases 3-5 (mirrors eval script
+        # which reuses one connection across all episodes)
+        if args.skip_to <= 5:
+            test_config = {**config, 'robot': {**config['robot'], 'use_mock': False}}
+            robot = FrankaInterface(test_config, device='cpu')
+
         if args.skip_to <= 3:
             wait_for_enter("Press Enter to start Phase 3...")
-            phase3_torque_control_read_state(config)
+            phase3_torque_control_read_state(robot)
 
         if args.skip_to <= 4:
             wait_for_enter("Press Enter to start Phase 4...")
-            phase4_force_torque_sign(config)
+            phase4_force_torque_sign(robot)
 
         if args.skip_to <= 5:
             if initial_ee_pos is None:
-                # Need to read position if we skipped phase 1
-                import pylibfranka
-                raw_robot = pylibfranka.Robot(config['robot']['ip'])
-                raw_robot.set_EE(config['robot']['NE_T_EE'])
-                raw_robot.set_K(config['robot']['EE_T_K'])
-                state = raw_robot.read_once()
+                # Read position from existing connection if we skipped phase 1
+                state = robot._robot.read_once()
                 T = state.O_T_EE
                 initial_ee_pos = [T[12], T[13], T[14]]
-                raw_robot.stop()
 
             wait_for_enter("Press Enter to start Phase 5 (will move robot 2cm up)...")
-            phase5_cartesian_reset(config, initial_ee_pos)
+            phase5_cartesian_reset(robot, initial_ee_pos)
 
         print("\n" + "=" * 70)
         print("  ALL PHASES COMPLETE")
@@ -478,6 +473,10 @@ def main():
         print(f"\n\nERROR: {type(e).__name__}: {e}")
         print("Robot should stop automatically on communication timeout.")
         raise
+
+    finally:
+        if robot is not None:
+            robot.shutdown()
 
 
 if __name__ == "__main__":

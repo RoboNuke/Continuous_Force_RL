@@ -584,6 +584,10 @@ def run_episode(
                 print(f"    BREAK at step {step} (force={force_magnitude:.2f}N)")
                 break
 
+    # End torque control session immediately so the robot isn't waiting
+    # for 1kHz communication while we compute metrics / print results
+    robot.end_control()
+
     episode_length = step + 1
 
     # Normalize smoothness by episode length (matching sim: ssv = sum / ep_len)
