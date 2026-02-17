@@ -2,17 +2,34 @@
 Real Robot Interface (pylibfranka)
 
 Direct communication with FR3 via pylibfranka at ~1kHz.
-Policy runs at 15Hz; read_state() bridges by running a tight 1kHz
-readOnce/writeOnce loop for one policy timestep, EMA-filtering F/T at 1kHz.
+A background thread runs the 1kHz readOnce/writeOnce loop continuously,
+keeping the robot fed with torque commands while the main thread computes
+policy actions at 15Hz. EMA-filters F/T at 1kHz within the loop.
 
 Mock mode (use_mock: true) uses mock_pylibfranka for offline integration testing.
 """
 
 import math
 import time
+import threading
+from collections import namedtuple
 
 import numpy as np
 import torch
+
+
+StateSnapshot = namedtuple('StateSnapshot', [
+    'ee_pos',           # [3] torch.float32
+    'ee_quat',          # [4] torch.float32 (w,x,y,z)
+    'ee_linvel',        # [3] torch.float32
+    'ee_angvel',        # [3] torch.float32
+    'force_torque',     # [6] torch.float32
+    'joint_pos',        # [7] torch.float32
+    'joint_vel',        # [7] torch.float32
+    'joint_torques',    # [7] torch.float32
+    'jacobian',         # [6,7] torch.float32
+    'mass_matrix',      # [7,7] torch.float32
+])
 
 
 class SafetyViolation(Exception):
@@ -178,10 +195,11 @@ _SAFETY_MARGIN_FORCE = 50.0  # N, max L2 force norm
 class FrankaInterface:
     """pylibfranka interface for Franka FR3.
 
-    Communicates at ~1kHz via pylibfranka's ActiveControl.
-    read_state() runs the 1kHz loop for one policy timestep, EMA-filtering
-    F/T readings at 1kHz. send_joint_torques() just stores torques for the
-    next read_state() cycle.
+    A background thread runs the 1kHz readOnce/writeOnce loop continuously.
+    The main thread sets target torques via send_joint_torques() and reads
+    the latest state via get_state_snapshot(). The background thread ramps
+    commanded torques toward the held target and builds immutable StateSnapshot
+    objects that the main thread reads lock-free via GIL reference swap.
 
     Args:
         config: Dictionary loaded from real_robot_exps/config.yaml.
@@ -241,81 +259,73 @@ class FrankaInterface:
         self._ft_ema_alpha = robot_cfg.get('ft_ema_alpha', 0.2)
         self._ft_ema = np.zeros(6)
 
-        # Held torques (target for read_state's 1kHz loop)
+        # Held torques (target set by main thread, read by background thread)
         self._held_torques = [0.0] * 7
         # Commanded torques (actual values sent, ramped toward _held_torques)
+        # ONLY touched by background thread — no lock needed
         self._cmd_torques = [0.0] * 7
 
-        # Torque control handle (set by reset_to_start_pose)
+        # Torque control handle (set by start_torque_mode)
         self._ctrl = None
 
-        # State validity flag (fail-fast for get_*() before read_state)
+        # State validity flag (for check_safety guard)
         self._state_valid = False
 
-        # Cached state tensors (populated by _parse_state)
-        self._ee_pos = None
-        self._ee_quat = None
-        self._ee_linvel = None
-        self._ee_angvel = None
-        self._force_torque = None
-        self._joint_pos = None
-        self._joint_vel = None
-        self._joint_torques = None
-        self._jacobian = None
-        self._mass_matrix = None
+        # Background thread synchronization
+        self._torque_lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._comm_thread = None
+
+        # Latest snapshot (immutable NamedTuple, swapped atomically via GIL)
+        self._latest_snapshot = None
+
+        # 15Hz policy step timing
+        self._last_send_time = None
 
         print(f"[FrankaInterface] control_rate={self._control_rate_hz}Hz, "
               f"ft_ema_alpha={self._ft_ema_alpha}")
 
     # -------------------------------------------------------------------------
-    # Core methods
+    # Background 1kHz communication loop
     # -------------------------------------------------------------------------
 
-    def read_state(self):
-        """Run 1kHz readOnce/writeOnce loop for one policy step.
+    def _comm_loop(self):
+        """1kHz readOnce/writeOnce loop running in background thread."""
+        while not self._stop_event.is_set():
+            state, _ = self._ctrl.readOnce()
 
-        Applies EMA low-pass filter to F/T at 1kHz within the loop.
-        Caches final state as torch tensors.
-
-        Raises:
-            RuntimeError: If torque control not started (call reset_to_start_pose first).
-        """
-        if self._ctrl is None:
-            raise RuntimeError("Torque control not started. Call reset_to_start_pose() first.")
-
-        target_dt = 1.0 / self._control_rate_hz
-        start = time.time()
-
-        while True:
-            state, duration = self._ctrl.readOnce()
-
-            # EMA filter on F/T at 1kHz
+            # EMA filter F/T at 1kHz
             raw_ft = np.array(state.O_F_ext_hat_K)
-            self._ft_ema = (
-                self._ft_ema_alpha * raw_ft
-                + (1.0 - self._ft_ema_alpha) * self._ft_ema
-            )
+            self._ft_ema = self._ft_ema_alpha * raw_ft + (1.0 - self._ft_ema_alpha) * self._ft_ema
 
-            # Ramp toward held torques at max 1.0 Nm/step (1000 Nm/s at 1kHz)
+            # Ramp toward held torques (rate-limited)
+            with self._torque_lock:
+                held = list(self._held_torques)
             for j in range(7):
-                delta = self._held_torques[j] - self._cmd_torques[j]
+                delta = held[j] - self._cmd_torques[j]
                 if delta > _MAX_TORQUE_DELTA:
                     self._cmd_torques[j] += _MAX_TORQUE_DELTA
                 elif delta < -_MAX_TORQUE_DELTA:
                     self._cmd_torques[j] -= _MAX_TORQUE_DELTA
                 else:
-                    self._cmd_torques[j] = self._held_torques[j]
+                    self._cmd_torques[j] = held[j]
 
-            cmd = self._Torques(self._cmd_torques)
-            self._ctrl.writeOnce(cmd)
+            self._ctrl.writeOnce(self._Torques(self._cmd_torques))
 
-            if time.time() - start >= target_dt:
-                break
+            # Build snapshot every iteration (immutable namedtuple, GIL-atomic swap)
+            self._latest_snapshot = self._build_snapshot(state)
 
-        self._parse_state(state)
+    # -------------------------------------------------------------------------
+    # Core methods
+    # -------------------------------------------------------------------------
 
     def send_joint_torques(self, torques: torch.Tensor):
-        """Store [7] torques for next read_state() cycle.
+        """Set target [7] torques for the background 1kHz loop.
+
+        The background thread ramps commanded torques toward this target
+        at the rate-limited _MAX_TORQUE_DELTA per 1kHz step.
+
+        Also starts the 15Hz policy step timer.
 
         Args:
             torques: [7] joint torques tensor.
@@ -325,7 +335,38 @@ class FrankaInterface:
         """
         if torques.shape != (7,):
             raise ValueError(f"Expected [7] torques, got {torques.shape}")
-        self._held_torques = torques.detach().cpu().tolist()
+        with self._torque_lock:
+            self._held_torques = torques.detach().cpu().tolist()
+        # Start 15Hz timer when policy output is sent
+        self._last_send_time = time.time()
+
+    def get_state_snapshot(self) -> StateSnapshot:
+        """Get latest robot state (lock-free read of immutable snapshot).
+
+        Returns:
+            StateSnapshot namedtuple with all robot state fields.
+
+        Raises:
+            RuntimeError: If no snapshot available (call start_torque_mode first).
+        """
+        snap = self._latest_snapshot
+        if snap is None:
+            raise RuntimeError("No state snapshot available. Call start_torque_mode() first.")
+        return snap
+
+    def wait_for_policy_step(self):
+        """Block until 1/control_rate_hz has elapsed since last send_joint_torques().
+
+        Timer starts when send_joint_torques() is called (when policy produces output),
+        NOT when we start computing the next observation/action.
+        """
+        if self._last_send_time is None:
+            return  # First step, no waiting needed
+        target_dt = 1.0 / self._control_rate_hz
+        elapsed = time.time() - self._last_send_time
+        remaining = target_dt - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
 
     def retract_up(self, height_m: float):
         """Retract EE vertically upward by the specified height.
@@ -384,6 +425,9 @@ class FrankaInterface:
         Leaves the robot idle after motion completes. Call start_torque_mode()
         separately to begin torque control for the rollout.
 
+        Stores a StateSnapshot from the final Cartesian state so that
+        get_state_snapshot() works between reset and torque mode start.
+
         Args:
             target_pose_4x4: [4, 4] numpy homogeneous transform (row-major)
                 for target EE pose.
@@ -438,46 +482,56 @@ class FrankaInterface:
             ctrl.writeOnce(pose_cmd)
             state, _ = ctrl.readOnce()
 
-        # Parse final state from Cartesian motion so EE position is available
-        self._parse_state(state)
+        # Build snapshot from final Cartesian state so get_state_snapshot() works
+        # between reset and torque mode start (e.g. for controller.reset())
+        self._latest_snapshot = self._build_snapshot(state)
         self._state_valid = True
 
         self.end_control()
         print("[FrankaInterface] Reset to start pose complete")
 
     def start_torque_mode(self):
-        """Start torque control mode for rollout.
+        """Start torque control mode with background 1kHz communication thread.
 
-        Begins torque control and runs a 100ms warm-up at 1kHz with zero
-        torques to establish a stable control stream. The first read_state()
-        call after this continues the stream seamlessly.
+        Begins torque control, runs a 100ms warm-up at 1kHz with zero
+        torques to establish a stable control stream, then starts the
+        background thread that continues the 1kHz loop.
         """
         self._held_torques = [0.0] * 7
         self._cmd_torques = [0.0] * 7
         self._ft_ema = np.zeros(6)
         self._ctrl = self._robot.start_torque_control()
 
-        # Run 1kHz zero-torque loop for 100ms to stabilize
+        # Synchronous warmup (100 steps at 1kHz = 100ms)
         warmup_steps = 100
         for wi in range(warmup_steps):
             state, _ = self._ctrl.readOnce()
             self._ctrl.writeOnce(self._Torques([0.0] * 7))
 
-        self._parse_state(state)
+        # Build initial snapshot from warmup
+        self._latest_snapshot = self._build_snapshot(state)
         self._state_valid = True
-        print(f"[FrankaInterface] Torque control started (warmup {warmup_steps} steps OK)")
 
-    def check_safety(self):
-        """Check joint pos/vel limits and force magnitude on cached state.
+        # Start background thread
+        self._stop_event.clear()
+        self._comm_thread = threading.Thread(target=self._comm_loop, daemon=True)
+        self._comm_thread.start()
+        self._last_send_time = time.time()
+
+        print(f"[FrankaInterface] Torque control started (warmup {warmup_steps} steps OK), "
+              f"background 1kHz thread running")
+
+    def check_safety(self, snapshot: StateSnapshot):
+        """Check joint pos/vel limits and force magnitude.
+
+        Args:
+            snapshot: StateSnapshot to check.
 
         Raises:
             SafetyViolation: If any limit exceeded.
         """
-        if not self._state_valid:
-            raise RuntimeError("No valid state. Call read_state() first.")
-
         # Joint position limits
-        q = self._joint_pos.cpu().numpy()
+        q = snapshot.joint_pos.cpu().numpy()
         for i in range(7):
             low = _FR3_JOINT_POS_LIMITS[i, 0] * _SAFETY_MARGIN_POS
             high = _FR3_JOINT_POS_LIMITS[i, 1] * _SAFETY_MARGIN_POS
@@ -488,7 +542,7 @@ class FrankaInterface:
                 )
 
         # Joint velocity limits
-        dq = self._joint_vel.cpu().numpy()
+        dq = snapshot.joint_vel.cpu().numpy()
         for i in range(7):
             limit = _FR3_JOINT_VEL_LIMITS[i] * _SAFETY_MARGIN_VEL
             if abs(dq[i]) > limit:
@@ -497,7 +551,7 @@ class FrankaInterface:
                 )
 
         # Force magnitude
-        force_mag = torch.norm(self._force_torque[:3]).item()
+        force_mag = torch.norm(snapshot.force_torque[:3]).item()
         if force_mag > _SAFETY_MARGIN_FORCE:
             raise SafetyViolation(
                 f"Force magnitude {force_mag:.2f}N exceeds limit {_SAFETY_MARGIN_FORCE:.1f}N"
@@ -506,16 +560,22 @@ class FrankaInterface:
     def end_control(self):
         """End the active control session. Keeps the robot connection alive.
 
-        Drops the ActiveControl handle and calls robot.stop() to cleanly
-        reset the robot to idle. No readOnce/writeOnce handshake needed —
-        stop() handles the transition regardless of control state.
+        Stops the background 1kHz thread, drops the ActiveControl handle,
+        and calls robot.stop() to cleanly reset the robot to idle.
 
         No-op if no control session is active.
         """
         if self._ctrl is not None:
+            # Stop background thread first
+            self._stop_event.set()
+            if self._comm_thread is not None:
+                self._comm_thread.join(timeout=2.0)
+                self._comm_thread = None
             self._ctrl = None
             self._robot.stop()
             self._state_valid = False
+            self._latest_snapshot = None
+            self._last_send_time = None
 
     def shutdown(self):
         """End control session and close robot connection."""
@@ -524,114 +584,17 @@ class FrankaInterface:
         print("[FrankaInterface] Shutdown complete.")
 
     # -------------------------------------------------------------------------
-    # State getters (return cached tensors, fail-fast if no valid state)
+    # Internal state building
     # -------------------------------------------------------------------------
 
-    def _require_valid_state(self):
-        if not self._state_valid:
-            raise RuntimeError(
-                "No valid robot state. Call reset_to_start_pose() and read_state() first."
-            )
-
-    def get_ee_position(self) -> torch.Tensor:
-        """Get end-effector (fingertip midpoint) position in world frame.
-
-        Returns:
-            [3] tensor in meters.
-        """
-        self._require_valid_state()
-        return self._ee_pos
-
-    def get_ee_orientation(self) -> torch.Tensor:
-        """Get end-effector orientation as quaternion.
-
-        Returns:
-            [4] tensor (w, x, y, z).
-        """
-        self._require_valid_state()
-        return self._ee_quat
-
-    def get_ee_linear_velocity(self) -> torch.Tensor:
-        """Get end-effector linear velocity (J @ dq).
-
-        Returns:
-            [3] tensor in m/s.
-        """
-        self._require_valid_state()
-        return self._ee_linvel
-
-    def get_ee_angular_velocity(self) -> torch.Tensor:
-        """Get end-effector angular velocity (J @ dq).
-
-        Returns:
-            [3] tensor in rad/s.
-        """
-        self._require_valid_state()
-        return self._ee_angvel
-
-    def get_force_torque(self) -> torch.Tensor:
-        """Get force/torque at end-effector (negated EMA-filtered O_F_ext_hat_K).
-
-        Returns:
-            [6] tensor (Fx, Fy, Fz, Tx, Ty, Tz) in N and Nm.
-        """
-        self._require_valid_state()
-        return self._force_torque
-
-    def get_joint_positions(self) -> torch.Tensor:
-        """Get 7-DOF arm joint positions.
-
-        Returns:
-            [7] tensor in radians.
-        """
-        self._require_valid_state()
-        return self._joint_pos
-
-    def get_joint_velocities(self) -> torch.Tensor:
-        """Get 7-DOF arm joint velocities.
-
-        Returns:
-            [7] tensor in rad/s.
-        """
-        self._require_valid_state()
-        return self._joint_vel
-
-    def get_joint_torques(self) -> torch.Tensor:
-        """Get 7-DOF arm joint torques (measured).
-
-        Returns:
-            [7] tensor in Nm.
-        """
-        self._require_valid_state()
-        return self._joint_torques
-
-    def get_jacobian(self) -> torch.Tensor:
-        """Get geometric Jacobian at end-effector frame.
-
-        Returns:
-            [6, 7] tensor mapping joint velocities to task-space velocities.
-        """
-        self._require_valid_state()
-        return self._jacobian
-
-    def get_mass_matrix(self) -> torch.Tensor:
-        """Get 7x7 arm mass (inertia) matrix.
-
-        Returns:
-            [7, 7] tensor in kg*m^2.
-        """
-        self._require_valid_state()
-        return self._mass_matrix
-
-    # -------------------------------------------------------------------------
-    # Internal state parsing
-    # -------------------------------------------------------------------------
-
-    def _parse_state(self, state):
-        """Parse pylibfranka RobotState into cached torch tensors.
+    def _build_snapshot(self, state) -> StateSnapshot:
+        """Build immutable StateSnapshot from pylibfranka RobotState.
 
         Args:
             state: pylibfranka.RobotState (or mock equivalent).
+
+        Returns:
+            StateSnapshot namedtuple with all robot state as torch tensors.
         """
         device = self._device
 
@@ -639,45 +602,48 @@ class FrankaInterface:
         T = np.array(state.O_T_EE)
 
         # Position: translation is at indices [12, 13, 14] in column-major
-        self._ee_pos = torch.tensor(
+        ee_pos = torch.tensor(
             [T[12], T[13], T[14]], device=device, dtype=torch.float32
         )
 
         # Rotation matrix from O_T_EE columns (column-major layout)
-        # col0 = T[0:4], col1 = T[4:8], col2 = T[8:12]
         R = torch.tensor([
             [T[0], T[4], T[8]],
             [T[1], T[5], T[9]],
             [T[2], T[6], T[10]],
         ], device=device, dtype=torch.float32)
-        self._ee_quat = _rotation_matrix_to_quat_wxyz(R)
+        ee_quat = _rotation_matrix_to_quat_wxyz(R)
 
         # Joint state
-        self._joint_pos = torch.tensor(state.q, device=device, dtype=torch.float32)
-        self._joint_vel = torch.tensor(state.dq, device=device, dtype=torch.float32)
-        self._joint_torques = torch.tensor(state.tau_J, device=device, dtype=torch.float32)
+        joint_pos = torch.tensor(state.q, device=device, dtype=torch.float32)
+        joint_vel = torch.tensor(state.dq, device=device, dtype=torch.float32)
+        joint_torques = torch.tensor(state.tau_J, device=device, dtype=torch.float32)
 
         # Jacobian: model.zero_jacobian(state) returns 42-element list (column-major 6x7)
-        # Reshape to row-major [6, 7] — validated on real robot
         jac_flat = np.array(self._model.zero_jacobian(state))
-        self._jacobian = torch.tensor(
+        jacobian = torch.tensor(
             jac_flat.reshape(6, 7), device=device, dtype=torch.float32
         )
 
         # Mass matrix: model.mass(state) returns 49-element list (column-major 7x7)
-        # Reshape to row-major [7, 7]
         mass_flat = np.array(self._model.mass(state))
-        self._mass_matrix = torch.tensor(
+        mass_matrix = torch.tensor(
             mass_flat.reshape(7, 7), device=device, dtype=torch.float32
         )
 
         # EE velocity: J @ dq
-        dq = self._joint_vel.unsqueeze(1)  # [7, 1]
-        ee_vel = (self._jacobian @ dq).squeeze(1)  # [6]
-        self._ee_linvel = ee_vel[:3]
-        self._ee_angvel = ee_vel[3:]
+        dq = joint_vel.unsqueeze(1)  # [7, 1]
+        ee_vel = (jacobian @ dq).squeeze(1)  # [6]
+        ee_linvel = ee_vel[:3]
+        ee_angvel = ee_vel[3:]
 
         # Force/torque: negate EMA-filtered O_F_ext_hat_K (to match training convention)
-        self._force_torque = torch.tensor(
+        force_torque = torch.tensor(
             -self._ft_ema, device=device, dtype=torch.float32
         )
+
+        return StateSnapshot(
+            ee_pos, ee_quat, ee_linvel, ee_angvel, force_torque,
+            joint_pos, joint_vel, joint_torques, jacobian, mass_matrix,
+        )
+

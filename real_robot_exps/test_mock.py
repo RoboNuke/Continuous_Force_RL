@@ -14,30 +14,36 @@ config = {
 
 robot = FrankaInterface(config, device='cpu')
 
-# Fail-fast: get_*() before reset should raise RuntimeError
+# Fail-fast: get_state_snapshot() before reset should raise RuntimeError
 try:
-    robot.get_ee_position()
+    robot.get_state_snapshot()
     print("FAIL")
 except RuntimeError:
     print("PASS: fail-fast before reset")
 
-# Reset + read_state
+# Reset stores a snapshot
 target = make_ee_target_pose(np.array([0.3, 0.0, 0.4]), np.array([3.1416, 0.0, 0.0]))
 robot.reset_to_start_pose(target)
-robot.read_state()
+snap = robot.get_state_snapshot()
 
-# Check all shapes
-assert robot.get_ee_position().shape == (3,)
-assert robot.get_ee_orientation().shape == (4,)
-assert robot.get_ee_linear_velocity().shape == (3,)
-assert robot.get_ee_angular_velocity().shape == (3,)
-assert robot.get_force_torque().shape == (6,)
-assert robot.get_joint_positions().shape == (7,)
-assert robot.get_joint_velocities().shape == (7,)
-assert robot.get_joint_torques().shape == (7,)
-assert robot.get_jacobian().shape == (6, 7)
-assert robot.get_mass_matrix().shape == (7, 7)
+# Check all shapes from snapshot
+assert snap.ee_pos.shape == (3,)
+assert snap.ee_quat.shape == (4,)
+assert snap.ee_linvel.shape == (3,)
+assert snap.ee_angvel.shape == (3,)
+assert snap.force_torque.shape == (6,)
+assert snap.joint_pos.shape == (7,)
+assert snap.joint_vel.shape == (7,)
+assert snap.joint_torques.shape == (7,)
+assert snap.jacobian.shape == (6, 7)
+assert snap.mass_matrix.shape == (7, 7)
 print("PASS: all shapes correct")
+
+# Start torque mode and verify background thread
+robot.start_torque_mode()
+snap = robot.get_state_snapshot()
+assert snap.ee_pos.shape == (3,)
+print("PASS: torque mode snapshot works")
 
 # send_joint_torques
 robot.send_joint_torques(torch.zeros(7))
@@ -48,10 +54,17 @@ except ValueError:
     print("PASS: rejects wrong shape")
 
 # Safety + quaternion norm
-robot.check_safety()
-assert abs(torch.norm(robot.get_ee_orientation()).item() - 1.0) < 1e-5
+robot.check_safety(snap)
+assert abs(torch.norm(snap.ee_quat).item() - 1.0) < 1e-5
 print("PASS: safety + unit quaternion")
+
+# wait_for_policy_step should not error
+robot.wait_for_policy_step()
+print("PASS: wait_for_policy_step works")
+
+# End control stops background thread
+robot.end_control()
+print("PASS: end_control stops thread")
 
 robot.shutdown()
 print("ALL TESTS PASSED")
-

@@ -181,41 +181,34 @@ def phase2_frame_validation(config: dict):
     raw_robot.stop()
 
 
-def phase3_torque_control_read_state(robot: FrankaInterface):
-    """Phase 3: Start torque control, run read_state with zero torques, check timing."""
-    print_separator(3, "TORQUE CONTROL + READ_STATE (zero torques)")
+def phase3_torque_control_snapshot(robot: FrankaInterface):
+    """Phase 3: Start torque control with background thread, read snapshots."""
+    print_separator(3, "TORQUE CONTROL + SNAPSHOT (zero torques, background thread)")
 
-    # Start torque control manually (bypass reset_to_start_pose to avoid motion)
-    robot._ctrl = robot._robot.start_torque_control()
-    # Do one readOnce/writeOnce to initialize
-    state, _ = robot._ctrl.readOnce()
-    robot._ctrl.writeOnce(robot._Torques([0.0] * 7))
-    robot._parse_state(state)
-    robot._state_valid = True
-    robot._ft_ema = np.array(state.O_F_ext_hat_K)  # initialize EMA to current reading
+    # Start torque mode (includes warmup + background thread)
+    robot.start_torque_mode()
 
     n_iters = 5
-    print(f"Running {n_iters} read_state() iterations with zero torques...\n")
+    print(f"Reading {n_iters} snapshots from background thread...\n")
 
-    timings = []
     for i in range(n_iters):
-        t0 = time.time()
-        robot.read_state()
-        dt = time.time() - t0
-        timings.append(dt)
+        robot.wait_for_policy_step()
+        snap = robot.get_state_snapshot()
+        # Reset timer for next iteration
+        robot.send_joint_torques(torch.zeros(7))
 
-        print(f"--- Iteration {i+1}/{n_iters} (dt={dt*1000:.1f}ms) ---")
-        print(f"  ee_pos:     {robot.get_ee_position().tolist()}")
-        print(f"  ee_quat:    {[f'{v:.4f}' for v in robot.get_ee_orientation().tolist()]}")
-        print(f"  ee_linvel:  {[f'{v:.6f}' for v in robot.get_ee_linear_velocity().tolist()]}")
-        print(f"  ee_angvel:  {[f'{v:.6f}' for v in robot.get_ee_angular_velocity().tolist()]}")
-        print(f"  force_torque: {[f'{v:.4f}' for v in robot.get_force_torque().tolist()]}")
-        print(f"  joint_pos:  {[f'{v:.4f}' for v in robot.get_joint_positions().tolist()]}")
-        print(f"  joint_vel:  {[f'{v:.6f}' for v in robot.get_joint_velocities().tolist()]}")
-        print(f"  joint_torq: {[f'{v:.4f}' for v in robot.get_joint_torques().tolist()]}")
+        print(f"--- Iteration {i+1}/{n_iters} ---")
+        print(f"  ee_pos:     {snap.ee_pos.tolist()}")
+        print(f"  ee_quat:    {[f'{v:.4f}' for v in snap.ee_quat.tolist()]}")
+        print(f"  ee_linvel:  {[f'{v:.6f}' for v in snap.ee_linvel.tolist()]}")
+        print(f"  ee_angvel:  {[f'{v:.6f}' for v in snap.ee_angvel.tolist()]}")
+        print(f"  force_torque: {[f'{v:.4f}' for v in snap.force_torque.tolist()]}")
+        print(f"  joint_pos:  {[f'{v:.4f}' for v in snap.joint_pos.tolist()]}")
+        print(f"  joint_vel:  {[f'{v:.6f}' for v in snap.joint_vel.tolist()]}")
+        print(f"  joint_torq: {[f'{v:.4f}' for v in snap.joint_torques.tolist()]}")
 
-        J = robot.get_jacobian()
-        M = robot.get_mass_matrix()
+        J = snap.jacobian
+        M = snap.mass_matrix
         print(f"  jacobian shape: {J.shape}")
         print(f"  mass_matrix shape: {M.shape}")
 
@@ -224,34 +217,22 @@ def phase3_torque_control_read_state(robot: FrankaInterface):
         print(f"  mass_matrix symmetry error: {sym_err:.8f} {'PASS' if sym_err < 0.01 else 'FAIL'}")
 
         # Verify J @ dq matches ee velocities
-        dq = robot.get_joint_velocities()
-        ee_vel_from_J = J @ dq
+        ee_vel_from_J = J @ snap.joint_vel
         ee_linvel_from_J = ee_vel_from_J[:3]
         ee_angvel_from_J = ee_vel_from_J[3:]
-        linvel_err = torch.max(torch.abs(ee_linvel_from_J - robot.get_ee_linear_velocity())).item()
-        angvel_err = torch.max(torch.abs(ee_angvel_from_J - robot.get_ee_angular_velocity())).item()
+        linvel_err = torch.max(torch.abs(ee_linvel_from_J - snap.ee_linvel)).item()
+        angvel_err = torch.max(torch.abs(ee_angvel_from_J - snap.ee_angvel)).item()
         print(f"  J@dq vs ee_linvel error: {linvel_err:.8f} {'PASS' if linvel_err < 1e-6 else 'FAIL'}")
         print(f"  J@dq vs ee_angvel error: {angvel_err:.8f} {'PASS' if angvel_err < 1e-6 else 'FAIL'}")
         print()
 
     # Safety check
+    snap = robot.get_state_snapshot()
     try:
-        robot.check_safety()
+        robot.check_safety(snap)
         print("PASS: check_safety() passed")
     except SafetyViolation as e:
         print(f"FAIL: SafetyViolation: {e}")
-
-    # Timing summary
-    control_rate = robot._control_rate_hz
-    expected_dt = 1.0 / control_rate
-    avg_dt = sum(timings) / len(timings)
-    print(f"\n--- Timing summary ---")
-    print(f"  Expected dt: {expected_dt*1000:.1f}ms ({control_rate}Hz)")
-    print(f"  Avg dt:      {avg_dt*1000:.1f}ms")
-    print(f"  Min dt:      {min(timings)*1000:.1f}ms")
-    print(f"  Max dt:      {max(timings)*1000:.1f}ms")
-    timing_ok = abs(avg_dt - expected_dt) / expected_dt < 0.2  # within 20%
-    print(f"  {'PASS' if timing_ok else 'WARN'}: timing within 20% of target")
 
     # End torque control session (keep connection alive for next phase)
     robot.end_control()
@@ -261,33 +242,25 @@ def phase4_force_torque_sign(robot: FrankaInterface):
     """Phase 4: Validate F/T sign convention with manual push.
 
     Split into two torque-control sessions so we can safely block for user
-    input between them (pylibfranka requires continuous 1kHz communication
+    input between them (background thread keeps 1kHz communication active
     while a control session is active).
     """
     print_separator(4, "FORCE/TORQUE SIGN CONVENTION")
 
     # --- Session 1: Read baseline F/T at rest ---
-    robot._ctrl = robot._robot.start_torque_control()
-    state, _ = robot._ctrl.readOnce()
-    robot._ctrl.writeOnce(robot._Torques([0.0] * 7))
-    robot._parse_state(state)
-    robot._state_valid = True
-    robot._ft_ema = np.array(state.O_F_ext_hat_K)
+    robot.start_torque_mode()
 
-    # Read a few cycles to stabilize EMA
-    print("Stabilizing EMA filter (10 reads)...")
-    for _ in range(10):
-        robot.read_state()
+    # Let EMA stabilize (background thread runs 1kHz loop)
+    print("Stabilizing EMA filter (1 second)...")
+    time.sleep(1.0)
 
-    raw_ft = np.array(state.O_F_ext_hat_K)
-    our_ft = robot.get_force_torque()
+    snap_baseline = robot.get_state_snapshot()
+    our_ft = snap_baseline.force_torque
 
     print(f"\n--- Baseline F/T (robot at rest) ---")
-    print(f"  Raw O_F_ext_hat_K:  {[f'{v:+.4f}' for v in raw_ft.tolist()]}")
-    print(f"  Our get_force_torque (negated EMA): {[f'{v:+.4f}' for v in our_ft.tolist()]}")
-    print(f"  Sign check: our = -raw?  {[f'{(-raw_ft[i]):+.4f}' for i in range(6)]}")
+    print(f"  Our force_torque (negated EMA): {[f'{v:+.4f}' for v in our_ft.tolist()]}")
 
-    # End torque control before waiting for user input (keep connection alive)
+    # End torque control before waiting for user input
     robot.end_control()
 
     print(f"\n  INSTRUCTION: Gently push the end-effector in the POSITIVE X direction")
@@ -297,35 +270,22 @@ def phase4_force_torque_sign(robot: FrankaInterface):
     wait_for_enter("Push EE in +X direction, then press Enter...")
 
     # --- Session 2: Read F/T while user is pushing (same connection) ---
-    robot._ctrl = robot._robot.start_torque_control()
-    state, _ = robot._ctrl.readOnce()
-    robot._ctrl.writeOnce(robot._Torques([0.0] * 7))
-    robot._parse_state(state)
-    robot._state_valid = True
-    robot._ft_ema = np.array(state.O_F_ext_hat_K)
+    robot.start_torque_mode()
 
-    # Read a few cycles to stabilize EMA under the applied force
-    for _ in range(10):
-        robot.read_state()
+    # Let EMA stabilize under applied force
+    time.sleep(1.0)
 
-    # Get the latest raw state from the internal ctrl
-    pushed_state, _ = robot._ctrl.readOnce()
-    robot._ctrl.writeOnce(robot._Torques([0.0] * 7))
-    pushed_raw_ft = np.array(pushed_state.O_F_ext_hat_K)
-    pushed_our_ft = robot.get_force_torque()
+    snap_pushed = robot.get_state_snapshot()
+    pushed_our_ft = snap_pushed.force_torque
 
     print(f"\n--- F/T while pushing +X ---")
-    print(f"  Raw O_F_ext_hat_K:  {[f'{v:+.4f}' for v in pushed_raw_ft.tolist()]}")
-    print(f"  Our get_force_torque: {[f'{v:+.4f}' for v in pushed_our_ft.tolist()]}")
+    print(f"  Our force_torque: {[f'{v:+.4f}' for v in pushed_our_ft.tolist()]}")
 
-    delta_raw = pushed_raw_ft - raw_ft
     delta_our = pushed_our_ft.numpy() - our_ft.numpy()
-    print(f"\n  Delta raw Fx: {delta_raw[0]:+.4f}")
-    print(f"  Delta our Fx: {delta_our[0]:+.4f}")
+    print(f"\n  Delta our Fx: {delta_our[0]:+.4f}")
 
     print(f"\n  EXPECTED for training convention (force = -joint_forces):")
-    print(f"    Push +X -> raw O_F_ext_hat_K[0] should be NEGATIVE (reaction force)")
-    print(f"    Push +X -> our get_force_torque()[0] should be POSITIVE (negated reaction)")
+    print(f"    Push +X -> our force_torque[0] delta should be POSITIVE (negated reaction)")
     print(f"\n  MANUAL CHECK: Do the signs above match the expected convention?")
     print(f"  If our Fx delta is positive when pushing +X, the sign convention is correct.")
 
@@ -361,10 +321,10 @@ def phase5_cartesian_reset(robot: FrankaInterface, initial_ee_pos: list):
 
     robot.reset_to_start_pose(target_pose)
 
-    print("\n  Reset complete. Reading state...")
-    robot.read_state()
+    print("\n  Reset complete. Reading snapshot from reset...")
+    snap = robot.get_state_snapshot()
 
-    new_pos = robot.get_ee_position()
+    new_pos = snap.ee_pos
     print(f"\n--- Post-reset EE position ---")
     print(f"  New position: {new_pos.tolist()}")
     print(f"  Expected Z:   ~{target_pos[2]:.4f}")
@@ -374,17 +334,18 @@ def phase5_cartesian_reset(robot: FrankaInterface, initial_ee_pos: list):
     print(f"  Z error: {z_err*1000:.2f}mm")
     print(f"  {'PASS' if z_err < 0.005 else 'WARN'}: Z within 5mm of target")
 
-    # Verify torque control is active
-    print("\n  Verifying torque control is active (one more read_state)...")
-    robot.read_state()
-    print(f"  PASS: read_state() works after reset")
+    # Verify torque control works after reset
+    print("\n  Verifying torque mode starts after reset...")
+    robot.start_torque_mode()
+    snap = robot.get_state_snapshot()
+    print(f"  PASS: torque mode + snapshot works after reset")
 
     # Print all state for inspection
     print(f"\n--- Full state after reset ---")
-    print(f"  ee_pos:     {robot.get_ee_position().tolist()}")
-    print(f"  ee_quat:    {[f'{v:.4f}' for v in robot.get_ee_orientation().tolist()]}")
-    print(f"  joint_pos:  {[f'{v:.4f}' for v in robot.get_joint_positions().tolist()]}")
-    print(f"  force_torque: {[f'{v:.4f}' for v in robot.get_force_torque().tolist()]}")
+    print(f"  ee_pos:     {snap.ee_pos.tolist()}")
+    print(f"  ee_quat:    {[f'{v:.4f}' for v in snap.ee_quat.tolist()]}")
+    print(f"  joint_pos:  {[f'{v:.4f}' for v in snap.joint_pos.tolist()]}")
+    print(f"  force_torque: {[f'{v:.4f}' for v in snap.force_torque.tolist()]}")
 
     # End torque control (keep connection alive for shutdown in main)
     robot.end_control()
@@ -415,7 +376,7 @@ def main():
     print("\n  This test has 5 phases:")
     print("  1. Connect & read raw state (no motion)")
     print("  2. Frame validation (no motion)")
-    print("  3. Torque control + read_state (zero torques, no motion)")
+    print("  3. Torque control + snapshot (zero torques, background thread)")
     print("  4. Force/torque sign convention (manual push)")
     print("  5. Cartesian reset motion (2cm up)")
     print("\n  Each phase waits for Enter before proceeding.")
@@ -441,7 +402,7 @@ def main():
 
         if args.skip_to <= 3:
             wait_for_enter("Press Enter to start Phase 3...")
-            phase3_torque_control_read_state(robot)
+            phase3_torque_control_snapshot(robot)
 
         if args.skip_to <= 4:
             wait_for_enter("Press Enter to start Phase 4...")
