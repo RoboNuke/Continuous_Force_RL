@@ -162,6 +162,11 @@ _FR3_JOINT_POS_LIMITS = np.array([
 
 _FR3_JOINT_VEL_LIMITS = np.array([2.1750, 2.1750, 2.1750, 2.1750, 2.6100, 2.6100, 2.6100])
 
+# Max torque change per 1kHz step: 1000 Nm/s * 0.001s = 1.0 Nm theoretical max
+# (from libfranka rate_limiting.h kMaxTorqueRate)
+# Use 0.75 for safety margin
+_MAX_TORQUE_DELTA = 0.75
+
 _FR3_JOINT_TORQUE_LIMITS = np.array([87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0])
 
 # Safety margins (percentage of limit before triggering violation)
@@ -219,6 +224,12 @@ class FrankaInterface:
         self._robot.set_EE(NE_T_EE)
         self._robot.set_K(EE_T_K)
 
+        # Raise collision thresholds to prevent premature reflex errors during contact
+        self._robot.set_collision_behavior(
+            [100.0] * 7, [100.0] * 7,  # joint torque: lower/upper thresholds
+            [100.0] * 6, [100.0] * 6,  # Cartesian force: lower/upper thresholds
+        )
+
         # Load dynamics model
         self._model = self._robot.load_model()
 
@@ -230,8 +241,10 @@ class FrankaInterface:
         self._ft_ema_alpha = robot_cfg.get('ft_ema_alpha', 0.2)
         self._ft_ema = np.zeros(6)
 
-        # Held torques (applied in read_state's 1kHz loop)
+        # Held torques (target for read_state's 1kHz loop)
         self._held_torques = [0.0] * 7
+        # Commanded torques (actual values sent, ramped toward _held_torques)
+        self._cmd_torques = [0.0] * 7
 
         # Torque control handle (set by reset_to_start_pose)
         self._ctrl = None
@@ -283,8 +296,17 @@ class FrankaInterface:
                 + (1.0 - self._ft_ema_alpha) * self._ft_ema
             )
 
-            # Send held torques
-            cmd = self._Torques(self._held_torques)
+            # Ramp toward held torques at max 1.0 Nm/step (1000 Nm/s at 1kHz)
+            for j in range(7):
+                delta = self._held_torques[j] - self._cmd_torques[j]
+                if delta > _MAX_TORQUE_DELTA:
+                    self._cmd_torques[j] += _MAX_TORQUE_DELTA
+                elif delta < -_MAX_TORQUE_DELTA:
+                    self._cmd_torques[j] -= _MAX_TORQUE_DELTA
+                else:
+                    self._cmd_torques[j] = self._held_torques[j]
+
+            cmd = self._Torques(self._cmd_torques)
             self._ctrl.writeOnce(cmd)
 
             if time.time() - start >= target_dt:
@@ -305,16 +327,67 @@ class FrankaInterface:
             raise ValueError(f"Expected [7] torques, got {torques.shape}")
         self._held_torques = torques.detach().cpu().tolist()
 
-    def reset_to_start_pose(self, target_pose_4x4: np.ndarray):
-        """Move to target pose via Cartesian control, then start torque control.
+    def retract_up(self, height_m: float):
+        """Retract EE vertically upward by the specified height.
 
-        Single code path for both real robot and mock.
+        Uses Cartesian pose control with cosine ramp (same as reset motion).
+        Keeps orientation fixed, only moves in world +Z.
+
+        Args:
+            height_m: Distance to retract upward in meters.
+
+        Raises:
+            ValueError: If height_m <= 0.
+        """
+        if height_m <= 0:
+            raise ValueError(f"retract height must be > 0, got {height_m}")
+
+        ctrl = self._robot.start_cartesian_pose_control(
+            self._pylibfranka.ControllerMode.JointImpedance
+        )
+
+        state, _ = ctrl.readOnce()
+        start_flat = np.array(state.O_T_EE)  # column-major flat [16]
+        start_t = start_flat[12:15].copy()
+
+        target_t = start_t.copy()
+        target_t[2] += height_m  # move up in world Z
+
+        # Use 1 second for retract (1000 steps at 1kHz)
+        n_steps = 1000
+        for i in range(n_steps):
+            alpha = 0.5 * (1.0 - math.cos(math.pi * (i + 1) / n_steps))
+
+            interp_t = (1.0 - alpha) * start_t + alpha * target_t
+
+            # Keep original rotation, only update translation
+            interp_flat = start_flat.copy()
+            interp_flat[12] = interp_t[0]
+            interp_flat[13] = interp_t[1]
+            interp_flat[14] = interp_t[2]
+
+            pose_cmd = self._pylibfranka.CartesianPose(interp_flat.tolist())
+
+            if i == n_steps - 1:
+                pose_cmd.motion_finished = True
+                ctrl.writeOnce(pose_cmd)
+                break
+            ctrl.writeOnce(pose_cmd)
+            state, _ = ctrl.readOnce()
+
+        self.end_control()
+        print(f"[FrankaInterface] Retracted {height_m*100:.1f}cm upward")
+
+    def reset_to_start_pose(self, target_pose_4x4: np.ndarray):
+        """Move to target pose via Cartesian control, then stop.
+
+        Leaves the robot idle after motion completes. Call start_torque_mode()
+        separately to begin torque control for the rollout.
 
         Args:
             target_pose_4x4: [4, 4] numpy homogeneous transform (row-major)
                 for target EE pose.
         """
-        # Phase 1: Cartesian pose control to target
         ctrl = self._robot.start_cartesian_pose_control(
             self._pylibfranka.ControllerMode.JointImpedance
         )
@@ -355,29 +428,44 @@ class FrankaInterface:
                 interp_R[0, 2], interp_R[1, 2], interp_R[2, 2], 0.0,
                 interp_t[0], interp_t[1], interp_t[2], 1.0,
             ])
-            
+
             pose_cmd = self._pylibfranka.CartesianPose(interp_flat.tolist())
-            
+
             if i == n_steps - 1:
                 pose_cmd.motion_finished = True
                 ctrl.writeOnce(pose_cmd)
-                self._robot.stop()
                 break
             ctrl.writeOnce(pose_cmd)
             state, _ = ctrl.readOnce()
-        
-        print("Completed for loop")
-        self.end_control()
-        # Phase 2: Switch to torque control for rollout
-        self._ctrl = self._robot.start_torque_control()
-        state, _ = self._ctrl.readOnce()
-        self._ctrl.writeOnce(self._Torques([0.0] * 7))
-        self._parse_state(state)
 
-        # Reset internal state
-        self._held_torques = [0.0] * 7
-        self._ft_ema = np.zeros(6)
+        # Parse final state from Cartesian motion so EE position is available
+        self._parse_state(state)
         self._state_valid = True
+
+        self.end_control()
+        print("[FrankaInterface] Reset to start pose complete")
+
+    def start_torque_mode(self):
+        """Start torque control mode for rollout.
+
+        Begins torque control and runs a 100ms warm-up at 1kHz with zero
+        torques to establish a stable control stream. The first read_state()
+        call after this continues the stream seamlessly.
+        """
+        self._held_torques = [0.0] * 7
+        self._cmd_torques = [0.0] * 7
+        self._ft_ema = np.zeros(6)
+        self._ctrl = self._robot.start_torque_control()
+
+        # Run 1kHz zero-torque loop for 100ms to stabilize
+        warmup_steps = 100
+        for wi in range(warmup_steps):
+            state, _ = self._ctrl.readOnce()
+            self._ctrl.writeOnce(self._Torques([0.0] * 7))
+
+        self._parse_state(state)
+        self._state_valid = True
+        print(f"[FrankaInterface] Torque control started (warmup {warmup_steps} steps OK)")
 
     def check_safety(self):
         """Check joint pos/vel limits and force magnitude on cached state.

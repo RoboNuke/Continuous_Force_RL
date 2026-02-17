@@ -472,16 +472,21 @@ def run_episode(
     start_yaw_noise = (2 * torch.rand(1, device=device).item() - 1) * hand_init_orn_noise[2]
 
     # 3. Compute target EE start pose in world frame
-    # hand_init_pos is relative to fixed_asset_position (hole tip)
-    target_ee_pos = goal_position + hand_init_pos + start_pos_noise
+    # hand_init_pos is relative to hole tip (top of hole), but goal_position is hole
+    # bottom, so add hole_height in Z to get the tip reference point
+    hole_tip_offset = torch.tensor([0.0, 0.0, hole_height], device=device, dtype=torch.float32)
+    target_ee_pos = goal_position + hole_tip_offset + hand_init_pos + start_pos_noise
     target_rpy = [hand_init_orn[0], hand_init_orn[1], hand_init_orn[2] + start_yaw_noise]
     target_pose = make_ee_target_pose(target_ee_pos.cpu().numpy(), np.array(target_rpy))
 
-    # 4. Reset robot to start pose
-    robot.reset_to_start_pose(target_pose)
+    # 4. Retract upward to safely clear the hole before moving to new start pose
+    retract_height = real_config['robot']['retract_height_m']
+    input("    [WAIT] Press Enter to RETRACT upward...")
+    robot.retract_up(retract_height)
 
-    ee_pos = robot.get_ee_position()
-    controller.reset(ee_pos, noisy_goal)
+    # 5. Reset robot to start pose
+    input("    [WAIT] Press Enter to MOVE TO START POSE...")
+    robot.reset_to_start_pose(target_pose)
 
     prev_actions = torch.zeros(model_info['action_dim'], device=device)
 
@@ -499,8 +504,16 @@ def run_episode(
 
     contact_force_threshold = obs_builder.contact_force_threshold
 
+    # 6. Initialize controller using cached EE state from reset_to_start_pose
+    ee_pos = robot.get_ee_position()
+    controller.reset(ee_pos, noisy_goal)
+
+    # 7. Start torque control — go straight into the loop, no work in between
+    input("    [WAIT] Press Enter to START ROLLOUT...")
+    robot.start_torque_mode()
     for step in range(max_steps):
         # read_state runs 1kHz loop for ~67ms, handles timing
+        print(f"    [DEBUG] step={step} held={[f'{t:.2f}' for t in robot._held_torques]} cmd={[f'{t:.2f}' for t in robot._cmd_torques]}")
         robot.read_state()
         robot.check_safety()
 

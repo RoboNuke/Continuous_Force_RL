@@ -4,9 +4,10 @@
 
 robot:
   ip: "192.168.1.11"
-  use_mock: true              # Set false for real robot
+  use_mock: false              # Set false for real robot
   control_rate_hz: 15.0       # Must match training policy_hz
   reset_duration_sec: 3.0     # Duration for Cartesian reset motion
+  retract_height_m: 0.05      # Retract upward before reset to clear hole (meters)
 
   # Standard Franka Hand NE_T_EE: 45deg Z rotation + 103.4mm Z offset (flange -> fingertip midpoint)
   # Column-major 4x4 homogeneous transform [R|t; 0 0 0 1]
@@ -32,18 +33,18 @@ robot:
 task:
   # Fixed asset position (hole position in world frame, meters)
   # This is "fixed_pos" in sim - used for OBSERVATIONS (fingertip_pos_rel_fixed = ee_pos - this)
-  fixed_asset_position: [0.0, 0.0, 0.0]
+  fixed_asset_position: [0.607, -0.003, 0.0556]
   fixed_asset_orientation_quat: [1.0, 0.0, 0.0, 0.0]  # [w, x, y, z]
 
   # Target peg base position (where peg base should be when fully inserted)
   # This is "target_held_base_pos" in sim - used for SUCCESS/ENGAGEMENT DETECTION
   # May differ from fixed_asset_position depending on geometry
-  target_peg_base_position: [0.0, 0.0, 0.0]
+  target_peg_base_position: [0.607, -0.003, 0.0556]
 
   # Offset from EE (fingertip midpoint) to peg base (grasped object root)
   # Needed to compute peg_base_pos = ee_pos + this offset for detection
   # Must be measured for your specific peg + gripper setup
-  ee_to_peg_base_offset: [0.0, 0.0, -0.05]  # Example: peg extends 50mm below EE
+  ee_to_peg_base_offset: [0.0, 0.0, -0.0412]  # Example: peg extends 50mm below EE
 
   # Detection thresholds (matching IsaacLab factory env logic exactly)
   # Success: xy_dist < xy_centering_threshold AND z_disp < hole_height * success_threshold
@@ -54,7 +55,7 @@ task:
   engage_threshold: 0.9            # Multiplied by hole_height -> 22.5mm Z threshold
 
   # Break detection (matches FragileObjectWrapper)
-  break_force_threshold: 15.0      # N - L2 norm of force (Fx,Fy,Fz) >= this triggers break
+  break_force_threshold: 10.0      # N - L2 norm of force (Fx,Fy,Fz) >= this triggers break
 
   # Episode parameters
   episode_timeout_steps: 150       # Max steps per episode
