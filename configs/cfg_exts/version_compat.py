@@ -2,10 +2,51 @@
 Isaac Lab Version Compatibility Handler
 
 Handles imports across different Isaac Lab versions and provides fallbacks for testing.
+
+When running outside Isaac Sim (e.g., real robot evaluation), call set_no_sim_mode(True)
+BEFORE importing any modules that depend on Isaac Lab. This provides mock base classes
+so the config infrastructure can be used without the simulator.
 """
 
 # Cache for consistent class identities across imports
 _cached_imports = None
+
+# When True, skip Isaac Sim imports and return mock classes instead
+_no_sim_mode = False
+
+
+def set_no_sim_mode(enabled=True):
+    """Enable standalone mode to skip all Isaac Sim imports and use mock classes.
+
+    Must be called BEFORE any modules that use get_isaac_lab_factory_imports()
+    or get_isaac_lab_task_imports() are imported.
+    """
+    global _no_sim_mode
+    _no_sim_mode = enabled
+    if enabled:
+        print("[CONFIG]: No-sim mode enabled — Isaac Sim imports will be skipped")
+
+
+def _mock_configclass(cls):
+    """Mock replacement for Isaac Lab's @configclass that handles mutable defaults.
+
+    Isaac Lab's configclass auto-wraps mutable defaults (list, dict, set) with
+    dataclasses.field(default_factory=...). Standard @dataclass does not, so this
+    wrapper replicates that behavior.
+    """
+    import dataclasses
+    from copy import deepcopy
+
+    annotations = getattr(cls, '__annotations__', {})
+    for name, _ in annotations.items():
+        if hasattr(cls, name):
+            val = getattr(cls, name)
+            if isinstance(val, (list, dict, set)):
+                # Replace mutable default with a field using default_factory
+                default_val = val
+                setattr(cls, name, dataclasses.field(default_factory=lambda v=default_val: deepcopy(v)))
+
+    return dataclasses.dataclass(cls)
 
 
 def get_isaac_lab_ctrl_imports():
@@ -76,6 +117,22 @@ def get_isaac_lab_ctrl_imports():
 
 def get_isaac_lab_factory_imports():
     """Get Isaac Lab factory environments config imports with version compatibility."""
+    if _no_sim_mode:
+        @_mock_configclass
+        class MockFactoryTaskPegInsertCfg:
+            pass
+
+        @_mock_configclass
+        class MockFactoryTaskGearMeshCfg:
+            pass
+
+        @_mock_configclass
+        class MockFactoryTaskNutThreadCfg:
+            pass
+
+        print("[CONFIG]: Using no-sim mock factory env imports")
+        return (_mock_configclass, MockFactoryTaskPegInsertCfg, MockFactoryTaskGearMeshCfg, MockFactoryTaskNutThreadCfg)
+
     try:
         # Isaac Lab v2+ (isaaclab_tasks)
         from isaaclab.utils.configclass import configclass
@@ -99,6 +156,23 @@ def get_isaac_lab_factory_imports():
 
 
 def get_isaac_lab_task_imports():
+    """Get Isaac Lab task config imports with version compatibility."""
+    if _no_sim_mode:
+        @_mock_configclass
+        class MockPegInsert:
+            pass
+
+        @_mock_configclass
+        class MockGearMesh:
+            pass
+
+        @_mock_configclass
+        class MockNutThread:
+            pass
+
+        print("[CONFIG]: Using no-sim mock task imports")
+        return (_mock_configclass, MockPegInsert, MockGearMesh, MockNutThread)
+
     try:
         # Isaac Lab v2+ (isaaclab_tasks)
         from isaaclab.utils.configclass import configclass
@@ -109,7 +183,7 @@ def get_isaac_lab_task_imports():
         )
         print("[CONFIG]: Using Isaac Lab v2+ task imports")
         return (
-            configclass, 
+            configclass,
             PegInsert,
             GearMesh,
             NutThread
@@ -124,9 +198,30 @@ def get_isaac_lab_task_imports():
         )
         print("[CONFIG]: Using Isaac Lab v1.4.1 task imports")
         return (
-            configclass, 
+            configclass,
             PegInsert,
             GearMesh,
             NutThread
         )
-        
+
+
+def get_contact_sensor_cfg():
+    """Get ContactSensorCfg class with version compatibility."""
+    if _no_sim_mode:
+        @_mock_configclass
+        class MockContactSensorCfg:
+            prim_path: str = ""
+            update_period: float = 0.0
+            history_length: int = 0
+            debug_vis: bool = False
+            filter_prim_paths_expr: list = None
+            track_air_time: bool = False
+
+        return MockContactSensorCfg
+
+    try:
+        from isaaclab.sensors import ContactSensorCfg
+        return ContactSensorCfg
+    except ImportError:
+        from omni.isaac.lab.sensors import ContactSensorCfg
+        return ContactSensorCfg

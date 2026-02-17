@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from .version_compat import get_isaac_lab_task_imports
+from .version_compat import get_isaac_lab_task_imports, get_contact_sensor_cfg
 
 
 def _get_project_root() -> str:
@@ -35,10 +35,7 @@ def _get_project_root() -> str:
 configclass, PegInsert, _, _ = get_isaac_lab_task_imports()
 from configs.cfg_exts.ctrl_cfg import ExtendedCtrlCfg
 
-try:
-    from isaaclab.sensors import ContactSensorCfg
-except:
-    from omni.isaac.lab.sensors import ContactSensorCfg
+ContactSensorCfg = get_contact_sensor_cfg()
 
 
 def build_contact_sensor_cfg(peg_prim_name: str, hole_prim_name: str) -> ContactSensorCfg:

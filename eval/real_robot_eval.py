@@ -127,6 +127,7 @@ def reconstruct_obs_order(configs: dict) -> list:
 def load_single_agent_policy(
     policy_path: str,
     configs: dict,
+    obs_dim: int,
     device: str = "cpu",
 ) -> Tuple[SimBaNet, ObservationNormalizer, dict]:
     """Load a trained policy network and normalizer from checkpoint.
@@ -136,6 +137,9 @@ def load_single_agent_policy(
     Args:
         policy_path: Path to policy .pt checkpoint file.
         configs: Training config dict from WandB.
+        obs_dim: Policy observation dimension (from obs_order + action_dim).
+                 The preprocessor may have more dimensions (policy + critic),
+                 so only the first obs_dim elements are used for normalization.
         device: Torch device.
 
     Returns:
@@ -152,8 +156,14 @@ def load_single_agent_policy(
     if 'state_preprocessor' not in checkpoint:
         raise RuntimeError(f"Policy checkpoint missing 'state_preprocessor': {policy_path}")
 
-    # Extract dimensions from checkpoint
-    obs_dim = checkpoint['state_preprocessor']['running_mean'].shape[0]
+    # Validate obs_dim matches the network's input layer
+    net_input_dim = checkpoint['net_state_dict']['input.0.weight'].shape[1]
+    if net_input_dim != obs_dim:
+        raise RuntimeError(
+            f"obs_dim mismatch: obs_order+action_dim gives {obs_dim} but "
+            f"network input layer expects {net_input_dim}. "
+            f"Check that obs_order reconstruction matches training config."
+        )
 
     # Model architecture from training config
     actor_n = configs['model'].actor.n
@@ -198,8 +208,11 @@ def load_single_agent_policy(
     policy_net.load_state_dict(checkpoint['net_state_dict'])
     policy_net.eval()
 
-    # Create normalizer
-    normalizer = ObservationNormalizer(checkpoint['state_preprocessor'], device=device)
+    # Create normalizer — slice to policy obs_dim only (preprocessor includes
+    # both policy and critic observations, we only need the policy portion)
+    normalizer = ObservationNormalizer(
+        checkpoint['state_preprocessor'], device=device, obs_dim=obs_dim
+    )
 
     model_info = {
         'sigma_idx': sigma_idx,
@@ -601,7 +614,7 @@ def main():
     parser = argparse.ArgumentParser(description="Real Robot Evaluation")
     parser.add_argument("--tag", type=str, required=True, help="WandB experiment tag")
     parser.add_argument("--entity", type=str, default="hur", help="WandB entity")
-    parser.add_argument("--project", type=str, default="Peg_in_Hole", help="WandB project")
+    parser.add_argument("--project", type=str, default="SG_Exps", help="WandB project")
     parser.add_argument("--num_episodes", type=int, default=20, help="Episodes per agent")
     parser.add_argument("--eval_seed", type=int, default=42, help="Random seed")
     parser.add_argument("--no_wandb", action="store_true", help="Disable WandB logging")
@@ -622,14 +635,18 @@ def main():
     print(f"\nLoading config: {args.config}")
     real_config = load_real_robot_config(args.config, args.override)
 
+    # Enable no-sim mode before importing config infrastructure
+    from configs.cfg_exts.version_compat import set_no_sim_mode
+    set_no_sim_mode(True)
+
     # 2. Query WandB for training runs
     import wandb
     from eval.checkpoint_utils import (
         query_runs_by_tag,
         reconstruct_config_from_wandb,
         download_checkpoint_pair,
+        get_best_checkpoints_for_runs,
     )
-    from eval.wandb_eval import get_best_checkpoints_for_runs
 
     print(f"\nQuerying WandB for runs with tag: {args.tag}")
     runs = query_runs_by_tag(args.tag, args.entity, args.project, args.run_id)
@@ -736,7 +753,7 @@ def main():
         try:
             # Load policy
             policy_net, normalizer, model_info = load_single_agent_policy(
-                policy_path, configs, device=args.device,
+                policy_path, configs, obs_dim=obs_builder.obs_dim, device=args.device,
             )
 
             # Validate observation dimensions

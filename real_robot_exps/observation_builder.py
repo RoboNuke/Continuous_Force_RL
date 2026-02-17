@@ -207,7 +207,8 @@ class ObservationNormalizer:
         eps: Epsilon for numerical stability (default 1e-8, matching SKRL).
     """
 
-    def __init__(self, checkpoint_preprocessor: dict, device: str = "cpu", eps: float = 1e-8):
+    def __init__(self, checkpoint_preprocessor: dict, device: str = "cpu",
+                 eps: float = 1e-8, obs_dim: int = None):
         self.device = device
         self.eps = eps
 
@@ -216,9 +217,27 @@ class ObservationNormalizer:
         if "running_variance" not in checkpoint_preprocessor:
             raise ValueError("Checkpoint state_preprocessor missing 'running_variance'")
 
-        self.running_mean = checkpoint_preprocessor["running_mean"].to(device).float()
-        self.running_variance = checkpoint_preprocessor["running_variance"].to(device).float()
-        self.obs_dim = self.running_mean.shape[0]
+        full_mean = checkpoint_preprocessor["running_mean"].to(device).float()
+        full_var = checkpoint_preprocessor["running_variance"].to(device).float()
+        full_dim = full_mean.shape[0]
+
+        # The preprocessor may contain stats for both policy and critic observations.
+        # If obs_dim is provided, slice to only the policy's portion.
+        if obs_dim is not None and obs_dim < full_dim:
+            self.running_mean = full_mean[:obs_dim]
+            self.running_variance = full_var[:obs_dim]
+            self.obs_dim = obs_dim
+            print(f"[ObservationNormalizer] Sliced preprocessor stats: "
+                  f"policy obs_dim={obs_dim} from full dim={full_dim}")
+        elif obs_dim is not None and obs_dim != full_dim:
+            raise ValueError(
+                f"obs_dim={obs_dim} is larger than preprocessor dim={full_dim}. "
+                f"This should not happen — check obs_order reconstruction."
+            )
+        else:
+            self.running_mean = full_mean
+            self.running_variance = full_var
+            self.obs_dim = full_dim
 
         count = checkpoint_preprocessor.get("current_count", torch.tensor(1.0))
         print(f"[ObservationNormalizer] Loaded frozen stats: obs_dim={self.obs_dim}, "

@@ -5,16 +5,13 @@ This module defines ExtendedFactoryTaskNutThreadCfg which extends Isaac Lab's
 FactoryTaskNutThreadCfg with our custom parameters.
 """
 
-from .version_compat import get_isaac_lab_task_imports
+from .version_compat import get_isaac_lab_task_imports, get_contact_sensor_cfg
 
 # Get Isaac Lab imports with version compatibility
 configclass, _, _, NutThread = get_isaac_lab_task_imports()
 from configs.cfg_exts.ctrl_cfg import ExtendedCtrlCfg
 
-try:
-    from isaaclab.sensors import ContactSensorCfg
-except:
-    from omni.isaac.lab.sensors import ContactSensorCfg
+ContactSensorCfg = get_contact_sensor_cfg()
 
 
 @configclass

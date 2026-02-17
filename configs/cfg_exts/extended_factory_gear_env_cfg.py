@@ -47,10 +47,12 @@ class ExtendedFactoryGearEnvCfg(GearFactoryEnv):
 
         # Update scene configuration for multi-agent setup
         if hasattr(self, 'scene') and self.scene is not None:
-            self.scene.num_envs = primary_cfg.total_num_envs
-            # Isaac Lab scene configs typically have replicate_physics
-            if hasattr(self.scene, 'replicate_physics'):
-                self.scene.replicate_physics = True
+            if isinstance(self.scene, dict):
+                self.scene['num_envs'] = primary_cfg.total_num_envs
+            else:
+                self.scene.num_envs = primary_cfg.total_num_envs
+                if hasattr(self.scene, 'replicate_physics'):
+                    self.scene.replicate_physics = True
 
         # Store reference to primary config for computed properties
         self._primary_cfg = primary_cfg

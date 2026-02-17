@@ -9,7 +9,7 @@ import os
 import time
 import shutil
 import tempfile
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import torch
 import wandb
@@ -444,3 +444,122 @@ def load_checkpoints_parallel(
         print(f"  All {len(runs)} checkpoints loaded successfully! (eval mode)")
 
     return download_dirs
+
+
+def get_best_checkpoints_for_runs(
+    api: wandb.Api,
+    runs: List[wandb.Run],
+    method_tag: str,
+    entity: str,
+    project: str
+) -> Dict[str, int]:
+    """
+    Determine the best checkpoint for each run based on eval_performance data.
+
+    Uses the same logic as analysis_utils.get_best_checkpoint_per_run():
+    score = num_successful_completions - num_breaks
+
+    Args:
+        api: WandB API instance
+        runs: List of training runs to find best checkpoints for
+        method_tag: Tag identifying the method/experiment (e.g., "MATCH:2024-01-15_10:00")
+        entity: WandB entity name
+        project: WandB project name
+
+    Returns:
+        Dict mapping source_run_id -> best_checkpoint_step
+
+    Raises:
+        RuntimeError: If no eval_performance data found for any run
+    """
+    print(f"\n{'=' * 80}")
+    print("BEST CHECKPOINT DISCOVERY")
+    print(f"{'=' * 80}")
+    print(f"Querying eval_performance runs with tags: '{method_tag}' AND 'eval_performance'")
+
+    # Query for eval_performance runs with both tags
+    eval_perf_runs = api.runs(
+        f"{entity}/{project}",
+        filters={"$and": [{"tags": method_tag}, {"tags": "eval_performance"}]}
+    )
+    eval_perf_runs = list(eval_perf_runs)
+
+    if len(eval_perf_runs) == 0:
+        raise RuntimeError(
+            f"No eval_performance runs found with tags '{method_tag}' AND 'eval_performance'. "
+            f"You must run eval_mode=performance first before using --eval_best_policies."
+        )
+
+    print(f"Found {len(eval_perf_runs)} eval_performance runs")
+
+    # Build mapping from eval run to source training run
+    # Eval runs have tag "source_run:{source_run_id}"
+    eval_run_to_source = {}
+    for eval_run in eval_perf_runs:
+        for tag in eval_run.tags:
+            if tag.startswith("source_run:"):
+                source_id = tag.split(":", 1)[1]
+                eval_run_to_source[eval_run.id] = source_id
+                break
+
+    # Build set of training run IDs we need best checkpoints for
+    training_run_ids = {run.id for run in runs}
+
+    # Find best checkpoint for each training run
+    best_checkpoints = {}
+    missing_runs = []
+
+    for training_run in runs:
+        # Find the eval_performance run for this training run
+        matching_eval_run = None
+        for eval_run in eval_perf_runs:
+            if eval_run_to_source.get(eval_run.id) == training_run.id:
+                matching_eval_run = eval_run
+                break
+
+        if matching_eval_run is None:
+            missing_runs.append(training_run)
+            continue
+
+        # Get history and find best checkpoint
+        history = matching_eval_run.history()
+        if history.empty:
+            missing_runs.append(training_run)
+            continue
+
+        # Check required columns exist
+        success_col = "Eval_Core/num_successful_completions"
+        breaks_col = "Eval_Core/num_breaks"
+        steps_col = "total_steps"
+
+        if success_col not in history.columns or breaks_col not in history.columns:
+            raise RuntimeError(
+                f"eval_performance run {matching_eval_run.id} missing required columns. "
+                f"Expected '{success_col}' and '{breaks_col}'. "
+                f"Available columns: {list(history.columns)}"
+            )
+
+        if steps_col not in history.columns:
+            raise RuntimeError(
+                f"eval_performance run {matching_eval_run.id} missing '{steps_col}' column."
+            )
+
+        # Calculate score: successes - breaks
+        history["_score"] = history[success_col] - history[breaks_col]
+        best_idx = history["_score"].idxmax()
+        best_step = int(history.loc[best_idx, steps_col])
+        best_score = history.loc[best_idx, "_score"]
+
+        best_checkpoints[training_run.id] = best_step
+        print(f"  {training_run.name}: best checkpoint at step {best_step} (score: {best_score:.0f})")
+
+    # Error if any runs are missing eval_performance data
+    if missing_runs:
+        missing_names = [r.name for r in missing_runs]
+        raise RuntimeError(
+            f"No eval_performance data found for {len(missing_runs)} run(s): {missing_names}. "
+            f"All runs must have eval_performance data before using --eval_best_policies."
+        )
+
+    print(f"\nFound best checkpoints for all {len(best_checkpoints)} runs")
+    return best_checkpoints
