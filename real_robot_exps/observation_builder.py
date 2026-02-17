@@ -45,6 +45,8 @@ class ObservationBuilder:
                              during training (from training config).
         tanh_ft_scale: Scale factor for tanh transform (default 0.03).
         contact_force_threshold: Force threshold for in_contact detection (N).
+        fixed_asset_yaw: Known yaw angle of the fixed asset on the table (radians).
+                         Used to compute fingertip_yaw_rel_fixed matching sim.
         device: Torch device.
     """
 
@@ -55,6 +57,7 @@ class ObservationBuilder:
         use_tanh_ft_scaling: bool = False,
         tanh_ft_scale: float = 0.03,
         contact_force_threshold: float = 1.5,
+        fixed_asset_yaw: float = 0.0,
         device: str = "cpu",
     ):
         self.obs_order = list(obs_order)
@@ -62,6 +65,7 @@ class ObservationBuilder:
         self.use_tanh_ft_scaling = use_tanh_ft_scaling
         self.tanh_ft_scale = tanh_ft_scale
         self.contact_force_threshold = contact_force_threshold
+        self.fixed_asset_yaw = fixed_asset_yaw
         self.device = device
 
         # Validate all obs components are known
@@ -98,30 +102,32 @@ class ObservationBuilder:
 
     def build_observation(
         self,
-        robot_interface,
+        snapshot,
         goal_position: torch.Tensor,
         prev_actions: torch.Tensor,
         fixed_yaw_offset: float = 0.0,
     ) -> torch.Tensor:
-        """Construct observation vector from robot state.
+        """Construct observation vector from robot state snapshot.
 
         Args:
-            robot_interface: FrankaROS2Interface instance.
-            goal_position: [3] fixed asset position (for relative observations).
-                          This is fixed_pos in sim, NOT target_peg_base_pos.
-            prev_actions: [action_dim] previous EMA-smoothed actions.
-            fixed_yaw_offset: Yaw offset for fingertip_yaw_rel_fixed (radians).
+            snapshot: StateSnapshot namedtuple from FrankaInterface.
+            goal_position: [3] observation frame position (hole tip + per-episode noise).
+                          Matches sim's (fixed_pos_obs_frame + init_fixed_pos_obs_noise).
+            prev_actions: [action_dim] previous raw policy actions (matching sim's
+                          self.actions.clone(), NOT EMA-smoothed).
+            fixed_yaw_offset: Per-episode yaw noise for fingertip_yaw_rel_fixed (radians).
+                             Added to fixed_asset_yaw before computing relative yaw.
 
         Returns:
             [obs_dim] observation tensor (single environment, unbatched).
         """
-        # Read robot state
-        ee_pos = robot_interface.get_ee_position()       # [3]
-        ee_quat = robot_interface.get_ee_orientation()    # [4] (w,x,y,z)
-        ee_linvel = robot_interface.get_ee_linear_velocity()   # [3]
-        ee_angvel = robot_interface.get_ee_angular_velocity()  # [3]
-        force_torque = robot_interface.get_force_torque()      # [6]
-        joint_pos = robot_interface.get_joint_positions()       # [7]
+        # Read state from snapshot
+        ee_pos = snapshot.ee_pos            # [3]
+        ee_quat = snapshot.ee_quat          # [4] (w,x,y,z)
+        ee_linvel = snapshot.ee_linvel      # [3]
+        ee_angvel = snapshot.ee_angvel      # [3]
+        force_torque = snapshot.force_torque # [6]
+        joint_pos = snapshot.joint_pos      # [7]
 
         # Build component dictionary
         components = {}
@@ -138,12 +144,22 @@ class ObservationBuilder:
         components["fingertip_quat"] = ee_quat
 
         # Relative yaw (if in obs_order)
+        # Matches sim's EEPoseNoiseWrapper._compute_fingertip_yaw_rel_fixed:
+        #   1. Un-rotate EE quat by 180° around X (gripper points down)
+        #   2. Extract yaw from un-rotated quat
+        #   3. Subtract fixed asset yaw (with per-episode noise offset)
+        #   4. Wrap to [-pi, pi]
         if "fingertip_yaw_rel_fixed" in self.obs_order:
-            ee_yaw = _quat_to_yaw(ee_quat)
-            # Normalize yaw difference similar to sim
-            yaw_rel = ee_yaw + fixed_yaw_offset
+            fingertip_yaw = _fingertip_yaw_unrotated(ee_quat)
+            noisy_fixed_yaw = self.fixed_asset_yaw + fixed_yaw_offset
+            rel_yaw = fingertip_yaw - noisy_fixed_yaw
+            # Wrap to [-pi, pi]
+            if rel_yaw > math.pi:
+                rel_yaw -= 2 * math.pi
+            elif rel_yaw < -math.pi:
+                rel_yaw += 2 * math.pi
             components["fingertip_yaw_rel_fixed"] = torch.tensor(
-                [yaw_rel], device=self.device, dtype=torch.float32
+                [rel_yaw], device=self.device, dtype=torch.float32
             )
 
         # Velocities
@@ -255,20 +271,50 @@ class ObservationNormalizer:
         return (obs - self.running_mean) / torch.sqrt(self.running_variance + self.eps)
 
 
-def _quat_to_yaw(quat: torch.Tensor) -> float:
-    """Extract yaw angle from quaternion (w, x, y, z).
-
-    Uses the standard aerospace ZYX Euler angle extraction for yaw.
+def _quat_mul(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
+    """Hamilton product of two (w, x, y, z) quaternions.
 
     Args:
-        quat: [4] quaternion tensor (w, x, y, z).
+        q1: [4] quaternion tensor (w, x, y, z).
+        q2: [4] quaternion tensor (w, x, y, z).
 
     Returns:
-        Yaw angle in radians.
+        [4] product quaternion (w, x, y, z).
     """
-    w, x, y, z = quat[0].item(), quat[1].item(), quat[2].item(), quat[3].item()
-    # ZYX Euler: yaw = atan2(2*(w*z + x*y), 1 - 2*(y*y + z*z))
+    w1, x1, y1, z1 = q1[0], q1[1], q1[2], q1[3]
+    w2, x2, y2, z2 = q2[0], q2[1], q2[2], q2[3]
+    return torch.stack([
+        w1*w2 - x1*x2 - y1*y2 - z1*z2,
+        w1*x2 + x1*w2 + y1*z2 - z1*y2,
+        w1*y2 - x1*z2 + y1*w2 + z1*x2,
+        w1*z2 + x1*y2 - y1*x2 + z1*w2,
+    ])
+
+
+# 180° rotation around X: quat_from_euler(roll=-pi, pitch=0, yaw=0) = (0, -1, 0, 0)
+_UNROT_180X_QUAT = torch.tensor([0.0, -1.0, 0.0, 0.0], dtype=torch.float32)
+
+
+def _fingertip_yaw_unrotated(ee_quat: torch.Tensor) -> float:
+    """Extract yaw after un-rotating EE quaternion by 180° around X.
+
+    The Franka gripper points down (180° X rotation from upright). The sim
+    un-rotates this before extracting yaw so the yaw is in the "upright"
+    frame. This function replicates that exact computation.
+
+    Matches EEPoseNoiseWrapper._compute_fingertip_yaw_rel_fixed in sim.
+
+    Args:
+        ee_quat: [4] EE quaternion (w, x, y, z).
+
+    Returns:
+        Yaw angle in radians (in un-rotated frame).
+    """
+    unrot = _UNROT_180X_QUAT.to(device=ee_quat.device, dtype=ee_quat.dtype)
+    q_unrot = _quat_mul(unrot, ee_quat)
+
+    # Standard ZYX Euler yaw extraction
+    w, x, y, z = q_unrot[0].item(), q_unrot[1].item(), q_unrot[2].item(), q_unrot[3].item()
     siny_cosp = 2.0 * (w * z + x * y)
     cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-    yaw = math.atan2(siny_cosp, cosy_cosp)
-    return yaw
+    return math.atan2(siny_cosp, cosy_cosp)

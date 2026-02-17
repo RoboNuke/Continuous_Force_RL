@@ -31,10 +31,14 @@ robot:
   ft_ema_alpha: 0.2
 
 task:
-  # Fixed asset position (hole position in world frame, meters)
-  # This is "fixed_pos" in sim - used for OBSERVATIONS (fingertip_pos_rel_fixed = ee_pos - this)
+  # Fixed asset origin position (hole base in world frame, meters)
+  # The observation frame (sim's fixed_pos_obs_frame) is computed as:
+  #   obs_frame = fixed_asset_position + [0, 0, hole_height + fixed_asset_base_height]
+  # which gives the HOLE TIP (entrance) position matching the sim exactly.
   fixed_asset_position: [0.607, -0.003, 0.0556]
   fixed_asset_orientation_quat: [1.0, 0.0, 0.0, 0.0]  # [w, x, y, z]
+  fixed_asset_yaw: 0.0                # Yaw of fixed asset in world frame (radians)
+  fixed_asset_base_height: 0.0        # Height of base plate below hole channel (meters)
 
   # Target peg base position (where peg base should be when fully inserted)
   # This is "target_held_base_pos" in sim - used for SUCCESS/ENGAGEMENT DETECTION

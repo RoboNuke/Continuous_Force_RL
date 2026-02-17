@@ -24,7 +24,7 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.SimBa import SimBaNet
-from real_robot_exps.robot_interface import FrankaInterface, make_ee_target_pose
+from real_robot_exps.robot_interface import FrankaInterface, StateSnapshot, make_ee_target_pose
 from real_robot_exps.observation_builder import ObservationBuilder, ObservationNormalizer
 from real_robot_exps.hybrid_controller import RealRobotController
 
@@ -446,7 +446,12 @@ def run_episode(
         Episode result dict for metrics computation.
     """
     task_cfg = real_config['task']
-    goal_position = torch.tensor(task_cfg['fixed_asset_position'], device=device, dtype=torch.float32)
+    fixed_asset_position = torch.tensor(task_cfg['fixed_asset_position'], device=device, dtype=torch.float32)
+    # Compute observation frame at the hole TIP (entrance), matching sim's fixed_pos_obs_frame:
+    #   fixed_pos_obs_frame = fixed_pos + [0, 0, height + base_height]
+    obs_frame_z_offset = task_cfg['hole_height'] + task_cfg['fixed_asset_base_height']
+    goal_position = fixed_asset_position.clone()
+    goal_position[2] += obs_frame_z_offset
     target_peg_base_pos = torch.tensor(task_cfg['target_peg_base_position'], device=device, dtype=torch.float32)
     ee_to_peg_base_offset = torch.tensor(task_cfg['ee_to_peg_base_offset'], device=device, dtype=torch.float32)
 
@@ -472,10 +477,9 @@ def run_episode(
     start_yaw_noise = (2 * torch.rand(1, device=device).item() - 1) * hand_init_orn_noise[2]
 
     # 3. Compute target EE start pose in world frame
-    # hand_init_pos is relative to hole tip (top of hole), but goal_position is hole
-    # bottom, so add hole_height in Z to get the tip reference point
-    hole_tip_offset = torch.tensor([0.0, 0.0, hole_height], device=device, dtype=torch.float32)
-    target_ee_pos = goal_position + hole_tip_offset + hand_init_pos + start_pos_noise
+    # goal_position is already at the hole TIP (obs frame), so hand_init_pos
+    # is relative to it directly — matching sim's: above_fixed_pos = fixed_tip_pos + hand_init_pos[2]
+    target_ee_pos = goal_position + hand_init_pos + start_pos_noise
     target_rpy = [hand_init_orn[0], hand_init_orn[1], hand_init_orn[2] + start_yaw_noise]
     target_pose = make_ee_target_pose(target_ee_pos.cpu().numpy(), np.array(target_rpy))
 
@@ -505,71 +509,61 @@ def run_episode(
     contact_force_threshold = obs_builder.contact_force_threshold
 
     # 6. Initialize controller using cached EE state from reset_to_start_pose
-    ee_pos = robot.get_ee_position()
-    controller.reset(ee_pos, noisy_goal)
+    snap = robot.get_state_snapshot()
+    controller.reset(snap.ee_pos, noisy_goal)
 
-    # 7. Start torque control — go straight into the loop, no work in between
+    # 7. Start torque control — background 1kHz thread keeps robot fed
     input("    [WAIT] Press Enter to START ROLLOUT...")
     robot.start_torque_mode()
     for step in range(max_steps):
-        # read_state runs 1kHz loop for ~67ms, handles timing
-        print(f"    [DEBUG] step={step} held={[f'{t:.2f}' for t in robot._held_torques]} cmd={[f'{t:.2f}' for t in robot._cmd_torques]}")
-        robot.read_state()
-        robot.check_safety()
+        # Wait for 15Hz policy step timing, then grab latest snapshot
+        robot.wait_for_policy_step()
+        snap = robot.get_state_snapshot()
+        robot.check_safety(snap)
 
-        # Build observation (uses noisy_goal for obs frame, yaw_offset for yaw noise)
-        obs = obs_builder.build_observation(robot, noisy_goal, prev_actions, fixed_yaw_offset=yaw_offset)
+        # Build observation from snapshot (uses noisy_goal for obs frame)
+        obs = obs_builder.build_observation(snap, noisy_goal, prev_actions, fixed_yaw_offset=yaw_offset)
 
         # Get action
         action = get_deterministic_action(policy_net, normalizer, obs, model_info)
 
-        # Read robot state for controller
-        ee_pos = robot.get_ee_position()
-        ee_quat = robot.get_ee_orientation()
-        ee_linvel = robot.get_ee_linear_velocity()
-        ee_angvel = robot.get_ee_angular_velocity()
-        force_torque = robot.get_force_torque()
-        joint_pos = robot.get_joint_positions()
-        joint_vel = robot.get_joint_velocities()
-        jacobian = robot.get_jacobian()
-        mass_matrix = robot.get_mass_matrix()
-
-        # Compute control (action frame uses noisy goal)
+        # Compute control from snapshot state (action frame uses noisy goal)
         ctrl_output = controller.compute_action(
-            action, ee_pos, ee_quat, ee_linvel, ee_angvel,
-            force_torque, joint_pos, joint_vel, jacobian, mass_matrix,
+            action, snap.ee_pos, snap.ee_quat, snap.ee_linvel, snap.ee_angvel,
+            snap.force_torque, snap.joint_pos, snap.joint_vel, snap.jacobian, snap.mass_matrix,
             noisy_goal,
         )
 
-        # Direct torque command
+        # Send torques to background thread (starts 15Hz timer)
         robot.send_joint_torques(ctrl_output['joint_torques'])
 
         # Update prev_actions for next observation
-        prev_actions = ctrl_output['ema_actions']
+        # Use raw policy output (not EMA-smoothed) to match sim's self.actions.clone()
+        prev_actions = action.clone()
 
         # ---- Metric tracking ----
 
         # SSV: sum of EE velocity magnitude
-        velocity_norm = torch.norm(ee_linvel).item()
+        velocity_norm = torch.norm(snap.ee_linvel).item()
         ssv_sum += velocity_norm
 
         # SSJV: sum of squared joint velocity norm
-        ssjv_step = torch.norm(joint_vel * joint_vel).item()
+        ssjv_step = torch.norm(snap.joint_vel * snap.joint_vel).item()
         ssjv_sum += ssjv_step
 
         # Force metrics
-        force_magnitude = torch.norm(force_torque[:3]).item()
+        force_magnitude = torch.norm(snap.force_torque[:3]).item()
         max_force = max(max_force, force_magnitude)
 
         # Contact detection (matching sim: any axis force > threshold)
-        any_contact = (force_torque[:3].abs() >= contact_force_threshold).any().item()
+        any_contact = (snap.force_torque[:3].abs() >= contact_force_threshold).any().item()
         if any_contact:
             sum_force_in_contact += force_magnitude
             contact_steps += 1
 
         # Energy: sum |joint_vel * joint_torque| for arm joints
         energy_step = torch.sum(
-            torch.abs(joint_vel * ctrl_output['joint_torques'])
+            torch.abs(snap.joint_vel * ctrl_output['joint_torques'])
         ).item()
         energy_sum += energy_step
 
@@ -578,7 +572,7 @@ def run_episode(
         # Success check (uses TRUE target position, not noisy goal)
         if not succeeded:
             is_success = check_success(
-                ee_pos, ee_to_peg_base_offset, target_peg_base_pos,
+                snap.ee_pos, ee_to_peg_base_offset, target_peg_base_pos,
                 xy_centering, hole_height, success_threshold,
             )
             if is_success:
@@ -590,7 +584,7 @@ def run_episode(
 
         # Break check
         if not terminated:
-            is_break = check_break(force_torque, break_force_threshold)
+            is_break = check_break(snap.force_torque, break_force_threshold)
             if is_break:
                 terminated = True
                 termination_step = step
@@ -735,12 +729,14 @@ def main():
     print(f"[main] hand_init_orn={hand_init_orn}, hand_init_orn_noise={hand_init_orn_noise}")
 
     # 6. Initialize observation builder
+    fixed_asset_yaw = real_config['task']['fixed_asset_yaw']
     obs_builder = ObservationBuilder(
         obs_order=obs_order,
         action_dim=action_dim,
         use_tanh_ft_scaling=use_tanh,
         tanh_ft_scale=tanh_scale,
         contact_force_threshold=contact_threshold,
+        fixed_asset_yaw=fixed_asset_yaw,
         device=args.device,
     )
 
