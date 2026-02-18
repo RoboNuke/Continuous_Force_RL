@@ -13,6 +13,7 @@ Usage:
         download_eval_data,
         plot_rate_figure,
         plot_rate_figure_by_method,
+        darken_color,
         COLORS,
         NOISE_LEVEL_COLORS,
     )
@@ -57,46 +58,50 @@ METRIC_TOTAL = "total_episodes"
 # COLORS - MUST REMAIN CONSISTENT ACROSS ALL ANALYSES
 # DO NOT MODIFY WITHOUT EXPLICIT PERMISSION
 # =============================================================================
+pos1mm =  "#fce385"#648FFF"
+pos25mm = "#99ccb5"#FE6100"
+match =   "#9cd579"#DC267F"
+hybrid =  "#67c6c2"#FFB000"
 COLORS = {
     # Base method names
-    "Pose": "#2ca02c",           # Green
-    "Hybrid-Basic": "#ff7f0e",   # Orange
-    "Hybrid": "#ff7f0e",   # Orange
-    "MATCH": "#1f77b4",          # Blue
-    "SWISH": "#1f77b4",          # Blue (alias)
-    "LCLoP": "#1f77b4",          # Blue (alias)
+    "Pose": pos1mm,           # Green
+    "Hybrid-Basic": hybrid,   # Orange
+    "Hybrid": hybrid,   # Orange
+    "MATCH": match,          # Blue
+    "SWISH": match,          # Blue (alias)
+    "LCLoP": match,          # Blue (alias)
 
     # 1mm noise variants
-    "Pose(1mm)": "#2ca02c",
-    "Pose-1": "#2ca02c",
-    "MATCH(1mm)": "#1f77b4",
-    "Hybrid-Basic(1mm)": "#ff7f0e",
+    "Pose(1mm)": pos1mm,
+    "Pose-1": pos1mm,
+    "MATCH(1mm)": match,
+    "Hybrid-Basic(1mm)": hybrid,
 
     # 2.5mm noise variants
-    "Pose(2.5mm)": "#781fb4",    # Purple
-    "Pose-2.5": "#781fb4",    # Purple
-    "Pose-2.5mm": "#781fb4",    # Purple
-    "SWISH(2.5mm)": "#b41f1f",   # Red
-    "Hybrid-Basic(2.5mm)": "#b4aa1f",  # Yellow-green
+    "Pose(2.5mm)": pos25mm,    # Purple
+    "Pose-2.5": pos25mm,    # Purple
+    "Pose-2.5mm": pos25mm,    # Purple
+    "SWISH(2.5mm)": match,   # Red
+    "Hybrid-Basic(2.5mm)": hybrid,  # Yellow-green
 
     # state-std variants
-    "Pose(state-std)": "#2ca02c",
-    "MATCH(state-std)": "#1f77b4",
-    "Hybrid-Basic(state-std)": "#ff7f0e",
+    "Pose(state-std)": pos1mm,
+    "MATCH(state-std)": match,
+    "Hybrid-Basic(state-std)": hybrid,
 
     # Yaw/angle variants
-    "Pose(3deg)": "#781fb4",
-    "Pose(15deg)": "#2ca02c",
+    "Pose(3deg)": pos25mm,
+    "Pose(15deg)": pos1mm,
     "MATCH(3deg)": "#b41f1f",
-    "MATCH(15deg)": "#1f77b4",
+    "MATCH(15deg)": match,
     "Hybrid-Basic(3deg)": "#b4aa1f",
-    "Hybrid-Basic(15deg)": "#ff7f0e",
+    "Hybrid-Basic(15deg)": hybrid,
 }
 
 # Noise level colors (for plot_rate_figure_by_method)
 NOISE_LEVEL_COLORS = {
     "1mm": "#2ca02c",      # Green (low noise)
-    "2.5mm": "#1f77b4",    # Blue
+    "2.5mm": "#DC267F",    # Blue
     "5mm": "#ff7f0e",      # Orange
     "7.5mm": "#d62728",    # Red (high noise)
 }
@@ -106,7 +111,7 @@ NOISE_LEVEL_COLORS = {
 # =============================================================================
 DEFAULT_DPI = 150
 DEFAULT_FIGSIZE = (3.5, 2.6)
-DEFAULT_FIGSIZE_GRID_CELL = (4.25, 3)
+DEFAULT_FIGSIZE_GRID_CELL = (2.5,2.6) #(4.25, 3)
 
 # Font sizes
 FONT_SUPTITLE = 16
@@ -114,7 +119,7 @@ FONT_TITLE = 14
 FONT_AXIS_LABEL = 10 #12
 FONT_TICK = 7 #10
 FONT_LEGEND = 7 #10
-FONT_BAR_LABEL = 6 #7
+FONT_BAR_LABEL = 7 #7
 FONT_NA = 12
 
 # Error bar defaults
@@ -123,13 +128,19 @@ ERROR_BAR_COLOR = "black"
 ERROR_BAR_LINEWIDTH = 1.5
 
 # Highlight styling (for multi-panel grids)
-HIGHLIGHT_COLOR = "gold"
+HIGHLIGHT_COLOR = "#785EF0" #"gold"
 HIGHLIGHT_LINEWIDTH = 3
 
 # Bar plot defaults
 # DEFAULT_GROUP_WIDTH controls how much of each unit (0-1) the bars occupy
 # Gap between groups = 1.0 - DEFAULT_GROUP_WIDTH (e.g., 0.8 width = 0.2 gap)
-DEFAULT_GROUP_WIDTH = 0.9
+DEFAULT_GROUP_WIDTH = 0.925
+DEFAULT_BAR_GAP = 0.035        # Gap between individual bars within a group (in x-axis units)
+DEFAULT_EDGE_DARKEN = 0.8     # Factor to darken fill color for bar border (0=black, 1=same)
+DEFAULT_EDGE_LINEWIDTH = 0.8  # Bar border line width
+DEFAULT_BOLD_LABELS = False    # Whether bar value labels are bolded
+DEFAULT_SHOW_LABEL_CI = False   # Whether to include ±CI in bar value labels
+DEFAULT_SATURATION = 1.0       # Color saturation multiplier (0=gray, 1=unchanged)
 
 # Bar label positioning (space between label and bar/error bar)
 BAR_LABEL_OFFSET_ABOVE = 1.5  # Space above bar when label is on top (for y_lim >= 50)
@@ -159,6 +170,44 @@ TIGHT_H_PAD = 0.5  # Height padding between subplots
 
 # Axis margins (space at edges of data)
 AXIS_MARGIN_X = 0.005  # Horizontal margin (default 0.05, set to 0 for no edge space)
+
+# =============================================================================
+# TRAJECTORY PLOT STYLING
+# =============================================================================
+
+# Phase colors for trajectory background shading
+TRAJ_PHASE_COLORS = {
+    'approaching': "#C2BFBF",       # Gray
+    'initial_contact': "#E7B262",   # Light orange
+    'insertion': '#90EE90',         # Light green
+}
+
+# Phase display names (shown as labels on the plot)
+TRAJ_PHASE_DISPLAY = {
+    'approaching': 'Approach',
+    'initial_contact': 'Contact',
+    'insertion': 'Insert',
+}
+
+# Phase background alpha
+TRAJ_PHASE_ALPHA = 0.3
+
+# Selection probability plot colors
+SELECTION_PROB_COLORS = {
+    'z': "#EB0101EF",   # Dark red for Z-axis
+    'xy': "#6F00FF",    # Purple for XY average
+}
+
+# Phase boundary lines
+TRAJ_PHASE_BOUNDARY_LINES = True  # Whether to draw vertical dotted lines at phase boundaries
+TRAJ_PHASE_BOUNDARY_COLOR = "gray"
+TRAJ_PHASE_BOUNDARY_LINESTYLE = ":"
+TRAJ_PHASE_BOUNDARY_LINEWIDTH = 1.0
+
+# Phase label styling
+TRAJ_PHASE_LABEL_FONTSIZE = FONT_TICK  # Use tick font size for phase labels
+TRAJ_PHASE_LABEL_ALPHA = 0.7           # Alpha for phase label text
+TRAJ_PHASE_LABEL_Y_POS = 0.97         # Y position in axes coordinates (0=bottom, 1=top)
 
 # =============================================================================
 # SHAPE ICON CONFIGURATION (for shape_comparison plots)
@@ -596,6 +645,41 @@ def compute_stats_by_step(
 # COLOR UTILITIES
 # =============================================================================
 
+def darken_color(hex_color: str, factor: float = 0.7) -> str:
+    """
+    Darken a hex color by the given factor.
+
+    Args:
+        hex_color: Hex color string (e.g., "#648FFF")
+        factor: Darkening factor (0=black, 1=unchanged)
+
+    Returns:
+        Darkened hex color string
+    """
+    import matplotlib.colors as mcolors
+    rgb = mcolors.to_rgb(hex_color)
+    return mcolors.to_hex(tuple(c * factor for c in rgb))
+
+
+def desaturate_color(hex_color: str, factor: float = 1.0) -> str:
+    """
+    Reduce the saturation of a hex color.
+
+    Args:
+        hex_color: Hex color string (e.g., "#648FFF")
+        factor: Saturation multiplier (0=fully gray, 1=unchanged)
+
+    Returns:
+        Desaturated hex color string
+    """
+    import colorsys
+    import matplotlib.colors as mcolors
+    rgb = mcolors.to_rgb(hex_color)
+    h, l, s = colorsys.rgb_to_hls(*rgb)
+    s = s * factor
+    return mcolors.to_hex(colorsys.hls_to_rgb(h, l, s))
+
+
 def get_method_color(
     method_name: str,
     colors: Optional[Dict[str, str]] = None,
@@ -753,6 +837,12 @@ def plot_grouped_bars(
     label_decimal: int = 1,
     capsize: int = ERROR_BAR_CAPSIZE,
     y_lim: Tuple[float, float] = (0, 100),
+    bar_gap: float = DEFAULT_BAR_GAP,
+    edge_darken_factor: Optional[float] = DEFAULT_EDGE_DARKEN,
+    edge_linewidth: float = DEFAULT_EDGE_LINEWIDTH,
+    bold_labels: bool = DEFAULT_BOLD_LABELS,
+    show_label_ci: bool = DEFAULT_SHOW_LABEL_CI,
+    saturation: float = DEFAULT_SATURATION,
 ) -> List:
     """
     Plot grouped bar chart on given axes.
@@ -771,6 +861,13 @@ def plot_grouped_bars(
         label_decimal: Decimal places for label values
         capsize: Error bar cap size
         y_lim: Y-axis limits (used for label placement calculation)
+        bar_gap: Gap between individual bars within a group (in x-axis units)
+        edge_darken_factor: Factor to darken fill color for bar border
+                           (0=black, 1=same as fill, None=no border)
+        edge_linewidth: Bar border line width
+        bold_labels: Whether bar value labels are bolded
+        show_label_ci: Whether to include ±CI in bar value labels
+        saturation: Color saturation multiplier (0=gray, 1=unchanged)
 
     Returns:
         List of bar container objects
@@ -780,6 +877,7 @@ def plot_grouped_bars(
 
     n_methods = len(method_names)
     bar_width = group_width / n_methods
+    bar_draw_width = bar_width - bar_gap
     all_bars = []
 
     for i, method_name in enumerate(method_names):
@@ -789,19 +887,31 @@ def plot_grouped_bars(
         means, errors_lower, errors_upper = data_by_method[method_name]
         offset = (i - n_methods / 2 + 0.5) * bar_width
         color = get_method_color(method_name, colors)
+        if saturation < 1.0:
+            color = desaturate_color(color, saturation)
 
+        edge_color = darken_color(color, edge_darken_factor) if edge_darken_factor is not None else None
+
+        bar_positions = x + offset
         bars = ax.bar(
-            x + offset, means, bar_width,
+            bar_positions, means, bar_draw_width,
             label=method_name, color=color,
+            edgecolor=edge_color, linewidth=edge_linewidth,
+            zorder=1
+        )
+        ax.errorbar(
+            bar_positions, means,
             yerr=[errors_lower, errors_upper],
-            capsize=capsize, zorder=3
+            fmt="none", capsize=capsize,
+            ecolor=ERROR_BAR_COLOR, elinewidth=ERROR_BAR_LINEWIDTH,
+            zorder=4
         )
         all_bars.append(bars)
 
         # Add rotated labels
         if show_labels:
             y_range = y_lim[1] - y_lim[0]
-            label_height_estimate = y_range * 0.20
+            label_height_estimate = y_range * (0.20 if show_label_ci else 0.10)
 
             # Get the raw errors for label text (use lower as proxy for symmetric display)
             for bar, mean, err_lo, err_hi in zip(bars, means, errors_lower, errors_upper):
@@ -822,11 +932,16 @@ def plot_grouped_bars(
                         label_y = bar.get_height() + err_hi + offset
                         va = "bottom"
 
+                    if show_label_ci:
+                        label_text = f"{mean:.{label_decimal}f}±{err_display:.{label_decimal}f}"
+                    else:
+                        label_text = f"{mean:.{label_decimal}f}"
+
                     ax.text(
                         bar.get_x() + bar.get_width() / 2, label_y,
-                        f"{mean:.{label_decimal}f}±{err_display:.{label_decimal}f}",
+                        label_text,
                         ha="center", va=va, rotation=90,
-                        fontsize=label_fontsize, color="black", fontweight="bold"
+                        fontsize=label_fontsize, color="black", fontweight="bold" if bold_labels else "normal"
                     )
 
     return all_bars
@@ -853,6 +968,13 @@ def plot_rate_figure(
     filter_top_n: Optional[int] = None,
     best_checkpoints: Optional[Dict[str, Dict]] = None,
     legend_loc: str = "best",
+    group_width: float = DEFAULT_GROUP_WIDTH,
+    bar_gap: float = DEFAULT_BAR_GAP,
+    edge_darken_factor: Optional[float] = DEFAULT_EDGE_DARKEN,
+    edge_linewidth: float = DEFAULT_EDGE_LINEWIDTH,
+    bold_labels: bool = DEFAULT_BOLD_LABELS,
+    show_label_ci: bool = DEFAULT_SHOW_LABEL_CI,
+    saturation: float = DEFAULT_SATURATION,
 ) -> Tuple[plt.Figure, plt.Axes]:
     """
     Create complete rate comparison figure (success rate, break rate, etc.).
@@ -912,7 +1034,10 @@ def plot_rate_figure(
     x = np.arange(len(level_labels))
     plot_grouped_bars(
         ax, x, data_by_method, method_names, colors,
-        show_labels=show_labels, label_decimal=label_decimal, y_lim=y_lim
+        group_width=group_width,
+        show_labels=show_labels, label_decimal=label_decimal, y_lim=y_lim,
+        bar_gap=bar_gap, edge_darken_factor=edge_darken_factor,
+        edge_linewidth=edge_linewidth, bold_labels=bold_labels, show_label_ci=show_label_ci, saturation=saturation,
     )
 
     # Configure axes
@@ -927,6 +1052,8 @@ def plot_rate_figure(
     ax.tick_params(axis="x", labelsize=FONT_TICK, pad=TICK_PAD_X)
     ax.tick_params(axis="y", labelsize=FONT_TICK, pad=TICK_PAD_Y)
     ax.margins(x=AXIS_MARGIN_X)
+    for spine in ax.spines.values():
+        spine.set_zorder(3)
     ax.legend(fontsize=FONT_LEGEND, loc=legend_loc, handlelength=LEGEND_HANDLE_LENGTH)
 
     plt.subplots_adjust(left=MARGIN_LEFT, right=MARGIN_RIGHT, bottom=MARGIN_BOTTOM, top=MARGIN_TOP)
@@ -955,6 +1082,13 @@ def plot_rate_figure_by_method(
     filter_top_n: Optional[int] = None,
     best_checkpoints: Optional[Dict[str, Dict]] = None,
     legend_loc: str = "best",
+    group_width: float = DEFAULT_GROUP_WIDTH,
+    bar_gap: float = DEFAULT_BAR_GAP,
+    edge_darken_factor: Optional[float] = DEFAULT_EDGE_DARKEN,
+    edge_linewidth: float = DEFAULT_EDGE_LINEWIDTH,
+    bold_labels: bool = DEFAULT_BOLD_LABELS,
+    show_label_ci: bool = DEFAULT_SHOW_LABEL_CI,
+    saturation: float = DEFAULT_SATURATION,
 ) -> Tuple[plt.Figure, plt.Axes]:
     """
     Create rate comparison figure with methods on x-axis and levels as grouped bars.
@@ -1031,7 +1165,10 @@ def plot_rate_figure_by_method(
     x = np.arange(len(method_names))
     plot_grouped_bars(
         ax, x, data_by_level, level_labels, level_colors,
-        show_labels=show_labels, label_decimal=label_decimal, y_lim=y_lim
+        group_width=group_width,
+        show_labels=show_labels, label_decimal=label_decimal, y_lim=y_lim,
+        bar_gap=bar_gap, edge_darken_factor=edge_darken_factor,
+        edge_linewidth=edge_linewidth, bold_labels=bold_labels, show_label_ci=show_label_ci, saturation=saturation,
     )
 
     # Configure axes
@@ -1046,6 +1183,8 @@ def plot_rate_figure_by_method(
     ax.tick_params(axis="x", labelsize=FONT_TICK, pad=TICK_PAD_X)
     ax.tick_params(axis="y", labelsize=FONT_TICK, pad=TICK_PAD_Y)
     ax.margins(x=AXIS_MARGIN_X)
+    for spine in ax.spines.values():
+        spine.set_zorder(3)
     ax.legend(fontsize=FONT_LEGEND, loc=legend_loc, handlelength=LEGEND_HANDLE_LENGTH)
 
     plt.subplots_adjust(left=MARGIN_LEFT, right=MARGIN_RIGHT, bottom=MARGIN_BOTTOM, top=MARGIN_TOP)
@@ -1081,6 +1220,14 @@ def plot_multi_panel_grid(
     best_checkpoints: Optional[Dict[str, Dict[str, Dict]]] = None,
     show_shape_icons: bool = False,
     shape_icons_config: Optional[Dict] = None,
+    group_width: float = DEFAULT_GROUP_WIDTH,
+    bar_gap: float = DEFAULT_BAR_GAP,
+    edge_darken_factor: Optional[float] = DEFAULT_EDGE_DARKEN,
+    edge_linewidth: float = DEFAULT_EDGE_LINEWIDTH,
+    bold_labels: bool = DEFAULT_BOLD_LABELS,
+    show_label_ci: bool = DEFAULT_SHOW_LABEL_CI,
+    saturation: float = DEFAULT_SATURATION,
+    center_x_label: bool = False,
 ) -> Tuple[plt.Figure, np.ndarray]:
     """
     Create 2D grid of bar plots (for fragility, clearance, shape comparisons).
@@ -1177,7 +1324,10 @@ def plot_multi_panel_grid(
             # Plot bars
             plot_grouped_bars(
                 ax, x, data_by_method, method_names, colors,
-                show_labels=show_labels, label_decimal=label_decimal, y_lim=y_lim
+                group_width=group_width,
+                show_labels=show_labels, label_decimal=label_decimal, y_lim=y_lim,
+                bar_gap=bar_gap, edge_darken_factor=edge_darken_factor,
+                edge_linewidth=edge_linewidth, bold_labels=bold_labels, show_label_ci=show_label_ci, saturation=saturation,
             )
 
             # Configure subplot
@@ -1190,6 +1340,8 @@ def plot_multi_panel_grid(
             ax.tick_params(axis="x", labelsize=FONT_TICK, pad=TICK_PAD_X)
             ax.tick_params(axis="y", labelsize=FONT_TICK, pad=TICK_PAD_Y)
             ax.margins(x=AXIS_MARGIN_X)
+            for spine in ax.spines.values():
+                spine.set_zorder(3)
 
             # Only show legend on first plot
             if idx == 0:
@@ -1198,9 +1350,13 @@ def plot_multi_panel_grid(
                 labels = [l.replace("(1mm)", "").strip() for l in labels]
                 ax.legend(handles, labels, fontsize=FONT_LEGEND - 1, loc="upper right", handlelength=LEGEND_HANDLE_LENGTH)
 
-        # X-axis label only on bottom row
+        # X-axis label on bottom row (center column only if center_x_label is set)
         if row == n_rows - 1:
-            ax.set_xlabel(x_label, fontsize=FONT_AXIS_LABEL, labelpad=AXIS_LABEL_PAD_X)
+            if center_x_label:
+                if col == n_cols // 2:
+                    ax.set_xlabel(x_label, fontsize=FONT_AXIS_LABEL, labelpad=AXIS_LABEL_PAD_X)
+            else:
+                ax.set_xlabel(x_label, fontsize=FONT_AXIS_LABEL, labelpad=AXIS_LABEL_PAD_X)
 
         # Y-axis label only on left column
         if col == 0:
@@ -1253,7 +1409,7 @@ def plot_training_curves(
     x_lim: Optional[Tuple[float, float]] = None,
     y_lim: Tuple[float, float] = (0, 100),
     y_ticks: Optional[List[float]] = None,
-    figsize: Tuple[float, float] = (10, 6),
+    figsize: Tuple[float, float] = DEFAULT_FIGSIZE, #(10, 6),
     dpi: int = DEFAULT_DPI,
     threshold: Optional[float] = None,
     show_threshold_annotations: bool = False,
