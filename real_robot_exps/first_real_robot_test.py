@@ -351,12 +351,103 @@ def phase5_cartesian_reset(robot: FrankaInterface, initial_ee_pos: list):
     robot.end_control()
 
 
+def phase6_torque_recomputation_stress(robot: FrankaInterface):
+    """Phase 6: Stress test 1kHz torque recomputation with control targets.
+
+    Sets control targets where target_pos = current EE pos so the PD error
+    is near-zero, producing near-zero torques. The 1kHz thread runs the full
+    wrench + J^T + null-space computation every cycle. If this phase completes
+    without controller_torque_discontinuity, the computation fits in the 1ms budget.
+    """
+    from real_robot_exps.hybrid_controller import ControlTargets
+
+    print_separator(6, "1kHz TORQUE RECOMPUTATION STRESS TEST")
+
+    robot.start_torque_mode()
+
+    # Let the thread stabilize with zero torques first
+    time.sleep(0.5)
+    snap = robot.get_state_snapshot()
+
+    # Build control targets: target = current position → PD error ≈ 0 → torques ≈ 0
+    targets = ControlTargets(
+        target_pos=snap.ee_pos.clone(),
+        target_quat=snap.ee_quat.clone(),
+        target_force=torch.zeros(6),
+        sel_matrix=torch.zeros(6),
+        task_prop_gains=torch.tensor([100.0, 100.0, 100.0, 30.0, 30.0, 30.0]),
+        task_deriv_gains=torch.tensor([20.0, 20.0, 20.0, 11.0, 11.0, 11.0]),
+        force_kp=torch.zeros(6),
+        force_di_wrench=torch.zeros(6),
+        default_dof_pos=snap.joint_pos.clone(),
+        kp_null=10.0,
+        kd_null=6.3246,
+        pos_bounds=torch.tensor([0.05, 0.05, 0.05]),
+        goal_position=snap.ee_pos.clone(),
+        ctrl_mode="force_only",
+        singularity_damping=0.0,
+    )
+
+    print(f"  Target EE position: {snap.ee_pos.tolist()}")
+    print(f"  Target EE quat:     {[f'{v:.4f}' for v in snap.ee_quat.tolist()]}")
+    print(f"  Expected result:     near-zero torques (PD error ≈ 0)")
+    print(f"\n  Setting control targets — 1kHz thread will now run full")
+    print(f"  wrench + J^T + null-space computation every cycle.")
+    print(f"  Running for 5 seconds...\n")
+
+    robot.set_control_targets(targets)
+
+    # Run for 5 seconds, reading snapshots at 15Hz to monitor
+    test_duration = 5.0
+    start = time.time()
+    n_reads = 0
+
+    while time.time() - start < test_duration:
+        robot.wait_for_policy_step()
+        snap = robot.get_state_snapshot()
+        robot.check_safety(snap)
+
+        # Update targets to track current position (keep torques near zero)
+        targets = ControlTargets(
+            target_pos=snap.ee_pos.clone(),
+            target_quat=snap.ee_quat.clone(),
+            target_force=torch.zeros(6),
+            sel_matrix=torch.zeros(6),
+            task_prop_gains=torch.tensor([100.0, 100.0, 100.0, 30.0, 30.0, 30.0]),
+            task_deriv_gains=torch.tensor([20.0, 20.0, 20.0, 11.0, 11.0, 11.0]),
+            force_kp=torch.zeros(6),
+            force_di_wrench=torch.zeros(6),
+            default_dof_pos=snap.joint_pos.clone(),
+            kp_null=10.0,
+            kd_null=6.3246,
+            pos_bounds=torch.tensor([0.05, 0.05, 0.05]),
+            goal_position=snap.ee_pos.clone(),
+            ctrl_mode="force_only",
+            singularity_damping=0.0,
+        )
+        robot.set_control_targets(targets)
+        n_reads += 1
+
+        # Print status every ~1 second
+        elapsed = time.time() - start
+        if n_reads % 15 == 0:
+            print(f"  [{elapsed:.1f}s] ee_pos={[f'{v:.4f}' for v in snap.ee_pos.tolist()]}  "
+                  f"ft={[f'{v:.2f}' for v in snap.force_torque[:3].tolist()]}")
+
+    elapsed = time.time() - start
+    print(f"\n  Completed {elapsed:.1f}s, {n_reads} policy steps "
+          f"({n_reads/elapsed:.1f} Hz)")
+    print(f"  PASS: No controller_torque_discontinuity — 1kHz recomputation fits in budget")
+
+    robot.end_control()
+
+
 def main():
     parser = argparse.ArgumentParser(description="First Real Robot Test")
     parser.add_argument("--config", type=str, default="real_robot_exps/config.yaml",
                         help="Path to config.yaml")
     parser.add_argument("--skip-to", type=int, default=1,
-                        help="Skip to phase N (1-5)")
+                        help="Skip to phase N (1-6)")
     args = parser.parse_args()
 
     with open(args.config, 'r') as f:
@@ -373,12 +464,13 @@ def main():
     print("  Safe, interactive validation of FrankaInterface on real FR3")
     print("  Robot IP:", config['robot']['ip'])
     print("=" * 70)
-    print("\n  This test has 5 phases:")
+    print("\n  This test has 6 phases:")
     print("  1. Connect & read raw state (no motion)")
     print("  2. Frame validation (no motion)")
     print("  3. Torque control + snapshot (zero torques, background thread)")
     print("  4. Force/torque sign convention (manual push)")
     print("  5. Cartesian reset motion (2cm up)")
+    print("  6. 1kHz torque recomputation stress test")
     print("\n  Each phase waits for Enter before proceeding.")
     print("  You can Ctrl+C at any time to abort.\n")
 
@@ -394,9 +486,9 @@ def main():
             wait_for_enter("Press Enter to start Phase 2...")
             phase2_frame_validation(config)
 
-        # Create shared FrankaInterface for phases 3-5 (mirrors eval script
+        # Create shared FrankaInterface for phases 3-6 (mirrors eval script
         # which reuses one connection across all episodes)
-        if args.skip_to <= 5:
+        if args.skip_to <= 6:
             test_config = {**config, 'robot': {**config['robot'], 'use_mock': False}}
             robot = FrankaInterface(test_config, device='cpu')
 
@@ -417,6 +509,10 @@ def main():
 
             wait_for_enter("Press Enter to start Phase 5 (will move robot 2cm up)...")
             phase5_cartesian_reset(robot, initial_ee_pos)
+
+        if args.skip_to <= 6:
+            wait_for_enter("Press Enter to start Phase 6 (1kHz recomputation stress test)...")
+            phase6_torque_recomputation_stress(robot)
 
         print("\n" + "=" * 70)
         print("  ALL PHASES COMPLETE")

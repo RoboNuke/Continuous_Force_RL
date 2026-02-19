@@ -48,6 +48,14 @@ class CartesianPose:
         self.motion_finished = False
 
 
+class JointPositions:
+    """Mimics pylibfranka.JointPositions command."""
+    def __init__(self, q: list):
+        assert len(q) == 7, f"Expected 7 joint positions, got {len(q)}"
+        self.q = list(q)
+        self.motion_finished = False
+
+
 class Duration:
     """Mimics pylibfranka.Duration (time since last readOnce)."""
     def __init__(self, milliseconds: int = 1):
@@ -255,6 +263,36 @@ class CartesianActiveControl:
         self._state.O_T_EE = list(cmd.O_T_EE)
 
 
+class JointActiveControl:
+    """Mimics ActiveControlBase for joint position control.
+
+    Instantly tracks commanded joint positions (no dynamics simulation).
+    """
+
+    def __init__(self, state: RobotState):
+        self._state = state
+        self._step = 0
+        self._last_time = time.time()
+
+    def readOnce(self) -> Tuple[RobotState, Duration]:
+        """Returns (RobotState, Duration). Blocks to approximate 1kHz."""
+        now = time.time()
+        elapsed = now - self._last_time
+        sleep_time = 0.001 - elapsed
+        if sleep_time > 0:
+            time.sleep(sleep_time)
+        self._last_time = time.time()
+        self._state.time = self._step * 0.001
+        self._step += 1
+        return self._state, Duration(milliseconds=1)
+
+    def writeOnce(self, cmd: JointPositions):
+        """Accept joint position command. Instantly sets q."""
+        assert isinstance(cmd, JointPositions), f"Expected JointPositions, got {type(cmd)}"
+        self._state.q = list(cmd.q)
+        self._state.q_d = list(cmd.q)
+
+
 class Robot:
     """Mimics pylibfranka.Robot."""
 
@@ -284,6 +322,12 @@ class Robot:
         """Start Cartesian pose control mode."""
         self._active_control = CartesianActiveControl(RobotState())
         print("[MockRobot] Cartesian pose control started.")
+        return self._active_control
+
+    def start_joint_position_control(self, controller_mode) -> JointActiveControl:
+        """Start joint position control mode."""
+        self._active_control = JointActiveControl(RobotState())
+        print("[MockRobot] Joint position control started.")
         return self._active_control
 
     def stop(self):

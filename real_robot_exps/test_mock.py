@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from real_robot_exps.robot_interface import FrankaInterface, make_ee_target_pose, SafetyViolation
+from real_robot_exps.hybrid_controller import ControlTargets
 
 config = {
 'robot': {
@@ -45,13 +46,37 @@ snap = robot.get_state_snapshot()
 assert snap.ee_pos.shape == (3,)
 print("PASS: torque mode snapshot works")
 
-# send_joint_torques
+# send_joint_torques (legacy API)
 robot.send_joint_torques(torch.zeros(7))
 try:
     robot.send_joint_torques(torch.zeros(9))
     print("FAIL")
 except ValueError:
     print("PASS: rejects wrong shape")
+
+# set_control_targets — 1kHz torque recomputation
+dummy_targets = ControlTargets(
+    target_pos=snap.ee_pos.clone(),
+    target_quat=snap.ee_quat.clone(),
+    target_force=torch.zeros(6),
+    sel_matrix=torch.zeros(6),
+    task_prop_gains=torch.tensor([100.0, 100.0, 100.0, 30.0, 30.0, 30.0]),
+    task_deriv_gains=torch.tensor([20.0, 20.0, 20.0, 11.0, 11.0, 11.0]),
+    force_kp=torch.zeros(6),
+    force_di_wrench=torch.zeros(6),
+    default_dof_pos=torch.zeros(7),
+    kp_null=10.0,
+    kd_null=6.3246,
+    pos_bounds=torch.tensor([0.05, 0.05, 0.05]),
+    goal_position=torch.tensor([0.3, 0.0, 0.35]),
+    ctrl_mode="force_only",
+    singularity_damping=0.0,
+)
+robot.set_control_targets(dummy_targets)
+import time; time.sleep(0.05)  # let 1kHz thread run a few cycles
+snap2 = robot.get_state_snapshot()
+assert snap2.ee_pos.shape == (3,)
+print("PASS: set_control_targets + 1kHz recomputation works")
 
 # Safety + quaternion norm
 robot.check_safety(snap)
@@ -62,9 +87,10 @@ print("PASS: safety + unit quaternion")
 robot.wait_for_policy_step()
 print("PASS: wait_for_policy_step works")
 
-# End control stops background thread
+# End control stops background thread and clears targets
 robot.end_control()
-print("PASS: end_control stops thread")
+assert robot._control_targets is None
+print("PASS: end_control stops thread + clears targets")
 
 robot.shutdown()
-print("ALL TESTS PASSED")
+print("ALL TESTS PASSED (8/8)")

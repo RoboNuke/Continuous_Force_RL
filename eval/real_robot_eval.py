@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -78,6 +79,155 @@ def load_real_robot_config(config_path: str, overrides: Optional[List[str]] = No
             print(f"  Override: {key_path} = {value}")
 
     return config
+
+
+# ============================================================================
+# Checkpoint caching
+# ============================================================================
+
+def sanitize_tag(tag: str) -> str:
+    """Convert a WandB tag to a filesystem-safe directory name.
+
+    Args:
+        tag: WandB tag string (e.g. "MATCH:2024-01-15_10:00").
+
+    Returns:
+        Sanitized string safe for use as a directory name.
+    """
+    return tag.replace(':', '_').replace('/', '_').replace(' ', '_')
+
+
+def save_to_cache(
+    cache_path: str,
+    config_temp_dir: str,
+    runs: list,
+    best_checkpoints: Dict[str, int],
+    checkpoint_paths: Dict[str, Tuple[str, str]],
+) -> None:
+    """Save WandB data to local cache directory.
+
+    Copies config YAMLs, checkpoint .pt files, and run metadata.
+    runs.json is written LAST so its presence marks a complete cache.
+
+    Args:
+        cache_path: Absolute path to cache directory for this tag.
+        config_temp_dir: Temp dir containing config YAML files from WandB.
+        runs: List of WandB run objects (need .id, .name).
+        best_checkpoints: Dict mapping run_id -> best checkpoint step.
+        checkpoint_paths: Dict mapping run_id -> (policy_path, critic_path).
+    """
+    os.makedirs(cache_path, exist_ok=True)
+
+    # Copy base config
+    base_src = os.path.join(config_temp_dir, 'config_base.yaml')
+    if not os.path.exists(base_src):
+        raise RuntimeError(f"Base config not found in temp dir: {base_src}")
+    shutil.copy2(base_src, os.path.join(cache_path, 'config_base.yaml'))
+
+    # Copy experiment config (update base_config path to point to cache)
+    exp_src = os.path.join(config_temp_dir, 'config_experiment.yaml')
+    if os.path.exists(exp_src):
+        with open(exp_src, 'r') as f:
+            exp_data = yaml.safe_load(f)
+        exp_data['base_config'] = os.path.join(cache_path, 'config_base.yaml')
+        with open(os.path.join(cache_path, 'config_experiment.yaml'), 'w') as f:
+            yaml.safe_dump(exp_data, f, default_flow_style=False)
+
+    # Copy checkpoint files
+    for run_id, (policy_path, critic_path) in checkpoint_paths.items():
+        run_dir = os.path.join(cache_path, run_id)
+        os.makedirs(run_dir, exist_ok=True)
+        shutil.copy2(policy_path, os.path.join(run_dir, 'policy.pt'))
+        shutil.copy2(critic_path, os.path.join(run_dir, 'critic.pt'))
+
+    # Write runs.json LAST (serves as "cache complete" marker)
+    runs_data = [
+        {'id': r.id, 'name': r.name, 'best_step': best_checkpoints[r.id]}
+        for r in runs
+    ]
+    with open(os.path.join(cache_path, 'runs.json'), 'w') as f:
+        json.dump(runs_data, f, indent=2)
+
+    print(f"  Checkpoint cache saved to: {cache_path}")
+
+
+def load_from_cache(
+    cache_path: str,
+    run_id_filter: Optional[str] = None,
+) -> Tuple[dict, list, Dict[str, int]]:
+    """Load cached WandB data from local directory.
+
+    Args:
+        cache_path: Absolute path to cache directory for this tag.
+        run_id_filter: Optional run ID to filter to a single run.
+
+    Returns:
+        Tuple of (configs, run_infos, best_checkpoints) where:
+        - configs: Config dict from ConfigManagerV3.process_config()
+        - run_infos: List of objects with .id and .name attributes
+        - best_checkpoints: Dict mapping run_id -> best checkpoint step
+
+    Raises:
+        RuntimeError: If cache is incomplete or requested run not found.
+    """
+    from types import SimpleNamespace
+    from configs.config_manager_v3 import ConfigManagerV3
+
+    # Load run metadata
+    runs_json_path = os.path.join(cache_path, 'runs.json')
+    with open(runs_json_path, 'r') as f:
+        runs_data = json.load(f)
+
+    # Build run info objects and best_checkpoints mapping
+    run_infos = []
+    best_checkpoints = {}
+    for entry in runs_data:
+        run_infos.append(SimpleNamespace(id=entry['id'], name=entry['name']))
+        best_checkpoints[entry['id']] = entry['best_step']
+
+    # Apply run_id filter
+    if run_id_filter is not None:
+        run_infos = [r for r in run_infos if r.id == run_id_filter]
+        if len(run_infos) == 0:
+            available = [e['id'] for e in runs_data]
+            raise RuntimeError(
+                f"Run ID '{run_id_filter}' not found in cache. "
+                f"Available run IDs: {available}. "
+                f"Delete the cache directory to re-download: {cache_path}"
+            )
+        best_checkpoints = {r.id: best_checkpoints[r.id] for r in run_infos}
+
+    # Validate checkpoint files exist
+    for run_info in run_infos:
+        run_dir = os.path.join(cache_path, run_info.id)
+        for fname in ['policy.pt', 'critic.pt']:
+            fpath = os.path.join(run_dir, fname)
+            if not os.path.exists(fpath):
+                raise RuntimeError(
+                    f"Cached checkpoint missing: {fpath}. "
+                    f"Delete the cache directory to re-download: {cache_path}"
+                )
+
+    # Load configs from cached YAML files
+    config_manager = ConfigManagerV3()
+    exp_path = os.path.join(cache_path, 'config_experiment.yaml')
+    base_path = os.path.join(cache_path, 'config_base.yaml')
+
+    if os.path.exists(exp_path):
+        configs = config_manager.process_config(exp_path)
+    elif os.path.exists(base_path):
+        configs = config_manager.process_config(base_path)
+    else:
+        raise RuntimeError(
+            f"No config YAML files found in cache: {cache_path}. "
+            f"Delete the cache directory to re-download: {cache_path}"
+        )
+
+    print(f"  Loaded {len(run_infos)} run(s) from cache:")
+    for r in run_infos:
+        print(f"    - {r.id} ({r.name}) [best step: {best_checkpoints[r.id]}]")
+
+    return configs, run_infos, best_checkpoints
 
 
 # ============================================================================
@@ -512,9 +662,24 @@ def run_episode(
     snap = robot.get_state_snapshot()
     controller.reset(snap.ee_pos, noisy_goal)
 
-    # 7. Start torque control — background 1kHz thread keeps robot fed
+    # 7. Warmup policy + controller (triggers PyTorch JIT compilation)
+    for _wi in range(3):
+        _warmup_obs = obs_builder.build_observation(snap, noisy_goal, prev_actions, fixed_yaw_offset=yaw_offset)
+        _warmup_action = get_deterministic_action(policy_net, normalizer, _warmup_obs, model_info)
+        _warmup_ctrl = controller.compute_action(
+            _warmup_action, snap.ee_pos, snap.ee_quat, snap.ee_linvel, snap.ee_angvel,
+            snap.force_torque, snap.joint_pos, snap.joint_vel, snap.jacobian, snap.mass_matrix,
+            noisy_goal,
+        )
+    # Reset controller state since warmup modified EMA
+    controller.reset(snap.ee_pos, noisy_goal)
+    prev_actions = torch.zeros(model_info['action_dim'], device=device)
+    print("[run_episode] Warmup complete (3 iterations) — PyTorch JIT compiled")
+
+    # 8. Start torque control — background 1kHz thread keeps robot fed
     input("    [WAIT] Press Enter to START ROLLOUT...")
     robot.start_torque_mode()
+    _ep_start = time.time()
     for step in range(max_steps):
         # Wait for 15Hz policy step timing, then grab latest snapshot
         robot.wait_for_policy_step()
@@ -523,9 +688,13 @@ def run_episode(
 
         # Build observation from snapshot (uses noisy_goal for obs frame)
         obs = obs_builder.build_observation(snap, noisy_goal, prev_actions, fixed_yaw_offset=yaw_offset)
+        _t_obs = time.time() - _ep_start
+        print(f"[POLICY step={step} t={_t_obs:.3f}s] obs built")
 
         # Get action
         action = get_deterministic_action(policy_net, normalizer, obs, model_info)
+        _t_act = time.time() - _ep_start
+        print(f"[POLICY step={step} t={_t_act:.3f}s] action generated (inference took {(_t_act - _t_obs)*1000:.1f}ms)")
 
         # Compute control from snapshot state (action frame uses noisy goal)
         ctrl_output = controller.compute_action(
@@ -534,12 +703,17 @@ def run_episode(
             noisy_goal,
         )
 
-        # Send torques to background thread (starts 15Hz timer)
-        robot.send_joint_torques(ctrl_output['joint_torques'])
+        _t_ctrl = time.time() - _ep_start
+        print(f"[POLICY step={step} t={_t_ctrl:.3f}s] targets set (controller took {(_t_ctrl - _t_act)*1000:.1f}ms)")
+
+        # Set control targets for 1kHz torque recomputation (starts 15Hz timer)
+        robot.set_control_targets(ctrl_output['control_targets'])
 
         # Update prev_actions for next observation
-        # Use raw policy output (not EMA-smoothed) to match sim's self.actions.clone()
-        prev_actions = action.clone()
+        # Use EMA-smoothed actions to match sim's self.unwrapped.actions.clone()
+        # (base env applies EMA in _pre_physics_step; hybrid wrapper overwrites
+        #  self.unwrapped.actions = self.ema_actions.clone())
+        prev_actions = ctrl_output['ema_actions']
 
         # ---- Metric tracking ----
 
@@ -633,6 +807,8 @@ def main():
     parser.add_argument("--run_id", type=str, default=None, help="Evaluate specific run only")
     parser.add_argument("--device", type=str, default="cpu", help="Torch device")
     parser.add_argument("--override", action="append", default=[], help="Override config values (repeatable)")
+    parser.add_argument("--checkpoint_dir", type=str, default="./checkpoint_cache",
+                        help="Local directory for caching downloaded checkpoints")
     args = parser.parse_args()
 
     # Set seed
@@ -650,28 +826,56 @@ def main():
     from configs.cfg_exts.version_compat import set_no_sim_mode
     set_no_sim_mode(True)
 
-    # 2. Query WandB for training runs
-    import wandb
-    from eval.checkpoint_utils import (
-        query_runs_by_tag,
-        reconstruct_config_from_wandb,
-        download_checkpoint_pair,
-        get_best_checkpoints_for_runs,
-    )
+    # 2. Check for cached checkpoints or download from WandB
+    cache_path = os.path.abspath(os.path.join(args.checkpoint_dir, sanitize_tag(args.tag)))
+    cache_exists = os.path.exists(os.path.join(cache_path, 'runs.json'))
 
-    print(f"\nQuerying WandB for runs with tag: {args.tag}")
-    runs = query_runs_by_tag(args.tag, args.entity, args.project, args.run_id)
+    if not cache_exists:
+        print(f"\nNo local cache found. Downloading from WandB...")
 
-    # 3. Reconstruct training config from first run (all runs share same config)
-    print("\nReconstructing training config...")
-    configs, temp_dir = reconstruct_config_from_wandb(runs[0])
+        import wandb
+        from eval.checkpoint_utils import (
+            query_runs_by_tag,
+            reconstruct_config_from_wandb,
+            download_checkpoint_pair,
+            get_best_checkpoints_for_runs,
+        )
 
-    # 4. Get best checkpoint for each run
-    print("\nFinding best checkpoints...")
-    api = wandb.Api(timeout=60)
-    best_checkpoints = get_best_checkpoints_for_runs(
-        api, runs, args.tag, args.entity, args.project
-    )
+        # Query ALL runs for this tag (cache stores everything, --run_id filters at load)
+        runs_wb = query_runs_by_tag(args.tag, args.entity, args.project, run_id=None)
+
+        # Reconstruct training config from first run (all runs share same config)
+        print("\nReconstructing training config...")
+        configs_wb, temp_dir = reconstruct_config_from_wandb(runs_wb[0])
+
+        # Get best checkpoint for each run
+        print("\nFinding best checkpoints...")
+        api = wandb.Api(timeout=60)
+        best_checkpoints_wb = get_best_checkpoints_for_runs(
+            api, runs_wb, args.tag, args.entity, args.project
+        )
+
+        # Download all checkpoints
+        print("\nDownloading checkpoints...")
+        checkpoint_paths = {}
+        download_dirs = []
+        for run_wb in runs_wb:
+            policy_path, critic_path = download_checkpoint_pair(run_wb, best_checkpoints_wb[run_wb.id])
+            checkpoint_paths[run_wb.id] = (policy_path, critic_path)
+            download_dirs.append(os.path.dirname(os.path.dirname(policy_path)))
+
+        # Save everything to local cache
+        save_to_cache(cache_path, temp_dir, runs_wb, best_checkpoints_wb, checkpoint_paths)
+
+        # Cleanup temp directories (data is now in cache)
+        for d in download_dirs:
+            shutil.rmtree(d, ignore_errors=True)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+    else:
+        print(f"\nUsing cached checkpoints from: {cache_path}")
+
+    # Load from cache (single code path for both fresh download and cached)
+    configs, runs, best_checkpoints = load_from_cache(cache_path, args.run_id)
 
     # 5. Reconstruct obs_order and determine model properties
     obs_order = reconstruct_obs_order(configs)
@@ -690,6 +894,7 @@ def main():
     use_tanh = getattr(ft_cfg, 'use_tanh_scaling', False)
     tanh_scale = getattr(ft_cfg, 'tanh_scale', 0.03)
     contact_threshold = getattr(ft_cfg, 'contact_force_threshold', 1.5)
+    ee_pose_noise_enabled = getattr(configs['wrappers'].ee_pose_noise, 'enabled', False)
 
     # Per-episode noise config: real robot override or WandB training config
     noise_cfg = real_config.get('noise', {})
@@ -737,6 +942,7 @@ def main():
         tanh_ft_scale=tanh_scale,
         contact_force_threshold=contact_threshold,
         fixed_asset_yaw=fixed_asset_yaw,
+        ee_pose_noise_enabled=ee_pose_noise_enabled,
         device=args.device,
     )
 
@@ -747,6 +953,11 @@ def main():
     # 8. Initialize controller
     print("\nInitializing controller...")
     controller = RealRobotController(configs, real_config, device=args.device)
+
+    # 8b. Move robot to default null-space joint angles
+    print(f"\nDefault null-space joint positions: {controller.default_dof_pos.tolist()}")
+    input("    [WAIT] Press Enter to MOVE TO DEFAULT JOINT POSITIONS...")
+    robot.move_to_joint_positions(controller.default_dof_pos, duration_sec=3.0)
 
     # 9. Evaluate each run
     print(f"\n{'=' * 80}")
@@ -759,80 +970,75 @@ def main():
 
         print(f"\n--- Run {run_idx+1}/{len(runs)}: {run.name} (best step: {best_step}) ---")
 
-        # Download checkpoint
-        policy_path, critic_path = download_checkpoint_pair(run, best_step)
-        download_dir = os.path.dirname(os.path.dirname(policy_path))
+        # Load checkpoint from cache
+        policy_path = os.path.join(cache_path, run_id, 'policy.pt')
 
-        try:
-            # Load policy
-            policy_net, normalizer, model_info = load_single_agent_policy(
-                policy_path, configs, obs_dim=obs_builder.obs_dim, device=args.device,
+        # Load policy
+        policy_net, normalizer, model_info = load_single_agent_policy(
+            policy_path, configs, obs_dim=obs_builder.obs_dim, device=args.device,
+        )
+
+        # Validate observation dimensions
+        obs_builder.validate_against_checkpoint(model_info['obs_dim'])
+
+        # Run episodes
+        episode_results = []
+        for ep_idx in range(args.num_episodes):
+            print(f"  Episode {ep_idx+1}/{args.num_episodes}:", end=" ", flush=True)
+
+            result = run_episode(
+                robot, policy_net, normalizer, model_info,
+                obs_builder, controller, real_config,
+                goal_pos_noise_scale, goal_yaw_noise_scale,
+                hand_init_pos, hand_init_pos_noise,
+                hand_init_orn, hand_init_orn_noise,
+                args.device,
             )
 
-            # Validate observation dimensions
-            obs_builder.validate_against_checkpoint(model_info['obs_dim'])
+            outcome = "SUCCESS" if result['succeeded'] and not result['terminated'] else \
+                      "BREAK" if result['terminated'] else "TIMEOUT"
+            print(f"{outcome} (len={result['length']}, max_f={result['max_force']:.2f}N)")
 
-            # Run episodes
-            episode_results = []
-            for ep_idx in range(args.num_episodes):
-                print(f"  Episode {ep_idx+1}/{args.num_episodes}:", end=" ", flush=True)
+            episode_results.append(result)
 
-                result = run_episode(
-                    robot, policy_net, normalizer, model_info,
-                    obs_builder, controller, real_config,
-                    goal_pos_noise_scale, goal_yaw_noise_scale,
-                    hand_init_pos, hand_init_pos_noise,
-                    hand_init_orn, hand_init_orn_noise,
-                    args.device,
-                )
+        # Compute metrics
+        metrics = compute_real_robot_metrics(episode_results)
 
-                outcome = "SUCCESS" if result['succeeded'] and not result['terminated'] else \
-                          "BREAK" if result['terminated'] else "TIMEOUT"
-                print(f"{outcome} (len={result['length']}, max_f={result['max_force']:.2f}N)")
+        # Print summary
+        print(f"\n  Results for {run.name}:")
+        print(f"    Successes: {metrics['num_successful_completions']}/{metrics['total_episodes']}")
+        print(f"    Breaks:    {metrics['num_breaks']}/{metrics['total_episodes']}")
+        print(f"    Timeouts:  {metrics['num_failed_timeouts']}/{metrics['total_episodes']}")
+        print(f"    Avg Length: {metrics['episode_length']:.1f}")
+        print(f"    SSV:       {metrics['ssv']:.4f}")
+        print(f"    Max Force: {metrics['max_force']:.2f}N")
+        print(f"    Energy:    {metrics['energy']:.2f}")
 
-                episode_results.append(result)
+        # Log to WandB
+        if not args.no_wandb:
+            import wandb
+            eval_run = wandb.init(
+                entity=args.entity,
+                project=args.project,
+                name=f"Eval_RealRobot_{run.name}",
+                tags=["eval_real_robot", args.tag, f"source_run:{run_id}"],
+                config={
+                    "source_run_id": run_id,
+                    "source_run_name": run.name,
+                    "best_step": best_step,
+                    "num_episodes": args.num_episodes,
+                    "real_robot_config": real_config,
+                },
+            )
 
-            # Compute metrics
-            metrics = compute_real_robot_metrics(episode_results)
-
-            # Print summary
-            print(f"\n  Results for {run.name}:")
-            print(f"    Successes: {metrics['num_successful_completions']}/{metrics['total_episodes']}")
-            print(f"    Breaks:    {metrics['num_breaks']}/{metrics['total_episodes']}")
-            print(f"    Timeouts:  {metrics['num_failed_timeouts']}/{metrics['total_episodes']}")
-            print(f"    Avg Length: {metrics['episode_length']:.1f}")
-            print(f"    SSV:       {metrics['ssv']:.4f}")
-            print(f"    Max Force: {metrics['max_force']:.2f}N")
-            print(f"    Energy:    {metrics['energy']:.2f}")
-
-            # Log to WandB
-            if not args.no_wandb:
-                eval_run = wandb.init(
-                    entity=args.entity,
-                    project=args.project,
-                    name=f"Eval_RealRobot_{run.name}",
-                    tags=["eval_real_robot", args.tag, f"source_run:{run_id}"],
-                    config={
-                        "source_run_id": run_id,
-                        "source_run_name": run.name,
-                        "best_step": best_step,
-                        "num_episodes": args.num_episodes,
-                        "real_robot_config": real_config,
-                    },
-                )
-
-                # Log with Eval_Core prefix (matching sim eval format)
-                prefixed_metrics = {f"Eval_Core/{k}": v for k, v in metrics.items()}
-                prefixed_metrics["total_steps"] = best_step
-                wandb.log(prefixed_metrics)
-                wandb.finish()
-                print(f"    Logged to WandB: {eval_run.url}")
-            else:
-                print("    (WandB logging disabled)")
-
-        finally:
-            # Cleanup checkpoint download
-            shutil.rmtree(download_dir, ignore_errors=True)
+            # Log with Eval_Core prefix (matching sim eval format)
+            prefixed_metrics = {f"Eval_Core/{k}": v for k, v in metrics.items()}
+            prefixed_metrics["total_steps"] = best_step
+            wandb.log(prefixed_metrics)
+            wandb.finish()
+            print(f"    Logged to WandB: {eval_run.url}")
+        else:
+            print("    (WandB logging disabled)")
 
     # 10. Shutdown
     print(f"\n{'=' * 80}")
@@ -840,9 +1046,6 @@ def main():
     print(f"{'=' * 80}")
 
     robot.shutdown()
-
-    # Cleanup config temp dir
-    shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

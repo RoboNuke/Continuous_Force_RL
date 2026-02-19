@@ -7,9 +7,13 @@ robot:
   use_mock: false              # Set false for real robot
   control_rate_hz: 15.0       # Must match training policy_hz
   reset_duration_sec: 3.0     # Duration for Cartesian reset motion
-  retract_height_m: 0.05      # Retract upward before reset to clear hole (meters)
+  retract_height_m: 0.03      # Retract upward before reset to clear hole (meters)
 
-  # Standard Franka Hand NE_T_EE: 45deg Z rotation + 103.4mm Z offset (flange -> fingertip midpoint)
+  # NE_T_EE: -45deg Z rotation + 103.4mm Z offset (flange -> fingertip midpoint)
+  # Uses R_z(-45°) to match sim's panda_hand body frame (URDF rpy="0 0 -0.7854").
+  # NOTE: Franka standard Hand NE_T_EE uses R_z(+45°); we use -45° so that
+  # O_T_EE orientation matches the sim body frame exactly, avoiding any
+  # extra rotation in the F/T or observation pipeline.
   # Column-major 4x4 homogeneous transform [R|t; 0 0 0 1]
   NE_T_EE: [
     0.7071, -0.7071, 0.0, 0.0,
@@ -30,12 +34,18 @@ robot:
   # alpha=0.2 at 1kHz ~ 32Hz cutoff frequency (-3dB)
   ft_ema_alpha: 0.2
 
+  # Constant F/T bias subtracted from O_F_ext_hat_K BEFORE negation/rotation.
+  # Measured in free space with check_ft_bias.py — compensates for unmodeled
+  # EE payload (peg + gripper fingers) that the robot's gravity model misses.
+  # Set to [0,0,0,0,0,0] to disable.
+  ft_bias: [-0.9484, 0.5430, -0.5755, -0.2891, -0.1657, 0.3142]
+
 task:
   # Fixed asset origin position (hole base in world frame, meters)
   # The observation frame (sim's fixed_pos_obs_frame) is computed as:
   #   obs_frame = fixed_asset_position + [0, 0, hole_height + fixed_asset_base_height]
   # which gives the HOLE TIP (entrance) position matching the sim exactly.
-  fixed_asset_position: [0.607, -0.003, 0.0556]
+  fixed_asset_position: [0.6113, -0.0084, 0.0506] #[0.607, -0.003, 0.0556]
   fixed_asset_orientation_quat: [1.0, 0.0, 0.0, 0.0]  # [w, x, y, z]
   fixed_asset_yaw: 0.0                # Yaw of fixed asset in world frame (radians)
   fixed_asset_base_height: 0.0        # Height of base plate below hole channel (meters)
@@ -43,7 +53,7 @@ task:
   # Target peg base position (where peg base should be when fully inserted)
   # This is "target_held_base_pos" in sim - used for SUCCESS/ENGAGEMENT DETECTION
   # May differ from fixed_asset_position depending on geometry
-  target_peg_base_position: [0.607, -0.003, 0.0556]
+  target_peg_base_position: [0.6113, -0.0084, 0.0506]
 
   # Offset from EE (fingertip midpoint) to peg base (grasped object root)
   # Needed to compute peg_base_pos = ee_pos + this offset for detection
@@ -59,24 +69,59 @@ task:
   engage_threshold: 0.9            # Multiplied by hole_height -> 22.5mm Z threshold
 
   # Break detection (matches FragileObjectWrapper)
-  break_force_threshold: 10.0      # N - L2 norm of force (Fx,Fy,Fz) >= this triggers break
+  break_force_threshold: 10000.0      # N - L2 norm of force (Fx,Fy,Fz) >= this triggers break
 
   # Episode parameters
   episode_timeout_steps: 150       # Max steps per episode
   terminate_on_success: true       # True for real robot (no point continuing), False in sim
 
+control_gains:
+  # When true, use gain values below instead of WandB training config.
+  # When false, load gains from WandB training config (matching sim exactly).
+  use_rr_gains: True
+
+  # Pose PD gains [6]: [Fx, Fy, Fz, Tx, Ty, Tz]
+  # task_prop_gains = stiffness (N/m or Nm/rad)
+  # task_deriv_gains = damping (Ns/m or Nms/rad), default is 2*sqrt(kp) for critical damping
+  #task_prop_gains: [100.0, 100.0, 100.0, 30.0, 30.0, 30.0]
+  #task_deriv_gains: [20.0, 20.0, 20.0, 10.954451560974121, 10.954451560974121, 10.954451560974121]
+
+  #task_prop_gains: [50.0, 50.0, 50.0, 15.0, 15.0, 15.0]
+  #task_deriv_gains: [14.1421356243, 14.142135624, 14.142135624, 7.745966692, 7.745966692, 7.745966692]
+
+  task_prop_gains: [400.0, 400.0, 400.0, 30.0, 30.0, 30.0]
+  task_deriv_gains: [30, 30, 30, 10.954451560974121, 10.954451560974121, 10.954451560974121]
+
+
+
+  # Null-space gains (keep joints near default_dof_pos)
+  kp_null: 0 #10 #5
+  kd_null: 0 #6.32455532 #4.472135955
+
+  # Force gains [6] (hybrid only, ignored for pose-only control)
+  # Zeroing based on ctrl_mode is applied automatically after loading.
+  force_kp: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+  force_kd: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+  force_ki: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+  # Singularity damping for J M^-1 J^T inverse (Levenberg-Marquardt)
+  # Adds lambda*I to prevent blow-up near kinematic singularities.
+  # Set enabled=false to revert to undamped inverse.
+  singularity_damping_enabled: false
+  singularity_damping_lambda: 0.05
+
 noise:
   # When true, use noise values defined below instead of WandB training config.
   # When false, load noise from WandB training config (matching sim exactly).
-  use_rr_noise: false
+  use_rr_noise: true
 
   # Goal observation noise (Gaussian, sampled once per episode)
-  goal_pos_noise: [0.001, 0.001, 0.001]   # meters, std per axis
+  goal_pos_noise: [0.00, 0.00, 0.00]   # meters, std per axis
   goal_yaw_noise: 0.0524                    # radians, std (~3 degrees)
   use_yaw_noise: false
 
   # Start pose (offset from fixed_asset_position)
   hand_init_pos: [0.0, 0.0, 0.047]         # meters, nominal EE offset above hole
-  hand_init_pos_noise: [0.02, 0.02, 0.01]  # meters, uniform +/- range per axis
+  hand_init_pos_noise: [0.00, 0.00, 0.00]  # meters, uniform +/- range per axis
   hand_init_orn: [3.1416, 0.0, 0.0]        # RPY radians, nominal orientation (pointing down)
-  hand_init_orn_noise: [0.0, 0.0, 0.785]   # RPY radians, uniform +/- range (~45 deg yaw)
+  hand_init_orn_noise: [0.0, 0.0, 0.0]   # RPY radians, uniform +/- range (~45 deg yaw)

@@ -17,9 +17,31 @@ Also outputs intermediate Cartesian targets for alternative robot control modes
 """
 
 import math
+from collections import namedtuple
 from typing import Dict, Tuple
 
 import torch
+
+
+# Immutable control targets — computed at 15Hz by the policy, consumed at 1kHz
+# by the background thread for wrench→torque recomputation.
+ControlTargets = namedtuple('ControlTargets', [
+    'target_pos',        # [3] fixed position target
+    'target_quat',       # [4] fixed orientation target
+    'target_force',      # [6] fixed force target
+    'sel_matrix',        # [6] selection matrix (force vs position per axis)
+    'task_prop_gains',   # [6] pose PD proportional gains
+    'task_deriv_gains',  # [6] pose PD derivative gains
+    'force_kp',          # [6] force proportional gains
+    'force_di_wrench',   # [6] precomputed D+I contribution (constant within policy step)
+    'default_dof_pos',   # [7] null-space target joint positions
+    'kp_null',           # float — null-space proportional gain
+    'kd_null',           # float — null-space derivative gain
+    'pos_bounds',        # [3] position clamp bounds
+    'goal_position',     # [3] action frame origin (for bounds constraint)
+    'ctrl_mode',         # str — "force_only", "force_tz", or "force_torque"
+    'singularity_damping',  # float — Levenberg-Marquardt damping for J M^-1 J^T inverse (0.0 = disabled)
+])
 
 
 # ============================================================================
@@ -209,6 +231,7 @@ def compute_joint_torques_from_wrench(
     default_dof_pos: torch.Tensor,
     kp_null: float = 10.0,
     kd_null: float = 6.3246,
+    singularity_damping: float = 0.0,
 ) -> torch.Tensor:
     """Compute joint torques via J^T mapping with null-space compensation.
 
@@ -223,17 +246,24 @@ def compute_joint_torques_from_wrench(
         default_dof_pos: [7] default/home joint positions for null-space.
         kp_null: Null-space position gain.
         kd_null: Null-space damping gain.
+        singularity_damping: Levenberg-Marquardt damping lambda for
+            (J M^-1 J^T + lambda*I) inverse. 0.0 = undamped (original behavior).
 
     Returns:
-        [7] joint torques in Nm.
+        (total_torque [7], jt_torque [7], null_torque [7]) tuple.
+        total_torque is clamped; jt_torque and null_torque are pre-clamp components.
     """
     # J^T * wrench
     jacobian_T = jacobian.T  # [7, 6]
-    torque = jacobian_T @ task_wrench  # [7]
+    jt_torque = jacobian_T @ task_wrench  # [7]
 
     # Null-space compensation
     M_inv = torch.inverse(mass_matrix)  # [7, 7]
-    M_task = torch.inverse(jacobian @ M_inv @ jacobian_T)  # [6, 6]
+    JMJ = jacobian @ M_inv @ jacobian_T  # [6, 6]
+    if singularity_damping > 0.0:
+        I6 = torch.eye(6, device=joint_pos.device, dtype=joint_pos.dtype)
+        JMJ = JMJ + singularity_damping * I6
+    M_task = torch.inverse(JMJ)  # [6, 6]
     J_inv = M_task @ jacobian @ M_inv  # [6, 7]
 
     # Distance to default pose (wrapped to [-pi, pi])
@@ -246,13 +276,94 @@ def compute_joint_torques_from_wrench(
     # Null-space projector: (I - J^T @ J_inv^T)
     I7 = torch.eye(7, device=joint_pos.device, dtype=joint_pos.dtype)
     null_proj = I7 - jacobian_T @ J_inv
-    torque_null = null_proj @ u_null  # [7]
+    null_torque = null_proj @ u_null  # [7]
 
-    torque = torque + torque_null
+    torque = jt_torque + null_torque
 
     # Clamp to safe limits (matching sim)
     torque = torch.clamp(torque, min=-100.0, max=100.0)
-    return torque
+    return torque, jt_torque, null_torque
+
+
+# ============================================================================
+# 1kHz torque recomputation from fixed targets
+# ============================================================================
+
+def compute_torques_from_targets(
+    ee_pos: torch.Tensor,
+    ee_quat: torch.Tensor,
+    ee_linvel: torch.Tensor,
+    ee_angvel: torch.Tensor,
+    force_torque: torch.Tensor,
+    joint_pos: torch.Tensor,
+    joint_vel: torch.Tensor,
+    jacobian: torch.Tensor,
+    mass_matrix: torch.Tensor,
+    targets: ControlTargets,
+) -> torch.Tensor:
+    """Recompute joint torques from current state and fixed control targets.
+
+    Called by the 1kHz background thread each cycle. Matches the sim's
+    decimation behavior: targets are fixed per policy step, but wrenches
+    and torques are recomputed from current robot state.
+
+    The pose wrench PD is fully recomputed. For the force wrench, the P-term
+    is recomputed from current F/T; the D+I contribution is precomputed at
+    the policy rate and held constant (matching sim's ~120Hz decimation).
+
+    Args:
+        ee_pos: [3] current EE position.
+        ee_quat: [4] current EE quaternion (w,x,y,z).
+        ee_linvel: [3] current EE linear velocity.
+        ee_angvel: [3] current EE angular velocity.
+        force_torque: [6] current F/T sensor readings.
+        joint_pos: [7] current joint positions.
+        joint_vel: [7] current joint velocities.
+        jacobian: [6,7] current geometric Jacobian.
+        mass_matrix: [7,7] current arm mass matrix.
+        targets: ControlTargets from the latest policy step.
+
+    Returns:
+        (joint_torques [7], task_wrench [6]) tuple.
+    """
+    # 1. Pose wrench — full PD recomputation from current state
+    pose_wrench = compute_pose_task_wrench(
+        ee_pos, ee_quat, ee_linvel, ee_angvel,
+        targets.target_pos, targets.target_quat,
+        targets.task_prop_gains, targets.task_deriv_gains,
+    )
+
+    # 2. Force wrench — P-term from current F/T + precomputed D+I offset
+    force_p = targets.force_kp * (targets.target_force - force_torque)
+    force_wrench = force_p + targets.force_di_wrench
+
+    # 3. Blend wrenches using selection matrix
+    task_wrench = (1.0 - targets.sel_matrix) * pose_wrench + targets.sel_matrix * force_wrench
+
+    # 4. Ctrl_mode rotation override
+    if targets.ctrl_mode == "force_only":
+        task_wrench[3:] = pose_wrench[3:]
+    elif targets.ctrl_mode == "force_tz":
+        task_wrench[3:5] = pose_wrench[3:5]
+
+    # 4b. Zero all rotation wrench — real robot only, prevents joint limit hits
+    # task_wrench[3:] = 0.0
+
+    # 5. Bounds constraint — zero wrench pushing further out of bounds
+    delta_from_goal = ee_pos - targets.goal_position
+    for i in range(3):
+        if delta_from_goal[i] <= -targets.pos_bounds[i] and task_wrench[i] < 0:
+            task_wrench[i] = 0.0
+        if delta_from_goal[i] >= targets.pos_bounds[i] and task_wrench[i] > 0:
+            task_wrench[i] = 0.0
+
+    # 6. J^T + null-space
+    joint_torques, jt_torque, null_torque = compute_joint_torques_from_wrench(
+        task_wrench, jacobian, mass_matrix,
+        joint_pos, joint_vel, targets.default_dof_pos,
+        targets.kp_null, targets.kd_null, targets.singularity_damping,
+    )
+    return joint_torques, task_wrench.clone(), jt_torque, null_torque
 
 
 # ============================================================================
@@ -388,6 +499,83 @@ class RealRobotController:
             else:
                 self.force_ki = None
 
+        # ---------------------------------------------------------------------
+        # Optional: override gains from real robot config
+        # ---------------------------------------------------------------------
+        gains_cfg = real_config.get('control_gains', {})
+        self.use_rr_gains = gains_cfg.get('use_rr_gains', False)
+
+        if self.use_rr_gains:
+            print("[RealRobotController] Using REAL ROBOT control gains (control_gains.use_rr_gains=true)")
+
+            # Pose PD gains (required)
+            if 'task_prop_gains' not in gains_cfg:
+                raise RuntimeError("control_gains.use_rr_gains=true but 'task_prop_gains' not specified")
+            if 'task_deriv_gains' not in gains_cfg:
+                raise RuntimeError("control_gains.use_rr_gains=true but 'task_deriv_gains' not specified")
+            self.task_prop_gains = torch.tensor(
+                gains_cfg['task_prop_gains'], device=device, dtype=torch.float32
+            )
+            self.task_deriv_gains = torch.tensor(
+                gains_cfg['task_deriv_gains'], device=device, dtype=torch.float32
+            )
+
+            # Null-space gains (required)
+            if 'kp_null' not in gains_cfg:
+                raise RuntimeError("control_gains.use_rr_gains=true but 'kp_null' not specified")
+            if 'kd_null' not in gains_cfg:
+                raise RuntimeError("control_gains.use_rr_gains=true but 'kd_null' not specified")
+            self.kp_null = gains_cfg['kp_null']
+            self.kd_null = gains_cfg['kd_null']
+
+            # Force gains (required if hybrid)
+            if self.hybrid_enabled:
+                if 'force_kp' not in gains_cfg:
+                    raise RuntimeError("control_gains.use_rr_gains=true but 'force_kp' not specified (hybrid mode)")
+                self.force_kp = torch.tensor(
+                    gains_cfg['force_kp'], device=device, dtype=torch.float32
+                )
+
+                # Re-apply ctrl_mode zeroing on overridden force_kp
+                if self.ctrl_mode == "force_only":
+                    self.force_kp[3:] = 0.0
+                elif self.ctrl_mode == "force_tz":
+                    self.force_kp[3:5] = 0.0
+
+                # force_kd: override if derivative control is enabled
+                if self.enable_force_derivative:
+                    if 'force_kd' not in gains_cfg:
+                        raise RuntimeError("control_gains.use_rr_gains=true but 'force_kd' not specified (force derivative enabled)")
+                    self.force_kd = torch.tensor(
+                        gains_cfg['force_kd'], device=device, dtype=torch.float32
+                    )
+                    if self.ctrl_mode == "force_only":
+                        self.force_kd[3:] = 0.0
+                    elif self.ctrl_mode == "force_tz":
+                        self.force_kd[3:5] = 0.0
+
+                # force_ki: override if integral control is enabled
+                if self.enable_force_integral:
+                    if 'force_ki' not in gains_cfg:
+                        raise RuntimeError("control_gains.use_rr_gains=true but 'force_ki' not specified (force integral enabled)")
+                    self.force_ki = torch.tensor(
+                        gains_cfg['force_ki'], device=device, dtype=torch.float32
+                    )
+                    if self.ctrl_mode == "force_only":
+                        self.force_ki[3:] = 0.0
+                    elif self.ctrl_mode == "force_tz":
+                        self.force_ki[3:5] = 0.0
+        else:
+            print("[RealRobotController] Using WANDB training control gains (control_gains.use_rr_gains=false)")
+
+        # Singularity damping for J M^-1 J^T inverse
+        if gains_cfg.get('singularity_damping_enabled', False):
+            self.singularity_damping = gains_cfg.get('singularity_damping_lambda', 0.01)
+            print(f"[RealRobotController] Singularity damping ENABLED (lambda={self.singularity_damping})")
+        else:
+            self.singularity_damping = 0.0
+            print("[RealRobotController] Singularity damping DISABLED (undamped inverse)")
+
         # State (initialized by reset())
         self.ema_actions = None
         self.ema_task_wrench = None
@@ -398,11 +586,29 @@ class RealRobotController:
 
         print(f"[RealRobotController] mode={'hybrid' if self.hybrid_enabled else 'pose-only'}, "
               f"action_dim={self.action_dim}, ctrl_mode={self.ctrl_mode}")
-        print(f"[RealRobotController] ema_factor={self.ema_factor}, "
-              f"pos_threshold={self.pos_threshold.tolist()}")
+        print(f"[RealRobotController] ema_factor={self.ema_factor}")
+        print(f"[RealRobotController] pos_threshold={self.pos_threshold.tolist()}")
+        print(f"[RealRobotController] rot_threshold={self.rot_threshold.tolist()}")
+        print(f"[RealRobotController] pos_bounds={self.pos_bounds.tolist()}")
+        print(f"[RealRobotController] task_prop_gains={self.task_prop_gains.tolist()}")
+        print(f"[RealRobotController] task_deriv_gains={self.task_deriv_gains.tolist()}")
+        print(f"[RealRobotController] kp_null={self.kp_null}, kd_null={self.kd_null}")
+        print(f"[RealRobotController] default_dof_pos={self.default_dof_pos.tolist()}")
         if self.hybrid_enabled:
-            print(f"[RealRobotController] force_bounds={self.force_bounds.tolist()}, "
-                  f"use_delta_force={self.use_delta_force}")
+            print(f"[RealRobotController] force_kp={self.force_kp.tolist()}")
+            if self.force_kd is not None:
+                print(f"[RealRobotController] force_kd={self.force_kd.tolist()}")
+            if self.force_ki is not None:
+                print(f"[RealRobotController] force_ki={self.force_ki.tolist()}")
+            print(f"[RealRobotController] force_bounds={self.force_bounds.tolist()}")
+            print(f"[RealRobotController] force_threshold={self.force_threshold.tolist()}")
+            print(f"[RealRobotController] use_delta_force={self.use_delta_force}, "
+                  f"async_z_bounds={self.async_z_bounds}")
+            print(f"[RealRobotController] no_sel_ema={self.no_sel_ema}, "
+                  f"apply_ema_force={self.apply_ema_force}, ema_mode={self.ema_mode}")
+            if self.ctrl_mode in ["force_tz", "force_torque"]:
+                print(f"[RealRobotController] torque_bounds={self.torque_bounds.tolist()}")
+                print(f"[RealRobotController] torque_threshold={self.torque_threshold.tolist()}")
 
     def reset(self, ee_pos: torch.Tensor, goal_position: torch.Tensor):
         """Reset controller state for new episode.
@@ -541,10 +747,29 @@ class RealRobotController:
         )
 
         # Step 5: J^T mapping + null-space compensation
-        joint_torques = compute_joint_torques_from_wrench(
+        joint_torques, _, _ = compute_joint_torques_from_wrench(
             task_wrench, jacobian, mass_matrix,
             joint_pos, joint_vel, self.default_dof_pos,
-            self.kp_null, self.kd_null,
+            self.kp_null, self.kd_null, self.singularity_damping,
+        )
+
+        # Build ControlTargets for 1kHz recomputation
+        control_targets = ControlTargets(
+            target_pos=target_pos,
+            target_quat=target_quat,
+            target_force=torch.zeros(6, device=self.device),
+            sel_matrix=torch.zeros(6, device=self.device),
+            task_prop_gains=self.task_prop_gains,
+            task_deriv_gains=self.task_deriv_gains,
+            force_kp=torch.zeros(6, device=self.device),
+            force_di_wrench=torch.zeros(6, device=self.device),
+            default_dof_pos=self.default_dof_pos,
+            kp_null=self.kp_null,
+            kd_null=self.kd_null,
+            pos_bounds=self.pos_bounds,
+            goal_position=goal_position,
+            ctrl_mode=self.ctrl_mode,
+            singularity_damping=self.singularity_damping,
         )
 
         return {
@@ -555,6 +780,7 @@ class RealRobotController:
             'target_force': torch.zeros(6, device=self.device),
             'sel_matrix': torch.zeros(6, device=self.device),
             'task_wrench': task_wrench,
+            'control_targets': control_targets,
         }
 
     # ========================================================================
@@ -796,10 +1022,36 @@ class RealRobotController:
         # ----------------------------------------------------------------
         # Step 12: J^T + null-space
         # ----------------------------------------------------------------
-        joint_torques = compute_joint_torques_from_wrench(
+        joint_torques, _, _ = compute_joint_torques_from_wrench(
             task_wrench, jacobian, mass_matrix,
             joint_pos, joint_vel, self.default_dof_pos,
-            self.kp_null, self.kd_null,
+            self.kp_null, self.kd_null, self.singularity_damping,
+        )
+
+        # ----------------------------------------------------------------
+        # Step 13: Build ControlTargets for 1kHz recomputation
+        # ----------------------------------------------------------------
+        # Extract D+I contribution: force_wrench = kp*(target-current) + D + I
+        # The 1kHz thread recomputes P from current F/T, adds this constant offset.
+        force_p_wrench = self.force_kp * (target_force - force_torque)
+        force_di_wrench = force_wrench - force_p_wrench
+
+        control_targets = ControlTargets(
+            target_pos=target_pos,
+            target_quat=target_quat,
+            target_force=target_force,
+            sel_matrix=sel_matrix,
+            task_prop_gains=self.task_prop_gains,
+            task_deriv_gains=self.task_deriv_gains,
+            force_kp=self.force_kp,
+            force_di_wrench=force_di_wrench,
+            default_dof_pos=self.default_dof_pos,
+            kp_null=self.kp_null,
+            kd_null=self.kd_null,
+            pos_bounds=self.pos_bounds,
+            goal_position=goal_position,
+            ctrl_mode=self.ctrl_mode,
+            singularity_damping=self.singularity_damping,
         )
 
         return {
@@ -810,4 +1062,66 @@ class RealRobotController:
             'target_force': target_force,
             'sel_matrix': sel_matrix,
             'task_wrench': task_wrench,
+            'control_targets': control_targets,
         }
+
+
+# ============================================================================
+# Cross-process serialization for ControlTargets
+# ============================================================================
+
+def pack_control_targets(targets: ControlTargets) -> dict:
+    """Serialize ControlTargets to a dict of Python lists for mp.Queue transfer.
+
+    Args:
+        targets: ControlTargets namedtuple (contains torch tensors).
+
+    Returns:
+        Dict with all fields as plain Python types (lists, floats, str).
+    """
+    return {
+        'target_pos': targets.target_pos.tolist(),
+        'target_quat': targets.target_quat.tolist(),
+        'target_force': targets.target_force.tolist(),
+        'sel_matrix': targets.sel_matrix.tolist(),
+        'task_prop_gains': targets.task_prop_gains.tolist(),
+        'task_deriv_gains': targets.task_deriv_gains.tolist(),
+        'force_kp': targets.force_kp.tolist(),
+        'force_di_wrench': targets.force_di_wrench.tolist(),
+        'default_dof_pos': targets.default_dof_pos.tolist(),
+        'kp_null': float(targets.kp_null),
+        'kd_null': float(targets.kd_null),
+        'pos_bounds': targets.pos_bounds.tolist(),
+        'goal_position': targets.goal_position.tolist(),
+        'ctrl_mode': targets.ctrl_mode,
+        'singularity_damping': float(targets.singularity_damping),
+    }
+
+
+def unpack_control_targets(data: dict, device: str = "cpu") -> ControlTargets:
+    """Deserialize dict back to ControlTargets with torch tensors.
+
+    Args:
+        data: Dict from pack_control_targets().
+        device: Torch device for tensor creation.
+
+    Returns:
+        ControlTargets namedtuple with torch tensors.
+    """
+    return ControlTargets(
+        target_pos=torch.tensor(data['target_pos'], device=device, dtype=torch.float32),
+        target_quat=torch.tensor(data['target_quat'], device=device, dtype=torch.float32),
+        target_force=torch.tensor(data['target_force'], device=device, dtype=torch.float32),
+        sel_matrix=torch.tensor(data['sel_matrix'], device=device, dtype=torch.float32),
+        task_prop_gains=torch.tensor(data['task_prop_gains'], device=device, dtype=torch.float32),
+        task_deriv_gains=torch.tensor(data['task_deriv_gains'], device=device, dtype=torch.float32),
+        force_kp=torch.tensor(data['force_kp'], device=device, dtype=torch.float32),
+        force_di_wrench=torch.tensor(data['force_di_wrench'], device=device, dtype=torch.float32),
+        default_dof_pos=torch.tensor(data['default_dof_pos'], device=device, dtype=torch.float32),
+        kp_null=data['kp_null'],
+        kd_null=data['kd_null'],
+        pos_bounds=torch.tensor(data['pos_bounds'], device=device, dtype=torch.float32),
+        goal_position=torch.tensor(data['goal_position'], device=device, dtype=torch.float32),
+        ctrl_mode=data['ctrl_mode'],
+        singularity_damping=data['singularity_damping'],
+    )

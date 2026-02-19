@@ -47,6 +47,10 @@ class ObservationBuilder:
         contact_force_threshold: Force threshold for in_contact detection (N).
         fixed_asset_yaw: Known yaw angle of the fixed asset on the table (radians).
                          Used to compute fingertip_yaw_rel_fixed matching sim.
+        ee_pose_noise_enabled: Whether EEPoseNoiseWrapper was enabled during training.
+                               When True and use_tanh_ft_scaling is also True, tanh
+                               scaling is auto-disabled because EEPoseNoiseWrapper
+                               bypasses ForceTorqueWrapper's tanh in sim.
         device: Torch device.
     """
 
@@ -58,6 +62,7 @@ class ObservationBuilder:
         tanh_ft_scale: float = 0.03,
         contact_force_threshold: float = 1.5,
         fixed_asset_yaw: float = 0.0,
+        ee_pose_noise_enabled: bool = False,
         device: str = "cpu",
     ):
         self.obs_order = list(obs_order)
@@ -67,6 +72,15 @@ class ObservationBuilder:
         self.contact_force_threshold = contact_force_threshold
         self.fixed_asset_yaw = fixed_asset_yaw
         self.device = device
+
+        # Detect F/T tanh scaling mismatch: EEPoseNoiseWrapper bypasses
+        # ForceTorqueWrapper's get_force_torque_observation() in sim, so tanh
+        # scaling was never actually applied during training even if configured.
+        if use_tanh_ft_scaling and ee_pose_noise_enabled:
+            print("\033[91m[WARNING] use_tanh_ft_scaling=True but ee_pose_noise was enabled during training.")
+            print("  EEPoseNoiseWrapper bypasses ForceTorqueWrapper's tanh scaling in sim.")
+            print("  The policy trained on RAW F/T values. Disabling tanh to match.\033[0m")
+            self.use_tanh_ft_scaling = False
 
         # Validate all obs components are known
         for obs_name in self.obs_order:
@@ -79,6 +93,13 @@ class ObservationBuilder:
         # Calculate expected obs dimension (obs_order components + prev_actions)
         self.obs_dim = sum(OBS_DIM_MAP[name] for name in self.obs_order) + action_dim
         print(f"[ObservationBuilder] obs_order={self.obs_order}")
+        idx = 0
+        for name in self.obs_order:
+            dim = OBS_DIM_MAP[name]
+            print(f"  [{idx}:{idx+dim}] {name} (dim={dim})")
+            idx += dim
+        print(f"  [{idx}:{idx+action_dim}] prev_actions (dim={action_dim})")
+        idx += action_dim
         print(f"[ObservationBuilder] obs_dim={self.obs_dim} "
               f"(components={self.obs_dim - action_dim} + prev_actions={action_dim})")
 
@@ -113,8 +134,8 @@ class ObservationBuilder:
             snapshot: StateSnapshot namedtuple from FrankaInterface.
             goal_position: [3] observation frame position (hole tip + per-episode noise).
                           Matches sim's (fixed_pos_obs_frame + init_fixed_pos_obs_noise).
-            prev_actions: [action_dim] previous raw policy actions (matching sim's
-                          self.actions.clone(), NOT EMA-smoothed).
+            prev_actions: [action_dim] previous EMA-smoothed actions (matching sim's
+                          self.actions.clone(), which is EMA-smoothed in _pre_physics_step).
             fixed_yaw_offset: Per-episode yaw noise for fingertip_yaw_rel_fixed (radians).
                              Added to fixed_asset_yaw before computing relative yaw.
 
@@ -173,7 +194,12 @@ class ObservationBuilder:
         if self.use_tanh_ft_scaling:
             ft_obs = torch.tanh(self.tanh_ft_scale * force_torque)
         else:
-            ft_obs = force_torque
+            ft_obs = force_torque.clone()
+        # HACK: Zero out Tz (index 5) — real robot has ~-0.17 Nm bias that
+        # reads as -43σ after normalization. Training saw ~0. Remove to test.
+        #ft_obs[3] = 0.0
+        #ft_obs[4] = 0.0
+        ft_obs[5] = 0.0
         components["force_torque"] = ft_obs
 
         # Contact detection from force thresholds (matches ForceTorqueWrapper logic)
