@@ -1434,16 +1434,25 @@ class BlockPPO(PPO):
         std_metrics['Network Output / Pos Std Y'] = torch.zeros(self.num_agents, device=self.device)
         std_metrics['Network Output / Pos Std Z'] = torch.zeros(self.num_agents, device=self.device)
 
-        # Force stds (if available)
-        force_start_idx = sigma_offset + 6
-        if std_dim >= force_start_idx + 3:
+        # Check if VIC wrapper is active (gain stds instead of force stds)
+        is_vic = self._has_vic_wrapper()
+
+        # Extra stds after pose (indices sigma_offset+6 onward)
+        extra_start_idx = sigma_offset + 6
+        if is_vic and std_dim >= extra_start_idx + 3:
+            # VIC mode: indices 6-8 are gain stds
+            std_metrics['Network Output / Gain Std X'] = torch.zeros(self.num_agents, device=self.device)
+            std_metrics['Network Output / Gain Std Y'] = torch.zeros(self.num_agents, device=self.device)
+            std_metrics['Network Output / Gain Std Z'] = torch.zeros(self.num_agents, device=self.device)
+        elif std_dim >= extra_start_idx + 3:
+            # Hybrid mode: indices are force stds
             std_metrics['Network Output / Force Std X'] = torch.zeros(self.num_agents, device=self.device)
             std_metrics['Network Output / Force Std Y'] = torch.zeros(self.num_agents, device=self.device)
             std_metrics['Network Output / Force Std Z'] = torch.zeros(self.num_agents, device=self.device)
 
-        # Torque stds (if available)
+        # Torque stds (if available, only in hybrid mode)
         torque_start_idx = sigma_offset + 9
-        if std_dim >= torque_start_idx + 3:
+        if not is_vic and std_dim >= torque_start_idx + 3:
             std_metrics['Network Output / Torque Std X'] = torch.zeros(self.num_agents, device=self.device)
             std_metrics['Network Output / Torque Std Y'] = torch.zeros(self.num_agents, device=self.device)
             std_metrics['Network Output / Torque Std Z'] = torch.zeros(self.num_agents, device=self.device)
@@ -1468,14 +1477,18 @@ class BlockPPO(PPO):
             std_metrics['Network Output / Pos Std Y'][i] = std[sigma_offset + 1]
             std_metrics['Network Output / Pos Std Z'][i] = std[sigma_offset + 2]
 
-            # Force std by direction (if std has enough elements)
-            if std_dim >= force_start_idx + 3:
-                std_metrics['Network Output / Force Std X'][i] = std[force_start_idx + 0]
-                std_metrics['Network Output / Force Std Y'][i] = std[force_start_idx + 1]
-                std_metrics['Network Output / Force Std Z'][i] = std[force_start_idx + 2]
+            # Extra stds (gain or force, depending on VIC mode)
+            if is_vic and std_dim >= extra_start_idx + 3:
+                std_metrics['Network Output / Gain Std X'][i] = std[extra_start_idx + 0]
+                std_metrics['Network Output / Gain Std Y'][i] = std[extra_start_idx + 1]
+                std_metrics['Network Output / Gain Std Z'][i] = std[extra_start_idx + 2]
+            elif std_dim >= extra_start_idx + 3:
+                std_metrics['Network Output / Force Std X'][i] = std[extra_start_idx + 0]
+                std_metrics['Network Output / Force Std Y'][i] = std[extra_start_idx + 1]
+                std_metrics['Network Output / Force Std Z'][i] = std[extra_start_idx + 2]
 
-            # Torque std by direction (if std has enough elements)
-            if std_dim >= torque_start_idx + 3:
+            # Torque std by direction (if std has enough elements, hybrid mode only)
+            if not is_vic and std_dim >= torque_start_idx + 3:
                 std_metrics['Network Output / Torque Std X'][i] = std[torque_start_idx + 0]
                 std_metrics['Network Output / Torque Std Y'][i] = std[torque_start_idx + 1]
                 std_metrics['Network Output / Torque Std Z'][i] = std[torque_start_idx + 2]
@@ -1946,6 +1959,24 @@ class BlockPPO(PPO):
             search_depth += 1
 
         return None
+
+    def _has_vic_wrapper(self):
+        """Check if VICPoseWrapper is in the environment wrapper chain."""
+        current_env = self.env
+        search_depth = 0
+        max_depth = 10
+        while current_env is not None and search_depth < max_depth:
+            class_name = str(current_env.__class__)
+            if 'VICPoseWrapper' in class_name:
+                return True
+            next_env = None
+            for attr in ['env', '_env', 'unwrapped']:
+                if hasattr(current_env, attr):
+                    next_env = getattr(current_env, attr)
+                    break
+            current_env = next_env
+            search_depth += 1
+        return False
 
     def _get_force_torque_wrapper(self):
         """Get the ForceTorqueWrapper for accessing contact state.

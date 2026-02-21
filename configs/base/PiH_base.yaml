@@ -110,6 +110,10 @@ environment:
     default_task_force_integ_gains: [0.01, 0.01, 0.01, 0.001, 0.001, 0.001]  # Ki gains
     force_integral_clamp: 50.0      # Anti-windup clamp for integral term
 
+    # VIC (Variable Impedance Control) gain bounds - translational only
+    vic_gain_min_pos: [50.0, 50.0, 50.0]
+    vic_gain_max_pos: [500.0, 500.0, 500.0]
+
   hybrid_task:
     good_force_cmd_rew: 0.1
     bad_force_cmd_rew: -0.1
@@ -269,6 +273,11 @@ wrappers:
     # ctrl_mode is computed from primary config automatically
     reward_type: "none" #"simp"
     use_ground_truth_selection: false
+
+  # Variable Impedance Control (VIC) - pose control with learnable gains
+  vic_pose:
+    enabled: false
+    apply_ema_to_gains: false
 
   # Factory-specific metrics tracking
   factory_metrics:

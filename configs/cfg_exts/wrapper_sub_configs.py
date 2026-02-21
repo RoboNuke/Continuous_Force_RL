@@ -274,3 +274,15 @@ class EfficientResetConfig:
     terminate_on_success: bool = False  # Terminate episodes immediately upon success
     success_bonus: float = 0.0  # Total reward to give on success (base env gives +1, wrapper adjusts to this total)
     use_remaining_steps_bonus: bool = False  # If true, bonus = max_episode_length - steps_taken (overrides success_bonus)
+
+
+@dataclass
+class VICPoseConfig:
+    """Variable Impedance Control (VIC) pose wrapper configuration.
+
+    When enabled, the model outputs 3 additional actions for translational Kp gains
+    on top of the 6 pose actions (total 9 actions). Rotational gains remain fixed.
+    """
+    enabled: bool = False
+    apply_ema_to_gains: bool = False
+    """If True, apply EMA smoothing to gain actions. If False, use raw gain actions each step."""

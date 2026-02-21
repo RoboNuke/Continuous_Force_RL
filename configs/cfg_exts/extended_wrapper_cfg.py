@@ -15,7 +15,8 @@ from .wrapper_sub_configs import (
     FragileObjectConfig, ObsManagerConfig, FactoryMetricsConfig,
     PoseContactLoggingConfig, MisalignmentPenaltyConfig,
     TwoStageKeypointRewardConfig, KeypointOffsetConfig, CurriculumConfig,
-    ManualControlConfig, DynamicsRandomizationConfig, EfficientResetConfig
+    ManualControlConfig, DynamicsRandomizationConfig, EfficientResetConfig,
+    VICPoseConfig
 )
 
 # Get configclass decorator with version compatibility
@@ -86,6 +87,9 @@ class ExtendedWrapperConfig:
 
     efficient_reset: EfficientResetConfig = field(default_factory=EfficientResetConfig)
     """Efficient reset wrapper configuration"""
+
+    vic_pose: VICPoseConfig = field(default_factory=VICPoseConfig)
+    """Variable Impedance Control (VIC) pose wrapper configuration"""
 
     def apply_primary_cfg(self, primary_cfg) -> None:
         """

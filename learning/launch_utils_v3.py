@@ -11,6 +11,7 @@ from wrappers.logging.wandb_wrapper import GenericWandbLoggingWrapper
 from wrappers.logging.enhanced_action_logging_wrapper import EnhancedActionLoggingWrapper
 from wrappers.logging.pose_contact_logging_wrapper import PoseContactLoggingWrapper
 from wrappers.control.hybrid_force_position_wrapper import HybridForcePositionWrapper
+from wrappers.control.vic_pose_wrapper import VICPoseWrapper
 from wrappers.control.manual_control_wrapper import ManualControlWrapper
 from wrappers.mechanics.two_stage_keypoint_reward_wrapper import TwoStageKeypointRewardWrapper
 from wrappers.mechanics.keypoint_offset_wrapper import KeypointOffsetWrapper
@@ -45,6 +46,12 @@ def apply_wrappers(env, configs):
         raise ValueError(
             "Cannot enable both hybrid_control and pose_contact_logging wrappers. "
             "Only one contact tracking wrapper can be active at a time."
+        )
+
+    if wrappers_config.vic_pose.enabled and wrappers_config.hybrid_control.enabled:
+        raise ValueError(
+            "Cannot enable both vic_pose and hybrid_control wrappers. "
+            "VIC pose control is for pure pose control only."
         )
 
     if wrappers_config.fragile_objects.enabled:
@@ -134,6 +141,14 @@ def apply_wrappers(env, configs):
             task_cfg=configs['environment'].hybrid_task,
             num_agents=configs['primary'].total_agents,
             use_ground_truth_selection=wrappers_config.hybrid_control.use_ground_truth_selection
+        )
+
+    if wrappers_config.vic_pose.enabled:
+        print("  - Applying VIC Pose Wrapper")
+        env = VICPoseWrapper(
+            env,
+            ctrl_cfg=configs['environment'].ctrl,
+            apply_ema_to_gains=wrappers_config.vic_pose.apply_ema_to_gains
         )
 
     # Apply dynamics randomization AFTER hybrid controller so it can find and modify hybrid wrapper's variables

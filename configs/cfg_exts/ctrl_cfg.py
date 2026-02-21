@@ -80,6 +80,13 @@ class ExtendedCtrlCfg(CtrlCfg):
     force_integral_clamp: float = 50.0
     """Anti-windup clamp for integral term (symmetric bounds)."""
 
+    # VIC (Variable Impedance Control) parameters
+    vic_gain_min_pos: List[float] = None
+    """Minimum translational Kp gains [x, y, z] the model can command in VIC mode."""
+
+    vic_gain_max_pos: List[float] = None
+    """Maximum translational Kp gains [x, y, z] the model can command in VIC mode."""
+
     def __post_init__(self):
         """Post-initialization to set defaults for our custom parameters."""
         # Call parent post_init if it exists
@@ -106,6 +113,13 @@ class ExtendedCtrlCfg(CtrlCfg):
 
         if self.default_task_force_gains is None:
             self.default_task_force_gains = [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
+
+        # VIC gain bounds defaults
+        if self.vic_gain_min_pos is None:
+            self.vic_gain_min_pos = [50.0, 50.0, 50.0]
+
+        if self.vic_gain_max_pos is None:
+            self.vic_gain_max_pos = [500.0, 500.0, 500.0]
 
         # Validate integral config
         if self.enable_force_integral and self.default_task_force_integ_gains is None:
