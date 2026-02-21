@@ -150,6 +150,10 @@ model:
   use_separate_heads: false
   selection_head_hidden_dim: 2
   component_head_hidden_dim: 256
+
+  # Squashed Gaussian action bounding
+  squash_actions: false          # If true, apply tanh after sampling instead of on network mean
+  correct_squash_log_prob: false # If true (and squash_actions=true), apply Jacobian correction to log_prob
   # Actor architecture (SimBa policy network)
   actor:
     n: 2  # Number of SimBa layers

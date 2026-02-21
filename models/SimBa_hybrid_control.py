@@ -9,7 +9,7 @@ from torch.distributions import MixtureSameFamily, Normal, Bernoulli, Independen
 from models.SimBa import SimBaNet, ScaleLayer, MultiSimBaNet
 from torch.distributions.distribution import Distribution
 import torch.nn.functional as F
-from models.block_simba import BlockSimBa
+from models.block_simba import BlockSimBa, squash_log_prob_correction, safe_atanh
 from configs.cfg_exts.ctrl_mode import validate_ctrl_mode, get_force_size, VALID_CTRL_MODES
 
 class HybridActionGMM(Distribution): #MixtureSameFamily):
@@ -24,7 +24,9 @@ class HybridActionGMM(Distribution): #MixtureSameFamily):
             torque_weight: float = 1.0,
             uniform_rate: float = 0.01,
             ctrl_mode: str = None,
-            learn_selection: bool = True
+            learn_selection: bool = True,
+            squash_actions: bool = False,
+            correct_squash_log_prob: bool = False
     ) -> None:
         # Validate ctrl_mode (required, no default)
         validate_ctrl_mode(ctrl_mode)
@@ -40,6 +42,8 @@ class HybridActionGMM(Distribution): #MixtureSameFamily):
         self.uniform_rate = uniform_rate
         self.sample_uniform = (self.uniform_rate > 0.0)
         self.learn_sel = learn_selection
+        self.squash_actions = squash_actions
+        self.correct_squash_log_prob = correct_squash_log_prob
                 
     def sample(self, sample_shape=torch.Size()):
         with torch.no_grad():
@@ -67,10 +71,17 @@ class HybridActionGMM(Distribution): #MixtureSameFamily):
                 # 3DOF: Fx, Fy, Fz only
                 force_samples = comp_samples[..., :3, 1]
 
+            # When squashing, apply tanh to continuous samples before concatenation
+            if self.squash_actions:
+                pos_rot_samples = torch.tanh(comp_samples[..., :, 0])
+                force_samples = torch.tanh(force_samples)
+            else:
+                pos_rot_samples = comp_samples[..., :, 0]
+
             out_samples = torch.cat(
                 (
                     mix_sample[..., :self.force_size],  # selections
-                    comp_samples[..., :, 0],             # position/rotation (6)
+                    pos_rot_samples,                     # position/rotation (6)
                     force_samples                        # force/torque (3, 4, or 6)
                 ), dim=-1
             )
@@ -126,8 +137,13 @@ class HybridActionGMM(Distribution): #MixtureSameFamily):
         # Stack position and force into shape (batch, 6, 2) to match component_distribution
         values = torch.stack([pos_scaled, force_scaled], dim=-1)  # (batch, 6, 2)
 
-        # Evaluate component distribution at these values
-        comp_log_prob = self.component_distribution.log_prob(values)  # (batch, 6, 2)
+        if self.squash_actions:
+            # values are re-scaled tanh'd samples. Invert tanh to get pre-squash u.
+            u_values = safe_atanh(values)
+            comp_log_prob = self.component_distribution.log_prob(u_values)  # (batch, 6, 2)
+        else:
+            # Evaluate component distribution at these values directly
+            comp_log_prob = self.component_distribution.log_prob(values)  # (batch, 6, 2)
 
         # For each dimension, select the log prob corresponding to what was selected
         use_force = selections > 0.5  # (batch, force_size)
@@ -155,6 +171,19 @@ class HybridActionGMM(Distribution): #MixtureSameFamily):
             comp_log_prob[:, :, 1],  # Force component
             comp_log_prob[:, :, 0]   # Position component
         ).sum(dim=-1)  # Sum over all 6 dimensions -> (batch,)
+
+        # Apply squash correction: subtract log(1 - tanh²(u)) for each continuous dim
+        if self.squash_actions and self.correct_squash_log_prob:
+            # Select the appropriate u values per dimension (pos or force component)
+            u_selected = torch.where(
+                use_force_expanded,
+                u_values[:, :, 1],  # Force component u
+                u_values[:, :, 0]   # Position component u
+            )
+            # squash_log_prob_correction sums over last dim, but u_selected is (batch, 6)
+            # We need per-element correction summed over the 6 dims
+            correction = (2.0 * math.log(2.0) - 2.0 * u_selected - 2.0 * F.softplus(-2.0 * u_selected)).sum(dim=-1)
+            continuous_log_prob = continuous_log_prob - correction
 
         if self.learn_sel:
             return sel_log_prob + continuous_log_prob
@@ -204,11 +233,14 @@ class CLoPHybridActionGMM(HybridActionGMM):
             torque_weight: float = 1.0,
             uniform_rate: float = 0.01,
             ctrl_mode: str = None,
-            learn_selection: bool = True
+            learn_selection: bool = True,
+            squash_actions: bool = False,
+            correct_squash_log_prob: bool = False
     ) -> None:
         super().__init__(mixture_distribution, component_distribution, validate_args,
                          pos_weight, rot_weight, force_weight, torque_weight,
-                         uniform_rate, ctrl_mode, learn_selection)
+                         uniform_rate, ctrl_mode, learn_selection,
+                         squash_actions, correct_squash_log_prob)
 
     def log_prob(self, action):
         """
@@ -250,8 +282,14 @@ class CLoPHybridActionGMM(HybridActionGMM):
         # Stack position and force into shape (batch, 6, 2) to match component_distribution
         values = torch.stack([pos_scaled, force_scaled], dim=-1)  # (batch, 6, 2)
 
-        # Get component probabilities (not log probs)
-        comp_log_prob = self.component_distribution.log_prob(values)  # (batch, 6, 2)
+        if self.squash_actions:
+            # values are re-scaled tanh'd samples. Invert tanh to get pre-squash u.
+            u_values = safe_atanh(values)
+            comp_log_prob = self.component_distribution.log_prob(u_values)  # (batch, 6, 2)
+        else:
+            # Get component log probs directly
+            comp_log_prob = self.component_distribution.log_prob(values)  # (batch, 6, 2)
+
         comp_prob = comp_log_prob.exp()  # (batch, 6, 2)
 
         # Expand selection probs to match 6 dimensions - KEY 4DOF MAPPING
@@ -269,6 +307,15 @@ class CLoPHybridActionGMM(HybridActionGMM):
             # 3DOF: only translation
             sel_probs_expanded[:, :3] = sel_probs
             sel_probs_expanded[:, 3:6] = 0.0
+
+        # When squashing, we need to account for the Jacobian in the mixture probability.
+        # For CLoP: p(a) = (1-s)*p_pos(a) + s*p_force(a) where each p is the squashed density.
+        # The squashed density is p_normal(u) / |da/du| = p_normal(u) / (1 - tanh²(u)).
+        # So comp_prob already has p_normal(u), we need to divide by (1 - tanh²(u)) per component.
+        if self.squash_actions and self.correct_squash_log_prob:
+            # Jacobian factor: 1 / (1 - tanh²(u)) for each component
+            jacobian_factor = 1.0 / (1.0 - values ** 2 + 1e-6)  # values = tanh(u)
+            comp_prob = comp_prob * jacobian_factor
 
         # Compute GMM probability for each dimension
         # p(x) = (1 - sel_prob) * p_pos(x) + sel_prob * p_force(x)
@@ -313,7 +360,9 @@ class HybridGMMMixin(GaussianMixin):
             uniform_rate=0.0,
             ctrl_mode: str = None,
             learn_selection = True,
-            full_CLoP = False
+            full_CLoP = False,
+            squash_actions = False,
+            correct_squash_log_prob = False
     ) -> None:
         super().__init__(clip_actions, clip_log_std, min_log_std, max_log_std, reduction, role)
         # Validate ctrl_mode (required, no default)
@@ -327,6 +376,8 @@ class HybridGMMMixin(GaussianMixin):
         self.uniform_rate = uniform_rate
         self.learn_sel = learn_selection
         self.full_CLoP = full_CLoP
+        self.squash_actions = squash_actions
+        self.correct_squash_log_prob = correct_squash_log_prob
         
     def act(
         self,
@@ -433,7 +484,9 @@ class HybridGMMMixin(GaussianMixin):
                 rot_weight=self.rot_scale,
                 ctrl_mode=self.ctrl_mode,
                 uniform_rate=self.uniform_rate,
-                learn_selection=self.learn_sel
+                learn_selection=self.learn_sel,
+                squash_actions=self.squash_actions,
+                correct_squash_log_prob=self.correct_squash_log_prob
             )
         else:
             self._g_distribution = HybridActionGMM(
@@ -444,7 +497,9 @@ class HybridGMMMixin(GaussianMixin):
                 rot_weight=self.rot_scale,
                 ctrl_mode=self.ctrl_mode,
                 uniform_rate=self.uniform_rate,
-                learn_selection=self.learn_sel
+                learn_selection=self.learn_sel,
+                squash_actions=self.squash_actions,
+                correct_squash_log_prob=self.correct_squash_log_prob
             )
         actions = self._g_distribution.sample()
     
@@ -547,7 +602,9 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
             min_log_std=-20,
             max_log_std=2,
             reduction="sum",
-            num_agents=1
+            num_agents=1,
+            squash_actions=False,
+            correct_squash_log_prob=False
     ):
 
         # unpack cfg parameters
@@ -580,8 +637,16 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
             ctrl_mode=ctrl_mode,
             uniform_rate=uniform_rate,
             learn_selection=learn_selection,
-            full_CLoP=full_clop
+            full_CLoP=full_clop,
+            squash_actions=squash_actions,
+            correct_squash_log_prob=correct_squash_log_prob
         )
+        if squash_actions:
+            print("[INFO]: Squashed Gaussian enabled (tanh applied after sampling)")
+            if correct_squash_log_prob:
+                print("[INFO]: Jacobian log_prob correction enabled")
+            else:
+                print("[INFO]: Jacobian log_prob correction DISABLED")
         print("[INFO]: Clipping Log STD" if clip_log_std else "[INFO]: No Lot STD Clipping")
         print("[INFO]: Using full CLoP (soft GMM mixture)" if full_clop else "[INFO]: Using LCLoP (hard selection)")
         print(f"[INFO]: Control mode: {ctrl_mode} (force_size={self.force_size})")
@@ -637,7 +702,11 @@ class HybridControlSimBaActor(HybridGMMMixin, Model):
                     net.output[-1].weight *= hybrid_agent_parameters['init_layer_scale']
 
         self.selection_activation = nn.Sigmoid().to(device)
-        self.component_activation = nn.Tanh().to(device)
+        if self.squash_actions:
+            # When squashing, leave components raw — tanh applied after sampling
+            self.component_activation = nn.Identity().to(device)
+        else:
+            self.component_activation = nn.Tanh().to(device)
 
     def apply_selection_adjustments(self, hybrid_agent_parameters):
         if self.force_add:
@@ -728,6 +797,7 @@ class HybridControlBlockSimBaActor(HybridControlSimBaActor):
             component_head_hidden_dim=hybrid_agent_parameters['component_head_hidden_dim'],
             force_size=self.force_size,
             use_state_dependent_std=self.use_state_dependent_std,
+            squash_actions=self.squash_actions,
         )
 
         if hybrid_agent_parameters['init_scale_last_layer']:
@@ -790,7 +860,11 @@ class HybridControlBlockSimBaActor(HybridControlSimBaActor):
                     print(f"[DEBUG HybridControlBlockSimBaActor] std weight magnitude: {self.actor_mean.fc_out.weight[:, self.num_actions:, :].abs().mean().item():.6f}")
 
         self.selection_activation = nn.Sigmoid().to(device)
-        self.component_activation = nn.Tanh().to(device)
+        if self.squash_actions:
+            # When squashing, leave components raw — tanh applied after sampling
+            self.component_activation = nn.Identity().to(device)
+        else:
+            self.component_activation = nn.Tanh().to(device)
 
 
     def apply_selection_adjustments(self, hybrid_agent_parameters):

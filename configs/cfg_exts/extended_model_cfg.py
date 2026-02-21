@@ -58,6 +58,13 @@ class ExtendedModelConfig:
     use_hybrid_agent: bool = False
     """Whether to use hybrid force-position agent"""
 
+    # Squashed Gaussian action bounding
+    squash_actions: bool = False
+    """When True, apply tanh after sampling (squashed Gaussian) instead of on the network mean"""
+
+    correct_squash_log_prob: bool = False
+    """When True (and squash_actions=True), apply the Jacobian correction to log_prob"""
+
 
 
 @configclass

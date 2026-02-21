@@ -7,6 +7,40 @@ import math
 import torch.nn.functional as F
 from torch.distributions import Normal, Bernoulli, Independent
 
+
+# -----------------------------
+#  Squashed Gaussian Utilities
+# -----------------------------
+def squash_log_prob_correction(u):
+    """Jacobian correction for tanh squashing: -sum(log(1 - tanh²(u))).
+
+    Uses numerically stable formulation:
+        log(1 - tanh²(u)) = 2*log(2) - 2*u - 2*softplus(-2*u)
+
+    Args:
+        u: Pre-squash samples from the Normal distribution.
+
+    Returns:
+        Correction term to subtract from Normal log_prob, summed over last dim.
+    """
+    return (2.0 * math.log(2.0) - 2.0 * u - 2.0 * F.softplus(-2.0 * u)).sum(dim=-1)
+
+
+def safe_atanh(a, eps=1e-6):
+    """Numerically stable inverse tanh.
+
+    Clamps input to (-1+eps, 1-eps) to avoid inf at boundaries.
+
+    Args:
+        a: Tanh-squashed values in [-1, 1].
+        eps: Clamping margin from boundaries.
+
+    Returns:
+        Pre-squash values u such that tanh(u) ≈ a.
+    """
+    return torch.atanh(torch.clamp(a, -1.0 + eps, 1.0 - eps))
+
+
 # -----------------------------
 #  Block Linear Layer
 # -----------------------------
@@ -113,6 +147,7 @@ class BlockSimBa(nn.Module):
             component_head_hidden_dim=128,
             force_size=3,
             use_state_dependent_std=False,
+            squash_actions=False,
         ):
         super().__init__()
         self.device=device
@@ -141,6 +176,8 @@ class BlockSimBa(nn.Module):
         self.ln_out = BlockLayerNorm(num_agents, hidden_dim, name="ln_out")
 
         if use_separate_heads:
+            # When squashing, component heads output raw values (tanh applied after sampling)
+            component_activation = None if squash_actions else 'tanh'
             # Create separate heads for each selection variable
             self.selection_heads = nn.ModuleList([
                 BlockMLP(num_agents, hidden_dim, selection_head_hidden_dim, 1,
@@ -149,10 +186,10 @@ class BlockSimBa(nn.Module):
             ])
             # Position/rotation component head
             self.pos_rot_head = BlockMLP(num_agents, hidden_dim, component_head_hidden_dim, 6,
-                                        activation='tanh', name="pos_rot_head")
+                                        activation=component_activation, name="pos_rot_head")
             # Force/torque component head
             self.force_torque_head = BlockMLP(num_agents, hidden_dim, component_head_hidden_dim, force_size,
-                                             activation='tanh', name="force_torque_head")
+                                             activation=component_activation, name="force_torque_head")
             # Optional std head for state-dependent std
             if self.std_out_dim > 0:
                 self.std_head = BlockMLP(num_agents, hidden_dim, component_head_hidden_dim, self.std_out_dim,
@@ -258,6 +295,8 @@ class BlockSimBaActor(GaussianMixin, Model):
             reduction="sum",
             sigma_idx=0,
             use_state_dependent_std=False,
+            squash_actions=False,
+            correct_squash_log_prob=False,
         ):
         print("[INFO]: \t\tInstantiating Block SimBa Actor")
         Model.__init__(self, observation_space, action_space, device)
@@ -266,10 +305,23 @@ class BlockSimBaActor(GaussianMixin, Model):
         self.num_agents = num_agents
         self.sigma_idx = sigma_idx
         self.use_state_dependent_std = use_state_dependent_std
+        self.squash_actions = squash_actions
+        self.correct_squash_log_prob = correct_squash_log_prob
+
+        if squash_actions:
+            print("[INFO]: \t\tSquashed Gaussian enabled (tanh applied after sampling)")
+            if correct_squash_log_prob:
+                print("[INFO]: \t\tJacobian log_prob correction enabled")
+            else:
+                print("[INFO]: \t\tJacobian log_prob correction DISABLED")
 
         # Compute number of component dimensions (exclude selection terms)
         # sigma_idx is the count of selection terms, Bernoulli doesn't need std dev
         num_component_dims = self.num_actions - self.sigma_idx
+
+        # When squash_actions=True, network outputs raw (unbounded) values;
+        # tanh is applied after sampling instead of on the network output.
+        use_tanh_on_network = (self.sigma_idx == 0) and (not squash_actions)
 
         self.actor_mean = BlockSimBa(
             num_agents = self.num_agents,
@@ -278,7 +330,7 @@ class BlockSimBaActor(GaussianMixin, Model):
             act_dim = self.num_actions,
             device=device,
             num_blocks = actor_n,
-            tanh = (self.sigma_idx == 0),
+            tanh = use_tanh_on_network,
             force_size = self.sigma_idx,  # Pass sigma_idx as force_size for std_out_dim calculation
             use_state_dependent_std = use_state_dependent_std,
         ).to(device)
@@ -331,13 +383,65 @@ class BlockSimBaActor(GaussianMixin, Model):
 
 
     def act(self, inputs, role):
-        if self.sigma_idx == 0:
+        if self.sigma_idx == 0 and not self.squash_actions:
             return GaussianMixin.act(self, inputs, role)
 
-        # Get mean actions and log_std from compute()
+        if self.sigma_idx == 0 and self.squash_actions:
+            return self._act_squashed_gaussian(inputs, role)
+
+        # sigma_idx > 0: Bernoulli selections + Gaussian components
+        return self._act_bernoulli_gaussian(inputs, role)
+
+    def _act_squashed_gaussian(self, inputs, role):
+        """Squashed Gaussian for pure pose control (sigma_idx == 0).
+
+        Flow: network outputs raw mean -> Normal(mean, std) -> sample u -> a = tanh(u)
+        Log_prob: Normal.log_prob(u) - squash_correction(u) if correcting
+        """
         mean_actions, log_std, outputs = self.compute(inputs, role)
 
-        # Clamp log_std if configured
+        if self._g_clip_log_std:
+            log_std = torch.clamp(log_std, self._g_log_std_min, self._g_log_std_max)
+
+        self._g_log_std = log_std
+        self._g_num_samples = mean_actions.shape[0]
+
+        # Create Normal distribution with raw (unbounded) mean
+        dist = Normal(mean_actions, log_std.exp())
+        self._g_distribution = dist
+
+        # Sample u from Normal, then squash to get bounded action
+        u = dist.rsample()
+        actions = torch.tanh(u)
+
+        # For log_prob: use taken_actions if replaying, otherwise use our samples
+        taken_actions = inputs.get("taken_actions", actions)
+        # Invert tanh to recover pre-squash values for log_prob evaluation
+        u_for_log_prob = safe_atanh(taken_actions)
+
+        log_prob = dist.log_prob(u_for_log_prob)
+        if self.correct_squash_log_prob:
+            log_prob = log_prob.sum(dim=-1) - squash_log_prob_correction(u_for_log_prob)
+        else:
+            log_prob = log_prob.sum(dim=-1)
+
+        if log_prob.dim() != actions.dim():
+            log_prob = log_prob.unsqueeze(-1)
+
+        # Store for entropy calculation
+        self._squash_u = u
+
+        outputs["mean_actions"] = mean_actions
+        return actions, log_prob, outputs
+
+    def _act_bernoulli_gaussian(self, inputs, role):
+        """Bernoulli selections + Gaussian components (sigma_idx > 0).
+
+        When squash_actions=True: components are sampled from Normal then squashed via tanh.
+        When squash_actions=False: components use tanh'd means directly (original behavior).
+        """
+        mean_actions, log_std, outputs = self.compute(inputs, role)
+
         if self._g_clip_log_std:
             log_std = torch.clamp(log_std, self._g_log_std_min, self._g_log_std_max)
 
@@ -357,7 +461,14 @@ class BlockSimBaActor(GaussianMixin, Model):
         # Sample
         selection_samples = selection_dist.sample()
         component_samples = component_dist.rsample()
-        actions = torch.cat([selection_samples, component_samples], dim=-1)
+
+        if self.squash_actions:
+            # Squash component samples to [-1, 1]
+            component_actions = torch.tanh(component_samples)
+        else:
+            component_actions = component_samples
+
+        actions = torch.cat([selection_samples, component_actions], dim=-1)
 
         # Compute log_prob for taken_actions or sampled actions
         taken_actions = inputs.get("taken_actions", actions)
@@ -367,8 +478,15 @@ class BlockSimBaActor(GaussianMixin, Model):
         # Bernoulli log_prob for selections
         sel_log_prob = selection_dist.log_prob(taken_selections)  # Shape: (batch,)
 
-        # Gaussian log_prob for components, summed across dimensions
-        comp_log_prob = component_dist.log_prob(taken_components).sum(dim=-1)  # Shape: (batch,)
+        # Gaussian log_prob for components
+        if self.squash_actions:
+            # Invert tanh to get pre-squash values for log_prob
+            u_components = safe_atanh(taken_components)
+            comp_log_prob = component_dist.log_prob(u_components).sum(dim=-1)
+            if self.correct_squash_log_prob:
+                comp_log_prob = comp_log_prob - squash_log_prob_correction(u_components)
+        else:
+            comp_log_prob = component_dist.log_prob(taken_components).sum(dim=-1)
 
         # Total log_prob
         log_prob = sel_log_prob + comp_log_prob
@@ -396,7 +514,11 @@ class BlockSimBaActor(GaussianMixin, Model):
             # sigma_idx is count of selection terms
             selection_logits = action_mean[..., :self.sigma_idx]
             selection_probs = self.selection_activation(selection_logits)  # Sigmoid
-            components = self.component_activation(action_mean[..., self.sigma_idx:])
+            if self.squash_actions:
+                # When squashing, leave components raw — tanh applied after sampling
+                components = action_mean[..., self.sigma_idx:]
+            else:
+                components = self.component_activation(action_mean[..., self.sigma_idx:])
             action_mean = torch.cat([selection_probs, components], dim=-1)
 
         if not self.use_state_dependent_std:
@@ -427,8 +549,16 @@ class BlockSimBaActor(GaussianMixin, Model):
         return action_mean, log_std, {}
 
     def get_entropy(self, role=""):
-        if self.sigma_idx == 0:
+        if self.sigma_idx == 0 and not self.squash_actions:
             return GaussianMixin.get_entropy(self, role)
+
+        if self.sigma_idx == 0 and self.squash_actions:
+            # Use the Normal entropy as approximation — entropy is only used
+            # as a regularizer, not for the policy gradient. The exact entropy
+            # of a squashed Gaussian has no clean closed form.
+            if self._g_distribution is None:
+                return torch.tensor(0.0, device=self.device)
+            return self._g_distribution.entropy().to(self.device)
 
         # Combined entropy from both distributions
         sel_entropy = self._selection_dist.entropy()  # Shape: (batch,)
