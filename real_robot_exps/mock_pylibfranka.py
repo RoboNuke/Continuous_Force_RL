@@ -355,3 +355,45 @@ class Robot:
 
     def set_K(self, *args, **kwargs):
         print("[MockRobot] Stiffness frame set (no-op).")
+
+
+@dataclass
+class GripperState:
+    """Mimics pylibfranka.GripperState."""
+    width: float = 0.008
+    max_width: float = 0.08
+    is_grasped: bool = True
+    temperature: float = 25.0
+
+
+class Gripper:
+    """Mimics pylibfranka.Gripper."""
+
+    def __init__(self, ip: str):
+        self._ip = ip
+        self._state = GripperState()
+        print(f"[MockGripper] Connected to mock gripper at {ip}")
+
+    def homing(self) -> bool:
+        print("[MockGripper] Homing (no-op).")
+        self._state.width = self._state.max_width
+        return True
+
+    def grasp(self, width: float, speed: float, force: float,
+              epsilon_inner: float = 0.005, epsilon_outer: float = 0.005) -> bool:
+        print(f"[MockGripper] Grasp: width={width}m, speed={speed}m/s, force={force}N")
+        self._state.is_grasped = True
+        return True
+
+    def move(self, width: float, speed: float) -> bool:
+        print(f"[MockGripper] Move: width={width}m, speed={speed}m/s")
+        self._state.width = width
+        self._state.is_grasped = False
+        return True
+
+    def stop(self) -> bool:
+        print("[MockGripper] Stop (no-op).")
+        return True
+
+    def read_once(self) -> GripperState:
+        return self._state

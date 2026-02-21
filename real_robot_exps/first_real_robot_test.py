@@ -99,6 +99,17 @@ def phase1_connect_and_read(config: dict):
     print("\n  MANUAL CHECK: Does the printed EE position match where the")
     print("  fingertip midpoint physically is? Measure with a ruler if unsure.")
 
+    # YAML-ready calibration output (cyan for visibility)
+    ee_to_peg_base_offset = config['task']['ee_to_peg_base_offset']
+    peg_base_pos = [ee_pos[i] + ee_to_peg_base_offset[i] for i in range(3)]
+    CYAN = "\033[36m"
+    RESET = "\033[0m"
+    yaml_val = f"[{peg_base_pos[0]:.4f}, {peg_base_pos[1]:.4f}, {peg_base_pos[2]:.4f}]"
+    print(f"\n  {CYAN}--- Copy-paste into config.yaml (ee_pos + ee_to_peg_base_offset) ---{RESET}")
+    print(f"  {CYAN}ee_to_peg_base_offset: {ee_to_peg_base_offset}{RESET}")
+    print(f"  {CYAN}fixed_asset_position: {yaml_val}{RESET}")
+    print(f"  {CYAN}target_peg_base_position: {yaml_val}{RESET}")
+
     raw_robot.stop()
     return ee_pos
 

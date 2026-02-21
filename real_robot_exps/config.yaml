@@ -8,6 +8,7 @@ robot:
   control_rate_hz: 15.0       # Must match training policy_hz
   reset_duration_sec: 3.0     # Duration for Cartesian reset motion
   retract_height_m: 0.03      # Retract upward before reset to clear hole (meters)
+  gripper_force_n: 50.0       # Grasp force in Newtons (max 70N continuous limit)
 
   # NE_T_EE: -45deg Z rotation + 103.4mm Z offset (flange -> fingertip midpoint)
   # Uses R_z(-45°) to match sim's panda_hand body frame (URDF rpy="0 0 -0.7854").
@@ -38,14 +39,14 @@ robot:
   # Measured in free space with check_ft_bias.py — compensates for unmodeled
   # EE payload (peg + gripper fingers) that the robot's gravity model misses.
   # Set to [0,0,0,0,0,0] to disable.
-  ft_bias: [-0.9484, 0.5430, -0.5755, -0.2891, -0.1657, 0.3142]
+  ft_bias: [-2.9115, 0.0534, -1.0835, 0.0689, -0.6516, -0.0874]
 
 task:
   # Fixed asset origin position (hole base in world frame, meters)
   # The observation frame (sim's fixed_pos_obs_frame) is computed as:
   #   obs_frame = fixed_asset_position + [0, 0, hole_height + fixed_asset_base_height]
   # which gives the HOLE TIP (entrance) position matching the sim exactly.
-  fixed_asset_position: [0.6113, -0.0084, 0.0506] #[0.607, -0.003, 0.0556]
+  fixed_asset_position: [0.6218, -0.0142, 0.0535] #=0.6225m, y=-0.0084m, z=0.0939m
   fixed_asset_orientation_quat: [1.0, 0.0, 0.0, 0.0]  # [w, x, y, z]
   fixed_asset_yaw: 0.0                # Yaw of fixed asset in world frame (radians)
   fixed_asset_base_height: 0.0        # Height of base plate below hole channel (meters)
@@ -53,7 +54,7 @@ task:
   # Target peg base position (where peg base should be when fully inserted)
   # This is "target_held_base_pos" in sim - used for SUCCESS/ENGAGEMENT DETECTION
   # May differ from fixed_asset_position depending on geometry
-  target_peg_base_position: [0.6113, -0.0084, 0.0506]
+  target_peg_base_position: [0.6218, -0.0142, 0.0535]
 
   # Offset from EE (fingertip midpoint) to peg base (grasped object root)
   # Needed to compute peg_base_pos = ee_pos + this offset for detection
@@ -69,7 +70,7 @@ task:
   engage_threshold: 0.9            # Multiplied by hole_height -> 22.5mm Z threshold
 
   # Break detection (matches FragileObjectWrapper)
-  break_force_threshold: 10000.0      # N - L2 norm of force (Fx,Fy,Fz) >= this triggers break
+  break_force_threshold: 10.0      # N - L2 norm of force (Fx,Fy,Fz) >= this triggers break
 
   # Episode parameters
   episode_timeout_steps: 150       # Max steps per episode
@@ -86,11 +87,11 @@ control_gains:
   #task_prop_gains: [100.0, 100.0, 100.0, 30.0, 30.0, 30.0]
   #task_deriv_gains: [20.0, 20.0, 20.0, 10.954451560974121, 10.954451560974121, 10.954451560974121]
 
-  #task_prop_gains: [50.0, 50.0, 50.0, 15.0, 15.0, 15.0]
-  #task_deriv_gains: [14.1421356243, 14.142135624, 14.142135624, 7.745966692, 7.745966692, 7.745966692]
+  task_prop_gains: [315.0, 315.0, 315.0, 120.0, 120.0, 0.0]
+  task_deriv_gains: [22,22,22, 22, 22, 0]
 
-  task_prop_gains: [400.0, 400.0, 400.0, 30.0, 30.0, 30.0]
-  task_deriv_gains: [30, 30, 30, 10.954451560974121, 10.954451560974121, 10.954451560974121]
+  #task_prop_gains: [400.0, 400.0, 400.0, 120.0, 120.0, 0.0]
+  #task_deriv_gains: [30, 30, 30, 22, 22, 0.0] #15.491933385]
 
 
 
@@ -113,7 +114,7 @@ control_gains:
 noise:
   # When true, use noise values defined below instead of WandB training config.
   # When false, load noise from WandB training config (matching sim exactly).
-  use_rr_noise: true
+  use_rr_noise: false
 
   # Goal observation noise (Gaussian, sampled once per episode)
   goal_pos_noise: [0.00, 0.00, 0.00]   # meters, std per axis

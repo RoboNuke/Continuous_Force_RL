@@ -197,8 +197,8 @@ class ObservationBuilder:
             ft_obs = force_torque.clone()
         # HACK: Zero out Tz (index 5) — real robot has ~-0.17 Nm bias that
         # reads as -43σ after normalization. Training saw ~0. Remove to test.
-        #ft_obs[3] = 0.0
-        #ft_obs[4] = 0.0
+        ft_obs[3] = 0.0
+        ft_obs[4] = 0.0
         ft_obs[5] = 0.0
         components["force_torque"] = ft_obs
 

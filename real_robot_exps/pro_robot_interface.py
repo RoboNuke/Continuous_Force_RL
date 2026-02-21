@@ -832,6 +832,58 @@ class FrankaInterface:
         if resp[0] != "move_done":
             raise RuntimeError(f"Move joints failed: {resp}")
 
+    def close_gripper(self):
+        """Close gripper with configured force. Call once before episodes.
+
+        Creates a separate pylibfranka.Gripper connection (independent of
+        Robot), commands a grasp with width=0.0 and generous epsilon_outer
+        so the fingers clamp down on whatever is already in the gripper.
+
+        Raises:
+            ValueError: If configured gripper_force_n exceeds 70N.
+            RuntimeError: If grasp command fails.
+        """
+        force = self._config['robot'].get('gripper_force_n', 50.0)
+        if force > 70.0:
+            raise ValueError(
+                f"Gripper force {force}N exceeds 70N continuous limit. "
+                f"Set robot.gripper_force_n <= 70.0 in config.yaml."
+            )
+
+        robot_cfg = self._config['robot']
+        if robot_cfg.get('use_mock', False):
+            import real_robot_exps.mock_pylibfranka as plf
+        else:
+            import pylibfranka as plf
+
+        max_attempts = 5
+        last_error = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                gripper = plf.Gripper(robot_cfg['ip'])
+                success = gripper.grasp(
+                    width=0.0, speed=0.04, force=force,
+                    epsilon_inner=0.005, epsilon_outer=0.1,
+                )
+                if not success:
+                    raise RuntimeError(
+                        "Gripper grasp returned False — check that peg is in gripper"
+                    )
+
+                state = gripper.read_once()
+                print(f"[FrankaInterface/PRO] Gripper closed: width={state.width:.4f}m, "
+                      f"force={force}N, is_grasped={state.is_grasped}")
+                return
+            except Exception as e:
+                last_error = e
+                print(f"[FrankaInterface/PRO] Gripper attempt {attempt}/{max_attempts} "
+                      f"failed: {e}")
+
+        raise RuntimeError(
+            f"Gripper grasp failed after {max_attempts} attempts. "
+            f"Last error: {last_error}"
+        )
+
     def check_safety(self, snapshot: StateSnapshot):
         """Check process health, joint pos/vel limits, and force magnitude.
 

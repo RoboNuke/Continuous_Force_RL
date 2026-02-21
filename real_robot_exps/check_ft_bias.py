@@ -62,7 +62,8 @@ def _quat_slerp(q0, q1, t):
         q1 = -q1
         dot = -dot
     if dot > 0.9995:
-        return q0 + t * (q1 - q0)
+        result = q0 + t * (q1 - q0)
+        return result / np.linalg.norm(result)
     theta = math.acos(min(dot, 1.0))
     sin_theta = math.sin(theta)
     return (math.sin((1-t)*theta) / sin_theta) * q0 + (math.sin(t*theta) / sin_theta) * q1
@@ -185,7 +186,15 @@ def main():
     print(f"\nReading O_F_ext_hat_K for {DURATION_SEC}s (robot should be in FREE SPACE, no contact)...")
     print("=" * 80)
 
-    ctrl = robot.start_torque_control()
+    ctrl = robot.start_joint_position_control(plf.ControllerMode.JointImpedance)
+    state, _ = ctrl.readOnce()
+    q_hold = list(state.q)
+
+    # Let the position controller settle before recording data
+    print("  Settling for 2 seconds...")
+    for _ in range(2000):
+        state, _ = ctrl.readOnce()
+        ctrl.writeOnce(plf.JointPositions(q_hold))
 
     n_steps = DURATION_SEC * 1000
     all_readings = []
@@ -199,7 +208,7 @@ def main():
             print(f"  t={i/1000:.1f}s  F/T = [Fx={ft[0]:+.3f}, Fy={ft[1]:+.3f}, Fz={ft[2]:+.3f}, "
                   f"Tx={ft[3]:+.3f}, Ty={ft[4]:+.3f}, Tz={ft[5]:+.3f}]")
 
-        ctrl.writeOnce(plf.Torques([0.0] * 7))
+        ctrl.writeOnce(plf.JointPositions(q_hold))
 
     robot.stop()
 

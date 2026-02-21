@@ -266,7 +266,6 @@ def reconstruct_obs_order(configs: dict) -> list:
     if hasattr(env_cfg, 'obs_rand') and getattr(env_cfg.obs_rand, 'use_yaw_noise', False):
         obs_order.append("fingertip_yaw_rel_fixed")
 
-    print(f"[reconstruct_obs_order] Reconstructed: {obs_order}")
     return obs_order
 
 
@@ -341,10 +340,6 @@ def load_single_agent_policy(
         std_out_dim = 0
 
     out_size = action_dim + std_out_dim
-
-    print(f"[load_single_agent_policy] obs_dim={obs_dim}, action_dim={action_dim}, "
-          f"sigma_idx={sigma_idx}, tan_out={tan_out}, out_size={out_size}, "
-          f"state_dependent_std={use_state_dependent_std}")
 
     # Create and load SimBaNet
     policy_net = SimBaNet(
@@ -678,9 +673,9 @@ def run_episode(
     """
     task_cfg = real_config['task']
     fixed_asset_position = torch.tensor(task_cfg['fixed_asset_position'], device=device, dtype=torch.float32)
-    # Compute observation frame: fixed_asset_position + base_height only (no hole_height).
-    # Testing whether removing hole_height improves sim-to-real transfer.
-    obs_frame_z_offset = task_cfg['fixed_asset_base_height']
+    # Compute observation frame: fixed_asset_position + hole_height + base_height
+    # Matches sim's fixed_pos_obs_frame = fixed_pos + [0, 0, height + base_height]
+    obs_frame_z_offset = task_cfg['hole_height'] + task_cfg['fixed_asset_base_height']
     goal_position = fixed_asset_position.clone()
     goal_position[2] += obs_frame_z_offset
     target_peg_base_pos = torch.tensor(task_cfg['target_peg_base_position'], device=device, dtype=torch.float32)
@@ -708,19 +703,15 @@ def run_episode(
     start_yaw_noise = 0.0  # no yaw noise on starting pose
 
     # 3. Compute target EE start pose in world frame (ABSOLUTE, not relative to EE)
-    #    We want the PEG TIP at: hole_tip + hand_init_pos + noise
-    #    EE is above peg tip by ee_to_peg_base_offset (which is negative Z),
-    #    so subtract the offset to raise EE so peg tip lands at the right spot.
-    target_ee_pos = goal_position + hand_init_pos + start_pos_noise - ee_to_peg_base_offset
+    #    hand_init_pos is the EE offset above the hole tip, matching sim's convention
+    #    in spawn_height_curriculum_wrapper: above_fixed_pos = fixed_tip_pos + hand_init_pos
+    target_ee_pos = goal_position + hand_init_pos + start_pos_noise
     target_rpy = [hand_init_orn[0], hand_init_orn[1], hand_init_orn[2] + start_yaw_noise]
     target_pose = make_ee_target_pose(target_ee_pos.cpu().numpy(), np.array(target_rpy))
 
-    print(f"    [START POSE] hole_tip_z={goal_position[2].item():.4f} + "
-          f"hand_init_z={hand_init_pos[2].item():.4f} + "
-          f"noise_z={start_pos_noise[2].item():.4f} - "
-          f"peg_offset_z={ee_to_peg_base_offset[2].item():.4f} = "
-          f"target_ee_z={target_ee_pos[2].item():.4f}")
-    print(f"    [START POSE] target_xyz=[{target_ee_pos[0].item():.4f}, "
+    print(f"    [GOAL] xyz=[{noisy_goal[0].item():.4f}, "
+          f"{noisy_goal[1].item():.4f}, {noisy_goal[2].item():.4f}]")
+    print(f"    [START] target_xyz=[{target_ee_pos[0].item():.4f}, "
           f"{target_ee_pos[1].item():.4f}, {target_ee_pos[2].item():.4f}]")
 
     # 4. Retract upward to safely clear the hole before moving to new start pose
@@ -733,7 +724,7 @@ def run_episode(
 
     # Verify achieved position
     snap_after_reset = robot.get_state_snapshot()
-    print(f"    [START POSE] achieved_xyz=[{snap_after_reset.ee_pos[0].item():.4f}, "
+    print(f"    [START] achieved_xyz=[{snap_after_reset.ee_pos[0].item():.4f}, "
           f"{snap_after_reset.ee_pos[1].item():.4f}, {snap_after_reset.ee_pos[2].item():.4f}]")
 
     prev_actions = torch.zeros(model_info['action_dim'], device=device)
@@ -771,7 +762,6 @@ def run_episode(
     # Reset controller state since warmup modified EMA
     controller.reset(snap.ee_pos, noisy_goal)
     prev_actions = torch.zeros(model_info['action_dim'], device=device)
-    print("[run_episode] Warmup complete (3 iterations) — PyTorch JIT compiled")
 
     # 8. Start torque control — background 1kHz thread keeps robot fed
     input("    [WAIT] Press Enter to START ROLLOUT...")
@@ -859,6 +849,9 @@ def run_episode(
     # End torque control session immediately so the robot isn't waiting
     # for 1kHz communication while we compute metrics / print results
     robot.end_control()
+
+    print(f"    [END] ee_xyz=[{snap.ee_pos[0].item():.4f}, "
+          f"{snap.ee_pos[1].item():.4f}, {snap.ee_pos[2].item():.4f}]")
 
     episode_length = step + 1
 
@@ -994,7 +987,6 @@ def main():
 
     if use_rr_noise:
         # Load ALL noise values from real robot config (fail-fast if missing)
-        print("[main] Using REAL ROBOT noise config (noise.use_rr_noise=true)")
         goal_pos_noise_scale = torch.tensor(noise_cfg['goal_pos_noise'], device=args.device, dtype=torch.float32)
         use_yaw_noise = noise_cfg['use_yaw_noise']
         goal_yaw_noise_scale = noise_cfg['goal_yaw_noise'] if use_yaw_noise else 0.0
@@ -1004,7 +996,6 @@ def main():
         hand_init_orn_noise = list(noise_cfg['hand_init_orn_noise'])
     else:
         # Load noise from WandB training config (matching sim exactly)
-        print("[main] Using WANDB training noise config (noise.use_rr_noise=false)")
         obs_rand = configs['environment'].obs_rand
         goal_pos_noise_scale = torch.tensor(obs_rand.fixed_asset_pos, device=args.device, dtype=torch.float32)
         use_yaw_noise = hasattr(obs_rand, 'use_yaw_noise') and obs_rand.use_yaw_noise
@@ -1018,12 +1009,6 @@ def main():
                                            device=args.device, dtype=torch.float32)
         hand_init_orn = list(getattr(cfg_task, 'hand_init_orn', [3.1416, 0.0, 0.0]))
         hand_init_orn_noise = list(getattr(cfg_task, 'hand_init_orn_noise', [0.0, 0.0, 0.785]))
-
-    print(f"[main] goal_pos_noise_scale={goal_pos_noise_scale.tolist()}, "
-          f"goal_yaw_noise_scale={goal_yaw_noise_scale}")
-    print(f"[main] hand_init_pos={hand_init_pos.tolist()}, "
-          f"hand_init_pos_noise={hand_init_pos_noise.tolist()}")
-    print(f"[main] hand_init_orn={hand_init_orn}, hand_init_orn_noise={hand_init_orn_noise}")
 
     # 6. Initialize observation builder
     fixed_asset_yaw = real_config['task']['fixed_asset_yaw']
@@ -1041,6 +1026,10 @@ def main():
     # 7. Initialize robot interface
     print("\nInitializing robot interface...")
     robot = FrankaInterface(real_config, device=args.device)
+
+    # 7b. Close gripper with configured force (one-time, before any episodes)
+    print("\nClosing gripper...")
+    robot.close_gripper()
 
     # 8. Initialize controller
     print("\nInitializing controller...")
