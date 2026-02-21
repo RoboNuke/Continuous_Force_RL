@@ -430,8 +430,16 @@ class HybridGMMMixin(GaussianMixin):
         # NOTE: mean1 is a VIEW of mean_actions, so *= modifies mean_actions in-place
         # This is intentional for the Gaussian parameterization
         mean1 = mean_actions[:, self.force_size:self.force_size+6]
-        mean1[:, :3] *= self.pos_scale
-        mean1[:, 3:6] *= self.rot_scale
+
+        # When squashing, skip scaling — tanh maps raw outputs to [-1,1],
+        # and the wrapper/controller applies physical bounds downstream.
+        if self.squash_actions:
+            p_s, r_s, f_s, t_s = 1.0, 1.0, 1.0, 1.0
+        else:
+            p_s, r_s, f_s, t_s = self.pos_scale, self.rot_scale, self.force_scale, self.torque_scale
+
+        mean1[:, :3] *= p_s
+        mean1[:, 3:6] *= r_s
 
         # Build mean2 (force component) based on ctrl_mode
         mean2 = torch.zeros_like(mean1)  # (batch, 6)
@@ -439,16 +447,16 @@ class HybridGMMMixin(GaussianMixin):
 
         if self.ctrl_mode == "force_tz":
             # 4DOF: force_actions is [Fx, Fy, Fz, Tz]
-            mean2[:, :3] = force_actions[:, :3] * self.force_scale  # Fx, Fy, Fz
-            mean2[:, 5] = force_actions[:, 3] * self.torque_scale   # Tz -> index 5
+            mean2[:, :3] = force_actions[:, :3] * f_s  # Fx, Fy, Fz
+            mean2[:, 5] = force_actions[:, 3] * t_s   # Tz -> index 5
             mean2[:, 3:5] = mean1[:, 3:5]  # Rx, Ry from position
         elif self.ctrl_mode == "force_torque":
             # 6DOF: force_actions is [Fx, Fy, Fz, Tx, Ty, Tz]
-            mean2[:, :3] = force_actions[:, :3] * self.force_scale
-            mean2[:, 3:6] = force_actions[:, 3:6] * self.torque_scale
+            mean2[:, :3] = force_actions[:, :3] * f_s
+            mean2[:, 3:6] = force_actions[:, 3:6] * t_s
         else:  # force_only
             # 3DOF: force_actions is [Fx, Fy, Fz]
-            mean2[:, :3] = force_actions * self.force_scale
+            mean2[:, :3] = force_actions * f_s
             mean2[:, 3:6] = mean1[:, 3:6]  # Set to position values to make mixture work
 
         # Combine means and expand to component axis
@@ -457,17 +465,17 @@ class HybridGMMMixin(GaussianMixin):
         # Build std tensor
         std = torch.ones_like(means)
         # when you scale a normal distribution by c, the std dev is scaled by c only!
-        std[:, :3, 0] = log_std[:, 0:3].exp() * self.pos_scale
-        std[:, 3:, 0] = log_std[:, 3:6].exp() * self.rot_scale
-        std[:, :3, 1] = log_std[:, 6:9].exp() * self.force_scale
+        std[:, :3, 0] = log_std[:, 0:3].exp() * p_s
+        std[:, 3:, 0] = log_std[:, 3:6].exp() * r_s
+        std[:, :3, 1] = log_std[:, 6:9].exp() * f_s
 
         if self.ctrl_mode == "force_tz":
             # 4DOF: Tz std at index 5, Rx/Ry use position std
             std[:, 3:5, 1] = std[:, 3:5, 0]  # Rx, Ry use position std
-            std[:, 5, 1] = log_std[:, 9].exp() * (self.torque_scale ** 2)  # Tz std
+            std[:, 5, 1] = log_std[:, 9].exp() * (t_s ** 2)  # Tz std
         elif self.ctrl_mode == "force_torque":
             # 6DOF: full torque std
-            std[:, 3:, 1] = log_std[:, 9:].exp() * (self.torque_scale ** 2)
+            std[:, 3:, 1] = log_std[:, 9:].exp() * (t_s ** 2)
         else:  # force_only
             # 3DOF: rotation uses position std
             std[:, 3:, 1] = std[:, 3:, 0]
@@ -478,10 +486,10 @@ class HybridGMMMixin(GaussianMixin):
         if self.full_CLoP:
             self._g_distribution = CLoPHybridActionGMM(
                 mix_dist, components,
-                force_weight=self.force_scale,
-                torque_weight=self.torque_scale,
-                pos_weight=self.pos_scale,
-                rot_weight=self.rot_scale,
+                force_weight=f_s,
+                torque_weight=t_s,
+                pos_weight=p_s,
+                rot_weight=r_s,
                 ctrl_mode=self.ctrl_mode,
                 uniform_rate=self.uniform_rate,
                 learn_selection=self.learn_sel,
@@ -491,10 +499,10 @@ class HybridGMMMixin(GaussianMixin):
         else:
             self._g_distribution = HybridActionGMM(
                 mix_dist, components,
-                force_weight=self.force_scale,
-                torque_weight=self.torque_scale,
-                pos_weight=self.pos_scale,
-                rot_weight=self.rot_scale,
+                force_weight=f_s,
+                torque_weight=t_s,
+                pos_weight=p_s,
+                rot_weight=r_s,
                 ctrl_mode=self.ctrl_mode,
                 uniform_rate=self.uniform_rate,
                 learn_selection=self.learn_sel,
