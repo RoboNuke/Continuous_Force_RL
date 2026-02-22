@@ -62,6 +62,7 @@ pos1mm =  "#fce385"#648FFF"
 pos25mm = "#99ccb5"#FE6100"
 match =   "#9cd579"#DC267F"
 hybrid =  "#67c6c2"#FFB000"
+vic = "#e682b4"
 COLORS = {
     # Base method names
     "Pose": pos1mm,           # Green
@@ -70,6 +71,7 @@ COLORS = {
     "MATCH": match,          # Blue
     "SWISH": match,          # Blue (alias)
     "LCLoP": match,          # Blue (alias)
+    "VIC": vic,
 
     # 1mm noise variants
     "Pose(1mm)": pos1mm,
@@ -1457,7 +1459,7 @@ def plot_training_curves(
 
         # Plot mean line
         ax.plot(stats["total_steps"], stats["mean"],
-                color=color, label=method_name, linewidth=2)
+                color=color, label=method_name, linewidth=1)
 
         # Plot CI shaded region
         ax.fill_between(stats["total_steps"], stats["lower"], stats["upper"],
