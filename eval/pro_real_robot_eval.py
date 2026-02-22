@@ -12,8 +12,12 @@ Usage:
 import argparse
 import json
 import os
+import select
 import sys
+import termios
+import threading
 import time
+import tty
 import shutil
 from typing import Dict, List, Optional, Tuple
 
@@ -587,14 +591,16 @@ def print_obs_distribution_comparison(
     for i in range(obs_builder.action_dim):
         labels.append(f"prev_action[{i}]")
 
+    rp = EvalKeyboardController.raw_print
+
     n_samples = stacked.shape[0]
     w = 100
-    print(f"\n{'=' * w}")
-    print("OBSERVATION DISTRIBUTION COMPARISON: Real Robot vs Training")
-    print(f"  Samples collected: {n_samples}")
-    print(f"{'=' * w}")
-    print(f"{'Channel':<28} {'Train Mean':>11} {'Train Std':>11}  |  {'Real Mean':>11} {'Real Std':>11}  |  {'MeanΔ/Tstd':>11}")
-    print(f"{'-' * w}")
+    rp(f"{'=' * w}")
+    rp("OBSERVATION DISTRIBUTION COMPARISON: Real Robot vs Training")
+    rp(f"  Samples collected: {n_samples}")
+    rp(f"{'=' * w}")
+    rp(f"{'Channel':<28} {'Train Mean':>11} {'Train Std':>11}  |  {'Real Mean':>11} {'Real Std':>11}  |  {'MeanΔ/Tstd':>11}")
+    rp(f"{'-' * w}")
 
     # Track which obs component group we're in for visual separators
     idx = 0
@@ -621,13 +627,131 @@ def print_obs_distribution_comparison(
         if abs(normalized_shift) > 3.0:
             flag = " <<<"
 
-        print(f"{label:<28} {tm:>11.5f} {ts:>11.5f}  |  {rm:>11.5f} {rs:>11.5f}  |  {normalized_shift:>+11.2f}{flag}")
+        rp(f"{label:<28} {tm:>11.5f} {ts:>11.5f}  |  {rm:>11.5f} {rs:>11.5f}  |  {normalized_shift:>+11.2f}{flag}")
 
         # Print separator between obs groups
         if (i + 1) in group_boundaries:
-            print(f"{'-' * w}")
+            rp(f"{'-' * w}")
 
-    print(f"{'=' * w}\n")
+    rp(f"{'=' * w}")
+
+
+# ============================================================================
+# Non-blocking keyboard controller for eval
+# ============================================================================
+
+class EvalKeyboardController:
+    """Non-blocking keyboard listener for eval control.
+
+    Runs a daemon thread that reads single keypresses in raw terminal mode.
+    Main thread polls state via properties: should_skip, should_pause.
+
+    Keys (during episode):
+        's' - skip: end current episode immediately (counted as BREAK)
+        'p' - pause: finish current episode, then pause before next
+
+    Keys (while paused):
+        'c' - calibrate: move robot to goal XY, 5cm above goal Z
+        Enter - resume: continue running episodes
+
+    Keys (any time):
+        ESC - quit: end current episode immediately and shut down
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._skip = False
+        self._pause = False
+        self._resume = False
+        self._calibrate = False
+        self._quit = False
+        self._paused = False  # set by main thread when entering pause state
+        self._stop = threading.Event()
+        self._old_settings = None
+
+    def start(self):
+        """Save terminal settings, set raw mode, start listener thread."""
+        self._old_settings = termios.tcgetattr(sys.stdin)
+        tty.setraw(sys.stdin.fileno())
+        thread = threading.Thread(target=self._read_loop, daemon=True)
+        thread.start()
+
+    def stop(self):
+        """Restore terminal settings."""
+        self._stop.set()
+        if self._old_settings is not None:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self._old_settings)
+            self._old_settings = None
+
+    @property
+    def should_skip(self) -> bool:
+        """Returns True (once) if 's' was pressed during an episode."""
+        with self._lock:
+            val = self._skip
+            self._skip = False
+            return val
+
+    @property
+    def should_pause(self) -> bool:
+        """Returns True if 'p' was pressed (stays True until cleared by resume)."""
+        with self._lock:
+            return self._pause
+
+    @property
+    def should_calibrate(self) -> bool:
+        """Returns True (once) if 'c' was pressed while paused."""
+        with self._lock:
+            val = self._calibrate
+            self._calibrate = False
+            return val
+
+    @property
+    def should_resume(self) -> bool:
+        """Returns True (once) if Enter was pressed while paused."""
+        with self._lock:
+            val = self._resume
+            self._resume = False
+            return val
+
+    @property
+    def should_quit(self) -> bool:
+        """Returns True if ESC was pressed."""
+        with self._lock:
+            return self._quit
+
+    def set_paused(self, paused: bool):
+        """Called by main thread to enter/exit pause state."""
+        with self._lock:
+            self._paused = paused
+            if not paused:
+                self._pause = False
+                self._resume = False
+                self._calibrate = False
+
+    @staticmethod
+    def raw_print(msg: str):
+        """Print with \\r\\n so output isn't garbled in raw terminal mode."""
+        sys.stdout.write(msg + "\r\n")
+        sys.stdout.flush()
+
+    def _read_loop(self):
+        """Background thread: poll stdin for keypresses."""
+        while not self._stop.is_set():
+            ready, _, _ = select.select([sys.stdin], [], [], 0.05)
+            if ready:
+                ch = sys.stdin.read(1)
+                with self._lock:
+                    if ch == '\x1b':
+                        self._quit = True
+                        self._skip = True  # end current episode immediately
+                    elif ch.lower() == 's' and not self._paused:
+                        self._skip = True
+                    elif ch.lower() == 'p' and not self._paused:
+                        self._pause = True
+                    elif ch.lower() == 'c' and self._paused:
+                        self._calibrate = True
+                    elif ch in ('\r', '\n') and self._paused:
+                        self._resume = True
 
 
 # ============================================================================
@@ -648,6 +772,7 @@ def run_episode(
     hand_init_pos_noise: torch.Tensor,
     hand_init_orn: list,
     hand_init_orn_noise: list,
+    keyboard: EvalKeyboardController,
     device: str = "cpu",
 ) -> dict:
     """Run a single evaluation episode on the real robot.
@@ -684,6 +809,7 @@ def run_episode(
     xy_centering = task_cfg['xy_centering_threshold']
     hole_height = task_cfg['hole_height']
     success_threshold = task_cfg['success_threshold']
+    engage_threshold = task_cfg['engage_threshold']
     break_force_threshold = task_cfg['break_force_threshold']
     max_steps = task_cfg['episode_timeout_steps']
     terminate_on_success = task_cfg['terminate_on_success']
@@ -709,28 +835,18 @@ def run_episode(
     target_rpy = [hand_init_orn[0], hand_init_orn[1], hand_init_orn[2] + start_yaw_noise]
     target_pose = make_ee_target_pose(target_ee_pos.cpu().numpy(), np.array(target_rpy))
 
-    print(f"    [GOAL] xyz=[{noisy_goal[0].item():.4f}, "
-          f"{noisy_goal[1].item():.4f}, {noisy_goal[2].item():.4f}]")
-    print(f"    [START] target_xyz=[{target_ee_pos[0].item():.4f}, "
-          f"{target_ee_pos[1].item():.4f}, {target_ee_pos[2].item():.4f}]")
-
     # 4. Retract upward to safely clear the hole before moving to new start pose
     retract_height = real_config['robot']['retract_height_m']
-    input("    [WAIT] Press Enter to RETRACT and MOVE TO START POSE...")
     robot.retract_up(retract_height)
 
     # 5. Reset robot to start pose
     robot.reset_to_start_pose(target_pose)
 
-    # Verify achieved position
-    snap_after_reset = robot.get_state_snapshot()
-    print(f"    [START] achieved_xyz=[{snap_after_reset.ee_pos[0].item():.4f}, "
-          f"{snap_after_reset.ee_pos[1].item():.4f}, {snap_after_reset.ee_pos[2].item():.4f}]")
-
     prev_actions = torch.zeros(model_info['action_dim'], device=device)
 
     # Episode tracking
     succeeded = False
+    engaged = False
     terminated = False
     success_step = -1
     termination_step = -1
@@ -740,6 +856,21 @@ def run_episode(
     sum_force_in_contact = 0.0
     contact_steps = 0
     energy_sum = 0.0
+
+    # Force tracking error (hybrid only)
+    is_hybrid = model_info['sigma_idx'] > 0
+    sum_force_error_x = 0.0
+    sum_cmd_force_x = 0.0
+    sum_meas_force_x = 0.0
+    force_selected_steps_x = 0
+    sum_force_error_y = 0.0
+    sum_cmd_force_y = 0.0
+    sum_meas_force_y = 0.0
+    force_selected_steps_y = 0
+    sum_force_error_z = 0.0
+    sum_cmd_force_z = 0.0
+    sum_meas_force_z = 0.0
+    force_selected_steps_z = 0
 
     contact_force_threshold = obs_builder.contact_force_threshold
 
@@ -764,7 +895,6 @@ def run_episode(
     prev_actions = torch.zeros(model_info['action_dim'], device=device)
 
     # 8. Start torque control — background 1kHz thread keeps robot fed
-    input("    [WAIT] Press Enter to START ROLLOUT...")
     robot.start_torque_mode()
     _ep_start = time.time()
     for step in range(max_steps):
@@ -772,6 +902,12 @@ def run_episode(
         robot.wait_for_policy_step()
         snap = robot.get_state_snapshot()
         robot.check_safety(snap)
+
+        # Check for keyboard skip ('s' key)
+        if keyboard.should_skip:
+            terminated = True
+            termination_step = step
+            break
 
         # Build observation from snapshot (uses noisy_goal for obs frame)
         obs = obs_builder.build_observation(snap, noisy_goal, prev_actions, fixed_yaw_offset=yaw_offset)
@@ -822,7 +958,38 @@ def run_episode(
         ).item()
         energy_sum += energy_step
 
+        # Force tracking error (hybrid only, on force-selected steps)
+        if is_hybrid:
+            sel = ctrl_output['sel_matrix']
+            tf = ctrl_output['target_force']
+            force_err = (tf - snap.force_torque).abs()
+            mf = snap.force_torque
+            if sel[0].item() > 0.5:
+                sum_force_error_x += force_err[0].item()
+                sum_cmd_force_x += abs(tf[0].item())
+                sum_meas_force_x += abs(mf[0].item())
+                force_selected_steps_x += 1
+            if sel[1].item() > 0.5:
+                sum_force_error_y += force_err[1].item()
+                sum_cmd_force_y += abs(tf[1].item())
+                sum_meas_force_y += abs(mf[1].item())
+                force_selected_steps_y += 1
+            if sel[2].item() > 0.5:
+                sum_force_error_z += force_err[2].item()
+                sum_cmd_force_z += abs(tf[2].item())
+                sum_meas_force_z += abs(mf[2].item())
+                force_selected_steps_z += 1
+
         # ---- Check termination conditions ----
+
+        # Engage check (uses TRUE target position, not noisy goal)
+        if not engaged:
+            is_engaged = check_success(
+                snap.ee_pos, ee_to_peg_base_offset, target_peg_base_pos,
+                xy_centering, hole_height, engage_threshold,
+            )
+            if is_engaged:
+                engaged = True
 
         # Success check (uses TRUE target position, not noisy goal)
         if not succeeded:
@@ -833,7 +1000,6 @@ def run_episode(
             if is_success:
                 succeeded = True
                 success_step = step
-                print(f"    SUCCESS at step {step}")
                 if terminate_on_success:
                     break
 
@@ -843,15 +1009,11 @@ def run_episode(
             if is_break:
                 terminated = True
                 termination_step = step
-                print(f"    BREAK at step {step} (force={force_magnitude:.2f}N)")
                 break
 
     # End torque control session immediately so the robot isn't waiting
     # for 1kHz communication while we compute metrics / print results
     robot.end_control()
-
-    print(f"    [END] ee_xyz=[{snap.ee_pos[0].item():.4f}, "
-          f"{snap.ee_pos[1].item():.4f}, {snap.ee_pos[2].item():.4f}]")
 
     episode_length = step + 1
 
@@ -862,6 +1024,7 @@ def run_episode(
 
     return {
         'succeeded': succeeded,
+        'engaged': engaged,
         'terminated': terminated,
         'length': episode_length,
         'ssv': ssv,
@@ -873,6 +1036,18 @@ def run_episode(
         'success_step': success_step if success_step >= 0 else episode_length,
         'termination_step': termination_step if termination_step >= 0 else episode_length,
         'obs_history': obs_history,
+        'avg_force_error_x': sum_force_error_x / force_selected_steps_x if force_selected_steps_x > 0 else 0.0,
+        'avg_force_error_y': sum_force_error_y / force_selected_steps_y if force_selected_steps_y > 0 else 0.0,
+        'avg_force_error_z': sum_force_error_z / force_selected_steps_z if force_selected_steps_z > 0 else 0.0,
+        'avg_cmd_force_x': sum_cmd_force_x / force_selected_steps_x if force_selected_steps_x > 0 else 0.0,
+        'avg_cmd_force_y': sum_cmd_force_y / force_selected_steps_y if force_selected_steps_y > 0 else 0.0,
+        'avg_cmd_force_z': sum_cmd_force_z / force_selected_steps_z if force_selected_steps_z > 0 else 0.0,
+        'avg_meas_force_x': sum_meas_force_x / force_selected_steps_x if force_selected_steps_x > 0 else 0.0,
+        'avg_meas_force_y': sum_meas_force_y / force_selected_steps_y if force_selected_steps_y > 0 else 0.0,
+        'avg_meas_force_z': sum_meas_force_z / force_selected_steps_z if force_selected_steps_z > 0 else 0.0,
+        'force_selected_steps_x': force_selected_steps_x,
+        'force_selected_steps_y': force_selected_steps_y,
+        'force_selected_steps_z': force_selected_steps_z,
     }
 
 
@@ -1040,97 +1215,214 @@ def main():
     # input("    [WAIT] Press Enter to MOVE TO DEFAULT JOINT POSITIONS...")
     # robot.move_to_joint_positions(controller.default_dof_pos, duration_sec=3.0)
 
-    # 9. Evaluate each run
-    print(f"\n{'=' * 80}")
-    print(f"EVALUATING {len(runs)} RUN(S), {args.num_episodes} EPISODES EACH")
-    print(f"{'=' * 80}")
+    # 9. Compute calibration pose (goal XY, goal Z + 0.05m) for 'c' command
+    task_cfg = real_config['task']
+    fixed_asset_position = torch.tensor(task_cfg['fixed_asset_position'], device=args.device, dtype=torch.float32)
+    obs_frame_z_offset = task_cfg['hole_height'] + task_cfg['fixed_asset_base_height']
+    cal_goal = fixed_asset_position.clone()
+    cal_goal[2] += obs_frame_z_offset + 0.05  # 5cm above goal Z
+    cal_pose = make_ee_target_pose(cal_goal.cpu().numpy(), np.array(hand_init_orn))
+    retract_height = real_config['robot']['retract_height_m']
 
-    for run_idx, run in enumerate(runs):
-        run_id = run.id
-        best_step = best_checkpoints[run_id]
+    # 10. Move to calibration pose and wait for user to confirm alignment
+    print("\nMoving to calibration pose (goal XY, 5cm above goal Z)...")
+    robot.retract_up(retract_height)
+    robot.reset_to_start_pose(cal_pose)
+    snap = robot.get_state_snapshot()
+    print(f"  Calibration pose: xyz=[{snap.ee_pos[0].item():.4f}, "
+          f"{snap.ee_pos[1].item():.4f}, {snap.ee_pos[2].item():.4f}]")
+    input("  Press Enter to begin experiments...")
 
-        print(f"\n--- Run {run_idx+1}/{len(runs)}: {run.name} (best step: {best_step}) ---")
+    # 11. Start keyboard controller and evaluate
+    keyboard = EvalKeyboardController()
+    keyboard.start()
 
-        # Load checkpoint from cache
-        policy_path = os.path.join(cache_path, run_id, 'policy.pt')
+    rp = EvalKeyboardController.raw_print
 
-        # Load policy
-        policy_net, normalizer, model_info = load_single_agent_policy(
-            policy_path, configs, obs_dim=obs_builder.obs_dim, device=args.device,
-        )
+    try:
+        rp(f"{'=' * 80}")
+        rp(f"EVALUATING {len(runs)} RUN(S), {args.num_episodes} EPISODES EACH")
+        rp(f"{'=' * 80}")
+        rp("  Keyboard controls:")
+        rp("    's' = skip (end episode as BREAK)")
+        rp("    'p' = pause (finish episode, then pause)")
+        rp("    'c' = calibrate (while paused: move to goal XY, 5cm above goal Z)")
+        rp("    Enter = resume (while paused)")
+        rp("    ESC = quit (end episode and shut down)")
+        rp(f"{'=' * 80}")
 
-        # Validate observation dimensions
-        obs_builder.validate_against_checkpoint(model_info['obs_dim'])
+        for run_idx, run in enumerate(runs):
+            run_id = run.id
+            best_step = best_checkpoints[run_id]
 
-        # Run episodes
-        episode_results = []
-        for ep_idx in range(args.num_episodes):
-            print(f"  Episode {ep_idx+1}/{args.num_episodes}:", end=" ", flush=True)
+            rp(f"--- Run {run_idx+1}/{len(runs)}: {run.name} (best step: {best_step}) ---")
 
-            result = run_episode(
-                robot, policy_net, normalizer, model_info,
-                obs_builder, controller, real_config,
-                goal_pos_noise_scale, goal_yaw_noise_scale,
-                hand_init_pos, hand_init_pos_noise,
-                hand_init_orn, hand_init_orn_noise,
-                args.device,
+            # Load checkpoint from cache
+            policy_path = os.path.join(cache_path, run_id, 'policy.pt')
+
+            # Load policy
+            policy_net, normalizer, model_info = load_single_agent_policy(
+                policy_path, configs, obs_dim=obs_builder.obs_dim, device=args.device,
             )
 
-            outcome = "SUCCESS" if result['succeeded'] and not result['terminated'] else \
-                      "BREAK" if result['terminated'] else "TIMEOUT"
-            print(f"{outcome} (len={result['length']}, max_f={result['max_force']:.2f}N)")
+            # Validate observation dimensions
+            obs_builder.validate_against_checkpoint(model_info['obs_dim'])
 
-            episode_results.append(result)
+            # Run episodes
+            episode_results = []
+            running_success = 0
+            running_breaks = 0
+            running_breaks_engaged = 0
+            running_timeouts = 0
+            running_timeouts_engaged = 0
+            for ep_idx in range(args.num_episodes):
+                result = run_episode(
+                    robot, policy_net, normalizer, model_info,
+                    obs_builder, controller, real_config,
+                    goal_pos_noise_scale, goal_yaw_noise_scale,
+                    hand_init_pos, hand_init_pos_noise,
+                    hand_init_orn, hand_init_orn_noise,
+                    keyboard,
+                    args.device,
+                )
 
-        # Observation distribution comparison
-        all_obs = []
-        for ep in episode_results:
-            all_obs.extend(ep['obs_history'])
-        print_obs_distribution_comparison(all_obs, obs_builder, normalizer)
+                if result['succeeded'] and not result['terminated']:
+                    running_success += 1
+                elif result['terminated']:
+                    running_breaks += 1
+                    if result['engaged']:
+                        running_breaks_engaged += 1
+                else:
+                    running_timeouts += 1
+                    if result['engaged']:
+                        running_timeouts_engaged += 1
+                status = f"  [{ep_idx+1}/{args.num_episodes}] S:{running_success} B:{running_breaks}({running_breaks_engaged}) T:{running_timeouts}({running_timeouts_engaged})"
+                sys.stdout.write(f"\r\x1b[K{status}")
+                sys.stdout.flush()
 
-        # Compute metrics
-        metrics = compute_real_robot_metrics(episode_results)
+                episode_results.append(result)
 
-        # Print summary
-        print(f"\n  Results for {run.name}:")
-        print(f"    Successes: {metrics['num_successful_completions']}/{metrics['total_episodes']}")
-        print(f"    Breaks:    {metrics['num_breaks']}/{metrics['total_episodes']}")
-        print(f"    Timeouts:  {metrics['num_failed_timeouts']}/{metrics['total_episodes']}")
-        print(f"    Avg Length: {metrics['episode_length']:.1f}")
-        print(f"    SSV:       {metrics['ssv']:.4f}")
-        print(f"    Max Force: {metrics['max_force']:.2f}N")
-        print(f"    Energy:    {metrics['energy']:.2f}")
+                # Check for quit (ESC)
+                if keyboard.should_quit:
+                    sys.stdout.write("\r\n")
+                    rp("  [QUIT] Shutting down...")
+                    break
 
-        # Log to WandB
-        if not args.no_wandb:
-            import wandb
-            eval_run = wandb.init(
-                entity=args.entity,
-                project=args.project,
-                name=f"Eval_RealRobot_{run.name}",
-                tags=["eval_real_robot", args.tag, f"source_run:{run_id}"],
-                config={
-                    "source_run_id": run_id,
-                    "source_run_name": run.name,
-                    "best_step": best_step,
-                    "num_episodes": args.num_episodes,
-                    "real_robot_config": real_config,
-                },
-            )
+                # Check for pause request after episode completes
+                if keyboard.should_pause:
+                    sys.stdout.write("\r\n")
+                    keyboard.set_paused(True)
+                    rp("  [PAUSED] 'c' = calibrate, Enter = resume, ESC = quit")
+                    while True:
+                        if keyboard.should_quit:
+                            rp("  [QUIT] Shutting down...")
+                            keyboard.set_paused(False)
+                            break
+                        if keyboard.should_calibrate:
+                            rp("  [CALIBRATING] Moving to goal XY, 5cm above goal Z...")
+                            robot.retract_up(retract_height)
+                            robot.reset_to_start_pose(cal_pose)
+                            snap = robot.get_state_snapshot()
+                            rp(f"  [CALIBRATED] xyz=[{snap.ee_pos[0].item():.4f}, "
+                               f"{snap.ee_pos[1].item():.4f}, {snap.ee_pos[2].item():.4f}]")
+                            rp("  [PAUSED] 'c' = calibrate, Enter = resume, ESC = quit")
+                        if keyboard.should_resume:
+                            keyboard.set_paused(False)
+                            rp("  [RESUMED]")
+                            break
+                        time.sleep(0.05)
+                    if keyboard.should_quit:
+                        break
+            else:
+                # All episodes completed — finalize the status line
+                sys.stdout.write("\r\n")
 
-            # Log with Eval_Core prefix (matching sim eval format)
-            prefixed_metrics = {f"Eval_Core/{k}": v for k, v in metrics.items()}
-            prefixed_metrics["total_steps"] = best_step
-            wandb.log(prefixed_metrics)
-            wandb.finish()
-            print(f"    Logged to WandB: {eval_run.url}")
-        else:
-            print("    (WandB logging disabled)")
+            # Observation distribution comparison (disabled)
+            # all_obs = []
+            # for ep in episode_results:
+            #     all_obs.extend(ep['obs_history'])
+            # print_obs_distribution_comparison(all_obs, obs_builder, normalizer)
 
-    # 10. Shutdown
-    print(f"\n{'=' * 80}")
-    print("EVALUATION COMPLETE")
-    print(f"{'=' * 80}")
+            # Compute metrics
+            metrics = compute_real_robot_metrics(episode_results)
+
+            # Print summary
+            rp(f"  Results for {run.name}:")
+            rp(f"    Successes: {metrics['num_successful_completions']}/{metrics['total_episodes']}")
+            rp(f"    Breaks:    {metrics['num_breaks']}/{metrics['total_episodes']}")
+            rp(f"    Timeouts:  {metrics['num_failed_timeouts']}/{metrics['total_episodes']}")
+            rp(f"    Avg Length: {metrics['episode_length']:.1f}")
+            rp(f"    SSV:       {metrics['ssv']:.4f}")
+            rp(f"    Max Force: {metrics['max_force']:.2f}N")
+            rp(f"    Energy:    {metrics['energy']:.2f}")
+
+            # Force tracking error (hybrid only)
+            if hybrid_enabled:
+                total_fe_x = 0.0; total_cf_x = 0.0; total_mf_x = 0.0; total_steps_x = 0
+                total_fe_y = 0.0; total_cf_y = 0.0; total_mf_y = 0.0; total_steps_y = 0
+                total_fe_z = 0.0; total_cf_z = 0.0; total_mf_z = 0.0; total_steps_z = 0
+                for ep in episode_results:
+                    total_fe_x += ep['avg_force_error_x'] * ep['force_selected_steps_x']
+                    total_cf_x += ep['avg_cmd_force_x'] * ep['force_selected_steps_x']
+                    total_mf_x += ep['avg_meas_force_x'] * ep['force_selected_steps_x']
+                    total_steps_x += ep['force_selected_steps_x']
+                    total_fe_y += ep['avg_force_error_y'] * ep['force_selected_steps_y']
+                    total_cf_y += ep['avg_cmd_force_y'] * ep['force_selected_steps_y']
+                    total_mf_y += ep['avg_meas_force_y'] * ep['force_selected_steps_y']
+                    total_steps_y += ep['force_selected_steps_y']
+                    total_fe_z += ep['avg_force_error_z'] * ep['force_selected_steps_z']
+                    total_cf_z += ep['avg_cmd_force_z'] * ep['force_selected_steps_z']
+                    total_mf_z += ep['avg_meas_force_z'] * ep['force_selected_steps_z']
+                    total_steps_z += ep['force_selected_steps_z']
+                avg_fe_x = total_fe_x / total_steps_x if total_steps_x > 0 else 0.0
+                avg_cf_x = total_cf_x / total_steps_x if total_steps_x > 0 else 0.0
+                avg_mf_x = total_mf_x / total_steps_x if total_steps_x > 0 else 0.0
+                avg_fe_y = total_fe_y / total_steps_y if total_steps_y > 0 else 0.0
+                avg_cf_y = total_cf_y / total_steps_y if total_steps_y > 0 else 0.0
+                avg_mf_y = total_mf_y / total_steps_y if total_steps_y > 0 else 0.0
+                avg_fe_z = total_fe_z / total_steps_z if total_steps_z > 0 else 0.0
+                avg_cf_z = total_cf_z / total_steps_z if total_steps_z > 0 else 0.0
+                avg_mf_z = total_mf_z / total_steps_z if total_steps_z > 0 else 0.0
+                rp(f"    Force Err X: {avg_fe_x:.3f}N ({total_steps_x} steps) cmd={avg_cf_x:.3f}N meas={avg_mf_x:.3f}N")
+                rp(f"    Force Err Y: {avg_fe_y:.3f}N ({total_steps_y} steps) cmd={avg_cf_y:.3f}N meas={avg_mf_y:.3f}N")
+                rp(f"    Force Err Z: {avg_fe_z:.3f}N ({total_steps_z} steps) cmd={avg_cf_z:.3f}N meas={avg_mf_z:.3f}N")
+
+            # Log to WandB
+            if not args.no_wandb:
+                import wandb
+                eval_run = wandb.init(
+                    entity=args.entity,
+                    project=args.project,
+                    name=f"Eval_RealRobot_{run.name}",
+                    tags=["eval_real_robot", args.tag, f"source_run:{run_id}"],
+                    config={
+                        "source_run_id": run_id,
+                        "source_run_name": run.name,
+                        "best_step": best_step,
+                        "num_episodes": args.num_episodes,
+                        "real_robot_config": real_config,
+                    },
+                )
+
+                # Log with Eval_Core prefix (matching sim eval format)
+                prefixed_metrics = {f"Eval_Core/{k}": v for k, v in metrics.items()}
+                prefixed_metrics["total_steps"] = best_step
+                wandb.log(prefixed_metrics)
+                wandb.finish()
+                rp(f"    Logged to WandB: {eval_run.url}")
+            else:
+                rp("    (WandB logging disabled)")
+
+            if keyboard.should_quit:
+                break
+
+        # 11. Shutdown
+        rp(f"{'=' * 80}")
+        rp("EVALUATION COMPLETE")
+        rp(f"{'=' * 80}")
+
+    finally:
+        keyboard.stop()
 
     robot.shutdown()
 

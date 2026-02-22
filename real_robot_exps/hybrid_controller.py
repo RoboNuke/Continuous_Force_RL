@@ -637,7 +637,6 @@ class RealRobotController:
         else:
             self.ema_actions[:3] = init_pos_actions
 
-        print(f"[RealRobotController] Reset: init_pos_actions={init_pos_actions.tolist()}")
 
     def compute_action(
         self,

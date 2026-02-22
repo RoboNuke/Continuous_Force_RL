@@ -110,6 +110,10 @@ def phase1_connect_and_read(config: dict):
     print(f"  {CYAN}fixed_asset_position: {yaml_val}{RESET}")
     print(f"  {CYAN}target_peg_base_position: {yaml_val}{RESET}")
 
+    yaml_joints = "[" + ", ".join(f"{v:.4f}" for v in state.q) + "]"
+    print(f"\n  {CYAN}--- Joint angles (copy-paste into config.yaml task.joint_angles) ---{RESET}")
+    print(f"  {CYAN}joint_angles: {yaml_joints}{RESET}")
+
     raw_robot.stop()
     return ee_pos
 

@@ -301,7 +301,7 @@ def _comm_process_fn(state_shm, torque_shm, cmd_queue, response_queue,
                 state_ready.set()
 
                 robot.stop()
-                print("[COMM PROCESS] Reset to start pose complete")
+                time.sleep(0.5)
                 response_queue.put(("reset_done", None))
 
             elif cmd[0] == "start_torque":
@@ -320,7 +320,6 @@ def _comm_process_fn(state_shm, torque_shm, cmd_queue, response_queue,
                 _pack_state(state, ft_ema, jac_flat, mass_flat)
                 state_ready.set()
 
-                print("[COMM PROCESS] Torque control started")
                 response_queue.put(("torque_started", None))
                 stop_torque.clear()
 
@@ -370,6 +369,7 @@ def _comm_process_fn(state_shm, torque_shm, cmd_queue, response_queue,
                     try:
                         ctrl = None
                         robot.stop()
+                        time.sleep(0.5)
                     except Exception:
                         pass
                     state_ready.clear()
@@ -377,8 +377,8 @@ def _comm_process_fn(state_shm, torque_shm, cmd_queue, response_queue,
 
                 ctrl = None
                 robot.stop()
+                time.sleep(0.5)
                 state_ready.clear()
-                print("[COMM PROCESS] Torque loop stopped")
                 response_queue.put(("torque_stopped", None))
 
             elif cmd[0] == "retract":
@@ -411,7 +411,7 @@ def _comm_process_fn(state_shm, torque_shm, cmd_queue, response_queue,
                     state, _ = ctrl.readOnce()
 
                 robot.stop()
-                print(f"[COMM PROCESS] Retracted {height_m*100:.1f}cm upward")
+                time.sleep(0.5)
                 response_queue.put(("retract_done", None))
 
             elif cmd[0] == "move_joints":
@@ -436,7 +436,7 @@ def _comm_process_fn(state_shm, torque_shm, cmd_queue, response_queue,
                     state, _ = ctrl.readOnce()
 
                 robot.stop()
-                print(f"[COMM PROCESS] Moved to joint positions in {duration_sec:.1f}s")
+                time.sleep(0.5)
                 response_queue.put(("move_done", None))
 
             elif cmd[0] == "shutdown":
@@ -517,7 +517,6 @@ def _compute_process_fn(state_shm, torque_shm, targets_queue,
                 targets = None
                 was_active = True
                 start_time = time.time()
-                print("[COMPUTE PROCESS] Activated")
 
             # Drain queue for latest targets (keep only the newest)
             new_targets = None
@@ -760,8 +759,6 @@ class FrankaInterface:
         self._compute_active.set()
         self._last_send_time = time.time()
         self._torque_mode_active = True
-        print("[FrankaInterface/PRO] Torque control started, "
-              "comm process + compute process running")
 
     def end_control(self):
         """End the active torque control session.

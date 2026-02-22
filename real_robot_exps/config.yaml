@@ -65,6 +65,9 @@ task:
   # Success: xy_dist < xy_centering_threshold AND z_disp < hole_height * success_threshold
   # Engagement: xy_dist < xy_centering_threshold AND z_disp < hole_height * engage_threshold
   xy_centering_threshold: 0.0025   # 2.5mm - HARDCODED in IsaacLab _get_curr_successes()
+  # Joint angles for sim comparison (copy from first_real_robot_test.py phase 1 output)
+  joint_angles: [-0.0555, 0.3148, 0.0445, -1.8997, -0.0251, 2.1961, 1.5512]
+
   hole_height: 0.025               # 25mm - asset-specific, used to scale Z thresholds
   success_threshold: 0.04          # Multiplied by hole_height -> 1mm Z threshold
   engage_threshold: 0.9            # Multiplied by hole_height -> 22.5mm Z threshold
@@ -84,11 +87,11 @@ control_gains:
   # Pose PD gains [6]: [Fx, Fy, Fz, Tx, Ty, Tz]
   # task_prop_gains = stiffness (N/m or Nm/rad)
   # task_deriv_gains = damping (Ns/m or Nms/rad), default is 2*sqrt(kp) for critical damping
-  #task_prop_gains: [100.0, 100.0, 100.0, 30.0, 30.0, 30.0]
-  #task_deriv_gains: [20.0, 20.0, 20.0, 10.954451560974121, 10.954451560974121, 10.954451560974121]
+  task_prop_gains: [100.0, 100.0, 100.0, 30.0, 30.0, 30.0]
+  task_deriv_gains: [20.0, 20.0, 20.0, 10.954451560974121, 10.954451560974121, 10.954451560974121]
 
-  task_prop_gains: [315.0, 315.0, 315.0, 120.0, 120.0, 0.0]
-  task_deriv_gains: [22,22,22, 22, 22, 0]
+  #task_prop_gains: [315.0, 315.0, 315.0, 120.0, 120.0, 0.0]
+  #task_deriv_gains: [22,22,22, 22, 22, 0]
 
   #task_prop_gains: [400.0, 400.0, 400.0, 120.0, 120.0, 0.0]
   #task_deriv_gains: [30, 30, 30, 22, 22, 0.0] #15.491933385]
@@ -96,15 +99,17 @@ control_gains:
 
 
   # Null-space gains (keep joints near default_dof_pos)
-  kp_null: 0 #10 #5
-  kd_null: 0 #6.32455532 #4.472135955
+  kp_null: 10 #5
+  kd_null: 6.32455532 #4.472135955
 
   # Force gains [6] (hybrid only, ignored for pose-only control)
   # Zeroing based on ctrl_mode is applied automatically after loading.
-  force_kp: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-  force_kd: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+  #force_kp: [0.5, 0.5, 0.5, 0.1, 0.1, 0.1]
+  force_kd: [0,0,0, 0.0, 0.0, 0.0]
   force_ki: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
+
+  force_kp: [-1.0, 1.0, 1.0, 0.1, 0.1, 0.1]
   # Singularity damping for J M^-1 J^T inverse (Levenberg-Marquardt)
   # Adds lambda*I to prevent blow-up near kinematic singularities.
   # Set enabled=false to revert to undamped inverse.
