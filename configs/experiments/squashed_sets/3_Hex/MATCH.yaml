@@ -1,0 +1,85 @@
+# Hybrid Agent Control Experiment Configuration
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+
+primary:
+  agents_per_break_force: 5
+  num_envs_per_agent: 256
+  break_forces: [10000]
+  max_steps: 5000500
+  ctrl_mode: "force_only"
+# Model configuration for hybrid agent
+model:
+  use_hybrid_agent: true
+  squash_actions: true
+  correct_squash_log_prob: true
+  hybrid_agent:
+    force_init_std: 0.5 # implies a 96% range [-2.5, 2.5]
+
+# Enable hybrid control wrapper and related systems
+wrappers:
+  # Enable hybrid control wrapper
+  hybrid_control:
+    enabled: true
+    reward_type: "none"
+    use_ground_truth_selection: false
+
+  pose_contact_logging:
+    enabled: false
+
+  # Custom keypoint offset patterns for non-default peg shapes
+  keypoint_offset:
+    enabled: true
+    #mode: 'polygon'  # 'axis' or 'polygon'
+    mode: 'axis'
+    # Axis mode parameters
+
+    # 4 keypoints with 0.5 xy scale => 30deg error = 0.0496m error
+    num_keypoints: 4
+    x_scale: 0.5
+    y_scale: 0.5
+    z_scale: 0.15
+
+    # Polygon mode parameters
+    num_lines: 6
+    num_keypoints_z: 4
+    num_keypoints_radial: 4
+    xy_scale: 0.34 # 30deg error = 0.0497m
+
+  force_reward:
+    enable_contact_reward: false
+    contact_reward_weight: 2.0
+
+  factory_metrics:
+    enabled: true
+    publish_to_wandb: true
+    engagement_reward_scale: 1.0 #60.0  # Scale for engagement rewards (default 1.0 = no change)
+    success_reward_scale: 1.0 #40.0
+
+agent:
+  supervised_selection_loss_weight: 1.0
+  #entropy_loss_scale: 0.01
+#  policy_learning_rate: 5.0e-4
+#  critic_learning_rate: 1.0e-4
+#  #learning_epochs: 1
+
+environment:
+  task:
+    asset_variant: hex_short_small
+
+    # Yaw initialization for ±30° max peg-hole difference
+    fixed_asset_init_orn_deg: -27
+    fixed_asset_init_orn_range_deg: 54
+    hand_init_orn_noise: [0.0, 0.0, 0.0524]  # ±3° peg noise
+  # OBSERVATION RANDOMIZATION CONFIGURATION
+  obs_rand:
+    fixed_asset_pos: [0.001, 0.001, 0.001]
+    use_yaw_noise: true
+    fixed_asset_yaw: 0.2618 #0.0523599
+
+# Experiment metadata
+experiment:
+  name: &exp_name "MATCH_squashed_hex-15deg"
+  tags: ['hex_orient', '15deg', 'noZCon', 'squashed']
+  group: *exp_name
