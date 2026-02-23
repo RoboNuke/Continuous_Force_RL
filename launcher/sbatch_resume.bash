@@ -68,11 +68,20 @@ for tag_name in "${TAG_ARRAY[@]}"; do
         echo "  Overrides: $OVERRIDES"
     fi
 
+    # Build args for hpc script - only pass non-empty args
+    HPC_ARGS="--checkpoint_tag $tag_name"
+    if [[ -n "$CHECKPOINT_STEP" ]]; then
+        HPC_ARGS="$HPC_ARGS --checkpoint_step $CHECKPOINT_STEP"
+    fi
+    if [[ -n "$OVERRIDES" ]]; then
+        HPC_ARGS="$HPC_ARGS --overrides $OVERRIDES"
+    fi
+
     # Submit SLURM job with dynamic output file paths
     sbatch -J "$job_name" \
            -o "exp_logs/resume/${tag_name}_%j.out" \
            -e "exp_logs/resume/${tag_name}_%j.err" \
-           launcher/hpc_batch_resume.bash "$tag_name" "$CHECKPOINT_STEP" "$OVERRIDES"
+           launcher/hpc_batch_resume.bash $HPC_ARGS
 
     echo "  Job submitted successfully"
     echo ""
