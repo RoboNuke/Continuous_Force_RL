@@ -119,7 +119,6 @@ class ObservationBuilder:
                 f"obs_order={self.obs_order}, action_dim={self.action_dim}. "
                 f"Check that obs_order and action_dim match the training configuration."
             )
-        print(f"[ObservationBuilder] Dimension validated: {self.obs_dim} matches checkpoint")
 
     def build_observation(
         self,
@@ -161,8 +160,8 @@ class ObservationBuilder:
         # On real robot there's no obs noise - goal_position includes any calibration offset
         components["fingertip_pos_rel_fixed"] = ee_pos - goal_position
 
-        # EE orientation quaternion
-        components["fingertip_quat"] = ee_quat
+        # EE orientation quaternion — fixed to [0,1,0,0] (policy-only override)
+        components["fingertip_quat"] = torch.tensor([0.0, 1.0, 0.0, 0.0], device=self.device, dtype=torch.float32)
 
         # Relative yaw (if in obs_order)
         # Matches sim's EEPoseNoiseWrapper._compute_fingertip_yaw_rel_fixed:
@@ -197,6 +196,9 @@ class ObservationBuilder:
             ft_obs = force_torque.clone()
         # HACK: Zero out Tz (index 5) — real robot has ~-0.17 Nm bias that
         # reads as -43σ after normalization. Training saw ~0. Remove to test.
+        #ft_obs[0] = 0.0
+        #ft_obs[1] = 0.0
+        #ft_obs[2] = 0.0
         ft_obs[3] = 0.0
         ft_obs[4] = 0.0
         ft_obs[5] = 0.0
@@ -269,8 +271,6 @@ class ObservationNormalizer:
             self.running_mean = full_mean[:obs_dim]
             self.running_variance = full_var[:obs_dim]
             self.obs_dim = obs_dim
-            print(f"[ObservationNormalizer] Sliced preprocessor stats: "
-                  f"policy obs_dim={obs_dim} from full dim={full_dim}")
         elif obs_dim is not None and obs_dim != full_dim:
             raise ValueError(
                 f"obs_dim={obs_dim} is larger than preprocessor dim={full_dim}. "
@@ -281,9 +281,6 @@ class ObservationNormalizer:
             self.running_variance = full_var
             self.obs_dim = full_dim
 
-        count = checkpoint_preprocessor.get("current_count", torch.tensor(1.0))
-        print(f"[ObservationNormalizer] Loaded frozen stats: obs_dim={self.obs_dim}, "
-              f"sample_count={count.item():.0f}")
 
     def normalize(self, obs: torch.Tensor) -> torch.Tensor:
         """Normalize observation using frozen training statistics.

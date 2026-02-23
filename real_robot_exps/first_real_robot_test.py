@@ -401,6 +401,8 @@ def phase6_torque_recomputation_stress(robot: FrankaInterface):
         goal_position=snap.ee_pos.clone(),
         ctrl_mode="force_only",
         singularity_damping=0.0,
+        partial_inertia_decoupling=False,
+        sep_ori=False,
     )
 
     print(f"  Target EE position: {snap.ee_pos.tolist()}")

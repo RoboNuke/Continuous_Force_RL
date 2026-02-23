@@ -71,6 +71,8 @@ dummy_targets = ControlTargets(
     goal_position=torch.tensor([0.3, 0.0, 0.35]),
     ctrl_mode="force_only",
     singularity_damping=0.0,
+    partial_inertia_decoupling=False,
+    sep_ori=False,
 )
 robot.set_control_targets(dummy_targets)
 import time; time.sleep(0.05)  # let 1kHz thread run a few cycles

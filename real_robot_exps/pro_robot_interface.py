@@ -134,8 +134,9 @@ def _build_snapshot_from_shm(state_shm, device):
     # Rotate F/T from base frame to EE/body frame, then negate.
     # Sim reads joint forces in the panda_hand LOCAL frame (rotates with robot).
     # Real robot's O_F_ext_hat_K is in the fixed base frame.
-    # NE_T_EE is set to R_z(-45°) matching sim's panda_hand body frame,
-    # so R from O_T_EE directly represents the sim body orientation.
+    # NE_T_EE is identity; F_T_NE (from Franka Desk) already contains
+    # R_z(-45°) + T_z(0.1034) matching sim's panda_hand body frame,
+    # so R from O_T_EE = F_T_NE directly represents the sim body orientation.
     # R^T rotates base -> body. Negation flips robot-on-env to env-on-robot.
     ft_base = torch.tensor(ft_ema, device=device, dtype=torch.float32)
     ft_body = torch.zeros(6, device=device, dtype=torch.float32)

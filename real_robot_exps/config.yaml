@@ -10,18 +10,19 @@ robot:
   retract_height_m: 0.03      # Retract upward before reset to clear hole (meters)
   gripper_force_n: 50.0       # Grasp force in Newtons (max 70N continuous limit)
 
-  # NE_T_EE: -45deg Z rotation + 103.4mm Z offset (flange -> fingertip midpoint)
-  # Uses R_z(-45°) to match sim's panda_hand body frame (URDF rpy="0 0 -0.7854").
-  # NOTE: Franka standard Hand NE_T_EE uses R_z(+45°); we use -45° so that
-  # O_T_EE orientation matches the sim body frame exactly, avoiding any
-  # extra rotation in the F/T or observation pipeline.
+  # NE_T_EE: Identity — F_T_NE (configured in Franka Desk) already contains
+  # R_z(-45°) + T_z(0.1034), which matches the sim's panda_hand body frame
+  # (URDF rpy="0 0 -0.7854"). Setting NE_T_EE to identity means
+  # F_T_EE = F_T_NE = R_z(-45°) + T_z(0.1034), so the Jacobian and O_T_EE
+  # reference the fingertip midpoint with the correct sim-matching orientation.
   # Column-major 4x4 homogeneous transform [R|t; 0 0 0 1]
   NE_T_EE: [
-    0.7071, -0.7071, 0.0, 0.0,
-    0.7071,  0.7071, 0.0, 0.0,
-    0.0,     0.0,    1.0, 0.0,
-    0.0,     0.0,    0.1034, 1.0
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    0.0, 0.0, 0.0, 1.0
   ]
+
 
   # Stiffness frame = EE frame (identity) - forces measured at fingertip
   EE_T_K: [
@@ -33,20 +34,20 @@ robot:
 
   # F/T EMA low-pass filter coefficient (applied at 1kHz inside read_state)
   # alpha=0.2 at 1kHz ~ 32Hz cutoff frequency (-3dB)
-  ft_ema_alpha: 0.2
+  ft_ema_alpha: 0.08
 
   # Constant F/T bias subtracted from O_F_ext_hat_K BEFORE negation/rotation.
   # Measured in free space with check_ft_bias.py — compensates for unmodeled
   # EE payload (peg + gripper fingers) that the robot's gravity model misses.
   # Set to [0,0,0,0,0,0] to disable.
-  ft_bias: [-2.9115, 0.0534, -1.0835, 0.0689, -0.6516, -0.0874]
+  ft_bias: [-1.312, 0.144, -0.5614, -0.2626, -0.1608, 0.0305]
 
 task:
   # Fixed asset origin position (hole base in world frame, meters)
   # The observation frame (sim's fixed_pos_obs_frame) is computed as:
   #   obs_frame = fixed_asset_position + [0, 0, hole_height + fixed_asset_base_height]
   # which gives the HOLE TIP (entrance) position matching the sim exactly.
-  fixed_asset_position: [0.6218, -0.0142, 0.0535] #=0.6225m, y=-0.0084m, z=0.0939m
+  #fixed_asset_position: [0.6270, -0.0177, 0.1525]
   fixed_asset_orientation_quat: [1.0, 0.0, 0.0, 0.0]  # [w, x, y, z]
   fixed_asset_yaw: 0.0                # Yaw of fixed asset in world frame (radians)
   fixed_asset_base_height: 0.0        # Height of base plate below hole channel (meters)
@@ -54,26 +55,39 @@ task:
   # Target peg base position (where peg base should be when fully inserted)
   # This is "target_held_base_pos" in sim - used for SUCCESS/ENGAGEMENT DETECTION
   # May differ from fixed_asset_position depending on geometry
-  target_peg_base_position: [0.6218, -0.0142, 0.0535]
+  fixed_asset_position: [0.6107, -0.0217, 0.1657]
+  target_peg_base_position: [0.6107, -0.0217, 0.1657]
+
+
 
   # Offset from EE (fingertip midpoint) to peg base (grasped object root)
   # Needed to compute peg_base_pos = ee_pos + this offset for detection
   # Must be measured for your specific peg + gripper setup
-  ee_to_peg_base_offset: [0.0, 0.0, -0.0412]  # Example: peg extends 50mm below EE
+  ee_to_peg_base_offset: [0.0, 0.0, -0.0324] #-0.0412]  # Example: peg extends 50mm below EE
 
   # Detection thresholds (matching IsaacLab factory env logic exactly)
   # Success: xy_dist < xy_centering_threshold AND z_disp < hole_height * success_threshold
   # Engagement: xy_dist < xy_centering_threshold AND z_disp < hole_height * engage_threshold
   xy_centering_threshold: 0.0025   # 2.5mm - HARDCODED in IsaacLab _get_curr_successes()
   # Joint angles for sim comparison (copy from first_real_robot_test.py phase 1 output)
-  joint_angles: [-0.0555, 0.3148, 0.0445, -1.8997, -0.0251, 2.1961, 1.5512]
-
+  joint_angles: [-0.6773, 0.4790, 0.7229, -1.9019, -0.3875, 2.2211, 1.0957]
+  
   hole_height: 0.025               # 25mm - asset-specific, used to scale Z thresholds
-  success_threshold: 0.04          # Multiplied by hole_height -> 1mm Z threshold
+  success_threshold: 0.2          # Multiplied by hole_height -> 1mm Z threshold
   engage_threshold: 0.9            # Multiplied by hole_height -> 22.5mm Z threshold
 
   # Break detection (matches FragileObjectWrapper)
-  break_force_threshold: 10.0      # N - L2 norm of force (Fx,Fy,Fz) >= this triggers break
+  break_force_threshold: 20.0      # N - L2 norm of force (Fx,Fy,Fz) >= this triggers break
+
+  # Safety: force control is blocked when peg tip is more than this height
+  # above the hole top. Prevents force control in free space where there's
+  # nothing to push against. Set to a large value to effectively disable.
+  force_select_max_height_mm: 3.0
+
+  # Safety: force control is blocked when peg tip XY distance from goal XY
+  # exceeds this threshold. Prevents force control when not aligned with hole.
+  # Set to a large value to effectively disable.
+  force_select_max_xy_dist_mm: 12.5
 
   # Episode parameters
   episode_timeout_steps: 150       # Max steps per episode
@@ -87,9 +101,15 @@ control_gains:
   # Pose PD gains [6]: [Fx, Fy, Fz, Tx, Ty, Tz]
   # task_prop_gains = stiffness (N/m or Nm/rad)
   # task_deriv_gains = damping (Ns/m or Nms/rad), default is 2*sqrt(kp) for critical damping
-  task_prop_gains: [100.0, 100.0, 100.0, 30.0, 30.0, 30.0]
-  task_deriv_gains: [20.0, 20.0, 20.0, 10.954451560974121, 10.954451560974121, 10.954451560974121]
+  #task_prop_gains: [100.0, 100.0, 100.0, 30.0, 30.0, 30.0]
+  #task_deriv_gains: [20.0, 20.0, 20.0, 10.95, 10.95, 10.95]
 
+  task_prop_gains: [100.0, 100.0, 100.0, 45.0, 40.0, 40.0]
+  task_deriv_gains: [20.0, 20.0, 20.0,13.4, 12.649110641, 12.649110641]
+
+  # 60 - 15.5
+  # 45 - 13.4
+  # 40 - 12.65
   #task_prop_gains: [315.0, 315.0, 315.0, 120.0, 120.0, 0.0]
   #task_deriv_gains: [22,22,22, 22, 22, 0]
 
@@ -102,19 +122,31 @@ control_gains:
   kp_null: 10 #5
   kd_null: 6.32455532 #4.472135955
 
+  # Force PID enable flags (hybrid only). Overrides training config when
+  # use_rr_gains is true. If enabled, the corresponding gain array below
+  # is required.
+  enable_force_derivative: false
+  enable_force_integral: true
+
   # Force gains [6] (hybrid only, ignored for pose-only control)
   # Zeroing based on ctrl_mode is applied automatically after loading.
-  #force_kp: [0.5, 0.5, 0.5, 0.1, 0.1, 0.1]
-  force_kd: [0,0,0, 0.0, 0.0, 0.0]
-  force_ki: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  force_kp: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+  force_kd: [0.63, 0.63, 0.63, 0.0, 0.0, 0.0]
+  force_ki: [0.05, 0.05, 0.05, 0.0, 0.0, 0.0]
 
 
-  force_kp: [-1.0, 1.0, 1.0, 0.1, 0.1, 0.1]
+  #force_kp: [-1.0, 1.0, 1.0, 0.1, 0.1, 0.1]
   # Singularity damping for J M^-1 J^T inverse (Levenberg-Marquardt)
   # Adds lambda*I to prevent blow-up near kinematic singularities.
   # Set enabled=false to revert to undamped inverse.
   singularity_damping_enabled: false
-  singularity_damping_lambda: 0.05
+  singularity_damping_lambda: 0.1
+
+  # Partial inertia decoupling: compute separate 3x3 Lambda matrices for
+  # position and rotation instead of a single coupled 6x6 Lambda.
+  # Prevents position dynamics from suppressing orientation control.
+  partial_inertia_decoupling: false
+  sep_ori: true
 
 noise:
   # When true, use noise values defined below instead of WandB training config.
