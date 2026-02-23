@@ -41,6 +41,8 @@ ControlTargets = namedtuple('ControlTargets', [
     'goal_position',     # [3] action frame origin (for bounds constraint)
     'ctrl_mode',         # str — "force_only", "force_tz", or "force_torque"
     'singularity_damping',  # float — Levenberg-Marquardt damping for J M^-1 J^T inverse (0.0 = disabled)
+    'partial_inertia_decoupling',  # bool — separate 3x3 Lambda for pos/rot instead of coupled 6x6
+    'sep_ori',  # bool — position via full Lambda (zeroed rot), rotation via direct J_rot^T (no Lambda)
 ])
 
 
@@ -232,10 +234,13 @@ def compute_joint_torques_from_wrench(
     kp_null: float = 10.0,
     kd_null: float = 6.3246,
     singularity_damping: float = 0.0,
+    partial_inertia_decoupling: bool = False,
+    sep_ori: bool = False,
 ) -> torch.Tensor:
-    """Compute joint torques via J^T mapping with null-space compensation.
+    """Compute joint torques via J^T @ Λ @ wrench with null-space compensation.
 
-    Matches factory_control_utils.compute_dof_torque_from_wrench() for single env.
+    Uses dynamically-consistent wrench mapping (J^T @ Λ) instead of plain J^T
+    for configuration-independent task-space dynamics.
 
     Args:
         task_wrench: [6] task-space wrench.
@@ -248,25 +253,71 @@ def compute_joint_torques_from_wrench(
         kd_null: Null-space damping gain.
         singularity_damping: Levenberg-Marquardt damping lambda for
             (J M^-1 J^T + lambda*I) inverse. 0.0 = undamped (original behavior).
+        partial_inertia_decoupling: If True, compute separate 3x3 Lambda for
+            position and rotation instead of a coupled 6x6 Lambda. Prevents
+            position dynamics from suppressing orientation control.
+        sep_ori: If True, position uses full J^T @ Lambda_full @ [pos_wrench; 0,0,0],
+            rotation uses direct J_rot^T @ rot_wrench (impedance-style, no Lambda).
+            Mutually exclusive with partial_inertia_decoupling.
 
     Returns:
         (total_torque [7], jt_torque [7], null_torque [7]) tuple.
         total_torque is clamped; jt_torque and null_torque are pre-clamp components.
     """
-    # J^T * wrench
     jacobian_T = jacobian.T  # [7, 6]
-    jt_torque = jacobian_T @ task_wrench  # [7]
-
-    # Null-space compensation
     M_inv = torch.inverse(mass_matrix)  # [7, 7]
-    JMJ = jacobian @ M_inv @ jacobian_T  # [6, 6]
+
+    # Full 6x6 Lambda — always needed for the null-space projector
+    JMJ_full = jacobian @ M_inv @ jacobian_T  # [6, 6]
     if singularity_damping > 0.0:
         I6 = torch.eye(6, device=joint_pos.device, dtype=joint_pos.dtype)
-        JMJ = JMJ + singularity_damping * I6
-    M_task = torch.inverse(JMJ)  # [6, 6]
-    J_inv = M_task @ jacobian @ M_inv  # [6, 7]
+        JMJ_full = JMJ_full + singularity_damping * I6
+    M_task_full = torch.inverse(JMJ_full)  # [6, 6]
+
+    if sep_ori:
+        # Position: full Lambda with zeroed rotation wrench
+        wrench_pos_only = torch.zeros(6, device=joint_pos.device, dtype=joint_pos.dtype)
+        wrench_pos_only[0:3] = task_wrench[0:3]
+        tau_pos = jacobian_T @ M_task_full @ wrench_pos_only  # [7]
+
+        # Rotation: direct J_rot^T, no Lambda (impedance-style)
+        J_rot = jacobian[3:6, :]  # [3, 7]
+        tau_rot = J_rot.T @ task_wrench[3:6]  # [7]
+
+        jt_torque = tau_pos + tau_rot  # [7]
+    elif partial_inertia_decoupling:
+        # Split Jacobian into position and rotation blocks
+        J_pos = jacobian[0:3, :]  # [3, 7]
+        J_rot = jacobian[3:6, :]  # [3, 7]
+
+        # Separate 3x3 Lambda matrices (no pos/rot cross-coupling)
+        JMJ_pos = J_pos @ M_inv @ J_pos.T  # [3, 3]
+        JMJ_rot = J_rot @ M_inv @ J_rot.T  # [3, 3]
+        if singularity_damping > 0.0:
+            I3 = torch.eye(3, device=joint_pos.device, dtype=joint_pos.dtype)
+            JMJ_pos = JMJ_pos + singularity_damping * I3
+            JMJ_rot = JMJ_rot + singularity_damping * I3
+        Lambda_pos = torch.inverse(JMJ_pos)  # [3, 3]
+        Lambda_rot = torch.inverse(JMJ_rot)  # [3, 3]
+
+        # Apply Lambda to wrench halves independently, then concatenate
+        decoupled_wrench = torch.zeros(6, device=joint_pos.device, dtype=joint_pos.dtype)
+        decoupled_wrench[0:3] = Lambda_pos @ task_wrench[0:3]
+        decoupled_wrench[3:6] = Lambda_rot @ task_wrench[3:6]
+
+        # Map to joint torques
+        jt_torque = jacobian_T @ decoupled_wrench  # [7]
+    else:
+        # Original coupled path: J^T @ Λ_full @ wrench
+        jt_torque = jacobian_T @ M_task_full @ task_wrench  # [7]
+
+    # Null-space compensation (always uses full Lambda for correctness)
+    J_inv = M_task_full @ jacobian @ M_inv  # [6, 7]
 
     # Distance to default pose (wrapped to [-pi, pi])
+    # Force joint 7 null-space target to 0.0 (without mutating caller's tensor)
+    default_dof_pos = default_dof_pos.clone()
+    default_dof_pos[6] = 0.0
     dist = default_dof_pos - joint_pos
     dist = (dist + math.pi) % (2 * math.pi) - math.pi
 
@@ -282,6 +333,7 @@ def compute_joint_torques_from_wrench(
 
     # Clamp to safe limits (matching sim)
     torque = torch.clamp(torque, min=-100.0, max=100.0)
+    # torque[6] = 0.0  # Zero 7th joint (wrist rotation)
     return torque, jt_torque, null_torque
 
 
@@ -362,6 +414,7 @@ def compute_torques_from_targets(
         task_wrench, jacobian, mass_matrix,
         joint_pos, joint_vel, targets.default_dof_pos,
         targets.kp_null, targets.kd_null, targets.singularity_damping,
+        targets.partial_inertia_decoupling, targets.sep_ori,
     )
     return joint_torques, task_wrench.clone(), jt_torque, null_torque
 
@@ -542,7 +595,19 @@ class RealRobotController:
                 elif self.ctrl_mode == "force_tz":
                     self.force_kp[3:5] = 0.0
 
-                # force_kd: override if derivative control is enabled
+                # Override D/I enable flags from real robot config
+                if 'enable_force_derivative' not in gains_cfg:
+                    raise RuntimeError(
+                        "control_gains.use_rr_gains=true but 'enable_force_derivative' not specified (hybrid mode)"
+                    )
+                if 'enable_force_integral' not in gains_cfg:
+                    raise RuntimeError(
+                        "control_gains.use_rr_gains=true but 'enable_force_integral' not specified (hybrid mode)"
+                    )
+                self.enable_force_derivative = gains_cfg['enable_force_derivative']
+                self.enable_force_integral = gains_cfg['enable_force_integral']
+
+                # force_kd: load if derivative control is enabled, clear if disabled
                 if self.enable_force_derivative:
                     if 'force_kd' not in gains_cfg:
                         raise RuntimeError("control_gains.use_rr_gains=true but 'force_kd' not specified (force derivative enabled)")
@@ -553,8 +618,10 @@ class RealRobotController:
                         self.force_kd[3:] = 0.0
                     elif self.ctrl_mode == "force_tz":
                         self.force_kd[3:5] = 0.0
+                else:
+                    self.force_kd = None
 
-                # force_ki: override if integral control is enabled
+                # force_ki: load if integral control is enabled, clear if disabled
                 if self.enable_force_integral:
                     if 'force_ki' not in gains_cfg:
                         raise RuntimeError("control_gains.use_rr_gains=true but 'force_ki' not specified (force integral enabled)")
@@ -565,6 +632,8 @@ class RealRobotController:
                         self.force_ki[3:] = 0.0
                     elif self.ctrl_mode == "force_tz":
                         self.force_ki[3:5] = 0.0
+                else:
+                    self.force_ki = None
         else:
             print("[RealRobotController] Using WANDB training control gains (control_gains.use_rr_gains=false)")
 
@@ -575,6 +644,27 @@ class RealRobotController:
         else:
             self.singularity_damping = 0.0
             print("[RealRobotController] Singularity damping DISABLED (undamped inverse)")
+
+        # Partial inertia decoupling: separate 3x3 Lambda for pos/rot
+        self.partial_inertia_decoupling = gains_cfg.get('partial_inertia_decoupling', False)
+        if self.partial_inertia_decoupling:
+            print("[RealRobotController] Partial inertia decoupling ENABLED (separate 3x3 Lambda for pos/rot)")
+        else:
+            print("[RealRobotController] Partial inertia decoupling DISABLED (coupled 6x6 Lambda)")
+
+        # Separate orientation: position via full Lambda, rotation via direct J_rot^T
+        self.sep_ori = gains_cfg.get('sep_ori', False)
+        if self.sep_ori:
+            print("[RealRobotController] sep_ori ENABLED (position: full Lambda, rotation: direct J_rot^T)")
+        else:
+            print("[RealRobotController] sep_ori DISABLED")
+
+        # Mutual exclusion
+        if self.partial_inertia_decoupling and self.sep_ori:
+            raise RuntimeError(
+                "partial_inertia_decoupling and sep_ori are mutually exclusive — "
+                "set only one to true in control_gains"
+            )
 
         # State (initialized by reset())
         self.ema_actions = None
@@ -596,10 +686,10 @@ class RealRobotController:
         print(f"[RealRobotController] default_dof_pos={self.default_dof_pos.tolist()}")
         if self.hybrid_enabled:
             print(f"[RealRobotController] force_kp={self.force_kp.tolist()}")
-            if self.force_kd is not None:
-                print(f"[RealRobotController] force_kd={self.force_kd.tolist()}")
-            if self.force_ki is not None:
-                print(f"[RealRobotController] force_ki={self.force_ki.tolist()}")
+            print(f"[RealRobotController] enable_force_derivative={self.enable_force_derivative}"
+                  f"{f', force_kd={self.force_kd.tolist()}' if self.force_kd is not None else ''}")
+            print(f"[RealRobotController] enable_force_integral={self.enable_force_integral}"
+                  f"{f', force_ki={self.force_ki.tolist()}' if self.force_ki is not None else ''}")
             print(f"[RealRobotController] force_bounds={self.force_bounds.tolist()}")
             print(f"[RealRobotController] force_threshold={self.force_threshold.tolist()}")
             print(f"[RealRobotController] use_delta_force={self.use_delta_force}, "
@@ -636,6 +726,7 @@ class RealRobotController:
             self.ema_actions[self.force_size:self.force_size+3] = init_pos_actions
         else:
             self.ema_actions[:3] = init_pos_actions
+
 
 
     def compute_action(
@@ -750,6 +841,7 @@ class RealRobotController:
             task_wrench, jacobian, mass_matrix,
             joint_pos, joint_vel, self.default_dof_pos,
             self.kp_null, self.kd_null, self.singularity_damping,
+            self.partial_inertia_decoupling, self.sep_ori,
         )
 
         # Build ControlTargets for 1kHz recomputation
@@ -769,6 +861,8 @@ class RealRobotController:
             goal_position=goal_position,
             ctrl_mode=self.ctrl_mode,
             singularity_damping=self.singularity_damping,
+            partial_inertia_decoupling=self.partial_inertia_decoupling,
+            sep_ori=self.sep_ori,
         )
 
         return {
@@ -1025,6 +1119,7 @@ class RealRobotController:
             task_wrench, jacobian, mass_matrix,
             joint_pos, joint_vel, self.default_dof_pos,
             self.kp_null, self.kd_null, self.singularity_damping,
+            self.partial_inertia_decoupling, self.sep_ori,
         )
 
         # ----------------------------------------------------------------
@@ -1051,6 +1146,8 @@ class RealRobotController:
             goal_position=goal_position,
             ctrl_mode=self.ctrl_mode,
             singularity_damping=self.singularity_damping,
+            partial_inertia_decoupling=self.partial_inertia_decoupling,
+            sep_ori=self.sep_ori,
         )
 
         return {
@@ -1094,6 +1191,8 @@ def pack_control_targets(targets: ControlTargets) -> dict:
         'goal_position': targets.goal_position.tolist(),
         'ctrl_mode': targets.ctrl_mode,
         'singularity_damping': float(targets.singularity_damping),
+        'partial_inertia_decoupling': bool(targets.partial_inertia_decoupling),
+        'sep_ori': bool(targets.sep_ori),
     }
 
 
@@ -1123,4 +1222,6 @@ def unpack_control_targets(data: dict, device: str = "cpu") -> ControlTargets:
         goal_position=torch.tensor(data['goal_position'], device=device, dtype=torch.float32),
         ctrl_mode=data['ctrl_mode'],
         singularity_damping=data['singularity_damping'],
+        partial_inertia_decoupling=data.get('partial_inertia_decoupling', False),
+        sep_ori=data.get('sep_ori', False),
     )

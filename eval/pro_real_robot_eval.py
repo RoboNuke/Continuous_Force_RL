@@ -35,6 +35,18 @@ from real_robot_exps.hybrid_controller import RealRobotController
 
 
 # ============================================================================
+# Forge eval noise ranges (matching wandb_eval.py NOISE_RANGES)
+# ============================================================================
+
+FORGE_NOISE_RANGES = [
+    (0.0, 0.001, "0mm-1mm"),        # 0-1mm
+    (0.001, 0.0025, "1mm-2.5mm"),   # 1-2.5mm
+    (0.0025, 0.005, "2.5mm-5mm"),   # 2.5-5mm
+    (0.005, 0.0075, "5mm-7.5mm"),   # 5-7.5mm
+]
+
+
+# ============================================================================
 # Config loading
 # ============================================================================
 
@@ -593,45 +605,37 @@ def print_obs_distribution_comparison(
 
     rp = EvalKeyboardController.raw_print
 
-    n_samples = stacked.shape[0]
-    w = 100
-    rp(f"{'=' * w}")
-    rp("OBSERVATION DISTRIBUTION COMPARISON: Real Robot vs Training")
-    rp(f"  Samples collected: {n_samples}")
-    rp(f"{'=' * w}")
-    rp(f"{'Channel':<28} {'Train Mean':>11} {'Train Std':>11}  |  {'Real Mean':>11} {'Real Std':>11}  |  {'MeanΔ/Tstd':>11}")
-    rp(f"{'-' * w}")
-
-    # Track which obs component group we're in for visual separators
-    idx = 0
-    group_boundaries = []
-    for name in obs_builder.obs_order:
-        idx += OBS_DIM_MAP[name]
-        group_boundaries.append(idx)
-    group_boundaries.append(idx + obs_builder.action_dim)  # prev_actions boundary
-
+    # Pre-compute normalized shifts and collect outliers (|shift| > 2)
+    outliers = []
     for i, label in enumerate(labels):
         tm = train_mean[i].item()
         ts = train_std[i].item()
         rm = real_mean[i].item()
         rs = real_std[i].item()
 
-        # How many training std devs is the real mean shifted by?
         if ts > 1e-8:
             normalized_shift = (rm - tm) / ts
         else:
             normalized_shift = 0.0 if abs(rm - tm) < 1e-8 else float('inf')
 
-        # Flag large discrepancies
-        flag = ""
-        if abs(normalized_shift) > 3.0:
-            flag = " <<<"
+        if abs(normalized_shift) > 2.0:
+            outliers.append((label, tm, ts, rm, rs, normalized_shift))
 
+    # Only print if there are outliers
+    if not outliers:
+        return
+
+    n_samples = stacked.shape[0]
+    w = 100
+    rp(f"{'=' * w}")
+    rp(f"OBS DISTRIBUTION OUTLIERS (|shift| > 2σ): {len(outliers)}/{len(labels)} channels, {n_samples} samples")
+    rp(f"{'=' * w}")
+    rp(f"{'Channel':<28} {'Train Mean':>11} {'Train Std':>11}  |  {'Real Mean':>11} {'Real Std':>11}  |  {'MeanΔ/Tstd':>11}")
+    rp(f"{'-' * w}")
+
+    for label, tm, ts, rm, rs, normalized_shift in outliers:
+        flag = " <<<" if abs(normalized_shift) > 3.0 else ""
         rp(f"{label:<28} {tm:>11.5f} {ts:>11.5f}  |  {rm:>11.5f} {rs:>11.5f}  |  {normalized_shift:>+11.2f}{flag}")
-
-        # Print separator between obs groups
-        if (i + 1) in group_boundaries:
-            rp(f"{'-' * w}")
 
     rp(f"{'=' * w}")
 
@@ -774,6 +778,7 @@ def run_episode(
     hand_init_orn_noise: list,
     keyboard: EvalKeyboardController,
     device: str = "cpu",
+    forge_pos_noise: Optional[torch.Tensor] = None,
 ) -> dict:
     """Run a single evaluation episode on the real robot.
 
@@ -792,6 +797,8 @@ def run_episode(
         hand_init_orn: [3] nominal EE start orientation (RPY).
         hand_init_orn_noise: [3] uniform noise range for start orientation (RPY).
         device: Torch device.
+        forge_pos_noise: [3] pre-generated spherical noise vector for forge eval mode.
+                         When provided, used directly instead of Gaussian sampling.
 
     Returns:
         Episode result dict for metrics computation.
@@ -814,10 +821,29 @@ def run_episode(
     max_steps = task_cfg['episode_timeout_steps']
     terminate_on_success = task_cfg['terminate_on_success']
 
+    # Safety: force selection height gate (hybrid only)
+    is_hybrid = model_info['sigma_idx'] > 0
+    if is_hybrid:
+        if 'force_select_max_height_mm' not in task_cfg:
+            raise RuntimeError(
+                "task.force_select_max_height_mm is required in config.yaml for hybrid models. "
+                "This is the max height (mm) above hole top where force control is allowed."
+            )
+        if 'force_select_max_xy_dist_mm' not in task_cfg:
+            raise RuntimeError(
+                "task.force_select_max_xy_dist_mm is required in config.yaml for hybrid models. "
+                "This is the max XY distance (mm) from goal where force control is allowed."
+            )
+        force_select_max_height_m = task_cfg['force_select_max_height_mm'] / 1000.0
+        force_select_max_xy_dist_m = task_cfg['force_select_max_xy_dist_mm'] / 1000.0
+
     # --- Per-episode randomization ---
 
     # 1. Sample per-episode goal noise (obs + action frame)
-    pos_noise = torch.randn(3, device=device) * goal_pos_noise_scale
+    if forge_pos_noise is not None:
+        pos_noise = forge_pos_noise
+    else:
+        pos_noise = torch.randn(3, device=device) * goal_pos_noise_scale
     noisy_goal = goal_position + pos_noise
 
     yaw_offset = 0.0
@@ -856,9 +882,9 @@ def run_episode(
     sum_force_in_contact = 0.0
     contact_steps = 0
     energy_sum = 0.0
+    force_blocked_steps = 0
 
     # Force tracking error (hybrid only)
-    is_hybrid = model_info['sigma_idx'] > 0
     sum_force_error_x = 0.0
     sum_cmd_force_x = 0.0
     sum_meas_force_x = 0.0
@@ -922,6 +948,27 @@ def run_episode(
             snap.force_torque, snap.joint_pos, snap.joint_vel, snap.jacobian, snap.mass_matrix,
             noisy_goal,
         )
+
+        # Safety: block force selection when peg tip is too far from hole
+        if is_hybrid:
+            peg_tip_pos = snap.ee_pos + ee_to_peg_base_offset
+            z_above_hole_m = (peg_tip_pos[2] - goal_position[2]).item()
+            xy_dist_m = torch.norm(peg_tip_pos[:2] - goal_position[:2]).item()
+            sel = ctrl_output['sel_matrix']
+            any_force_selected = (sel > 0.5).any().item()
+
+            should_block = (
+                any_force_selected
+                and (z_above_hole_m > force_select_max_height_m
+                     or xy_dist_m > force_select_max_xy_dist_m)
+            )
+            if should_block:
+                force_blocked_steps += 1
+                zero_sel = torch.zeros(6, device=device)
+                ctrl_output['sel_matrix'] = zero_sel
+                ctrl_output['control_targets'] = ctrl_output['control_targets']._replace(
+                    sel_matrix=zero_sel,
+                )
 
         # Set control targets for 1kHz torque recomputation (starts 15Hz timer)
         robot.set_control_targets(ctrl_output['control_targets'])
@@ -1048,6 +1095,7 @@ def run_episode(
         'force_selected_steps_x': force_selected_steps_x,
         'force_selected_steps_y': force_selected_steps_y,
         'force_selected_steps_z': force_selected_steps_z,
+        'force_blocked_steps': force_blocked_steps,
     }
 
 
@@ -1069,6 +1117,9 @@ def main():
     parser.add_argument("--override", action="append", default=[], help="Override config values (repeatable)")
     parser.add_argument("--checkpoint_dir", type=str, default="./checkpoint_cache",
                         help="Local directory for caching downloaded checkpoints")
+    parser.add_argument("--forge_eval", action="store_true", default=False,
+                        help="Forge eval mode: spherical goal noise sampling across 4 ranges "
+                             "(num_episodes becomes per-range, total = 4 × num_episodes)")
     args = parser.parse_args()
 
     # Set seed
@@ -1239,9 +1290,30 @@ def main():
 
     rp = EvalKeyboardController.raw_print
 
+    all_run_summaries = []
+
+    # Pre-generate forge noise assignments if forge_eval is active
+    if args.forge_eval:
+        forge_noise_list = []  # List of (noise_tensor[3], range_idx)
+        for range_idx, (min_val, max_val, _range_name) in enumerate(FORGE_NOISE_RANGES):
+            for _ in range(args.num_episodes):
+                direction = torch.randn(3, device=args.device)
+                direction = direction / direction.norm()
+                radius = torch.rand(1, device=args.device).item() * (max_val - min_val) + min_val
+                noise = direction * radius
+                forge_noise_list.append((noise, range_idx))
+        total_episodes = len(forge_noise_list)
+    else:
+        forge_noise_list = None
+        total_episodes = args.num_episodes
+
     try:
         rp(f"{'=' * 80}")
-        rp(f"EVALUATING {len(runs)} RUN(S), {args.num_episodes} EPISODES EACH")
+        if args.forge_eval:
+            rp(f"EVALUATING {len(runs)} RUN(S), {args.num_episodes} EPISODES x {len(FORGE_NOISE_RANGES)} RANGES = {total_episodes} TOTAL")
+            rp(f"  Forge eval noise ranges: {', '.join(r[2] for r in FORGE_NOISE_RANGES)}")
+        else:
+            rp(f"EVALUATING {len(runs)} RUN(S), {args.num_episodes} EPISODES EACH")
         rp(f"{'=' * 80}")
         rp("  Keyboard controls:")
         rp("    's' = skip (end episode as BREAK)")
@@ -1275,7 +1347,8 @@ def main():
             running_breaks_engaged = 0
             running_timeouts = 0
             running_timeouts_engaged = 0
-            for ep_idx in range(args.num_episodes):
+            for ep_idx in range(total_episodes):
+                forge_noise = forge_noise_list[ep_idx][0] if args.forge_eval else None
                 result = run_episode(
                     robot, policy_net, normalizer, model_info,
                     obs_builder, controller, real_config,
@@ -1284,7 +1357,12 @@ def main():
                     hand_init_orn, hand_init_orn_noise,
                     keyboard,
                     args.device,
+                    forge_pos_noise=forge_noise,
                 )
+
+                # Tag result with range index for per-range stats
+                if args.forge_eval:
+                    result['forge_range_idx'] = forge_noise_list[ep_idx][1]
 
                 if result['succeeded'] and not result['terminated']:
                     running_success += 1
@@ -1296,7 +1374,12 @@ def main():
                     running_timeouts += 1
                     if result['engaged']:
                         running_timeouts_engaged += 1
-                status = f"  [{ep_idx+1}/{args.num_episodes}] S:{running_success} B:{running_breaks}({running_breaks_engaged}) T:{running_timeouts}({running_timeouts_engaged})"
+
+                if args.forge_eval:
+                    range_name = FORGE_NOISE_RANGES[forge_noise_list[ep_idx][1]][2]
+                    status = f"  [{ep_idx+1}/{total_episodes}] [{range_name}] S:{running_success} B:{running_breaks}({running_breaks_engaged}) T:{running_timeouts}({running_timeouts_engaged})"
+                else:
+                    status = f"  [{ep_idx+1}/{total_episodes}] S:{running_success} B:{running_breaks}({running_breaks_engaged}) T:{running_timeouts}({running_timeouts_engaged})"
                 sys.stdout.write(f"\r\x1b[K{status}")
                 sys.stdout.flush()
 
@@ -1337,24 +1420,81 @@ def main():
                 # All episodes completed — finalize the status line
                 sys.stdout.write("\r\n")
 
-            # Observation distribution comparison (disabled)
-            # all_obs = []
-            # for ep in episode_results:
-            #     all_obs.extend(ep['obs_history'])
-            # print_obs_distribution_comparison(all_obs, obs_builder, normalizer)
+            # Observation distribution comparison
+            all_obs = []
+            for ep in episode_results:
+                all_obs.extend(ep['obs_history'])
+            print_obs_distribution_comparison(all_obs, obs_builder, normalizer)
 
             # Compute metrics
             metrics = compute_real_robot_metrics(episode_results)
 
+            # Count engagements for breaks and timeouts
+            break_engaged = 0
+            timeout_engaged = 0
+            for ep in episode_results:
+                if ep['succeeded'] and not ep['terminated']:
+                    pass  # success
+                elif ep['terminated']:
+                    if ep['engaged']:
+                        break_engaged += 1
+                else:
+                    if ep['engaged']:
+                        timeout_engaged += 1
+
             # Print summary
             rp(f"  Results for {run.name}:")
+
+            # Per-range breakdown for forge eval
+            forge_range_results = {}
+            if args.forge_eval:
+                for range_idx, (_min_val, _max_val, range_name) in enumerate(FORGE_NOISE_RANGES):
+                    range_eps = [ep for ep in episode_results if ep.get('forge_range_idx') == range_idx]
+                    r_n = len(range_eps)
+                    r_s = sum(1 for ep in range_eps if ep['succeeded'] and not ep['terminated'])
+                    r_b = sum(1 for ep in range_eps if ep['terminated'])
+                    r_be = sum(1 for ep in range_eps if ep['terminated'] and ep['engaged'])
+                    r_t = r_n - r_s - r_b
+                    r_te = sum(1 for ep in range_eps if not ep['succeeded'] and not ep['terminated'] and ep['engaged'])
+                    forge_range_results[range_name] = {
+                        'n': r_n, 'success': r_s, 'breaks': r_b, 'break_eng': r_be,
+                        'timeouts': r_t, 'timeout_eng': r_te,
+                    }
+                    rp(f"    [{range_name:<10}] N={r_n:<3} S:{r_s:<3} B:{r_b}(E:{r_be}) T:{r_t}(E:{r_te})")
+
+            # Force blocked stats per episode
+            blocked_counts = [ep['force_blocked_steps'] for ep in episode_results]
+            blocked_avg = sum(blocked_counts) / len(blocked_counts) if blocked_counts else 0.0
+            blocked_std = (sum((x - blocked_avg) ** 2 for x in blocked_counts) / len(blocked_counts)) ** 0.5 if blocked_counts else 0.0
+
             rp(f"    Successes: {metrics['num_successful_completions']}/{metrics['total_episodes']}")
-            rp(f"    Breaks:    {metrics['num_breaks']}/{metrics['total_episodes']}")
-            rp(f"    Timeouts:  {metrics['num_failed_timeouts']}/{metrics['total_episodes']}")
+            rp(f"    Breaks:    {metrics['num_breaks']}/{metrics['total_episodes']} ({break_engaged} engaged)")
+            rp(f"    Timeouts:  {metrics['num_failed_timeouts']}/{metrics['total_episodes']} ({timeout_engaged} engaged)")
             rp(f"    Avg Length: {metrics['episode_length']:.1f}")
             rp(f"    SSV:       {metrics['ssv']:.4f}")
             rp(f"    Max Force: {metrics['max_force']:.2f}N")
             rp(f"    Energy:    {metrics['energy']:.2f}")
+            rp(f"    Blocked:   {blocked_avg:.1f} +/- {blocked_std:.1f} steps/ep")
+
+            # Store for final summary table
+            summary_entry = {
+                'name': run.name,
+                'total': metrics['total_episodes'],
+                'success': metrics['num_successful_completions'],
+                'breaks': metrics['num_breaks'],
+                'break_eng': break_engaged,
+                'timeouts': metrics['num_failed_timeouts'],
+                'timeout_eng': timeout_engaged,
+                'avg_len': metrics['episode_length'],
+                'ssv': metrics['ssv'],
+                'max_force': metrics['max_force'],
+                'energy': metrics['energy'],
+                'blocked_avg': blocked_avg,
+                'blocked_std': blocked_std,
+            }
+            if args.forge_eval:
+                summary_entry['forge_range_results'] = forge_range_results
+            all_run_summaries.append(summary_entry)
 
             # Force tracking error (hybrid only)
             if hybrid_enabled:
@@ -1416,7 +1556,42 @@ def main():
             if keyboard.should_quit:
                 break
 
-        # 11. Shutdown
+        # 11. Final summary table across all policies
+        if all_run_summaries:
+            rp("")
+            if args.forge_eval:
+                # Wide table with per-range success rate columns
+                range_headers = "".join(f" {r[2]:>10}" for r in FORGE_NOISE_RANGES)
+                table_width = 170
+                rp(f"{'=' * table_width}")
+                rp("FINAL SUMMARY — ALL POLICIES (FORGE EVAL)")
+                rp(f"{'=' * table_width}")
+                rp(f"{'Policy':<30} {'N':>4}{range_headers} {'Total':>6} {'Brk':>5} {'BrkE':>5} {'TO':>5} {'TOE':>5} {'AvgLen':>7} {'SSV':>8} {'MaxF':>7} {'Energy':>8} {'BlkAvg':>7} {'BlkStd':>7}")
+                rp(f"{'-' * table_width}")
+                for s in all_run_summaries:
+                    range_cols = ""
+                    frr = s.get('forge_range_results', {})
+                    for _min_val, _max_val, range_name in FORGE_NOISE_RANGES:
+                        rr = frr.get(range_name, {})
+                        r_s = rr.get('success', 0)
+                        r_n = rr.get('n', 0)
+                        cell = f"{r_s}/{r_n}" if r_n > 0 else "–"
+                        range_cols += f" {cell:>10}"
+                    success_pct = f"{100*s['success']/s['total']:.0f}%" if s['total'] > 0 else "N/A"
+                    rp(f"{s['name']:<30} {s['total']:>4}{range_cols} {success_pct:>6} {s['breaks']:>5} {s['break_eng']:>5} {s['timeouts']:>5} {s['timeout_eng']:>5} {s['avg_len']:>7.1f} {s['ssv']:>8.4f} {s['max_force']:>7.2f} {s['energy']:>8.2f} {s['blocked_avg']:>7.1f} {s['blocked_std']:>7.1f}")
+                rp(f"{'=' * table_width}")
+            else:
+                table_width = 135
+                rp(f"{'=' * table_width}")
+                rp("FINAL SUMMARY — ALL POLICIES")
+                rp(f"{'=' * table_width}")
+                rp(f"{'Policy':<30} {'N':>4} {'Succ':>5} {'Brk':>5} {'BrkE':>5} {'TO':>5} {'TOE':>5} {'AvgLen':>7} {'SSV':>8} {'MaxF':>7} {'Energy':>8} {'BlkAvg':>7} {'BlkStd':>7}")
+                rp(f"{'-' * table_width}")
+                for s in all_run_summaries:
+                    rp(f"{s['name']:<30} {s['total']:>4} {s['success']:>5} {s['breaks']:>5} {s['break_eng']:>5} {s['timeouts']:>5} {s['timeout_eng']:>5} {s['avg_len']:>7.1f} {s['ssv']:>8.4f} {s['max_force']:>7.2f} {s['energy']:>8.2f} {s['blocked_avg']:>7.1f} {s['blocked_std']:>7.1f}")
+                rp(f"{'=' * table_width}")
+
+        rp("")
         rp(f"{'=' * 80}")
         rp("EVALUATION COMPLETE")
         rp(f"{'=' * 80}")

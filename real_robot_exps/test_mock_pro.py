@@ -86,6 +86,8 @@ def main():
         goal_position=torch.tensor([0.3, 0.0, 0.35]),
         ctrl_mode="force_only",
         singularity_damping=0.01,
+        partial_inertia_decoupling=False,
+        sep_ori=False,
     )
     robot.set_control_targets(dummy_targets)
     time.sleep(0.1)  # let compute process pick up targets and compute
