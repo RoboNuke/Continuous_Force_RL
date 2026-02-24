@@ -8,7 +8,7 @@ robot:
   control_rate_hz: 15.0       # Must match training policy_hz
   reset_duration_sec: 3.0     # Duration for Cartesian reset motion
   retract_height_m: 0.03      # Retract upward before reset to clear hole (meters)
-  gripper_force_n: 50.0       # Grasp force in Newtons (max 70N continuous limit)
+  gripper_force_n: 60.0       # Grasp force in Newtons (max 70N continuous limit)
 
   # NE_T_EE: Identity — F_T_NE (configured in Franka Desk) already contains
   # R_z(-45°) + T_z(0.1034), which matches the sim's panda_hand body frame
@@ -40,7 +40,11 @@ robot:
   # Measured in free space with check_ft_bias.py — compensates for unmodeled
   # EE payload (peg + gripper fingers) that the robot's gravity model misses.
   # Set to [0,0,0,0,0,0] to disable.
-  ft_bias: [-1.312, 0.144, -0.5614, -0.2626, -0.1608, 0.0305]
+  ft_bias: [-2.3233, -0.0368, 0.2142, 0.2584, -0.9019, -0.0218]
+
+  # Per-episode FT calibration: hold position and average O_F_ext_hat_K
+  # for this many seconds before each episode. Replaces static ft_bias.
+  ft_calibration_duration_sec: 2.0
 
 task:
   # Fixed asset origin position (hole base in world frame, meters)
@@ -55,9 +59,8 @@ task:
   # Target peg base position (where peg base should be when fully inserted)
   # This is "target_held_base_pos" in sim - used for SUCCESS/ENGAGEMENT DETECTION
   # May differ from fixed_asset_position depending on geometry
-  fixed_asset_position: [0.6107, -0.0217, 0.1657]
-  target_peg_base_position: [0.6107, -0.0217, 0.1657]
-
+  fixed_asset_position: [0.6105, -0.0131, 0.1649]
+  target_peg_base_position: [0.6105, -0.0131, 0.1649]
 
 
   # Offset from EE (fingertip midpoint) to peg base (grasped object root)
@@ -77,7 +80,7 @@ task:
   engage_threshold: 0.9            # Multiplied by hole_height -> 22.5mm Z threshold
 
   # Break detection (matches FragileObjectWrapper)
-  break_force_threshold: 20.0      # N - L2 norm of force (Fx,Fy,Fz) >= this triggers break
+  break_force_threshold: 10.0      # N - L2 norm of force (Fx,Fy,Fz) >= this triggers break
 
   # Safety: force control is blocked when peg tip is more than this height
   # above the hole top. Prevents force control in free space where there's
@@ -151,7 +154,7 @@ control_gains:
 noise:
   # When true, use noise values defined below instead of WandB training config.
   # When false, load noise from WandB training config (matching sim exactly).
-  use_rr_noise: false
+  use_rr_noise: true
 
   # Goal observation noise (Gaussian, sampled once per episode)
   goal_pos_noise: [0.00, 0.00, 0.00]   # meters, std per axis
@@ -160,6 +163,6 @@ noise:
 
   # Start pose (offset from fixed_asset_position)
   hand_init_pos: [0.0, 0.0, 0.047]         # meters, nominal EE offset above hole
-  hand_init_pos_noise: [0.00, 0.00, 0.00]  # meters, uniform +/- range per axis
+  hand_init_pos_noise: [0.02, 0.02, 0.01]  # meters, uniform +/- range per axis
   hand_init_orn: [3.1416, 0.0, 0.0]        # RPY radians, nominal orientation (pointing down)
   hand_init_orn_noise: [0.0, 0.0, 0.0]   # RPY radians, uniform +/- range (~45 deg yaw)

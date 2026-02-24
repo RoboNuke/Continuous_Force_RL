@@ -158,7 +158,14 @@ def save_to_cache(
 
     # Write runs.json LAST (serves as "cache complete" marker)
     runs_data = [
-        {'id': r.id, 'name': r.name, 'best_step': best_checkpoints[r.id]}
+        {
+            'id': r.id,
+            'name': r.name,
+            'group': r.group,
+            'project': r.project,
+            'tags': list(r.tags),
+            'best_step': best_checkpoints[r.id],
+        }
         for r in runs
     ]
     with open(os.path.join(cache_path, 'runs.json'), 'w') as f:
@@ -198,7 +205,17 @@ def load_from_cache(
     run_infos = []
     best_checkpoints = {}
     for entry in runs_data:
-        run_infos.append(SimpleNamespace(id=entry['id'], name=entry['name']))
+        for required_field in ('group', 'project', 'tags'):
+            if required_field not in entry:
+                raise RuntimeError(
+                    f"Cache is missing '{required_field}' field (old format). "
+                    f"Delete the cache directory and re-download: {cache_path}"
+                )
+        run_infos.append(SimpleNamespace(
+            id=entry['id'], name=entry['name'],
+            group=entry['group'], project=entry['project'],
+            tags=entry['tags'],
+        ))
         best_checkpoints[entry['id']] = entry['best_step']
 
     # Apply run_id filter
@@ -552,6 +569,9 @@ def compute_real_robot_metrics(episode_results: List[dict]) -> Dict[str, float]:
     metrics['ssjv'] = sum(ep['ssjv'] for ep in episode_results) / n
 
     # Force
+    total_force = sum(ep['sum_force'] for ep in episode_results)
+    total_steps = sum(ep['length'] for ep in episode_results)
+    metrics['avg_force'] = total_force / total_steps if total_steps > 0 else 0.0
     metrics['max_force'] = max(ep['max_force'] for ep in episode_results)
     total_force_in_contact = sum(ep['sum_force_in_contact'] for ep in episode_results)
     total_contact_steps = sum(ep['contact_steps'] for ep in episode_results)
@@ -677,6 +697,7 @@ class EvalKeyboardController:
         """Save terminal settings, set raw mode, start listener thread."""
         self._old_settings = termios.tcgetattr(sys.stdin)
         tty.setraw(sys.stdin.fileno())
+        self._stop.clear()
         thread = threading.Thread(target=self._read_loop, daemon=True)
         thread.start()
 
@@ -770,16 +791,14 @@ def run_episode(
     obs_builder: ObservationBuilder,
     controller: RealRobotController,
     real_config: dict,
-    goal_pos_noise_scale: torch.Tensor,
-    goal_yaw_noise_scale: float,
+    episode_noise: dict,
     hand_init_pos: torch.Tensor,
-    hand_init_pos_noise: torch.Tensor,
     hand_init_orn: list,
     hand_init_orn_noise: list,
     keyboard: EvalKeyboardController,
     device: str = "cpu",
-    forge_pos_noise: Optional[torch.Tensor] = None,
-) -> dict:
+    log_trajectory: bool = False,
+) -> Optional[dict]:
     """Run a single evaluation episode on the real robot.
 
     Args:
@@ -790,15 +809,16 @@ def run_episode(
         obs_builder: Observation builder.
         controller: Hybrid/pose controller.
         real_config: Real robot config dict.
-        goal_pos_noise_scale: [3] per-episode goal position noise std.
-        goal_yaw_noise_scale: Per-episode goal yaw noise std (rad).
+        episode_noise: Pre-generated noise for this episode. Keys:
+            'goal_pos_noise': [3] goal position noise tensor.
+            'goal_yaw_noise': float, goal yaw offset (rad).
+            'start_pos_noise': [3] start position noise tensor.
         hand_init_pos: [3] nominal EE start offset relative to fixed_asset_position.
-        hand_init_pos_noise: [3] uniform noise range for start position.
         hand_init_orn: [3] nominal EE start orientation (RPY).
         hand_init_orn_noise: [3] uniform noise range for start orientation (RPY).
         device: Torch device.
-        forge_pos_noise: [3] pre-generated spherical noise vector for forge eval mode.
-                         When provided, used directly instead of Gaussian sampling.
+        log_trajectory: If True, enable 1kHz trajectory logging and collect
+                        15Hz policy data for saving.
 
     Returns:
         Episode result dict for metrics computation.
@@ -837,21 +857,14 @@ def run_episode(
         force_select_max_height_m = task_cfg['force_select_max_height_mm'] / 1000.0
         force_select_max_xy_dist_m = task_cfg['force_select_max_xy_dist_mm'] / 1000.0
 
-    # --- Per-episode randomization ---
+    # --- Per-episode noise (pre-generated for cross-policy consistency) ---
 
-    # 1. Sample per-episode goal noise (obs + action frame)
-    if forge_pos_noise is not None:
-        pos_noise = forge_pos_noise
-    else:
-        pos_noise = torch.randn(3, device=device) * goal_pos_noise_scale
+    pos_noise = episode_noise['goal_pos_noise']
     noisy_goal = goal_position + pos_noise
 
-    yaw_offset = 0.0
-    if goal_yaw_noise_scale > 0:
-        yaw_offset = (torch.randn(1, device=device) * goal_yaw_noise_scale).item()
+    yaw_offset = episode_noise['goal_yaw_noise']
 
-    # 2. Sample per-episode start pose noise (position only, orientation fixed)
-    start_pos_noise = (2 * torch.rand(3, device=device) - 1) * hand_init_pos_noise
+    start_pos_noise = episode_noise['start_pos_noise']
     start_yaw_noise = 0.0  # no yaw noise on starting pose
 
     # 3. Compute target EE start pose in world frame (ABSOLUTE, not relative to EE)
@@ -861,12 +874,31 @@ def run_episode(
     target_rpy = [hand_init_orn[0], hand_init_orn[1], hand_init_orn[2] + start_yaw_noise]
     target_pose = make_ee_target_pose(target_ee_pos.cpu().numpy(), np.array(target_rpy))
 
-    # 4. Retract upward to safely clear the hole before moving to new start pose
+    # 4. Retract + reset with retry logic (motion reflex errors are recoverable)
+    MAX_MOTION_RETRIES = 5
     retract_height = real_config['robot']['retract_height_m']
-    robot.retract_up(retract_height)
+    for attempt in range(MAX_MOTION_RETRIES):
+        try:
+            robot.retract_up(retract_height)
+            robot.reset_to_start_pose(target_pose)
+            break
+        except RuntimeError as e:
+            EvalKeyboardController.raw_print(f"  [MOTION RETRY {attempt+1}/{MAX_MOTION_RETRIES}] {e}")
+            try:
+                robot.error_recovery()
+            except RuntimeError:
+                pass
+            time.sleep(1.0)
+    else:
+        EvalKeyboardController.raw_print(f"  [MOTION FAILED] All {MAX_MOTION_RETRIES} retries exhausted")
+        return None
 
-    # 5. Reset robot to start pose
-    robot.reset_to_start_pose(target_pose)
+    # 5. Calibrate FT bias at the start pose for this episode
+    ft_bias = robot.calibrate_ft_bias()
+    EvalKeyboardController.raw_print(
+        f"  FT bias: [{ft_bias[0]:+.4f}, {ft_bias[1]:+.4f}, {ft_bias[2]:+.4f}, "
+        f"{ft_bias[3]:+.4f}, {ft_bias[4]:+.4f}, {ft_bias[5]:+.4f}]"
+    )
 
     prev_actions = torch.zeros(model_info['action_dim'], device=device)
 
@@ -879,6 +911,7 @@ def run_episode(
     ssv_sum = 0.0
     ssjv_sum = 0.0
     max_force = 0.0
+    sum_force = 0.0
     sum_force_in_contact = 0.0
     contact_steps = 0
     energy_sum = 0.0
@@ -921,8 +954,14 @@ def run_episode(
     prev_actions = torch.zeros(model_info['action_dim'], device=device)
 
     # 8. Start torque control — background 1kHz thread keeps robot fed
-    robot.start_torque_mode()
+    robot.start_torque_mode(log_trajectory=log_trajectory)
     _ep_start = time.time()
+
+    # 15Hz trajectory accumulation (only when logging)
+    if log_trajectory:
+        traj_actions_15hz = []
+        traj_sel_matrices_15hz = []
+        traj_time_ms_15hz = []
     for step in range(max_steps):
         # Wait for 15Hz policy step timing, then grab latest snapshot
         robot.wait_for_policy_step()
@@ -979,6 +1018,16 @@ def run_episode(
         #  self.unwrapped.actions = self.ema_actions.clone())
         prev_actions = ctrl_output['ema_actions']
 
+        # Accumulate 15Hz trajectory data
+        if log_trajectory:
+            traj_actions_15hz.append(action.detach().cpu().clone())
+            sel = ctrl_output.get('sel_matrix', None)
+            if sel is not None:
+                traj_sel_matrices_15hz.append(sel.detach().cpu().clone())
+            else:
+                traj_sel_matrices_15hz.append(torch.zeros(6))
+            traj_time_ms_15hz.append((time.time() - _ep_start) * 1000.0)
+
         # ---- Metric tracking ----
 
         # SSV: sum of EE velocity magnitude
@@ -991,6 +1040,7 @@ def run_episode(
 
         # Force metrics
         force_magnitude = torch.norm(snap.force_torque[:3]).item()
+        sum_force += force_magnitude
         max_force = max(max_force, force_magnitude)
 
         # Contact detection (matching sim: any axis force > threshold)
@@ -1069,6 +1119,18 @@ def run_episode(
     ssjv = ssjv_sum / episode_length if episode_length > 0 else 0.0
     energy = energy_sum  # Energy is total, not averaged per step (matching sim)
 
+    # Build trajectory data dict if logging
+    if log_trajectory:
+        traj_1khz = robot.get_last_trajectory()
+        trajectory_data = {
+            'trajectory_1khz': traj_1khz,
+            'actions_15hz': traj_actions_15hz,
+            'sel_matrices_15hz': traj_sel_matrices_15hz,
+            'time_ms_15hz': traj_time_ms_15hz,
+        }
+    else:
+        trajectory_data = {}
+
     return {
         'succeeded': succeeded,
         'engaged': engaged,
@@ -1077,6 +1139,7 @@ def run_episode(
         'ssv': ssv,
         'ssjv': ssjv,
         'max_force': max_force,
+        'sum_force': sum_force,
         'sum_force_in_contact': sum_force_in_contact,
         'contact_steps': contact_steps,
         'energy': energy,
@@ -1096,6 +1159,7 @@ def run_episode(
         'force_selected_steps_y': force_selected_steps_y,
         'force_selected_steps_z': force_selected_steps_z,
         'force_blocked_steps': force_blocked_steps,
+        **trajectory_data,
     }
 
 
@@ -1120,6 +1184,12 @@ def main():
     parser.add_argument("--forge_eval", action="store_true", default=False,
                         help="Forge eval mode: spherical goal noise sampling across 4 ranges "
                              "(num_episodes becomes per-range, total = 4 × num_episodes)")
+    parser.add_argument("--policy_idx", type=int, default=None,
+                        help="Run only the policy at this index (0-based) from the tag's run list")
+    parser.add_argument("--log_trajectories", action="store_true",
+                        help="Save per-episode 1kHz trajectory data as .npz files")
+    parser.add_argument("--trajectory_dir", type=str, default="./trajectory_logs",
+                        help="Directory for trajectory files")
     args = parser.parse_args()
 
     # Set seed
@@ -1187,6 +1257,20 @@ def main():
 
     # Load from cache (single code path for both fresh download and cached)
     configs, runs, best_checkpoints = load_from_cache(cache_path, args.run_id)
+
+    # Filter to single policy by index if requested
+    if args.policy_idx is not None:
+        if args.policy_idx < 0 or args.policy_idx >= len(runs):
+            print(f"\nAvailable policies for tag '{args.tag}':")
+            for i, r in enumerate(runs):
+                print(f"  [{i}] {r.name} (id={r.id}, best step={best_checkpoints[r.id]})")
+            raise ValueError(
+                f"--policy_idx {args.policy_idx} out of range [0, {len(runs)-1}]"
+            )
+        selected = runs[args.policy_idx]
+        print(f"\n  --policy_idx {args.policy_idx}: selected '{selected.name}' (id={selected.id})")
+        runs = [selected]
+        best_checkpoints = {selected.id: best_checkpoints[selected.id]}
 
     # 5. Reconstruct obs_order and determine model properties
     obs_order = reconstruct_obs_order(configs)
@@ -1292,20 +1376,34 @@ def main():
 
     all_run_summaries = []
 
-    # Pre-generate forge noise assignments if forge_eval is active
+    # Pre-generate ALL per-episode noise so every policy sees identical conditions
     if args.forge_eval:
-        forge_noise_list = []  # List of (noise_tensor[3], range_idx)
+        total_episodes = args.num_episodes * len(FORGE_NOISE_RANGES)
+        forge_range_indices = []
+        goal_pos_noises = []
         for range_idx, (min_val, max_val, _range_name) in enumerate(FORGE_NOISE_RANGES):
             for _ in range(args.num_episodes):
                 direction = torch.randn(3, device=args.device)
                 direction = direction / direction.norm()
                 radius = torch.rand(1, device=args.device).item() * (max_val - min_val) + min_val
-                noise = direction * radius
-                forge_noise_list.append((noise, range_idx))
-        total_episodes = len(forge_noise_list)
+                goal_pos_noises.append(direction * radius)
+                forge_range_indices.append(range_idx)
     else:
-        forge_noise_list = None
         total_episodes = args.num_episodes
+        forge_range_indices = None
+        goal_pos_noises = [
+            torch.randn(3, device=args.device) * goal_pos_noise_scale
+            for _ in range(total_episodes)
+        ]
+
+    episode_noises = []
+    for ep_idx in range(total_episodes):
+        episode_noises.append({
+            'goal_pos_noise': goal_pos_noises[ep_idx],
+            'goal_yaw_noise': (torch.randn(1, device=args.device) * goal_yaw_noise_scale).item()
+                              if goal_yaw_noise_scale > 0 else 0.0,
+            'start_pos_noise': (2 * torch.rand(3, device=args.device) - 1) * hand_init_pos_noise,
+        })
 
     try:
         rp(f"{'=' * 80}")
@@ -1348,21 +1446,26 @@ def main():
             running_timeouts = 0
             running_timeouts_engaged = 0
             for ep_idx in range(total_episodes):
-                forge_noise = forge_noise_list[ep_idx][0] if args.forge_eval else None
                 result = run_episode(
                     robot, policy_net, normalizer, model_info,
                     obs_builder, controller, real_config,
-                    goal_pos_noise_scale, goal_yaw_noise_scale,
-                    hand_init_pos, hand_init_pos_noise,
+                    episode_noises[ep_idx],
+                    hand_init_pos,
                     hand_init_orn, hand_init_orn_noise,
                     keyboard,
                     args.device,
-                    forge_pos_noise=forge_noise,
+                    log_trajectory=args.log_trajectories,
                 )
+
+                # Motion retries exhausted — skip remaining episodes for this policy
+                if result is None:
+                    sys.stdout.write("\r\n")
+                    rp(f"  [ABORT] Motion failed after retries — skipping remaining episodes")
+                    break
 
                 # Tag result with range index for per-range stats
                 if args.forge_eval:
-                    result['forge_range_idx'] = forge_noise_list[ep_idx][1]
+                    result['forge_range_idx'] = forge_range_indices[ep_idx]
 
                 if result['succeeded'] and not result['terminated']:
                     running_success += 1
@@ -1376,7 +1479,7 @@ def main():
                         running_timeouts_engaged += 1
 
                 if args.forge_eval:
-                    range_name = FORGE_NOISE_RANGES[forge_noise_list[ep_idx][1]][2]
+                    range_name = FORGE_NOISE_RANGES[forge_range_indices[ep_idx]][2]
                     status = f"  [{ep_idx+1}/{total_episodes}] [{range_name}] S:{running_success} B:{running_breaks}({running_breaks_engaged}) T:{running_timeouts}({running_timeouts_engaged})"
                 else:
                     status = f"  [{ep_idx+1}/{total_episodes}] S:{running_success} B:{running_breaks}({running_breaks_engaged}) T:{running_timeouts}({running_timeouts_engaged})"
@@ -1384,6 +1487,20 @@ def main():
                 sys.stdout.flush()
 
                 episode_results.append(result)
+
+                # Save 1kHz + 15Hz trajectory data to .npz
+                if args.log_trajectories and result.get('trajectory_1khz') is not None:
+                    policy_traj_dir = os.path.join(args.trajectory_dir, run.name)
+                    os.makedirs(policy_traj_dir, exist_ok=True)
+                    np.savez_compressed(
+                        os.path.join(policy_traj_dir, f"traj_{ep_idx:03d}.npz"),
+                        # 1kHz signals
+                        **result['trajectory_1khz'],
+                        # 15Hz signals
+                        action_15hz=np.stack([a.numpy() for a in result['actions_15hz']]),
+                        sel_matrix_15hz=np.stack([s.numpy() for s in result['sel_matrices_15hz']]),
+                        time_ms_15hz=np.array(result['time_ms_15hz']),
+                    )
 
                 # Check for quit (ESC)
                 if keyboard.should_quit:
@@ -1419,6 +1536,19 @@ def main():
             else:
                 # All episodes completed — finalize the status line
                 sys.stdout.write("\r\n")
+
+            # Handle case where no episodes completed (motion failures)
+            if not episode_results:
+                rp(f"  Results for {run.name}: NO EPISODES COMPLETED (motion failures)")
+                all_run_summaries.append({
+                    'name': run.name, 'total': 0, 'success': 0,
+                    'breaks': 0, 'break_eng': 0, 'timeouts': 0, 'timeout_eng': 0,
+                    'avg_len': 0.0, 'ssv': 0.0, 'max_force': 0.0, 'energy': 0.0,
+                    'blocked_avg': 0.0, 'blocked_std': 0.0,
+                })
+                if keyboard.should_quit:
+                    break
+                continue
 
             # Observation distribution comparison
             all_obs = []
@@ -1472,6 +1602,7 @@ def main():
             rp(f"    Timeouts:  {metrics['num_failed_timeouts']}/{metrics['total_episodes']} ({timeout_engaged} engaged)")
             rp(f"    Avg Length: {metrics['episode_length']:.1f}")
             rp(f"    SSV:       {metrics['ssv']:.4f}")
+            rp(f"    Avg Force: {metrics['avg_force']:.2f}N")
             rp(f"    Max Force: {metrics['max_force']:.2f}N")
             rp(f"    Energy:    {metrics['energy']:.2f}")
             rp(f"    Blocked:   {blocked_avg:.1f} +/- {blocked_std:.1f} steps/ep")
@@ -1487,6 +1618,7 @@ def main():
                 'timeout_eng': timeout_engaged,
                 'avg_len': metrics['episode_length'],
                 'ssv': metrics['ssv'],
+                'avg_force': metrics['avg_force'],
                 'max_force': metrics['max_force'],
                 'energy': metrics['energy'],
                 'blocked_avg': blocked_avg,
@@ -1527,17 +1659,28 @@ def main():
                 rp(f"    Force Err Y: {avg_fe_y:.3f}N ({total_steps_y} steps) cmd={avg_cf_y:.3f}N meas={avg_mf_y:.3f}N")
                 rp(f"    Force Err Z: {avg_fe_z:.3f}N ({total_steps_z} steps) cmd={avg_cf_z:.3f}N meas={avg_mf_z:.3f}N")
 
-            # Log to WandB
+            # Log to WandB (restore terminal from raw mode so wandb prints normally)
             if not args.no_wandb:
                 import wandb
+                keyboard.stop()
+                eval_tags = [
+                    "eval_real_robot", f"source_run:{run_id}",
+                ] + list(run.tags)
+                eval_group = f"Eval_RealRobot_{run.group}_{args.tag}" if run.group else None
                 eval_run = wandb.init(
+                    project=run.project,
                     entity=args.entity,
-                    project=args.project,
                     name=f"Eval_RealRobot_{run.name}",
-                    tags=["eval_real_robot", args.tag, f"source_run:{run_id}"],
+                    group=eval_group,
+                    tags=eval_tags,
+                    reinit="create_new",
                     config={
                         "source_run_id": run_id,
                         "source_run_name": run.name,
+                        "source_run_group": run.group,
+                        "source_project": run.project,
+                        "eval_mode": "real_robot",
+                        "eval_seed": args.eval_seed,
                         "best_step": best_step,
                         "num_episodes": args.num_episodes,
                         "real_robot_config": real_config,
@@ -1547,8 +1690,9 @@ def main():
                 # Log with Eval_Core prefix (matching sim eval format)
                 prefixed_metrics = {f"Eval_Core/{k}": v for k, v in metrics.items()}
                 prefixed_metrics["total_steps"] = best_step
-                wandb.log(prefixed_metrics)
-                wandb.finish()
+                eval_run.log(prefixed_metrics)
+                eval_run.finish()
+                keyboard.start()
                 rp(f"    Logged to WandB: {eval_run.url}")
             else:
                 rp("    (WandB logging disabled)")
@@ -1566,7 +1710,7 @@ def main():
                 rp(f"{'=' * table_width}")
                 rp("FINAL SUMMARY — ALL POLICIES (FORGE EVAL)")
                 rp(f"{'=' * table_width}")
-                rp(f"{'Policy':<30} {'N':>4}{range_headers} {'Total':>6} {'Brk':>5} {'BrkE':>5} {'TO':>5} {'TOE':>5} {'AvgLen':>7} {'SSV':>8} {'MaxF':>7} {'Energy':>8} {'BlkAvg':>7} {'BlkStd':>7}")
+                rp(f"{'Policy':<30} {'N':>4}{range_headers} {'Total':>6} {'Brk':>5} {'BrkE':>5} {'TO':>5} {'TOE':>5} {'AvgLen':>7} {'SSV':>8} {'AvgF':>7} {'MaxF':>7} {'Energy':>8} {'BlkAvg':>7} {'BlkStd':>7}")
                 rp(f"{'-' * table_width}")
                 for s in all_run_summaries:
                     range_cols = ""
@@ -1578,17 +1722,17 @@ def main():
                         cell = f"{r_s}/{r_n}" if r_n > 0 else "–"
                         range_cols += f" {cell:>10}"
                     success_pct = f"{100*s['success']/s['total']:.0f}%" if s['total'] > 0 else "N/A"
-                    rp(f"{s['name']:<30} {s['total']:>4}{range_cols} {success_pct:>6} {s['breaks']:>5} {s['break_eng']:>5} {s['timeouts']:>5} {s['timeout_eng']:>5} {s['avg_len']:>7.1f} {s['ssv']:>8.4f} {s['max_force']:>7.2f} {s['energy']:>8.2f} {s['blocked_avg']:>7.1f} {s['blocked_std']:>7.1f}")
+                    rp(f"{s['name']:<30} {s['total']:>4}{range_cols} {success_pct:>6} {s['breaks']:>5} {s['break_eng']:>5} {s['timeouts']:>5} {s['timeout_eng']:>5} {s['avg_len']:>7.1f} {s['ssv']:>8.4f} {s['avg_force']:>7.2f} {s['max_force']:>7.2f} {s['energy']:>8.2f} {s['blocked_avg']:>7.1f} {s['blocked_std']:>7.1f}")
                 rp(f"{'=' * table_width}")
             else:
-                table_width = 135
+                table_width = 143
                 rp(f"{'=' * table_width}")
                 rp("FINAL SUMMARY — ALL POLICIES")
                 rp(f"{'=' * table_width}")
-                rp(f"{'Policy':<30} {'N':>4} {'Succ':>5} {'Brk':>5} {'BrkE':>5} {'TO':>5} {'TOE':>5} {'AvgLen':>7} {'SSV':>8} {'MaxF':>7} {'Energy':>8} {'BlkAvg':>7} {'BlkStd':>7}")
+                rp(f"{'Policy':<30} {'N':>4} {'Succ':>5} {'Brk':>5} {'BrkE':>5} {'TO':>5} {'TOE':>5} {'AvgLen':>7} {'SSV':>8} {'AvgF':>7} {'MaxF':>7} {'Energy':>8} {'BlkAvg':>7} {'BlkStd':>7}")
                 rp(f"{'-' * table_width}")
                 for s in all_run_summaries:
-                    rp(f"{s['name']:<30} {s['total']:>4} {s['success']:>5} {s['breaks']:>5} {s['break_eng']:>5} {s['timeouts']:>5} {s['timeout_eng']:>5} {s['avg_len']:>7.1f} {s['ssv']:>8.4f} {s['max_force']:>7.2f} {s['energy']:>8.2f} {s['blocked_avg']:>7.1f} {s['blocked_std']:>7.1f}")
+                    rp(f"{s['name']:<30} {s['total']:>4} {s['success']:>5} {s['breaks']:>5} {s['break_eng']:>5} {s['timeouts']:>5} {s['timeout_eng']:>5} {s['avg_len']:>7.1f} {s['ssv']:>8.4f} {s['avg_force']:>7.2f} {s['max_force']:>7.2f} {s['energy']:>8.2f} {s['blocked_avg']:>7.1f} {s['blocked_std']:>7.1f}")
                 rp(f"{'=' * table_width}")
 
         rp("")
