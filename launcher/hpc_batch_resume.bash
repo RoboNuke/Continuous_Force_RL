@@ -9,10 +9,36 @@
 #SBATCH --signal=TERM@300           # send SIGTERM 300 seconds (5 min) before time limit
 # Note: Output files will be set dynamically based on tag name
 
-# Script arguments
-CHECKPOINT_TAG=$1
-CHECKPOINT_STEP=$2
-OVERRIDES=$3
+# Parse named arguments
+CHECKPOINT_TAG=""
+CHECKPOINT_STEP=""
+OVERRIDES=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --checkpoint_tag)
+            CHECKPOINT_TAG="$2"
+            shift 2
+            ;;
+        --checkpoint_step)
+            CHECKPOINT_STEP="$2"
+            shift 2
+            ;;
+        --overrides)
+            OVERRIDES="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
+
+if [[ -z "$CHECKPOINT_TAG" ]]; then
+    echo "Error: --checkpoint_tag is required"
+    exit 1
+fi
 
 echo "=== HPC Resume Batch Script Started ==="
 echo "Job Name: $SLURM_JOB_NAME"

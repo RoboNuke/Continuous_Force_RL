@@ -360,6 +360,11 @@ def main(
         # Returns tuple of (configs, temp_dir)
         configs, config_temp_dir = reconstruct_config_from_wandb(checkpoint_runs[0])
 
+        # Auto-inherit WandB project from checkpoint runs
+        checkpoint_project = checkpoint_runs[0].project
+        configs['experiment'].wandb_project = checkpoint_project
+        print(f"[INFO]: Inheriting WandB project from checkpoint: {checkpoint_project}")
+
         # Create resume_info for passing to define_agent_configs
         resume_info = {
             'run_ids': [r.id for r in checkpoint_runs],
