@@ -140,8 +140,9 @@ environment:
   obs_rand:
     fixed_asset_pos: [0.0025, 0.0025, 0.0025]  # 2.5mm default from FORGE
     fixed_asset_yaw: 0.0523599  # 3 degrees in radians
-    use_yaw_noise: false  # Set to true to add fingertip_yaw_rel_fixed observation
+    use_fixed_asset_yaw_noise: false  # Set to true to add fingertip_yaw_rel_fixed observation
     ee_pos: [0.00025, 0.00025, 0.00025]
+    ee_rpy: [0.0, 0.0, 0.0]  # RPY noise for EE orientation (radians) - [roll, pitch, yaw] - 0 = disabled
     force_torque: [1.0, 1.0, 1.0, 0.2, 0.2, 0.2]  # Force (N) and Torque (Nm) noise - applied per step
 
 # MODEL CONFIGURATION (SimBa architecture parameters)
@@ -251,6 +252,7 @@ wrappers:
     add_contact_obs: false    # actor
     add_contact_state: true   # critic
     use_contact_sensor: true  # Use ContactSensor for contact detection
+    exclude_torques: false    # If true, only forces (3 dims) in force_torque observation
 
   # Observation format conversion (Isaac Lab dict -> single tensor)
   observation_manager:

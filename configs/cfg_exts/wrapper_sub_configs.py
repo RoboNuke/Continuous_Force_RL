@@ -33,6 +33,7 @@ class ForceTorqueSensorConfig:
     add_force_obs: bool = False
     add_contact_obs: bool = False
     add_contact_state: bool = True
+    exclude_torques: bool = False  # If True, only forces (3 dims) are included in force_torque observation
 
     # Contact detection parameters (moved from HybridTaskCfg)
     contact_force_threshold: float = 0.1

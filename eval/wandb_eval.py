@@ -561,7 +561,7 @@ class FixedYawObsNoiseWrapper(gym.Wrapper):
         if not hasattr(self.unwrapped, 'init_fixed_yaw_obs_noise'):
             raise RuntimeError(
                 "FixedYawObsNoiseWrapper requires init_fixed_yaw_obs_noise attribute. "
-                "Ensure EEPoseNoiseWrapper is applied with use_yaw_noise=True before this wrapper."
+                "Ensure EEPoseNoiseWrapper is applied with use_fixed_asset_yaw_noise=True before this wrapper."
             )
 
     def _wrapped_reset_idx(self, env_ids):

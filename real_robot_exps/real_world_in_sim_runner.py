@@ -144,7 +144,7 @@ def reconstruct_obs_order(configs):
         obs_order.append("in_contact")
 
     env_cfg = configs['environment']
-    if hasattr(env_cfg, 'obs_rand') and getattr(env_cfg.obs_rand, 'use_yaw_noise', False):
+    if hasattr(env_cfg, 'obs_rand') and getattr(env_cfg.obs_rand, 'use_fixed_asset_yaw_noise', False):
         obs_order.append("fingertip_yaw_rel_fixed")
 
     return obs_order
