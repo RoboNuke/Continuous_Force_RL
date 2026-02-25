@@ -7,7 +7,7 @@ primary:
   agents_per_break_force: 5
   num_envs_per_agent: 256
   break_forces: [10000]
-  max_steps: 5000500
+  max_steps: 4000500
   ctrl_mode: "force_only"
 
 # Model configuration for hybrid agent
