@@ -176,8 +176,12 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         """
         Reset specified environments with dynamics randomization.
 
-        Randomizes dynamics BEFORE calling original reset so new parameters
-        are in place when environment state is initialized.
+        Two-phase randomization:
+        - Phase 1 (BEFORE reset): PhysX properties (mass, friction) that need the
+          base env's step_sim_no_action() to flush into the simulation.
+        - Phase 2 (AFTER reset): Gains and thresholds that are pure tensor assignments.
+          These MUST come after reset because the base env's randomize_initial_state()
+          overwrites task_prop_gains and task_deriv_gains back to defaults.
         """
         # Initialize wrapper on first reset if not already done
         if not self._wrapper_initialized:
@@ -190,16 +194,25 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
             # Ensure env_ids are on GPU (test may pass CPU tensors)
             env_ids = env_ids.to(device=self.device)
 
-        # Randomize dynamics for the environments being reset
-        self._randomize_dynamics(env_ids)
+        # Phase 1: PhysX properties BEFORE reset (flushed by step_sim_no_action inside base reset)
+        self._randomize_physx_properties(env_ids)
 
-        # Call original reset (env_ids on GPU, PhysX conversions happen internally)
+        # Call original reset (flushes PhysX properties, but overwrites gains to defaults)
         if self._original_reset_idx is not None:
             self._original_reset_idx(env_ids)
 
-    def _randomize_dynamics(self, env_ids):
+        # Phase 2: Gains and thresholds AFTER reset (so base env can't overwrite them)
+        self._randomize_gains_and_thresholds(env_ids)
+
+        # Verify all randomized values actually took effect
+        self._verify_randomization(env_ids)
+
+    def _randomize_physx_properties(self, env_ids):
         """
-        Randomize dynamics parameters for specified environments.
+        Randomize PhysX-level properties (friction, mass/inertia) for specified environments.
+
+        These are set BEFORE the base reset so that step_sim_no_action() flushes them
+        into the PhysX simulation.
 
         Args:
             env_ids: Tensor of environment indices to randomize
@@ -230,7 +243,20 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
             # Apply mass scale to held asset
             self._set_mass_per_env(self.unwrapped._held_asset, env_ids, sampled_mass_scales)
 
-        # 3. Randomize controller gains (position and rotation)
+    def _randomize_gains_and_thresholds(self, env_ids):
+        """
+        Randomize controller gains and action thresholds for specified environments.
+
+        These are set AFTER the base reset because the base env's randomize_initial_state()
+        overwrites task_prop_gains and task_deriv_gains back to defaults. By applying
+        our randomization after, our values are the final ones used for the episode.
+
+        Args:
+            env_ids: Tensor of environment indices to randomize
+        """
+        num_reset_envs = len(env_ids)
+
+        # 1. Randomize controller gains (position and rotation)
         if self.randomize_gains:
             # Sample position gains (same for all 3 position dims)
             pos_gain_min, pos_gain_max = self.pos_gains_range
@@ -253,7 +279,7 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
             # Apply gains to environment
             self._apply_controller_gains(env_ids)
 
-        # 4. Randomize force/torque gains (hybrid control only)
+        # 2. Randomize force/torque gains (hybrid control only)
         if self.randomize_force_gains:
             # Sample force gains (same for all 3 force dims)
             force_gain_min, force_gain_max = self.force_gains_range
@@ -276,7 +302,7 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
             # Apply force gains to environment
             self._apply_force_gains(env_ids)
 
-        # 5. Randomize action thresholds
+        # 3. Randomize action thresholds
         if self.randomize_pos_threshold:
             pos_thresh_min, pos_thresh_max = self.pos_threshold_range
             sampled_pos_thresh = (
@@ -303,6 +329,120 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
             )
             self.current_force_threshold[env_ids] = sampled_force_thresh
             self._apply_force_threshold(env_ids)
+
+    def _verify_randomization(self, env_ids):
+        """
+        Verify all randomized parameters actually took effect after reset.
+
+        Reads back values from PhysX views and environment tensors and asserts they
+        match what we set. This catches silent IsaacSim bugs where PhysX ignores
+        property changes at runtime.
+
+        Args:
+            env_ids: Tensor of environment indices that were randomized
+        """
+        atol = 1e-4
+
+        # Verify friction
+        if self.randomize_friction:
+            asset = self.unwrapped._held_asset
+            materials = asset.root_physx_view.get_material_properties()
+            mat_device = materials.device
+            env_ids_cpu = env_ids.to(mat_device)
+            expected_friction = self.current_friction[env_ids].to(mat_device)
+
+            # Check static friction (index 0) for first shape
+            actual_static = materials[env_ids_cpu, 0, 0]
+            if not torch.allclose(actual_static, expected_friction, atol=atol):
+                raise RuntimeError(
+                    f"[DynamicsRandomizationWrapper] FRICTION VERIFICATION FAILED!\n"
+                    f"  Expected static friction: {expected_friction[:3].tolist()}...\n"
+                    f"  Actual static friction:   {actual_static[:3].tolist()}...\n"
+                    f"  This is a known IsaacSim bug where friction changes are silently ignored.\n"
+                    f"  See: https://forums.developer.nvidia.com/t/runtime-friction-and-restitution-randomization-bug"
+                )
+
+            # Check dynamic friction (index 1) for first shape
+            actual_dynamic = materials[env_ids_cpu, 0, 1]
+            if not torch.allclose(actual_dynamic, expected_friction, atol=atol):
+                raise RuntimeError(
+                    f"[DynamicsRandomizationWrapper] FRICTION VERIFICATION FAILED!\n"
+                    f"  Expected dynamic friction: {expected_friction[:3].tolist()}...\n"
+                    f"  Actual dynamic friction:   {actual_dynamic[:3].tolist()}...\n"
+                    f"  This is a known IsaacSim bug where friction changes are silently ignored.\n"
+                    f"  See: https://forums.developer.nvidia.com/t/runtime-friction-and-restitution-randomization-bug"
+                )
+
+        # Verify mass and inertia
+        if self.randomize_held_mass:
+            asset = self.unwrapped._held_asset
+            masses = asset.root_physx_view.get_masses()
+            inertias = asset.root_physx_view.get_inertias()
+            physx_device = masses.device
+            env_ids_cpu = env_ids.to(physx_device)
+            mass_scales = self.current_held_mass[env_ids].to(physx_device)
+
+            # Compute expected masses from defaults * scale
+            default_masses = asset.data.default_mass
+            expected_masses = default_masses[env_ids_cpu] * mass_scales.unsqueeze(-1)
+            actual_masses = masses[env_ids_cpu]
+
+            if not torch.allclose(actual_masses, expected_masses, atol=atol):
+                raise RuntimeError(
+                    f"[DynamicsRandomizationWrapper] MASS VERIFICATION FAILED!\n"
+                    f"  Expected masses (env 0): {expected_masses[0].tolist()}\n"
+                    f"  Actual masses (env 0):   {actual_masses[0].tolist()}\n"
+                    f"  Mass scales applied: {mass_scales[:3].tolist()}...\n"
+                    f"  PhysX may have silently ignored the mass change."
+                )
+
+            # Compute expected inertias from defaults * scale
+            default_inertias = asset.data.default_inertia
+            expected_inertias = default_inertias[env_ids_cpu] * mass_scales.unsqueeze(-1).unsqueeze(-1)
+            actual_inertias = inertias[env_ids_cpu]
+
+            if not torch.allclose(actual_inertias, expected_inertias, atol=atol):
+                raise RuntimeError(
+                    f"[DynamicsRandomizationWrapper] INERTIA VERIFICATION FAILED!\n"
+                    f"  Expected inertia (env 0): {expected_inertias[0, 0, :3].tolist()}...\n"
+                    f"  Actual inertia (env 0):   {actual_inertias[0, 0, :3].tolist()}...\n"
+                    f"  Mass scales applied: {mass_scales[:3].tolist()}...\n"
+                    f"  PhysX may have silently ignored the inertia change."
+                )
+
+        # Verify controller gains
+        if self.randomize_gains:
+            expected_prop = self.current_prop_gains[env_ids].to(
+                dtype=self.unwrapped.task_prop_gains.dtype,
+                device=self.unwrapped.task_prop_gains.device
+            )
+            actual_prop = self.unwrapped.task_prop_gains[env_ids]
+
+            if not torch.allclose(actual_prop, expected_prop, atol=atol):
+                raise RuntimeError(
+                    f"[DynamicsRandomizationWrapper] CONTROLLER GAIN VERIFICATION FAILED!\n"
+                    f"  Expected prop gains (env 0): {expected_prop[0].tolist()}\n"
+                    f"  Actual prop gains (env 0):   {actual_prop[0].tolist()}\n"
+                    f"  The base environment's _reset_idx likely overwrote the randomized gains.\n"
+                    f"  Gains must be applied AFTER the base reset, not before."
+                )
+
+            # Also verify derivative gains
+            expected_deriv = 2.0 * torch.sqrt(expected_prop)
+            rot_deriv_scale = 1.0
+            if hasattr(self.unwrapped.cfg.ctrl, 'default_rot_deriv_scale'):
+                rot_deriv_scale = self.unwrapped.cfg.ctrl.default_rot_deriv_scale
+            if rot_deriv_scale != 1.0:
+                expected_deriv[:, 3:6] *= rot_deriv_scale
+            actual_deriv = self.unwrapped.task_deriv_gains[env_ids]
+
+            if not torch.allclose(actual_deriv, expected_deriv.to(dtype=actual_deriv.dtype), atol=atol):
+                raise RuntimeError(
+                    f"[DynamicsRandomizationWrapper] DERIVATIVE GAIN VERIFICATION FAILED!\n"
+                    f"  Expected deriv gains (env 0): {expected_deriv[0].tolist()}\n"
+                    f"  Actual deriv gains (env 0):   {actual_deriv[0].tolist()}\n"
+                    f"  Derivative gains should be 2*sqrt(prop_gains)."
+                )
 
     def _set_friction_per_env(self, asset, env_ids, friction_values):
         """
