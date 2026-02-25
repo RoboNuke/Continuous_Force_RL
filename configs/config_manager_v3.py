@@ -202,7 +202,8 @@ class ConfigManagerV3:
     # Config Processing Methods (Features 4 & 5)
     # =============================================================================
 
-    def process_config(self, config_path: str, cli_overrides: Optional[List[str]] = None) -> Dict[str, Any]:
+    def process_config(self, config_path: str, cli_overrides: Optional[List[str]] = None,
+                       base_config_override: Optional[str] = None) -> Dict[str, Any]:
         """
         Process a configuration file (base or experiment).
 
@@ -214,6 +215,7 @@ class ConfigManagerV3:
         Args:
             config_path: Path to config YAML file (base or experiment)
             cli_overrides: Optional list of CLI override strings in dot notation
+            base_config_override: Optional path to override the base_config in an experiment config
 
         Returns:
             Dictionary containing config instances and metadata
@@ -222,9 +224,14 @@ class ConfigManagerV3:
         yaml_data, config_type = self.load_yaml(config_path)
 
         if config_type == 'base':
+            if base_config_override is not None:
+                raise ValueError(
+                    f"--base_config was provided but '{config_path}' is not an experiment config "
+                    f"(no base_config field found)"
+                )
             configs = self._process_base_config(config_path, yaml_data)
         else:  # experiment
-            configs = self._process_experiment_config(config_path, yaml_data)
+            configs = self._process_experiment_config(config_path, yaml_data, base_config_override)
 
         # Apply primary config to all other configs (propagate shared values)
         self._apply_primary_config_to_all(configs)
@@ -402,7 +409,8 @@ class ConfigManagerV3:
 
         return configs
 
-    def _process_experiment_config(self, experiment_config_path: str, yaml_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _process_experiment_config(self, experiment_config_path: str, yaml_data: Dict[str, Any],
+                                    base_config_override: Optional[str] = None) -> Dict[str, Any]:
         """
         Internal method to process an experiment configuration file.
 
@@ -411,6 +419,7 @@ class ConfigManagerV3:
         Args:
             experiment_config_path: Path to experiment config YAML file
             yaml_data: Parsed experiment YAML data
+            base_config_override: Optional path to override the base_config from the YAML
 
         Returns:
             Dictionary containing config instances and metadata
@@ -420,6 +429,12 @@ class ConfigManagerV3:
             raise ValueError(f"Experiment config '{experiment_config_path}' missing 'base_config' attribute")
 
         base_config_path = yaml_data['base_config']
+
+        if base_config_override is not None:
+            if not os.path.exists(base_config_override):
+                raise FileNotFoundError(f"Base config override not found: {base_config_override}")
+            print(f"[INFO]: Overriding base_config: {base_config_path} -> {base_config_override}")
+            base_config_path = base_config_override
 
         # Assume path is relative to project root (current working directory)
 

@@ -137,7 +137,7 @@ HIGHLIGHT_LINEWIDTH = 3
 # DEFAULT_GROUP_WIDTH controls how much of each unit (0-1) the bars occupy
 # Gap between groups = 1.0 - DEFAULT_GROUP_WIDTH (e.g., 0.8 width = 0.2 gap)
 DEFAULT_GROUP_WIDTH = 0.925
-DEFAULT_BAR_GAP = 0.035        # Gap between individual bars within a group (in x-axis units)
+DEFAULT_BAR_GAP = 0.04        # Gap between individual bars within a group (in x-axis units)
 DEFAULT_EDGE_DARKEN = 0.8     # Factor to darken fill color for bar border (0=black, 1=same)
 DEFAULT_EDGE_LINEWIDTH = 0.8  # Bar border line width
 DEFAULT_BOLD_LABELS = False    # Whether bar value labels are bolded
@@ -151,7 +151,7 @@ BAR_LABEL_OFFSET_INSIDE = 1  # Space inside bar when label fits inside (for y_li
 BAR_LABEL_OFFSET_INSIDE_SMALL = 0.1  # Space inside bar when label fits inside (for y_lim < 50)
 
 # Legend styling
-LEGEND_HANDLE_LENGTH = 1.9  # Width of color indicator in legend (default ~2.0)5
+LEGEND_HANDLE_LENGTH = 1.5  # Width of color indicator in legend (default ~2.0)5
 
 # Spacing/padding defaults
 AXIS_LABEL_PAD_X = 1  # Padding between x-axis tick labels and axis label (default ~4-6)
@@ -1230,6 +1230,8 @@ def plot_multi_panel_grid(
     show_label_ci: bool = DEFAULT_SHOW_LABEL_CI,
     saturation: float = DEFAULT_SATURATION,
     center_x_label: bool = False,
+    legend_panel: int = 0,
+    legend_loc: str = "lower left",
 ) -> Tuple[plt.Figure, np.ndarray]:
     """
     Create 2D grid of bar plots (for fragility, clearance, shape comparisons).
@@ -1345,12 +1347,12 @@ def plot_multi_panel_grid(
             for spine in ax.spines.values():
                 spine.set_zorder(3)
 
-            # Only show legend on first plot
-            if idx == 0:
+            # Only show legend on specified panel
+            if idx == legend_panel:
                 handles, labels = ax.get_legend_handles_labels()
                 # Strip "(1mm)" suffix from legend labels for cleaner display
                 labels = [l.replace("(1mm)", "").strip() for l in labels]
-                ax.legend(handles, labels, fontsize=FONT_LEGEND - 1, loc="upper right", handlelength=LEGEND_HANDLE_LENGTH)
+                ax.legend(handles, labels, fontsize=FONT_LEGEND - 1, loc=legend_loc, handlelength=LEGEND_HANDLE_LENGTH)
 
         # X-axis label on bottom row (center column only if center_x_label is set)
         if row == n_rows - 1:
@@ -1497,7 +1499,7 @@ def plot_training_curves(
     ax.margins(x=AXIS_MARGIN_X)
     ax.ticklabel_format(axis="x", style="scientific", scilimits=(6, 6))
     ax.legend(fontsize=FONT_LEGEND, loc=legend_loc, handlelength=LEGEND_HANDLE_LENGTH)
-    ax.grid(True, alpha=0.3)
+    ax.grid(False)
 
     plt.subplots_adjust(left=MARGIN_LEFT, right=MARGIN_RIGHT, bottom=MARGIN_BOTTOM, top=MARGIN_TOP)
     plt.tight_layout(pad=TIGHT_PAD, w_pad=TIGHT_W_PAD, h_pad=TIGHT_H_PAD)

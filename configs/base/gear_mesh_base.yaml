@@ -12,12 +12,12 @@ experiment:
 
 # PRIMARY PARAMETERS (overrides defaults in PrimaryConfig)
 primary:
-  agents_per_break_force: 5 # Number of agents per break force condition
-  num_envs_per_agent: 256   # Environments per individual agent
-  break_forces: [100000]  # Break force conditions (-1 = unbreakable)
+  agents_per_break_force: 2 # Number of agents per break force condition
+  num_envs_per_agent: 16   # Environments per individual agent
+  break_forces: [15]  # Break force conditions (-1 = unbreakable)
   decimation: 8
   policy_hz: 15
-  max_steps: 25000192
+  max_steps: 3000064 #25000192
   debug_mode: false
   seed: -1
   ckpt_tracker_path: "/nfs/stak/users/brownhun/ckpt_trackers/voltron_baseline_tracker.txt" #"/home/hunter/ckpt_tracker.txt" #
@@ -25,21 +25,92 @@ primary:
 
 # ENVIRONMENT OVERRIDES (Direct Isaac Lab FactoryEnvCfg parameters)
 environment:
+
+  sim:
+    physx:
+      solver_type: 1
+      max_position_iteration_count: &pos_iter 32  # Important to avoid interpenetration.
+      max_velocity_iteration_count: &vel_iter 8
+      bounce_threshold_velocity: 0.2
+      friction_offset_threshold: 0.01
+      friction_correlation_distance: 0.00625
+      gpu_collision_stack_size: 134217728
+      #gpu_max_rigid_contact_count: 2**23
+      #gpu_max_rigid_patch_count: 2**23
+      gpu_max_num_partitions: 1
+
+  #robot:
+  #  spawn:
+  #    rigid_props:
+  #      solver_position_iteration_count: &robot_pos_iter 192
+  #      solver_velocity_iteration_count: &robot_vel_iter 8
+  #      linear_damping: &lin_damp 0.0
+
+  #    articulation_props:
+  #      solver_position_iteration_count: *robot_pos_iter
+  #      solver_velocity_iteration_count: *robot_vel_iter
+  robot:
+    spawn:
+      rigid_props:
+        solver_position_iteration_count: *pos_iter
+        solver_velocity_iteration_count: *vel_iter
+        linear_damping: &lin_damp 0.0
+
+      articulation_props:
+        solver_position_iteration_count: *pos_iter
+        solver_velocity_iteration_count: *vel_iter
+
   task:
     name: 'gear_mesh'
-  # Episode length for gear mesh is 20.0s (vs 10.0s for peg insert)
+
+    # Asset variant selection (optional - defaults to IsaacLab built-in assets)
+    # Set both fields to use custom peg/hole assets from manifest
+    asset_variant: null          # e.g., "forge_8mm", "custom_10mm"
+    asset_manifest_path: "assets/peg_hole/manifest.json"  # Relative to project root (or absolute path)
+    fixed_asset:
+      spawn:
+        rigid_props:
+          solver_position_iteration_count: *pos_iter
+          solver_velocity_iteration_count: *vel_iter
+          linear_damping: *lin_damp
+
+    held_asset:
+      spawn:
+        rigid_props:
+          solver_position_iteration_count: *pos_iter
+          solver_velocity_iteration_count: *vel_iter
+          linear_damping: *lin_damp
+
+  # episode_length_s comes from Isaac Lab defaults (10.0s for peg insert)
   # decimation comes from primary config applied automatically
   scene:
     filter_collisions: false
 
   # These parameters will be applied to the ExtendedCtrlCfg
   ctrl:
-    force_action_bounds: [50.0, 50.0, 50.0]
-    torque_action_bounds: [0.5, 0.5, 0.5]
-    force_action_threshold: [10.0, 10.0, 10.0]
-    torque_action_threshold: [0.1, 0.1, 0.1]
-    default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
+    apply_ema_force: true
+    async_z_force_bounds: true
+    force_action_bounds: [20.0, 20.0, 20.0] #
+    torque_action_bounds: [0.25, 0.25, 0.25]
+    force_action_threshold: [2.0, 2.0, 2.0] #
+    torque_action_threshold: [0.01, 0.01, 0.01]
+
+    #default_task_force_gains: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
+    default_task_prop_gains: [100, 100, 100, 30, 30, 30]
+    default_task_force_gains: [0.5, 0.5, 0.5, 0.1, 0.1, 0.1]
+
     no_sel_ema: true
+    use_delta_force: false  # false=absolute (action*bounds), true=delta (action*threshold+current)
+
+    # Force PID control
+    enable_force_derivative: false  # Enable D term (velocity damping) in force control
+    enable_force_integral: false    # Enable I term in force control
+    default_task_force_integ_gains: [0.01, 0.01, 0.01, 0.001, 0.001, 0.001]  # Ki gains
+    force_integral_clamp: 50.0      # Anti-windup clamp for integral term
+
+    # VIC (Variable Impedance Control) gain bounds - translational only
+    vic_gain_min_pos: [50.0, 50.0, 50.0]
+    vic_gain_max_pos: [500.0, 500.0, 500.0]
 
   hybrid_task:
     good_force_cmd_rew: 0.1
@@ -51,6 +122,7 @@ environment:
     fingertip_pos: "fingertip_midpoint_pos"
     fingertip_pos_rel_fixed: "fingertip_pos_rel_fixed"
     fingertip_quat: "fingertip_midpoint_quat"
+    fingertip_yaw_rel_fixed: "fingertip_yaw_rel_fixed"
     ee_linvel: "ee_linvel_fd"
     ee_angvel: "ee_angvel_fd"
     joint_pos: "joint_pos"
@@ -64,8 +136,11 @@ environment:
 
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
-    fixed_asset_pos: [0.001, 0.001, 0.001]  # 1mm position noise (default from IsaacLab)
+    fixed_asset_pos: [0.0025, 0.0025, 0.0025]  # 2.5mm default from FORGE
+    fixed_asset_yaw: 0.0523599  # 3 degrees in radians
+    use_fixed_asset_yaw_noise: false  # Set to true to add fingertip_yaw_rel_fixed observation
     ee_pos: [0.00025, 0.00025, 0.00025]
+    ee_rpy: [0.0, 0.0, 0.0]  # RPY noise for EE orientation (radians) - [roll, pitch, yaw] - 0 = disabled
     force_torque: [1.0, 1.0, 1.0, 0.2, 0.2, 0.2]  # Force (N) and Torque (Nm) noise - applied per step
 
 # MODEL CONFIGURATION (SimBa architecture parameters)
@@ -75,18 +150,22 @@ model:
   last_layer_scale: 0.1
   act_init_std: 1.0
   critic_output_init_mean: 50
-
   use_separate_heads: false
   selection_head_hidden_dim: 2
   component_head_hidden_dim: 256
+
+  # Squashed Gaussian action bounding
+  squash_actions: false          # If true, apply tanh after sampling instead of on network mean
+  correct_squash_log_prob: false # If true (and squash_actions=true), apply Jacobian correction to log_prob
   # Actor architecture (SimBa policy network)
   actor:
-    n: 1  # Number of SimBa layers
-    latent_size: 256  # Hidden dimension
+    n: 2  # Number of SimBa layers
+    latent_size: 512  # Hidden dimension
+    use_state_dependent_std: false
 
   # Critic architecture (SimBa value network)
   critic:
-    n: 3  # Number of SimBa layers
+    n: 4  # Number of SimBa layers
     latent_size: 1024  # Hidden dimension
 
   # Hybrid agent configuration
@@ -95,6 +174,7 @@ model:
   # Hybrid agent specific parameters
   hybrid_agent:
     ctrl_mode: "force_only"  # Match primary.ctrl_mode
+    full_clop: false
     unit_std_init: false
     unit_factor_std_init: 1.0
     pos_init_std: 1.0
@@ -138,12 +218,15 @@ wrappers:
   # Fragile object behavior
   fragile_objects:
     enabled: true
-    peg_break_rew: -0.4 #-1.0
+    peg_break_rew: 0.0 #-15.0
     # break_force and num_agents are computed from primary config automatically
 
-  # Efficient environment resetting3
+  # Efficient environment resetting
   efficient_reset:
     enabled: true
+    terminate_on_success: false  # If true, episodes terminate immediately upon success
+    success_bonus: 1.0  # Total reward on success (base env gives +1, wrapper adjusts to this total)
+    use_remaining_steps_bonus: false  # If true, bonus = max_episode_length - steps_taken (overrides success_bonus)
 
   # Spawn height curriculum learning
   spawn_height_curriculum:
@@ -162,11 +245,12 @@ wrappers:
     tanh_scale: 0.03
     add_force_obs: true
     contact_force_threshold: 1.5
-    contact_torque_threshold: 100.0 # don't want torque activation
+    contact_torque_threshold: 0.1 #100.0 # don't want torque activation
     log_contact_state: true
     add_contact_obs: false    # actor
     add_contact_state: true   # critic
     use_contact_sensor: true  # Use ContactSensor for contact detection
+    exclude_torques: false    # If true, only forces (3 dims) in force_torque observation
 
   # Observation format conversion (Isaac Lab dict -> single tensor)
   observation_manager:
@@ -190,15 +274,24 @@ wrappers:
     reward_type: "none" #"simp"
     use_ground_truth_selection: false
 
+  # Variable Impedance Control (VIC) - pose control with learnable gains
+  vic_pose:
+    enabled: false
+    apply_ema_to_gains: false
+
   # Factory-specific metrics tracking
   factory_metrics:
     enabled: true
     publish_to_wandb: true
+    engagement_reward_scale: 1.0 #60.0  # Scale for engagement rewards (default 1.0 = no change)
+    success_reward_scale: 1.0 #40.0
+    timeout_penalty: 0.0 #-20.0 # Penalty applied on timeout (max steps reached, default 0.0 = no penalty)
     # num_agents is computed from primary config automatically
 
   # Wandb logging with factory metrics
   wandb_logging:
     enabled: true
+    track_rewards_by_outcome: false
 
   # Enhanced action logging
   action_logging:
@@ -222,12 +315,27 @@ wrappers:
     height_threshold_fraction: 0.9  # Fraction of fixed asset height (engage_threshold)
 
   two_stage_keypoint_reward:
-    enabled: true
+    enabled: false
     xy_threshold: 0.0025
+
+  # Custom keypoint offset patterns for non-default peg shapes
+  keypoint_offset:
+    enabled: false
+    mode: 'axis'  # 'axis' or 'polygon'
+    # Axis mode parameters
+    num_keypoints: 4
+    x_scale: 0.01
+    y_scale: 0.01
+    z_scale: 0.05
+    # Polygon mode parameters
+    num_lines: 6
+    num_keypoints_z: 4
+    num_keypoints_radial: 4
+    xy_scale: 0.005
 
   # Force reward system with 8 reward functions
   force_reward:
-    enabled: false
+    enabled: true
     contact_force_threshold: 1.0 # not used anymore
     contact_window_size: 10
 
@@ -276,14 +384,53 @@ wrappers:
     force_ratio_reward_weight: 1.0
     #############################################################
 
-    enable_contact_reward: False
-    contact_reward_weight: 1.0
+    enable_contact_reward: false
+    contact_reward_weight: 2.0
+
+    enable_square_vel: False
+    square_vel_weight: 1000.0
+
+    enable_softplus: False
+    softplus_weight: 2.0
+    enable_softplus_max: False
+
+  # Dynamics randomization for domain randomization
+  dynamics_randomization:
+    enabled: false
+
+    randomize_held_mass: false
+    held_mass_range: [0.5, 2.0]  # Scale factors
+
+    # Friction randomization (held asset only)
+    randomize_friction: false
+    friction_range: [0.5, 1.0]
+
+    # Controller gains randomization (separate for pos/rot)
+    randomize_gains: false
+    #pos_gains_range: [80.0, 120.0]
+    pos_gains_range: [400.0, 800.0]
+    rot_gains_range: [29.0, 30.0]    # Don't actually want to randomize
+
+    # Force/torque gains randomization (hybrid control only)
+    randomize_force_gains: false
+    force_gains_range: [0.1, 0.5]
+    torque_gains_range: [0.001, 0.001]      # Don't Want to Randomize
+
+    # Action thresholds randomization
+    randomize_pos_threshold: false
+    pos_threshold_range: [0.016, 0.025]
+
+    randomize_rot_threshold: false
+    rot_threshold_range: [0.08, 0.12]
+
+    randomize_force_threshold: false
+    force_threshold_range: [40.0, 60.0]
 
 
 # AGENT CONFIGURATION (SKRL PPO parameters + custom extensions)
 agent:
   # Core identification
-  disable_progressbar: false
+  disable_progressbar: true
 
   # Checkpoint and experiment tracking
   track_ckpts: false
@@ -295,7 +442,7 @@ agent:
   # rollouts and mini_batches are auto-calculated from episode timing
   learning_epochs: 4
   mini_batches: 300
-  discount_factor: 0.99
+  discount_factor: 0.995
   lambda_: 0.95  # Note: underscore for Python compatibility
   random_timesteps: 0
   learning_starts: 0
@@ -303,6 +450,9 @@ agent:
   mixed_precision: false
 
   # CUSTOM LEARNING PARAMETERS (extensions to SKRL)
+  #policy_learning_rate: 1.0e-5
+  #critic_learning_rate: 1.0e-5
+  #value_update_ratio: 2
   policy_learning_rate: 1.0e-5
   critic_learning_rate: 1.0e-5
   value_update_ratio: 2
@@ -324,6 +474,7 @@ agent:
   time_limit_bootstrap: true
 
   supervised_selection_loss_weight: 0.0
+  #checkpoint_interval: 1500
 
   # Reward shaping
   reward_shaper_type: 'const_scale'

@@ -25,6 +25,7 @@ parser.add_argument("--checkpoint_step", type=int, default=None, help="Checkpoin
 parser.add_argument("--checkpoint_project", type=str, default="SG_Exps", help="WandB project to search for checkpoint runs (default: SG_Exps)")
 parser.add_argument("--checkpoint_entity", type=str, default="hur", help="WandB entity for checkpoint runs (default: hur)")
 parser.add_argument("--new_project", type=str, default=None, help="WandB project for new training runs (overrides config value)")
+parser.add_argument("--base_config", type=str, default=None, help="Override the base_config path in the experiment config")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -385,7 +386,8 @@ def main(
     else:
         # Load config from local file
         configManager = ConfigManagerV3()
-        configs = configManager.process_config(args_cli.config, args_cli.override)
+        configs = configManager.process_config(args_cli.config, args_cli.override,
+                                                base_config_override=args_cli.base_config)
 
     # Override WandB project for new training runs if specified
     if args_cli.new_project is not None:
