@@ -662,7 +662,10 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
 
     def _apply_force_gains(self, env_ids):
         """
-        Apply randomized force/torque gains to HybridForcePositionWrapper's kp.
+        Apply randomized force/torque gains to HybridForcePositionWrapper's kp and recalculate kd.
+
+        kd is always derived from kp as: kd = force_deriv_scale * 2 * sqrt(kp)
+        This maintains critical damping regardless of the randomized kp value.
         """
         hybrid_wrapper = self._find_hybrid_wrapper()
 
@@ -675,6 +678,19 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
 
         # Modify the wrapper's kp attribute (convert dtype to match target if needed)
         hybrid_wrapper.kp[env_ids] = self.current_force_gains[env_ids].to(dtype=hybrid_wrapper.kp.dtype)
+
+        # Recalculate kd from the new kp to maintain critical damping: kd = scale * 2 * sqrt(kp)
+        if hybrid_wrapper.kd is not None:
+            force_deriv_scale = getattr(hybrid_wrapper, 'force_deriv_scale', 1.0)
+            new_kd = force_deriv_scale * 2.0 * torch.sqrt(hybrid_wrapper.kp[env_ids])
+
+            # Preserve zero-masking from ctrl_mode (force_only zeros torque, force_tz zeros Tx/Ty)
+            if hybrid_wrapper.ctrl_mode == "force_only":
+                new_kd[:, 3:] = 0.0
+            elif hybrid_wrapper.ctrl_mode == "force_tz":
+                new_kd[:, 3:5] = 0.0
+
+            hybrid_wrapper.kd[env_ids] = new_kd.to(dtype=hybrid_wrapper.kd.dtype)
 
     def _apply_pos_threshold(self, env_ids):
         """Apply randomized position thresholds by overwriting base env attribute."""
