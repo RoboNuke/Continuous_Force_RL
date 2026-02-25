@@ -6,7 +6,7 @@ base_config: "configs/base/PiH_base.yaml"
 primary:
   agents_per_break_force: 5 # Number of agents per break force condition
   num_envs_per_agent: 256   # Environments per individual agent
-  break_forces: [10]  # Break force conditions (-1 = unbreakable)
+  break_forces: [5]  # Break force conditions (-1 = unbreakable)
   max_steps: 3000064 #25000192
 
 # Model configuration for hybrid agent
@@ -18,8 +18,8 @@ model:
 wrappers:
   force_torque_sensor:
     exclude_torques: true
-  
-    # Dynamics randomization for domain randomization
+
+  # Dynamics randomization for domain randomization
   dynamics_randomization:
     enabled: true
 
@@ -33,7 +33,7 @@ wrappers:
     # Controller gains randomization (separate for pos/rot)
     randomize_gains: true
     pos_gains_range: [60.0, 140.0]
-    rot_gains_range: [20.0, 60.0]    
+    rot_gains_range: [20.0, 60.0]
 
     # Disabled randomizations
     randomize_force_gains: false
@@ -45,9 +45,14 @@ environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
     fixed_asset_pos: [0.001, 0.001, 0.001]
+    use_fixed_asset_yaw_noise: false  # circular peg so not needed
+
+    ee_pos: [0.0005, 0.0005, 0.0005]
+    ee_rpy: [0.0349, 0.0349, 0.0349]  # RPY noise for EE orientation (radians) - [roll, pitch, yaw] - 0 = disabled
+    force_torque: [1.0, 1.0, 1.0, 0.2, 0.2, 0.2]  # Force (N) and Torque (Nm) noise - applied per step
 
 # Experiment metadata
 experiment:
-  name: &exp_name "pose_squashed_breakable"
-  tags: ['breakable', '10N', 'noZCon', 'squashed']
+  name: &exp_name "pose_DR_breakable"
+  tags: ['breakable', '5N', 'noZCon', 'DR']
   group: *exp_name
