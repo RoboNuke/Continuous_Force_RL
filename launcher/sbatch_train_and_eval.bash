@@ -143,10 +143,17 @@ for config_name in "${CONFIG_ARRAY[@]}"; do
 
     # Submit SLURM job with dynamic output file paths (replace slashes with underscores for file names)
     output_name="$(echo "${config_name}" | tr '/' '_')"
-    job_output=$(sbatch -J "$job_name" \
+    # Build hpc_batch args
+    hpc_args="--config $config_path --experiment_tag $EXPERIMENT_TAG"
+    if [[ -n "$OVERRIDES" ]]; then
+        hpc_args="$hpc_args --overrides \"$OVERRIDES\""
+    fi
+    hpc_args="$hpc_args --eval_tag $eval_tag"
+
+    job_output=$(eval sbatch -J "$job_name" \
            -o "exp_logs/${EXPERIMENT_TAG}/${output_name}_%j.out" \
            -e "exp_logs/${EXPERIMENT_TAG}/${output_name}_%j.err" \
-           launcher/hpc_batch.bash "$config_path" "$EXPERIMENT_TAG" "$OVERRIDES" "$eval_tag")
+           launcher/hpc_batch.bash $hpc_args)
 
     # Extract job ID from sbatch output
     job_id=$(echo "$job_output" | grep -oP 'Submitted batch job \K\d+')
