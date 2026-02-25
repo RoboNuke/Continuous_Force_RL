@@ -131,6 +131,9 @@ class EEPoseNoiseWrapper(gym.Wrapper):
             device=self.device
         )
 
+        # Find ForceTorqueWrapper in wrapper chain for noisy FT observations
+        self._ft_wrapper = self._find_force_torque_wrapper()
+
         # Flag to track if wrapper is initialized
         self._wrapper_initialized = False
 
@@ -184,6 +187,23 @@ class EEPoseNoiseWrapper(gym.Wrapper):
                 current_env = current_env.env
             else:
                 break
+
+    def _find_force_torque_wrapper(self):
+        """
+        Search the wrapper chain for a ForceTorqueWrapper instance.
+
+        Returns the wrapper if found, None otherwise. Used to call
+        get_force_torque_observation() for noisy FT data in observations.
+        """
+        current_env = self.env
+        while current_env is not None:
+            if current_env.__class__.__name__ == 'ForceTorqueWrapper':
+                return current_env
+            if hasattr(current_env, 'env'):
+                current_env = current_env.env
+            else:
+                break
+        return None
 
     def _add_yaw_observation_to_config(self):
         """
@@ -463,21 +483,39 @@ class EEPoseNoiseWrapper(gym.Wrapper):
             state_dict["fingertip_yaw_rel_fixed"] = self._compute_fingertip_yaw_rel_fixed(noisy=False)
 
         # Add force_torque if it exists in obs/state order
-        # Use get_force_torque_observation() to include sensor noise (from ForceTorqueWrapper)
+        # Use ForceTorqueWrapper.get_force_torque_observation() to include sensor noise
         if hasattr(self.unwrapped.cfg, 'obs_order') and 'force_torque' in self.unwrapped.cfg.obs_order:
-            obs_dict['force_torque'] = self.get_force_torque_observation()
+            if self._ft_wrapper is None:
+                raise RuntimeError(
+                    "force_torque is in obs_order but ForceTorqueWrapper not found in wrapper chain. "
+                    "EEPoseNoiseWrapper requires ForceTorqueWrapper to be applied before it."
+                )
+            obs_dict['force_torque'] = self._ft_wrapper.get_force_torque_observation()
 
         if hasattr(self.unwrapped.cfg, 'state_order') and 'force_torque' in self.unwrapped.cfg.state_order:
-            state_dict['force_torque'] = self.get_force_torque_observation()
+            if self._ft_wrapper is None:
+                raise RuntimeError(
+                    "force_torque is in state_order but ForceTorqueWrapper not found in wrapper chain. "
+                    "EEPoseNoiseWrapper requires ForceTorqueWrapper to be applied before it."
+                )
+            state_dict['force_torque'] = self._ft_wrapper.get_force_torque_observation()
 
         # Add in_contact if it exists in obs/state order
         if hasattr(self.unwrapped.cfg, 'obs_order') and 'in_contact' in self.unwrapped.cfg.obs_order:
-            if hasattr(self.unwrapped, 'in_contact'):
-                obs_dict['in_contact'] = self.unwrapped.in_contact[:, :3]
+            if self._ft_wrapper is None:
+                raise RuntimeError(
+                    "in_contact is in obs_order but ForceTorqueWrapper not found in wrapper chain. "
+                    "EEPoseNoiseWrapper requires ForceTorqueWrapper to be applied before it."
+                )
+            obs_dict['in_contact'] = self._ft_wrapper.get_in_contact_observation()
 
         if hasattr(self.unwrapped.cfg, 'state_order') and 'in_contact' in self.unwrapped.cfg.state_order:
-            if hasattr(self.unwrapped, 'in_contact'):
-                state_dict['in_contact'] = self.unwrapped.in_contact[:, :3]
+            if self._ft_wrapper is None:
+                raise RuntimeError(
+                    "in_contact is in state_order but ForceTorqueWrapper not found in wrapper chain. "
+                    "EEPoseNoiseWrapper requires ForceTorqueWrapper to be applied before it."
+                )
+            state_dict['in_contact'] = self._ft_wrapper.get_in_contact_observation()
 
         # Concatenate observations in the correct order
         obs_tensors = [obs_dict[obs_name] for obs_name in self.unwrapped.cfg.obs_order + ["prev_actions"]]

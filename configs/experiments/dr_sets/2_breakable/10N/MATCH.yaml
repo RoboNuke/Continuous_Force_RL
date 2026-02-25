@@ -59,6 +59,8 @@ wrappers:
 
 agent:
   supervised_selection_loss_weight: 1.0
+  #disable_progressbar: false
+
 #  policy_learning_rate: 5.0e-4
 #  critic_learning_rate: 1.0e-4
 #  #learning_epochs: 1

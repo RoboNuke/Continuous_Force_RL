@@ -89,6 +89,7 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         # Store original methods
         self._original_reset_idx = None
         self._wrapper_initialized = False
+        self._verified = False
 
         # Note: Initialization is delayed until first reset when environment parameters are ready
         # Do NOT initialize here - task_prop_gains and other parameters don't exist until first _reset_idx
@@ -176,7 +177,10 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
         """
         Reset specified environments with dynamics randomization.
 
-        Two-phase randomization:
+        Dynamics randomization only applies on full resets (all envs resetting at once).
+        Partial resets pass through to the base reset without re-randomizing.
+
+        Two-phase randomization on full resets:
         - Phase 1 (BEFORE reset): PhysX properties (mass, friction) that need the
           base env's step_sim_no_action() to flush into the simulation.
         - Phase 2 (AFTER reset): Gains and thresholds that are pure tensor assignments.
@@ -194,18 +198,27 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
             # Ensure env_ids are on GPU (test may pass CPU tensors)
             env_ids = env_ids.to(device=self.device)
 
+        is_full_reset = len(env_ids) == self.num_envs
+
         # Phase 1: PhysX properties BEFORE reset (flushed by step_sim_no_action inside base reset)
-        self._randomize_physx_properties(env_ids)
+        if is_full_reset:
+            self._randomize_physx_properties(env_ids)
 
         # Call original reset (flushes PhysX properties, but overwrites gains to defaults)
         if self._original_reset_idx is not None:
             self._original_reset_idx(env_ids)
 
         # Phase 2: Gains and thresholds AFTER reset (so base env can't overwrite them)
-        self._randomize_gains_and_thresholds(env_ids)
-
-        # Verify all randomized values actually took effect
-        self._verify_randomization(env_ids)
+        # On full resets: sample new values and apply
+        # On partial resets: re-apply previously sampled values (base reset overwrites to defaults)
+        if is_full_reset:
+            self._randomize_gains_and_thresholds(env_ids)
+            # Verify on first full reset only to catch silent IsaacSim bugs
+            if not self._verified:
+                self._verify_randomization(env_ids)
+                self._verified = True
+        else:
+            self._reapply_gains_and_thresholds(env_ids)
 
     def _randomize_physx_properties(self, env_ids):
         """
@@ -330,6 +343,25 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
             self.current_force_threshold[env_ids] = sampled_force_thresh
             self._apply_force_threshold(env_ids)
 
+    def _reapply_gains_and_thresholds(self, env_ids):
+        """
+        Re-apply previously sampled gains and thresholds for partial resets.
+
+        On partial resets we don't sample new values, but the base env's
+        randomize_initial_state() still overwrites task_prop_gains and task_deriv_gains
+        back to defaults. This restores our previously randomized values.
+        """
+        if self.randomize_gains:
+            self._apply_controller_gains(env_ids)
+        if self.randomize_force_gains:
+            self._apply_force_gains(env_ids)
+        if self.randomize_pos_threshold:
+            self._apply_pos_threshold(env_ids)
+        if self.randomize_rot_threshold:
+            self._apply_rot_threshold(env_ids)
+        if self.randomize_force_threshold:
+            self._apply_force_threshold(env_ids)
+
     def _verify_randomization(self, env_ids):
         """
         Verify all randomized parameters actually took effect after reset.
@@ -349,7 +381,7 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
             materials = asset.root_physx_view.get_material_properties()
             mat_device = materials.device
             env_ids_cpu = env_ids.to(mat_device)
-            expected_friction = self.current_friction[env_ids].to(mat_device)
+            expected_friction = self.current_friction[env_ids_cpu]
 
             # Check static friction (index 0) for first shape
             actual_static = materials[env_ids_cpu, 0, 0]
@@ -380,7 +412,7 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
             inertias = asset.root_physx_view.get_inertias()
             physx_device = masses.device
             env_ids_cpu = env_ids.to(physx_device)
-            mass_scales = self.current_held_mass[env_ids].to(physx_device)
+            mass_scales = self.current_held_mass[env_ids_cpu]
 
             # Compute expected masses from defaults * scale
             default_masses = asset.data.default_mass
@@ -428,15 +460,17 @@ class DynamicsRandomizationWrapper(gym.Wrapper):
                 )
 
             # Also verify derivative gains
-            expected_deriv = 2.0 * torch.sqrt(expected_prop)
+            # Must match _apply_controller_gains: sqrt on float32, then cast to target dtype
+            expected_deriv = 2.0 * torch.sqrt(self.current_prop_gains[env_ids])
             rot_deriv_scale = 1.0
             if hasattr(self.unwrapped.cfg.ctrl, 'default_rot_deriv_scale'):
                 rot_deriv_scale = self.unwrapped.cfg.ctrl.default_rot_deriv_scale
             if rot_deriv_scale != 1.0:
                 expected_deriv[:, 3:6] *= rot_deriv_scale
+            expected_deriv = expected_deriv.to(dtype=self.unwrapped.task_deriv_gains.dtype)
             actual_deriv = self.unwrapped.task_deriv_gains[env_ids]
 
-            if not torch.allclose(actual_deriv, expected_deriv.to(dtype=actual_deriv.dtype), atol=atol):
+            if not torch.allclose(actual_deriv, expected_deriv, atol=atol):
                 raise RuntimeError(
                     f"[DynamicsRandomizationWrapper] DERIVATIVE GAIN VERIFICATION FAILED!\n"
                     f"  Expected deriv gains (env 0): {expected_deriv[0].tolist()}\n"
