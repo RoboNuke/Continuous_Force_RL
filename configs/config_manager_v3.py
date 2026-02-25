@@ -314,8 +314,22 @@ class ConfigManagerV3:
 
                 print(f"  Adjusted experiment config base_config to: {base_path}")
 
+                # DEBUG: Print the round-tripped experiment YAML to verify obs_rand is preserved
+                with open(exp_path, 'r') as _f:
+                    _round_tripped = _f.read()
+                print(f"[DEBUG config_from_wandb] Round-tripped experiment YAML:\n{_round_tripped}")
+
                 # Process experiment config (which will load base config internally)
                 configs = self.process_config(str(exp_path))
+
+                # DEBUG: Check obs_rand right after process_config
+                if 'environment' in configs:
+                    _env_cfg = configs['environment']
+                    print(f"[DEBUG config_from_wandb] AFTER process_config:")
+                    print(f"  obs_rand type: {type(_env_cfg.obs_rand).__name__}")
+                    print(f"  obs_rand.__dict__: {_env_cfg.obs_rand.__dict__ if hasattr(_env_cfg.obs_rand, '__dict__') else 'NO __dict__'}")
+                    print(f"  hasattr use_fixed_asset_yaw_noise: {hasattr(_env_cfg.obs_rand, 'use_fixed_asset_yaw_noise')}")
+                    print(f"  getattr use_fixed_asset_yaw_noise: {getattr(_env_cfg.obs_rand, 'use_fixed_asset_yaw_noise', 'DEFAULT_FALSE')}")
 
                 # Update metadata to indicate WandB source
                 configs['config_paths'] = {
@@ -499,6 +513,17 @@ class ConfigManagerV3:
         indent = "\t" * indent_level
 
         for key, value in yaml_overrides.items():
+            # DEBUG: trace obs_rand processing
+            if key == 'obs_rand' or (key == 'use_fixed_asset_yaw_noise'):
+                print(f"[DEBUG _apply_yaml_overrides] key='{key}', value={value}, "
+                      f"config_instance type={type(config_instance).__name__}, "
+                      f"hasattr={hasattr(config_instance, key)}")
+                if hasattr(config_instance, key):
+                    ca = getattr(config_instance, key)
+                    print(f"[DEBUG _apply_yaml_overrides]   current_attr type={type(ca).__name__}, "
+                          f"value={ca}, has__dict__={hasattr(ca, '__dict__')}, "
+                          f"isinstance_dict={isinstance(value, dict)}")
+
             if hasattr(config_instance, key):
                 current_attr = getattr(config_instance, key)
 
@@ -529,6 +554,11 @@ class ConfigManagerV3:
                     if self.verbose:
                         print(f"{indent}{key}: {current_attr} → {value}")
                     setattr(config_instance, key, value)
+
+                # DEBUG: verify obs_rand after setting
+                if key == 'use_fixed_asset_yaw_noise':
+                    print(f"[DEBUG _apply_yaml_overrides] AFTER set: "
+                          f"use_fixed_asset_yaw_noise={getattr(config_instance, 'use_fixed_asset_yaw_noise', 'MISSING')}")
             else:
                 # Attribute doesn't exist, create it
                 # Check if this is a dict that should be instantiated as a config object
