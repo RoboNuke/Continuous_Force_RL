@@ -9,6 +9,7 @@ CONFIGS=""
 FOLDER=""
 EXPERIMENT_TAG=""
 OVERRIDES=""
+BASE_CONFIG=""
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -27,6 +28,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --overrides)
             OVERRIDES="$2"
+            shift 2
+            ;;
+        --base_config)
+            BASE_CONFIG="$2"
             shift 2
             ;;
         *)
@@ -65,6 +70,7 @@ echo "Configs: $CONFIGS"
 echo "Folder: $FOLDER"
 echo "Experiment Tag: $EXPERIMENT_TAG"
 echo "Overrides: $OVERRIDES"
+echo "Base Config: $BASE_CONFIG"
 echo ""
 
 # Handle folder mode or individual config mode
@@ -125,7 +131,7 @@ for config_name in "${CONFIG_ARRAY[@]}"; do
     sbatch -J "$job_name" \
            -o "exp_logs/${EXPERIMENT_TAG}/${output_name}_%j.out" \
            -e "exp_logs/${EXPERIMENT_TAG}/${output_name}_%j.err" \
-           launcher/hpc_batch.bash "$config_path" "$EXPERIMENT_TAG" "$OVERRIDES"
+           launcher/hpc_batch.bash "$config_path" "$EXPERIMENT_TAG" "$OVERRIDES" "" "$BASE_CONFIG"
 
     echo "  Job submitted successfully"
     echo ""
