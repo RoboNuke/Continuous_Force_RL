@@ -129,12 +129,6 @@ def apply_wrappers(env, configs):
         raise NotImplementedError
 
     if wrappers_config.ee_pose_noise.enabled:
-        # DEBUG: Check obs_rand state right before EEPoseNoiseWrapper creation
-        _dbg_or = env.unwrapped.cfg.obs_rand
-        print(f"[DEBUG CHECKPOINT-3.5] obs_rand BEFORE EEPoseNoiseWrapper:")
-        print(f"  type: {type(_dbg_or).__name__}, id: {id(_dbg_or)}")
-        print(f"  __dict__: {_dbg_or.__dict__ if hasattr(_dbg_or, '__dict__') else 'NO __dict__'}")
-        print(f"  use_fixed_asset_yaw_noise: {getattr(_dbg_or, 'use_fixed_asset_yaw_noise', 'ATTR_MISSING')}")
         print("  - Applying EE Pose Noise Wrapper")
         env = EEPoseNoiseWrapper(env)
 

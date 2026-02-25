@@ -361,15 +361,6 @@ def main(
         # Returns tuple of (configs, temp_dir)
         configs, config_temp_dir = reconstruct_config_from_wandb(checkpoint_runs[0])
 
-        # DEBUG: Verify obs_rand after WandB config reconstruction
-        if 'environment' in configs:
-            _obs_rand = configs['environment'].obs_rand
-            print(f"[DEBUG CHECKPOINT-1] obs_rand after reconstruct_config_from_wandb:")
-            print(f"  type: {type(_obs_rand).__name__}")
-            print(f"  __dict__: {_obs_rand.__dict__ if hasattr(_obs_rand, '__dict__') else 'NO __dict__'}")
-            print(f"  use_fixed_asset_yaw_noise: {getattr(_obs_rand, 'use_fixed_asset_yaw_noise', 'ATTR_MISSING')}")
-            print(f"  id(obs_rand): {id(_obs_rand)}")
-
         # Auto-inherit WandB project from checkpoint runs
         checkpoint_project = checkpoint_runs[0].project
         configs['experiment'].wandb_project = checkpoint_project
@@ -488,27 +479,8 @@ def main(
         print("[INFO]:   Using standard factory environment")
 
     # Create environment directly
-    # DEBUG: Check obs_rand BEFORE env creation
-    _obs_rand_pre = configs['environment'].obs_rand
-    print(f"[DEBUG CHECKPOINT-2] obs_rand BEFORE FactoryEnv.__init__:")
-    print(f"  type: {type(_obs_rand_pre).__name__}")
-    print(f"  use_fixed_asset_yaw_noise: {getattr(_obs_rand_pre, 'use_fixed_asset_yaw_noise', 'ATTR_MISSING')}")
-    print(f"  id(obs_rand): {id(_obs_rand_pre)}")
-    print(f"  id(configs['environment']): {id(configs['environment'])}")
-
     env = EnvClass(cfg=configs['environment'], render_mode=None)
     print("[INFO]: Environment created successfully")
-
-    # DEBUG: Check obs_rand AFTER env creation
-    _obs_rand_post = env.unwrapped.cfg.obs_rand
-    print(f"[DEBUG CHECKPOINT-3] obs_rand AFTER FactoryEnv.__init__ (via env.unwrapped.cfg):")
-    print(f"  type: {type(_obs_rand_post).__name__}")
-    print(f"  __dict__: {_obs_rand_post.__dict__ if hasattr(_obs_rand_post, '__dict__') else 'NO __dict__'}")
-    print(f"  use_fixed_asset_yaw_noise: {getattr(_obs_rand_post, 'use_fixed_asset_yaw_noise', 'ATTR_MISSING')}")
-    print(f"  id(obs_rand): {id(_obs_rand_post)}")
-    print(f"  id(env.unwrapped.cfg): {id(env.unwrapped.cfg)}")
-    print(f"  same obs_rand object? {id(_obs_rand_pre) == id(_obs_rand_post)}")
-    print(f"  same cfg object? {id(configs['environment']) == id(env.unwrapped.cfg)}")
 
     # Debug: Print USD prim hierarchy
     #if configs['primary'].debug_mode:

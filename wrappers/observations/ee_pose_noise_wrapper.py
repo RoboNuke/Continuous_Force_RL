@@ -114,27 +114,6 @@ class EEPoseNoiseWrapper(gym.Wrapper):
             (self.num_envs,), dtype=torch.float32, device=self.device
         )
 
-        # DEBUG: Comprehensive obs_rand inspection before yaw check
-        _dbg_obs_rand = self.unwrapped.cfg.obs_rand
-        print(f"[DEBUG CHECKPOINT-4] EEPoseNoiseWrapper obs_rand inspection:")
-        print(f"  type(obs_rand): {type(_dbg_obs_rand).__name__}")
-        print(f"  type(obs_rand).__mro__: {[c.__name__ for c in type(_dbg_obs_rand).__mro__]}")
-        print(f"  id(obs_rand): {id(_dbg_obs_rand)}")
-        print(f"  id(env.unwrapped.cfg): {id(self.unwrapped.cfg)}")
-        print(f"  hasattr 'use_fixed_asset_yaw_noise': {hasattr(_dbg_obs_rand, 'use_fixed_asset_yaw_noise')}")
-        if hasattr(_dbg_obs_rand, '__dict__'):
-            print(f"  obs_rand.__dict__: {_dbg_obs_rand.__dict__}")
-        if hasattr(_dbg_obs_rand, '__dataclass_fields__'):
-            print(f"  obs_rand.__dataclass_fields__ keys: {list(_dbg_obs_rand.__dataclass_fields__.keys())}")
-        # Also check class-level vs instance-level
-        print(f"  class attrs: {[a for a in dir(_dbg_obs_rand) if not a.startswith('_')]}")
-        # Try direct attribute access
-        try:
-            _direct = _dbg_obs_rand.use_fixed_asset_yaw_noise
-            print(f"  direct access .use_fixed_asset_yaw_noise = {_direct}")
-        except AttributeError as e:
-            print(f"  direct access FAILED: {e}")
-
         # Check if fixed asset yaw noise observation is enabled
         self.use_fixed_asset_yaw_noise = getattr(
             self.unwrapped.cfg.obs_rand, 'use_fixed_asset_yaw_noise', False
