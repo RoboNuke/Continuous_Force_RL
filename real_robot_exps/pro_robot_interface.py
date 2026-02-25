@@ -78,6 +78,8 @@ _SHM_MASS    = (85,  134)  # Mass matrix 7x7 flat [49]
 _SHM_STATE_SIZE = 134
 
 _SHM_TORQUE_SIZE = 7
+_SHM_WRENCH = (7, 13)            # task_wrench [6] (compute process writes)
+_SHM_TORQUE_WRENCH_SIZE = 13     # total torque_shm size
 
 
 # ============================================================================
@@ -174,6 +176,7 @@ def _comm_process_fn(state_shm, torque_shm, cmd_queue, response_queue,
                  O_F_ext_hat_K BEFORE EMA filtering. None to disable.
     """
     import os
+    import sys
     import math
     import time
     import queue
@@ -253,59 +256,71 @@ def _comm_process_fn(state_shm, torque_shm, cmd_queue, response_queue,
                 continue
 
             if cmd[0] == "reset":
-                target_pose_list = cmd[1]  # nested list from .tolist() of 4x4 array
-                target_pose_4x4 = np.array(target_pose_list)
+                try:
+                    target_pose_list = cmd[1]  # nested list from .tolist() of 4x4 array
+                    target_pose_4x4 = np.array(target_pose_list)
 
-                ctrl = robot.start_cartesian_pose_control(ControllerMode.JointImpedance)
-                state, _ = ctrl.readOnce()
-                start_flat = np.array(state.O_T_EE)
-
-                start_R = np.array([
-                    [start_flat[0], start_flat[4], start_flat[8]],
-                    [start_flat[1], start_flat[5], start_flat[9]],
-                    [start_flat[2], start_flat[6], start_flat[10]],
-                ])
-                start_t = start_flat[12:15]
-
-                target_R = target_pose_4x4[:3, :3]
-                target_t = target_pose_4x4[:3, 3]
-
-                start_q = _rotation_matrix_to_quat_wxyz_np(start_R)
-                target_q = _rotation_matrix_to_quat_wxyz_np(target_R)
-
-                n_steps = int(reset_duration_sec * 1000)
-                for i in range(n_steps):
-                    alpha = 0.5 * (1.0 - math.cos(math.pi * (i + 1) / n_steps))
-                    interp_t = (1.0 - alpha) * start_t + alpha * target_t
-                    interp_q = _quat_slerp(start_q, target_q, alpha)
-                    interp_R = _quat_wxyz_to_rotation_matrix_np(interp_q)
-
-                    interp_flat = np.array([
-                        interp_R[0, 0], interp_R[1, 0], interp_R[2, 0], 0.0,
-                        interp_R[0, 1], interp_R[1, 1], interp_R[2, 1], 0.0,
-                        interp_R[0, 2], interp_R[1, 2], interp_R[2, 2], 0.0,
-                        interp_t[0], interp_t[1], interp_t[2], 1.0,
-                    ])
-
-                    pose_cmd = CartesianPose(interp_flat.tolist())
-                    if i == n_steps - 1:
-                        pose_cmd.motion_finished = True
-                        ctrl.writeOnce(pose_cmd)
-                        break
-                    ctrl.writeOnce(pose_cmd)
+                    ctrl = robot.start_cartesian_pose_control(ControllerMode.JointImpedance)
                     state, _ = ctrl.readOnce()
+                    start_flat = np.array(state.O_T_EE)
 
-                # Pack final state into shared memory
-                jac_flat = model.zero_jacobian(state)
-                mass_flat = model.mass(state)
-                _pack_state(state, [0.0] * 6, jac_flat, mass_flat)
-                state_ready.set()
+                    start_R = np.array([
+                        [start_flat[0], start_flat[4], start_flat[8]],
+                        [start_flat[1], start_flat[5], start_flat[9]],
+                        [start_flat[2], start_flat[6], start_flat[10]],
+                    ])
+                    start_t = start_flat[12:15]
 
-                robot.stop()
-                time.sleep(0.5)
-                response_queue.put(("reset_done", None))
+                    target_R = target_pose_4x4[:3, :3]
+                    target_t = target_pose_4x4[:3, 3]
+
+                    start_q = _rotation_matrix_to_quat_wxyz_np(start_R)
+                    target_q = _rotation_matrix_to_quat_wxyz_np(target_R)
+
+                    n_steps = int(reset_duration_sec * 1000)
+                    for i in range(n_steps):
+                        alpha = 0.5 * (1.0 - math.cos(math.pi * (i + 1) / n_steps))
+                        interp_t = (1.0 - alpha) * start_t + alpha * target_t
+                        interp_q = _quat_slerp(start_q, target_q, alpha)
+                        interp_R = _quat_wxyz_to_rotation_matrix_np(interp_q)
+
+                        interp_flat = np.array([
+                            interp_R[0, 0], interp_R[1, 0], interp_R[2, 0], 0.0,
+                            interp_R[0, 1], interp_R[1, 1], interp_R[2, 1], 0.0,
+                            interp_R[0, 2], interp_R[1, 2], interp_R[2, 2], 0.0,
+                            interp_t[0], interp_t[1], interp_t[2], 1.0,
+                        ])
+
+                        pose_cmd = CartesianPose(interp_flat.tolist())
+                        if i == n_steps - 1:
+                            pose_cmd.motion_finished = True
+                            ctrl.writeOnce(pose_cmd)
+                            break
+                        ctrl.writeOnce(pose_cmd)
+                        state, _ = ctrl.readOnce()
+
+                    # Pack final state into shared memory
+                    jac_flat = model.zero_jacobian(state)
+                    mass_flat = model.mass(state)
+                    _pack_state(state, [0.0] * 6, jac_flat, mass_flat)
+                    state_ready.set()
+
+                    robot.stop()
+                    time.sleep(0.5)
+                    response_queue.put(("reset_done", None))
+                except Exception as e:
+                    sys.stdout.write(f"[COMM PROCESS] Reset motion failed: {e}\r\n")
+                    sys.stdout.flush()
+                    try:
+                        robot.stop()
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
+                    response_queue.put(("error", str(e)))
 
             elif cmd[0] == "start_torque":
+                log_trajectory = cmd[1] if len(cmd) > 1 else False
+
                 ctrl = robot.start_torque_control()
 
                 # Warmup (1 step)
@@ -323,6 +338,22 @@ def _comm_process_fn(state_shm, torque_shm, cmd_queue, response_queue,
 
                 response_queue.put(("torque_started", None))
                 stop_torque.clear()
+
+                # --- 1kHz trajectory: pre-allocate numpy buffers ---
+                if log_trajectory:
+                    import gc as _gc
+                    _TRAJ_ALLOC = 15000  # 15s at 1kHz, generous margin
+                    _buf_time = np.empty(_TRAJ_ALLOC, dtype=np.float64)
+                    _buf_O_T_EE = np.empty((_TRAJ_ALLOC, 16), dtype=np.float64)
+                    _buf_q = np.empty((_TRAJ_ALLOC, 7), dtype=np.float64)
+                    _buf_dq = np.empty((_TRAJ_ALLOC, 7), dtype=np.float64)
+                    _buf_ft_raw = np.empty((_TRAJ_ALLOC, 6), dtype=np.float64)
+                    _buf_ft_filt = np.empty((_TRAJ_ALLOC, 6), dtype=np.float64)
+                    _buf_torques = np.empty((_TRAJ_ALLOC, 7), dtype=np.float64)
+                    _buf_wrench = np.empty((_TRAJ_ALLOC, 6), dtype=np.float64)
+                    _tidx = 0
+                    _t0 = time.time()
+                    _gc.disable()  # prevent GC pauses in 1kHz loop
 
                 # --- 1kHz TORQUE LOOP ---
                 alpha = ft_ema_alpha
@@ -352,8 +383,12 @@ def _comm_process_fn(state_shm, torque_shm, cmd_queue, response_queue,
                         jac_flat = model.zero_jacobian(state)
                         mass_flat = model.mass(state)
 
-                        # Subtract F/T bias from raw reading, then EMA filter
+                        # Capture raw F/T (write to numpy BEFORE bias subtraction)
                         ft = list(state.O_F_ext_hat_K)
+                        if log_trajectory and _tidx < _TRAJ_ALLOC:
+                            _buf_ft_raw[_tidx] = ft
+
+                        # Subtract F/T bias from raw reading, then EMA filter
                         if ft_bias is not None:
                             for i in range(6):
                                 ft[i] -= ft_bias[i]
@@ -362,6 +397,18 @@ def _comm_process_fn(state_shm, torque_shm, cmd_queue, response_queue,
 
                         # Pack state into shared memory
                         _pack_state(state, ft_ema, jac_flat, mass_flat)
+
+                        # Write 1kHz snapshot into pre-allocated numpy buffers
+                        # (no Python list objects created — data goes straight to C doubles)
+                        if log_trajectory and _tidx < _TRAJ_ALLOC:
+                            _buf_time[_tidx] = (time.time() - _t0) * 1000.0
+                            _buf_O_T_EE[_tidx] = state.O_T_EE
+                            _buf_q[_tidx] = state.q
+                            _buf_dq[_tidx] = state.dq
+                            _buf_ft_filt[_tidx] = ft_ema
+                            _buf_torques[_tidx] = cmd_torques
+                            _buf_wrench[_tidx] = torque_shm[_SHM_WRENCH[0]:_SHM_WRENCH[1]]
+                            _tidx += 1
 
                 except Exception as e:
                     import traceback
@@ -376,44 +423,86 @@ def _comm_process_fn(state_shm, torque_shm, cmd_queue, response_queue,
                     state_ready.clear()
                     continue
 
+                # Stop controller FIRST — robot expects 1kHz comms until stopped
                 ctrl = None
                 robot.stop()
                 time.sleep(0.5)
                 state_ready.clear()
-                response_queue.put(("torque_stopped", None))
+
+                # Package trajectory data (safe now — robot is stopped)
+                if log_trajectory:
+                    _gc.enable()  # re-enable GC now that loop is done
+
+                    # Slice pre-allocated buffers to actual length
+                    n = _tidx
+                    O_T_EE_arr = _buf_O_T_EE[:n]              # [n, 16]
+                    ee_pos_arr = O_T_EE_arr[:, [12, 13, 14]]   # [n, 3]
+                    ee_quat_arr = np.empty((n, 4), dtype=np.float64)
+                    for i in range(n):
+                        T = O_T_EE_arr[i]
+                        R = np.array([[T[0], T[4], T[8]],
+                                      [T[1], T[5], T[9]],
+                                      [T[2], T[6], T[10]]])
+                        ee_quat_arr[i] = _rotation_matrix_to_quat_wxyz_np(R)
+
+                    traj_data = {
+                        'time_ms': _buf_time[:n].copy(),
+                        'ee_pos': ee_pos_arr.copy(),
+                        'ee_quat': ee_quat_arr,
+                        'joint_pos': _buf_q[:n].copy(),
+                        'joint_vel': _buf_dq[:n].copy(),
+                        'ft_raw': _buf_ft_raw[:n].copy(),
+                        'ft_filtered': _buf_ft_filt[:n].copy(),
+                        'joint_torques_cmd': _buf_torques[:n].copy(),
+                        'task_wrench': _buf_wrench[:n].copy(),
+                    }
+                else:
+                    traj_data = None
+
+                response_queue.put(("torque_stopped", traj_data))
 
             elif cmd[0] == "retract":
-                height_m = cmd[1]
+                try:
+                    height_m = cmd[1]
 
-                ctrl = robot.start_cartesian_pose_control(ControllerMode.JointImpedance)
-                state, _ = ctrl.readOnce()
-                start_flat = np.array(state.O_T_EE)
-                start_t = start_flat[12:15].copy()
-
-                target_t = start_t.copy()
-                target_t[2] += height_m
-
-                n_steps = 1000
-                for i in range(n_steps):
-                    alpha = 0.5 * (1.0 - math.cos(math.pi * (i + 1) / n_steps))
-                    interp_t = (1.0 - alpha) * start_t + alpha * target_t
-
-                    interp_flat = start_flat.copy()
-                    interp_flat[12] = interp_t[0]
-                    interp_flat[13] = interp_t[1]
-                    interp_flat[14] = interp_t[2]
-
-                    pose_cmd = CartesianPose(interp_flat.tolist())
-                    if i == n_steps - 1:
-                        pose_cmd.motion_finished = True
-                        ctrl.writeOnce(pose_cmd)
-                        break
-                    ctrl.writeOnce(pose_cmd)
+                    ctrl = robot.start_cartesian_pose_control(ControllerMode.JointImpedance)
                     state, _ = ctrl.readOnce()
+                    start_flat = np.array(state.O_T_EE)
+                    start_t = start_flat[12:15].copy()
 
-                robot.stop()
-                time.sleep(0.5)
-                response_queue.put(("retract_done", None))
+                    target_t = start_t.copy()
+                    target_t[2] += height_m
+
+                    n_steps = 1000
+                    for i in range(n_steps):
+                        alpha = 0.5 * (1.0 - math.cos(math.pi * (i + 1) / n_steps))
+                        interp_t = (1.0 - alpha) * start_t + alpha * target_t
+
+                        interp_flat = start_flat.copy()
+                        interp_flat[12] = interp_t[0]
+                        interp_flat[13] = interp_t[1]
+                        interp_flat[14] = interp_t[2]
+
+                        pose_cmd = CartesianPose(interp_flat.tolist())
+                        if i == n_steps - 1:
+                            pose_cmd.motion_finished = True
+                            ctrl.writeOnce(pose_cmd)
+                            break
+                        ctrl.writeOnce(pose_cmd)
+                        state, _ = ctrl.readOnce()
+
+                    robot.stop()
+                    time.sleep(0.5)
+                    response_queue.put(("retract_done", None))
+                except Exception as e:
+                    sys.stdout.write(f"[COMM PROCESS] Retract motion failed: {e}\r\n")
+                    sys.stdout.flush()
+                    try:
+                        robot.stop()
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
+                    response_queue.put(("error", str(e)))
 
             elif cmd[0] == "move_joints":
                 target_q = np.array(cmd[1], dtype=np.float64)
@@ -440,12 +529,70 @@ def _comm_process_fn(state_shm, torque_shm, cmd_queue, response_queue,
                 time.sleep(0.5)
                 response_queue.put(("move_done", None))
 
+            elif cmd[0] == "calibrate_ft":
+                try:
+                    duration_sec = cmd[1]
+                    n_samples = int(duration_sec * 1000)
+
+                    ctrl = robot.start_joint_position_control(ControllerMode.JointImpedance)
+                    state, _ = ctrl.readOnce()
+                    q_hold = list(state.q)
+
+                    # Settle 0.5s
+                    for _ in range(500):
+                        state, _ = ctrl.readOnce()
+                        ctrl.writeOnce(JointPositions(q_hold))
+
+                    # Record for configured duration
+                    readings = []
+                    for _ in range(n_samples):
+                        state, _ = ctrl.readOnce()
+                        readings.append(list(state.O_F_ext_hat_K))
+                        ctrl.writeOnce(JointPositions(q_hold))
+
+                    # Mean
+                    mean_bias = [0.0] * 6
+                    for r in readings:
+                        for i in range(6):
+                            mean_bias[i] += r[i]
+                    for i in range(6):
+                        mean_bias[i] /= len(readings)
+
+                    ft_bias = mean_bias
+
+                    jcmd = JointPositions(q_hold)
+                    jcmd.motion_finished = True
+                    ctrl.writeOnce(jcmd)
+
+                    robot.stop()
+                    time.sleep(0.5)
+                    response_queue.put(("calibrate_ft_done", mean_bias))
+                except Exception as e:
+                    print(f"\n[COMM PROCESS] FT calibration failed: {e}")
+                    try:
+                        robot.stop()
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
+                    response_queue.put(("error", str(e)))
+
+            elif cmd[0] == "error_recovery":
+                try:
+                    robot.automatic_error_recovery()
+                    time.sleep(0.5)
+                    response_queue.put(("error_recovery_done", None))
+                except Exception as e:
+                    sys.stdout.write(f"[COMM PROCESS] Error recovery failed: {e}\r\n")
+                    sys.stdout.flush()
+                    response_queue.put(("error", str(e)))
+
             elif cmd[0] == "shutdown":
                 break
 
     except Exception as e:
         import traceback
-        print(f"\n[COMM PROCESS ERROR] {e}\n")
+        sys.stdout.write(f"[COMM PROCESS ERROR] {e}\r\n")
+        sys.stdout.flush()
         traceback.print_exc()
         try:
             response_queue.put(("error", str(e)))
@@ -482,6 +629,7 @@ def _compute_process_fn(state_shm, torque_shm, targets_queue,
         device_str: Torch device string (e.g. "cpu").
     """
     import os
+    import sys
     import time
     import math
     import queue as _q
@@ -584,11 +732,13 @@ def _compute_process_fn(state_shm, torque_shm, targets_queue,
                 targets,
             )
 
-            # Write torques to shared memory (comm process reads these)
+            # Write torques and task wrench to shared memory (comm process reads these)
             torque_shm[0:_SHM_TORQUE_SIZE] = torques.detach().cpu().tolist()
+            torque_shm[_SHM_WRENCH[0]:_SHM_WRENCH[1]] = task_wrench.detach().cpu().tolist()
 
     except Exception as e:
-        print(f"\n[COMPUTE PROCESS ERROR] {e}\n")
+        sys.stdout.write(f"[COMPUTE PROCESS ERROR] {e}\r\n")
+        sys.stdout.flush()
         import traceback
         traceback.print_exc()
     finally:
@@ -619,7 +769,7 @@ class FrankaInterface:
 
         # Shared memory via spawn context
         self._state_shm = _ctx.Array('d', _SHM_STATE_SIZE, lock=False)
-        self._torque_shm = _ctx.Array('d', _SHM_TORQUE_SIZE, lock=False)
+        self._torque_shm = _ctx.Array('d', _SHM_TORQUE_WRENCH_SIZE, lock=False)
 
         # Queues via spawn context
         self._targets_queue = _ctx.Queue()   # main → compute
@@ -635,6 +785,7 @@ class FrankaInterface:
 
         self._last_send_time = None
         self._torque_mode_active = False
+        self._last_trajectory = None
 
         # Start compute process (spawn — fresh interpreter, no fork overhead)
         self._compute_process = _ctx.Process(
@@ -746,14 +897,19 @@ class FrankaInterface:
         if resp[0] != "reset_done":
             raise RuntimeError(f"Reset failed: {resp}")
 
-    def start_torque_mode(self):
+    def start_torque_mode(self, log_trajectory: bool = False):
         """Start torque control mode with 1kHz comm loop in comm process.
 
         Sends command to comm process, waits for confirmation, then
         activates the compute process.
+
+        Args:
+            log_trajectory: If True, the comm process accumulates per-step
+                trajectory data at 1kHz. Retrieve after end_control() via
+                get_last_trajectory().
         """
-        self._torque_shm[0:_SHM_TORQUE_SIZE] = [0.0] * 7
-        self._cmd_queue.put(("start_torque",))
+        self._torque_shm[0:_SHM_TORQUE_WRENCH_SIZE] = [0.0] * _SHM_TORQUE_WRENCH_SIZE
+        self._cmd_queue.put(("start_torque", log_trajectory))
         resp = self._response_queue.get(timeout=10.0)
         if resp[0] != "torque_started":
             raise RuntimeError(f"Start torque failed: {resp}")
@@ -768,6 +924,9 @@ class FrankaInterface:
         the 1kHz loop, and waits for confirmation. Both processes stay
         alive for reuse in the next episode.
 
+        If trajectory logging was enabled via start_torque_mode(log_trajectory=True),
+        the trajectory data dict is stored and retrievable via get_last_trajectory().
+
         No-op if not in torque mode.
         """
         if not self._torque_mode_active:
@@ -779,10 +938,11 @@ class FrankaInterface:
 
         # Signal comm process to exit 1kHz loop
         self._stop_torque.set()
-        resp = self._response_queue.get(timeout=5.0)
+        resp = self._response_queue.get(timeout=10.0)  # increased for large trajectory data
         if resp[0] != "torque_stopped":
             raise RuntimeError(f"End control failed: {resp}")
 
+        self._last_trajectory = resp[1]  # None or dict of numpy arrays
         self._last_send_time = None
 
         # Drain targets queue so stale data doesn't leak into next episode
@@ -791,6 +951,27 @@ class FrankaInterface:
                 self._targets_queue.get_nowait()
             except _queue.Empty:
                 break
+
+    def get_last_trajectory(self):
+        """Return the 1kHz trajectory data from the last torque control session.
+
+        Returns:
+            Dict of numpy arrays if trajectory logging was enabled, else None.
+            Keys: time_ms, ee_pos, ee_quat, joint_pos, joint_vel, ft_raw,
+            ft_filtered, joint_torques_cmd, task_wrench.
+        """
+        return self._last_trajectory
+
+    def error_recovery(self):
+        """Clear Reflex/error state on the robot.
+
+        Sends automatic_error_recovery() to the comm process's robot object.
+        Call this before retrying motions after a reflex error.
+        """
+        self._cmd_queue.put(("error_recovery",))
+        resp = self._response_queue.get(timeout=10.0)
+        if resp[0] != "error_recovery_done":
+            raise RuntimeError(f"Error recovery failed: {resp}")
 
     def retract_up(self, height_m: float):
         """Retract EE vertically upward by the specified height.
@@ -829,6 +1010,34 @@ class FrankaInterface:
         resp = self._response_queue.get(timeout=duration_sec + 10.0)
         if resp[0] != "move_done":
             raise RuntimeError(f"Move joints failed: {resp}")
+
+    def calibrate_ft_bias(self) -> list:
+        """Calibrate FT bias by averaging raw O_F_ext_hat_K at current pose.
+
+        Sends calibrate_ft command to comm process. The comm process holds
+        current joint positions, settles 0.5s, records FT data for the
+        configured duration, and updates its internal ft_bias for subsequent
+        torque control sessions.
+
+        Must be called when robot is idle (not in torque control mode).
+
+        Returns:
+            List of 6 floats: the measured FT bias [Fx, Fy, Fz, Tx, Ty, Tz].
+
+        Raises:
+            RuntimeError: If calibration fails or robot is in torque mode.
+        """
+        if self._torque_mode_active:
+            raise RuntimeError(
+                "Cannot calibrate FT bias while in torque mode. "
+                "Call end_control() first."
+            )
+        duration = self._config['robot']['ft_calibration_duration_sec']
+        self._cmd_queue.put(("calibrate_ft", duration))
+        resp = self._response_queue.get(timeout=duration + 5.0)
+        if resp[0] != "calibrate_ft_done":
+            raise RuntimeError(f"FT calibration failed: {resp}")
+        return resp[1]
 
     def close_gripper(self):
         """Close gripper with configured force. Call once before episodes.
