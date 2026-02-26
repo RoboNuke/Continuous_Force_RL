@@ -54,20 +54,28 @@ METRIC_SUCCESS = "num_successful_completions"
 METRIC_BREAKS = "num_breaks"
 METRIC_TOTAL = "total_episodes"
 
+# Contact control count metrics (used for precision/recall analysis)
+CONTACT_COUNT_METRICS = [
+    "force_control_contact_x", "force_control_no_contact_x", "pos_control_contact_x", "pos_control_no_contact_x",
+    "force_control_contact_y", "force_control_no_contact_y", "pos_control_contact_y", "pos_control_no_contact_y",
+    "force_control_contact_z", "force_control_no_contact_z", "pos_control_contact_z", "pos_control_no_contact_z",
+]
+
 # =============================================================================
 # COLORS - MUST REMAIN CONSISTENT ACROSS ALL ANALYSES
 # DO NOT MODIFY WITHOUT EXPLICIT PERMISSION
 # =============================================================================
-pos1mm =  "#fce385"#648FFF"
-pos25mm = "#99ccb5"#FE6100"
-match =   "#9cd579"#DC267F"
-hybrid =  "#67c6c2"#FFB000"
+pos1mm =  "#F28E4C"
+pos25mm = "#F9B883"
+match =   "#8EC7E8" #88BF8A" #A6A0D2" #7BAFD4" #67c6c2"#FFB000"
+hybrid =  "#4A90C9" #3A7A3D" #5E4FA2" #2166AC" #99ccb5"#FE6100"
 vic = "#e682b4"
 COLORS = {
     # Base method names
     "Pose": pos1mm,           # Green
     "Hybrid-Basic": hybrid,   # Orange
     "Hybrid": hybrid,   # Orange
+    "Hybrid-MATCH": match,          # Blue
     "MATCH": match,          # Blue
     "SWISH": match,          # Blue (alias)
     "LCLoP": match,          # Blue (alias)
@@ -77,6 +85,7 @@ COLORS = {
     "Pose(1mm)": pos1mm,
     "Pose-1": pos1mm,
     "MATCH(1mm)": match,
+    "Hybrid-MATCH(1mm)":match,
     "Hybrid-Basic(1mm)": hybrid,
 
     # 2.5mm noise variants
@@ -85,6 +94,7 @@ COLORS = {
     "Pose-2.5mm": pos25mm,    # Purple
     "SWISH(2.5mm)": match,   # Red
     "Hybrid-Basic(2.5mm)": hybrid,  # Yellow-green
+    "Hybrid-MATCH(2.5mm)": match,
 
     # state-std variants
     "Pose(state-std)": pos1mm,
@@ -98,6 +108,7 @@ COLORS = {
     "MATCH(15deg)": match,
     "Hybrid-Basic(3deg)": "#b4aa1f",
     "Hybrid-Basic(15deg)": hybrid,
+    "Hybrid-MATCH(15deg)":match,
 }
 
 # Noise level colors (for plot_rate_figure_by_method)
@@ -120,7 +131,7 @@ FONT_SUPTITLE = 16
 FONT_TITLE = 14
 FONT_AXIS_LABEL = 10 #12
 FONT_TICK = 7 #10
-FONT_LEGEND = 7 #10
+FONT_LEGEND = 8 #10
 FONT_BAR_LABEL = 7 #7
 FONT_NA = 12
 
@@ -151,7 +162,11 @@ BAR_LABEL_OFFSET_INSIDE = 1  # Space inside bar when label fits inside (for y_li
 BAR_LABEL_OFFSET_INSIDE_SMALL = 0.1  # Space inside bar when label fits inside (for y_lim < 50)
 
 # Legend styling
-LEGEND_HANDLE_LENGTH = 1.5  # Width of color indicator in legend (default ~2.0)5
+LEGEND_HANDLE_LENGTH = 2 # Width of color indicator in legend (default ~2.0)
+LEGEND_COLUMN_SPACING = 2  # Horizontal spacing between legend entries (matplotlib default is 2.0)
+LEGEND_Y_OFFSET = -0.04  # Vertical offset for above/below legends (0.0 = flush with figure edge)
+VALID_LEGEND_POSITIONS = ("inside", "above", "below", "none")
+DEFAULT_LEGEND_POSITION = "below"  # "inside", "above", "below", or "none"
 
 # Spacing/padding defaults
 AXIS_LABEL_PAD_X = 1  # Padding between x-axis tick labels and axis label (default ~4-6)
@@ -389,6 +404,7 @@ def download_eval_performance_data(
     method_tag: str,
     best_checkpoints: Dict,
     extra_metrics: Optional[List[str]] = None,
+    extra_contact_metrics: Optional[List[str]] = None,
     verbose: bool = True,
 ) -> pd.DataFrame:
     """
@@ -399,11 +415,12 @@ def download_eval_performance_data(
         method_tag: Tag identifying the method/experiment
         best_checkpoints: Output from get_best_checkpoint_per_run()
         extra_metrics: List of additional metric names to fetch (without Eval_Core/ prefix)
+        extra_contact_metrics: List of contact metric names to fetch (without Eval_Contact/ prefix)
         verbose: Print progress information
 
     Returns:
         DataFrame with columns: [run_id, run_name, checkpoint, success, breaks, total,
-                                 + extra_metrics]
+                                 + extra_metrics + extra_contact_metrics]
     """
     runs = api.runs(
         f"{ENTITY}/{PROJECT}",
@@ -443,6 +460,10 @@ def download_eval_performance_data(
         if extra_metrics:
             for metric in extra_metrics:
                 record[metric] = row[f"Eval_Core/{metric}"]
+
+        if extra_contact_metrics:
+            for metric in extra_contact_metrics:
+                record[metric] = row[f"Eval_Contact/{metric}"]
 
         data.append(record)
 
@@ -608,6 +629,82 @@ def compute_rates(
         errors_upper.append(min(err, 100 - mean_pct))
 
     return means, errors, errors_lower, errors_upper
+
+
+def compute_precision_recall_f2(
+    df: pd.DataFrame,
+    axes: List[str],
+) -> Dict[str, Dict[str, float]]:
+    """
+    Compute precision, recall, F2 for force-control-in-contact from raw counts.
+
+    Framing: positive = force control should be used (contact detected).
+      TP = force_control_contact (force control when in contact)
+      FP = force_control_no_contact (force control when NOT in contact)
+      FN = pos_control_contact (position control when in contact)
+
+    Args:
+        df: DataFrame with contact count columns. Each row is one seed/run.
+        axes: List of axis suffixes to aggregate, e.g. ["x", "y"] or ["z"] or ["x", "y", "z"].
+              Counts are summed across axes before computing metrics.
+
+    Returns:
+        Dict with keys "precision", "recall", "f2", each mapping to
+        {"mean": float, "ci": float} (95% CI across seeds).
+    """
+    # Sum counts across requested axes per seed
+    tp = sum(df[f"force_control_contact_{a}"] for a in axes)
+    fp = sum(df[f"force_control_no_contact_{a}"] for a in axes)
+    fn = sum(df[f"pos_control_contact_{a}"] for a in axes)
+
+    # Per-seed precision, recall, F2
+    precision_per_seed = tp / (tp + fp)
+    recall_per_seed = tp / (tp + fn)
+    f2_per_seed = 5 * (precision_per_seed * recall_per_seed) / (4 * precision_per_seed + recall_per_seed)
+
+    results = {}
+    for name, values in [("precision", precision_per_seed), ("recall", recall_per_seed), ("f2", f2_per_seed)]:
+        mean = values.mean()
+        sem = values.std() / np.sqrt(len(values))
+        ci = 1.96 * sem
+        results[name] = {"mean": mean, "ci": ci}
+
+    return results
+
+
+def compute_confusion_percentages(
+    df: pd.DataFrame,
+    axes: List[str],
+) -> Dict[str, Dict[str, float]]:
+    """
+    Compute TP%, FP%, FN%, TN% as percentage of total steps.
+
+    Args:
+        df: DataFrame with contact count columns. Each row is one seed/run.
+        axes: List of axis suffixes to aggregate, e.g. ["x", "y"] or ["z"] or ["x", "y", "z"].
+
+    Returns:
+        Dict with keys "TP", "FP", "FN", "TN", each mapping to
+        {"mean": float, "ci": float} (95% CI across seeds). Values are percentages (0-100).
+    """
+    tp = sum(df[f"force_control_contact_{a}"] for a in axes)
+    fp = sum(df[f"force_control_no_contact_{a}"] for a in axes)
+    fn = sum(df[f"pos_control_contact_{a}"] for a in axes)
+    tn = sum(df[f"pos_control_no_contact_{a}"] for a in axes)
+    total = tp + fp + fn + tn
+
+    if (total == 0).any():
+        raise ValueError("Total steps is zero for one or more seeds — cannot compute confusion percentages.")
+
+    results = {}
+    for name, counts in [("TP", tp), ("FP", fp), ("FN", fn), ("TN", tn)]:
+        pct_per_seed = 100.0 * counts / total
+        mean = pct_per_seed.mean()
+        sem = pct_per_seed.std() / np.sqrt(len(pct_per_seed))
+        ci = 1.96 * sem
+        results[name] = {"mean": mean, "ci": ci}
+
+    return results
 
 
 def compute_stats_by_step(
@@ -949,6 +1046,66 @@ def plot_grouped_bars(
     return all_bars
 
 
+def _apply_legend(
+    ax: plt.Axes,
+    legend_position: str,
+    legend_loc: str,
+    fontsize: float = FONT_LEGEND,
+    handlelength: float = LEGEND_HANDLE_LENGTH,
+    columnspacing: float = LEGEND_COLUMN_SPACING,
+    y_offset: float = LEGEND_Y_OFFSET,
+    handles=None,
+    labels=None,
+    fig: Optional[plt.Figure] = None,
+) -> None:
+    """Apply legend to axes or figure based on legend_position.
+
+    Args:
+        ax: Axes to pull handles/labels from (and place legend on for "inside").
+        legend_position: "inside", "above", "below", or "none".
+        legend_loc: matplotlib loc string, used only when legend_position="inside".
+        fontsize: Legend font size.
+        handlelength: Legend handle length.
+        columnspacing: Horizontal spacing between legend entries.
+        y_offset: Vertical offset for above/below legends. Positive moves legend away from plot.
+        handles: Explicit handles (if None, pulled from ax).
+        labels: Explicit labels (if None, pulled from ax).
+        fig: Figure for "above"/"below" placement. If None, uses ax.get_figure().
+    """
+    if legend_position not in VALID_LEGEND_POSITIONS:
+        raise ValueError(
+            f"legend_position must be one of {VALID_LEGEND_POSITIONS}, got '{legend_position}'"
+        )
+
+    if legend_position == "none":
+        return
+
+    if handles is None or labels is None:
+        handles, labels = ax.get_legend_handles_labels()
+
+    if legend_position == "inside":
+        ax.legend(handles, labels, fontsize=fontsize, loc=legend_loc,
+                  handlelength=handlelength, columnspacing=columnspacing)
+    else:
+        if fig is None:
+            fig = ax.get_figure()
+        ncol = len(handles)
+        if legend_position == "above":
+            fig.legend(
+                handles, labels, fontsize=fontsize, handlelength=handlelength,
+                columnspacing=columnspacing,
+                loc="lower center", bbox_to_anchor=(0.5, 1.0 + y_offset), ncol=ncol,
+                frameon=False,
+            )
+        else:  # "below"
+            fig.legend(
+                handles, labels, fontsize=fontsize, handlelength=handlelength,
+                columnspacing=columnspacing,
+                loc="upper center", bbox_to_anchor=(0.5, 0.0 - y_offset), ncol=ncol,
+                frameon=False,
+            )
+
+
 def plot_rate_figure(
     data: Dict[str, pd.DataFrame],
     method_names: List[str],
@@ -970,6 +1127,7 @@ def plot_rate_figure(
     filter_top_n: Optional[int] = None,
     best_checkpoints: Optional[Dict[str, Dict]] = None,
     legend_loc: str = "best",
+    legend_position: str = DEFAULT_LEGEND_POSITION,
     group_width: float = DEFAULT_GROUP_WIDTH,
     bar_gap: float = DEFAULT_BAR_GAP,
     edge_darken_factor: Optional[float] = DEFAULT_EDGE_DARKEN,
@@ -1007,7 +1165,8 @@ def plot_rate_figure(
         label_decimal: Decimal places for labels
         filter_top_n: Filter to top N runs by score (requires best_checkpoints)
         best_checkpoints: dict[method] -> checkpoints dict (required if filter_top_n set)
-        legend_loc: Legend location
+        legend_loc: Legend location (used when legend_position="inside")
+        legend_position: "inside" (default), "above", or "below"
 
     Returns:
         (fig, ax)
@@ -1056,7 +1215,7 @@ def plot_rate_figure(
     ax.margins(x=AXIS_MARGIN_X)
     for spine in ax.spines.values():
         spine.set_zorder(3)
-    ax.legend(fontsize=FONT_LEGEND, loc=legend_loc, handlelength=LEGEND_HANDLE_LENGTH)
+    _apply_legend(ax, legend_position, legend_loc, fig=fig)
 
     plt.subplots_adjust(left=MARGIN_LEFT, right=MARGIN_RIGHT, bottom=MARGIN_BOTTOM, top=MARGIN_TOP)
     plt.tight_layout(pad=TIGHT_PAD, w_pad=TIGHT_W_PAD, h_pad=TIGHT_H_PAD)
@@ -1084,6 +1243,7 @@ def plot_rate_figure_by_method(
     filter_top_n: Optional[int] = None,
     best_checkpoints: Optional[Dict[str, Dict]] = None,
     legend_loc: str = "best",
+    legend_position: str = DEFAULT_LEGEND_POSITION,
     group_width: float = DEFAULT_GROUP_WIDTH,
     bar_gap: float = DEFAULT_BAR_GAP,
     edge_darken_factor: Optional[float] = DEFAULT_EDGE_DARKEN,
@@ -1119,7 +1279,8 @@ def plot_rate_figure_by_method(
         label_decimal: Decimal places for labels
         filter_top_n: Filter to top N runs by score (requires best_checkpoints)
         best_checkpoints: dict[method] -> checkpoints dict (required if filter_top_n set)
-        legend_loc: Legend location
+        legend_loc: Legend location (used when legend_position="inside")
+        legend_position: "inside" (default), "above", or "below"
 
     Returns:
         (fig, ax)
@@ -1187,7 +1348,7 @@ def plot_rate_figure_by_method(
     ax.margins(x=AXIS_MARGIN_X)
     for spine in ax.spines.values():
         spine.set_zorder(3)
-    ax.legend(fontsize=FONT_LEGEND, loc=legend_loc, handlelength=LEGEND_HANDLE_LENGTH)
+    _apply_legend(ax, legend_position, legend_loc, fig=fig)
 
     plt.subplots_adjust(left=MARGIN_LEFT, right=MARGIN_RIGHT, bottom=MARGIN_BOTTOM, top=MARGIN_TOP)
     plt.tight_layout(pad=TIGHT_PAD, w_pad=TIGHT_W_PAD, h_pad=TIGHT_H_PAD)
@@ -1232,6 +1393,7 @@ def plot_multi_panel_grid(
     center_x_label: bool = False,
     legend_panel: int = 0,
     legend_loc: str = "lower left",
+    legend_position: str = DEFAULT_LEGEND_POSITION,
 ) -> Tuple[plt.Figure, np.ndarray]:
     """
     Create 2D grid of bar plots (for fragility, clearance, shape comparisons).
@@ -1347,12 +1509,13 @@ def plot_multi_panel_grid(
             for spine in ax.spines.values():
                 spine.set_zorder(3)
 
-            # Only show legend on specified panel
-            if idx == legend_panel:
+            # Only show legend on specified panel (for "inside" mode)
+            if legend_position == "inside" and idx == legend_panel:
                 handles, labels = ax.get_legend_handles_labels()
                 # Strip "(1mm)" suffix from legend labels for cleaner display
                 labels = [l.replace("(1mm)", "").strip() for l in labels]
-                ax.legend(handles, labels, fontsize=FONT_LEGEND - 1, loc=legend_loc, handlelength=LEGEND_HANDLE_LENGTH)
+                _apply_legend(ax, legend_position, legend_loc,
+                              handles=handles, labels=labels, fig=fig)
 
         # X-axis label on bottom row (center column only if center_x_label is set)
         if row == n_rows - 1:
@@ -1378,7 +1541,17 @@ def plot_multi_panel_grid(
         col = idx % n_cols
         axes[row, col].axis("off")
 
-    plt.tight_layout(pad=TIGHT_PAD, w_pad=TIGHT_W_PAD, h_pad=TIGHT_H_PAD, rect=[0, 0, 1, 0.95] if suptitle else None)
+    # For "above"/"below", place a single figure-level legend using handles from first data panel
+    if legend_position != "inside":
+        # Get handles from the legend_panel (or first non-NA panel)
+        source_ax = axes[legend_panel // n_cols, legend_panel % n_cols]
+        handles, labels = source_ax.get_legend_handles_labels()
+        labels = [l.replace("(1mm)", "").strip() for l in labels]
+        _apply_legend(source_ax, legend_position, legend_loc,
+                      handles=handles, labels=labels, fig=fig)
+
+    tight_rect = [0, 0, 1, 0.95] if suptitle else None
+    plt.tight_layout(pad=TIGHT_PAD, w_pad=TIGHT_W_PAD, h_pad=TIGHT_H_PAD, rect=tight_rect)
 
     # Draw shape icons if requested
     if show_shape_icons:
@@ -1544,6 +1717,6 @@ def print_data_summary(
             if not subset.empty:
                 total = subset[total_col].sum()
                 rate = 100 * subset[metric].sum() / total
-                print(f"  {level}: {rate:.1f}%")
+                print(f"  {level}: {rate:.1f}% (n={len(subset)})")
             else:
                 print(f"  {level}: No data")
