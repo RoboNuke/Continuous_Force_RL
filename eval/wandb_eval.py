@@ -456,11 +456,8 @@ class FixedNoiseWrapper(gym.Wrapper):
             self.unwrapped.init_fixed_pos_obs_noise[env_ids]
         )
 
-        # also must update pos actions for initial ema
-        pos_actions = self.unwrapped.fingertip_midpoint_pos - self.unwrapped.fixed_pos_action_frame
-        pos_action_bounds = torch.tensor(self.unwrapped.cfg.ctrl.pos_action_bounds, device=self.unwrapped.device)
-        pos_actions = pos_actions @ torch.diag(1.0 / pos_action_bounds)
-        self.unwrapped.actions[env_ids, 0:3] = self.unwrapped.prev_actions[env_ids, 0:3] = pos_actions[env_ids, 0:3]
+        # Leave actions/prev_actions zeroed (as set by efficient_reset_wrapper)
+        # to match performance mode behavior and preserve the EMA soft-start
 
 
 
