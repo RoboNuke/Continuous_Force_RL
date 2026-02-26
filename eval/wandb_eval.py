@@ -456,8 +456,17 @@ class FixedNoiseWrapper(gym.Wrapper):
             self.unwrapped.init_fixed_pos_obs_noise[env_ids]
         )
 
-        # Leave actions/prev_actions zeroed (as set by efficient_reset_wrapper)
-        # to match performance mode behavior and preserve the EMA soft-start
+        # Recompute initial pos actions to match the new action frame.
+        # The factory env's randomize_initial_state back-calculates actions as
+        # (fingertip_pos - action_frame) / pos_action_bounds using its original
+        # Gaussian noise. Since we just overrode that noise, the back-calculated
+        # actions are now stale. We must recompute them because observation wrappers
+        # use self.unwrapped.actions.clone() for prev_actions in the policy observation.
+        # Without this, the first observation has prev_actions from the wrong noise.
+        pos_actions = self.unwrapped.fingertip_midpoint_pos - self.unwrapped.fixed_pos_action_frame
+        pos_action_bounds = torch.tensor(self.unwrapped.cfg.ctrl.pos_action_bounds, device=self.unwrapped.device)
+        pos_actions = pos_actions @ torch.diag(1.0 / pos_action_bounds)
+        self.unwrapped.actions[env_ids, 0:3] = self.unwrapped.prev_actions[env_ids, 0:3] = pos_actions[env_ids, 0:3]
 
 
 
