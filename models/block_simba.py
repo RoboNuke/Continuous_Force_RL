@@ -164,10 +164,10 @@ class BlockSimBa(nn.Module):
         # Calculate std_out_dim: number of continuous components (act_dim - force_size)
         self.std_out_dim = (act_dim - force_size) if use_state_dependent_std else 0
 
-        # DEBUG: Print configuration
-        print(f"[DEBUG BlockSimBa] use_state_dependent_std={use_state_dependent_std}")
-        print(f"[DEBUG BlockSimBa] act_dim={act_dim}, force_size={force_size}, std_out_dim={self.std_out_dim}")
-        print(f"[DEBUG BlockSimBa] use_separate_heads={use_separate_heads}")
+        # # DEBUG: Print configuration
+        # print(f"[DEBUG BlockSimBa] use_state_dependent_std={use_state_dependent_std}")
+        # print(f"[DEBUG BlockSimBa] act_dim={act_dim}, force_size={force_size}, std_out_dim={self.std_out_dim}")
+        # print(f"[DEBUG BlockSimBa] use_separate_heads={use_separate_heads}")
 
         self.fc_in = BlockLinear(num_agents, obs_dim, hidden_dim, name="fc_in")
         self.resblocks = nn.ModuleList(
@@ -194,16 +194,16 @@ class BlockSimBa(nn.Module):
             if self.std_out_dim > 0:
                 self.std_head = BlockMLP(num_agents, hidden_dim, component_head_hidden_dim, self.std_out_dim,
                                         activation=None, name="std_head")
-                print(f"[DEBUG BlockSimBa] Created std_head with output_dim={self.std_out_dim}")
+                # print(f"[DEBUG BlockSimBa] Created std_head with output_dim={self.std_out_dim}")
             else:
                 self.std_head = None
-                print(f"[DEBUG BlockSimBa] No std_head (std_out_dim=0)")
+                # print(f"[DEBUG BlockSimBa] No std_head (std_out_dim=0)")
         else:
             # fc_out outputs mean + std (if use_state_dependent_std)
             total_out_dim = act_dim + self.std_out_dim
             self.fc_out = BlockLinear(num_agents, hidden_dim, total_out_dim, name="fc_out")
             self.std_head = None
-            print(f"[DEBUG BlockSimBa] fc_out total_out_dim={total_out_dim} (act_dim={act_dim} + std_out_dim={self.std_out_dim})")
+            # print(f"[DEBUG BlockSimBa] fc_out total_out_dim={total_out_dim} (act_dim={act_dim} + std_out_dim={self.std_out_dim})")
     # Debug counter to limit prints
     _debug_forward_count = 0
 
@@ -255,21 +255,21 @@ class BlockSimBa(nn.Module):
             if self.use_tanh:
                 actions = torch.tanh(actions)
 
-        # DEBUG: Print shapes and stats (only first 3 calls)
-        BlockSimBa._debug_forward_count += 1
-        if BlockSimBa._debug_forward_count <= 3:
-            actions_flat = actions.view(-1, actions.shape[-1])
-            print(f"[DEBUG BlockSimBa.forward #{BlockSimBa._debug_forward_count}]")
-            print(f"  obs.shape={obs.shape}, num_envs={num_envs}")
-            print(f"  actions.shape={actions_flat.shape}")
-            if log_std is not None:
-                print(f"  log_std.shape={log_std.shape}")
-                print(f"  log_std min={log_std.min().item():.4f}, max={log_std.max().item():.4f}, mean={log_std.mean().item():.4f}")
-                # Check if std varies across batch (state-dependent)
-                std_variance = log_std.var(dim=0).mean().item()
-                print(f"  log_std variance across batch (should be >0 if state-dependent): {std_variance:.6f}")
-            else:
-                print(f"  log_std=None (not state-dependent)")
+        # # DEBUG: Print shapes and stats (only first 3 calls)
+        # BlockSimBa._debug_forward_count += 1
+        # if BlockSimBa._debug_forward_count <= 3:
+        #     actions_flat = actions.view(-1, actions.shape[-1])
+        #     print(f"[DEBUG BlockSimBa.forward #{BlockSimBa._debug_forward_count}]")
+        #     print(f"  obs.shape={obs.shape}, num_envs={num_envs}")
+        #     print(f"  actions.shape={actions_flat.shape}")
+        #     if log_std is not None:
+        #         print(f"  log_std.shape={log_std.shape}")
+        #         print(f"  log_std min={log_std.min().item():.4f}, max={log_std.max().item():.4f}, mean={log_std.mean().item():.4f}")
+        #         # Check if std varies across batch (state-dependent)
+        #         std_variance = log_std.var(dim=0).mean().item()
+        #         print(f"  log_std variance across batch (should be >0 if state-dependent): {std_variance:.6f}")
+        #     else:
+        #         print(f"  log_std=None (not state-dependent)")
 
         return actions.view(-1, actions.shape[-1]), log_std
 
@@ -345,12 +345,12 @@ class BlockSimBaActor(GaussianMixin, Model):
                 # Log-std clamping [-20, 2] provides safety bounds regardless of weight scale.
                 self.actor_mean.fc_out.weight[:, self.num_actions:, :] *= 0.1
 
-            # DEBUG: Verify initialization
-            print(f"[DEBUG BlockSimBaActor] Initialized std bias to log({act_init_std})={math.log(act_init_std):.4f}")
-            print(f"[DEBUG BlockSimBaActor] fc_out.bias shape: {self.actor_mean.fc_out.bias.shape}")
-            print(f"[DEBUG BlockSimBaActor] fc_out.weight shape: {self.actor_mean.fc_out.weight.shape}")
-            print(f"[DEBUG BlockSimBaActor] std bias values: {self.actor_mean.fc_out.bias[:, self.num_actions:].mean().item():.4f}")
-            print(f"[DEBUG BlockSimBaActor] std weight magnitude: {self.actor_mean.fc_out.weight[:, self.num_actions:, :].abs().mean().item():.6f}")
+            # # DEBUG: Verify initialization
+            # print(f"[DEBUG BlockSimBaActor] Initialized std bias to log({act_init_std})={math.log(act_init_std):.4f}")
+            # print(f"[DEBUG BlockSimBaActor] fc_out.bias shape: {self.actor_mean.fc_out.bias.shape}")
+            # print(f"[DEBUG BlockSimBaActor] fc_out.weight shape: {self.actor_mean.fc_out.weight.shape}")
+            # print(f"[DEBUG BlockSimBaActor] std bias values: {self.actor_mean.fc_out.bias[:, self.num_actions:].mean().item():.4f}")
+            # print(f"[DEBUG BlockSimBaActor] std weight magnitude: {self.actor_mean.fc_out.weight[:, self.num_actions:, :].abs().mean().item():.6f}")
 
             self.actor_logstd = None
         else:
@@ -531,20 +531,20 @@ class BlockSimBaActor(GaussianMixin, Model):
                 logstds.append(log_std_param.expand(batch_size, num_components))
             log_std = torch.cat(logstds, dim=0)
 
-        # DEBUG: Print shapes and stats (only first 3 calls)
-        BlockSimBaActor._debug_compute_count += 1
-        if BlockSimBaActor._debug_compute_count <= 3:
-            print(f"[DEBUG BlockSimBaActor.compute #{BlockSimBaActor._debug_compute_count}]")
-            print(f"  use_state_dependent_std={self.use_state_dependent_std}")
-            print(f"  action_mean.shape={action_mean.shape}")
-            print(f"  log_std.shape={log_std.shape}")
-            print(f"  log_std min={log_std.min().item():.4f}, max={log_std.max().item():.4f}, mean={log_std.mean().item():.4f}")
-            if self.use_state_dependent_std:
-                # Verify variance across batch (should be > 0 for state-dependent)
-                std_variance = log_std.var(dim=0).mean().item()
-                print(f"  log_std variance across batch: {std_variance:.6f}")
-                if std_variance < 1e-8:
-                    print(f"  WARNING: log_std variance is very low - may not be state-dependent!")
+        # # DEBUG: Print shapes and stats (only first 3 calls)
+        # BlockSimBaActor._debug_compute_count += 1
+        # if BlockSimBaActor._debug_compute_count <= 3:
+        #     print(f"[DEBUG BlockSimBaActor.compute #{BlockSimBaActor._debug_compute_count}]")
+        #     print(f"  use_state_dependent_std={self.use_state_dependent_std}")
+        #     print(f"  action_mean.shape={action_mean.shape}")
+        #     print(f"  log_std.shape={log_std.shape}")
+        #     print(f"  log_std min={log_std.min().item():.4f}, max={log_std.max().item():.4f}, mean={log_std.mean().item():.4f}")
+        #     if self.use_state_dependent_std:
+        #         # Verify variance across batch (should be > 0 for state-dependent)
+        #         std_variance = log_std.var(dim=0).mean().item()
+        #         print(f"  log_std variance across batch: {std_variance:.6f}")
+        #         if std_variance < 1e-8:
+        #             print(f"  WARNING: log_std variance is very low - may not be state-dependent!")
 
         return action_mean, log_std, {}
 

@@ -159,7 +159,7 @@ noise:
   # Goal observation noise (Gaussian, sampled once per episode)
   goal_pos_noise: [0.00, 0.00, 0.00]   # meters, std per axis
   goal_yaw_noise: 0.0524                    # radians, std (~3 degrees)
-  use_yaw_noise: false
+  use_fixed_asset_yaw_noise: false
 
   # Start pose (offset from fixed_asset_position)
   hand_init_pos: [0.0, 0.0, 0.047]         # meters, nominal EE offset above hole

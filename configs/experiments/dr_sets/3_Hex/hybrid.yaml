@@ -1,0 +1,118 @@
+# Hybrid Agent Control Experiment Configuration
+
+# Base configuration to inherit from
+base_config: "configs/base/PiH_base.yaml"
+
+primary:
+  agents_per_break_force: 5
+  num_envs_per_agent: 256
+  break_forces: [10000]
+  max_steps: 4000500
+  ctrl_mode: "force_only"
+
+# Model configuration for hybrid agent
+model:
+  use_hybrid_agent: false
+  squash_actions: true
+  correct_squash_log_prob: true
+  act_init_std: 0.6
+
+# Enable hybrid control wrapper and related systems
+wrappers:
+  # Enable hybrid control wrapper
+  hybrid_control:
+    enabled: true
+    reward_type: "none"
+    use_ground_truth_selection: false
+
+  force_torque_sensor:
+    exclude_torques: true
+
+  pose_contact_logging:
+    enabled: false
+
+  # Custom keypoint offset patterns for non-default peg shapes
+  keypoint_offset:
+    enabled: true
+    #mode: 'polygon'  # 'axis' or 'polygon'
+    mode: 'axis'
+    # Axis mode parameters
+
+    # 4 keypoints with 0.5 xy scale => 30deg error = 0.0496m error
+    num_keypoints: 4
+    x_scale: 0.5
+    y_scale: 0.5
+    z_scale: 0.15
+
+    # Polygon mode parameters
+    num_lines: 6
+    num_keypoints_z: 4
+    num_keypoints_radial: 4
+    xy_scale: 0.34 # 30deg error = 0.0497m
+
+  force_reward:
+
+    enable_contact_reward: false
+    contact_reward_weight: 2.0
+
+  factory_metrics:
+    enabled: true
+    publish_to_wandb: true
+    engagement_reward_scale: 1.0 #60.0  # Scale for engagement rewards (default 1.0 = no change)
+    success_reward_scale: 1.0 #40.0
+
+  # Dynamics randomization for domain randomization
+  dynamics_randomization:
+    enabled: true
+
+    randomize_held_mass: true
+    held_mass_range: [0.8, 1.2]  # Scale factors
+
+    # Friction randomization (held asset only)
+    randomize_friction: true
+    friction_range: [0.5, 2.0]
+
+    # Controller gains randomization (separate for pos/rot)
+    randomize_gains: true
+    pos_gains_range: [60.0, 140.0]
+    rot_gains_range: [20.0, 60.0]
+
+    # Force/torque gains randomization (hybrid control only)
+    randomize_force_gains: true
+    force_gains_range: [0.05, 0.6]
+    torque_gains_range: [0.001, 0.001]      # Don't Want to Randomize
+
+    # Action thresholds randomization
+    randomize_pos_threshold: false
+    randomize_rot_threshold: false
+    randomize_force_threshold: false
+
+agent:
+  supervised_selection_loss_weight: 1.0
+#  policy_learning_rate: 5.0e-4
+#  critic_learning_rate: 1.0e-4
+#  #learning_epochs: 1
+
+environment:
+  task:
+    asset_variant: hex_short_small
+
+    # Yaw initialization for ±30° max peg-hole difference
+    fixed_asset_init_orn_deg: -27
+    fixed_asset_init_orn_range_deg: 54
+    hand_init_orn_noise: [0.0, 0.0, 0.0524]  # ±3° peg noise
+  # OBSERVATION RANDOMIZATION CONFIGURATION
+  obs_rand:
+    fixed_asset_pos: [0.001, 0.001, 0.001]
+    use_fixed_asset_yaw_noise: true
+    fixed_asset_yaw: 0.2618 #0.0523599
+
+    ee_pos: [0.0005, 0.0005, 0.0005]
+    ee_rpy: [0.0349, 0.0349, 0.0349]  # RPY noise for EE orientation (radians) - [roll, pitch, yaw] - 0 = disabled
+    force_torque: [1.0, 1.0, 1.0, 0.2, 0.2, 0.2]  # Force (N) and Torque (Nm) noise - applied per step
+
+# Experiment metadata
+experiment:
+  name: &exp_name "hybrid_DR_hex-15deg"
+  tags: ['hex_orient', '15deg', 'noZCon', 'DR']
+  group: *exp_name

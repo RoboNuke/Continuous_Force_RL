@@ -63,6 +63,7 @@ class ObservationBuilder:
         contact_force_threshold: float = 1.5,
         fixed_asset_yaw: float = 0.0,
         ee_pose_noise_enabled: bool = False,
+        exclude_torques: bool = False,
         device: str = "cpu",
     ):
         self.obs_order = list(obs_order)
@@ -71,7 +72,14 @@ class ObservationBuilder:
         self.tanh_ft_scale = tanh_ft_scale
         self.contact_force_threshold = contact_force_threshold
         self.fixed_asset_yaw = fixed_asset_yaw
+        self.exclude_torques = exclude_torques
         self.device = device
+
+        # Override force_torque dimension if excluding torques
+        self._obs_dim_map = dict(OBS_DIM_MAP)  # instance-level copy
+        if self.exclude_torques:
+            self._obs_dim_map["force_torque"] = 3
+            print("[ObservationBuilder] exclude_torques=True: force_torque dim reduced to 3")
 
         # Detect F/T tanh scaling mismatch: EEPoseNoiseWrapper bypasses
         # ForceTorqueWrapper's get_force_torque_observation() in sim, so tanh
@@ -84,18 +92,18 @@ class ObservationBuilder:
 
         # Validate all obs components are known
         for obs_name in self.obs_order:
-            if obs_name not in OBS_DIM_MAP:
+            if obs_name not in self._obs_dim_map:
                 raise ValueError(
                     f"Unknown observation component '{obs_name}' in obs_order. "
-                    f"Known components: {list(OBS_DIM_MAP.keys())}"
+                    f"Known components: {list(self._obs_dim_map.keys())}"
                 )
 
         # Calculate expected obs dimension (obs_order components + prev_actions)
-        self.obs_dim = sum(OBS_DIM_MAP[name] for name in self.obs_order) + action_dim
+        self.obs_dim = sum(self._obs_dim_map[name] for name in self.obs_order) + action_dim
         print(f"[ObservationBuilder] obs_order={self.obs_order}")
         idx = 0
         for name in self.obs_order:
-            dim = OBS_DIM_MAP[name]
+            dim = self._obs_dim_map[name]
             print(f"  [{idx}:{idx+dim}] {name} (dim={dim})")
             idx += dim
         print(f"  [{idx}:{idx+action_dim}] prev_actions (dim={action_dim})")
@@ -197,18 +205,12 @@ class ObservationBuilder:
         components["joint_pos"] = joint_pos
 
         # Force/torque (with optional tanh scaling matching training)
-        if self.use_tanh_ft_scaling:
-            ft_obs = torch.tanh(self.tanh_ft_scale * force_torque)
+        if self.exclude_torques:
+            ft_obs = force_torque[:3].clone()
         else:
             ft_obs = force_torque.clone()
-        # HACK: Zero out Tz (index 5) — real robot has ~-0.17 Nm bias that
-        # reads as -43σ after normalization. Training saw ~0. Remove to test.
-        #ft_obs[0] = 0.0
-        #ft_obs[1] = 0.0
-        #ft_obs[2] = 0.0
-        ft_obs[3] = 0.0
-        ft_obs[4] = 0.0
-        ft_obs[5] = 0.0
+        if self.use_tanh_ft_scaling:
+            ft_obs = torch.tanh(self.tanh_ft_scale * ft_obs)
         components["force_torque"] = ft_obs
 
         # Contact detection from force thresholds (matches ForceTorqueWrapper logic)
@@ -223,7 +225,7 @@ class ObservationBuilder:
             component = components[obs_name]
             if component.dim() == 0:
                 component = component.unsqueeze(0)
-            expected_dim = OBS_DIM_MAP[obs_name]
+            expected_dim = self._obs_dim_map[obs_name]
             if component.shape[0] != expected_dim:
                 raise RuntimeError(
                     f"Observation component '{obs_name}' has dimension {component.shape[0]} "

@@ -9,11 +9,41 @@
 #SBATCH --signal=TERM@300           # send SIGTERM 300 seconds (5 min) before time limit
 # Note: Output files will be set dynamically based on EXPERIMENT_TAG parameter
 
-# Script arguments
-CONFIG_PATH=$1
-EXPERIMENT_TAG=$2
-OVERRIDES=$3
-EVAL_TAG=$4
+# Script arguments (named args)
+CONFIG_PATH=""
+EXPERIMENT_TAG=""
+OVERRIDES=""
+EVAL_TAG=""
+BASE_CONFIG=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --config)
+            CONFIG_PATH="$2"
+            shift 2
+            ;;
+        --experiment_tag)
+            EXPERIMENT_TAG="$2"
+            shift 2
+            ;;
+        --overrides)
+            OVERRIDES="$2"
+            shift 2
+            ;;
+        --eval_tag)
+            EVAL_TAG="$2"
+            shift 2
+            ;;
+        --base_config)
+            BASE_CONFIG="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
 
 echo "=== HPC Batch Script Started ==="
 echo "Job Name: $SLURM_JOB_NAME"
@@ -22,6 +52,7 @@ echo "Config Path: $CONFIG_PATH"
 echo "Experiment Tag: $EXPERIMENT_TAG"
 echo "Overrides: $OVERRIDES"
 echo "Eval Tag: $EVAL_TAG"
+echo "Base Config: $BASE_CONFIG"
 echo ""
 
 # Create log directory if it doesn't exist
@@ -53,6 +84,11 @@ fi
 # Add eval_tag if provided
 if [[ -n "$EVAL_TAG" ]]; then
     python_cmd="$python_cmd --eval_tag \"$EVAL_TAG\""
+fi
+
+# Add base_config override if provided
+if [[ -n "$BASE_CONFIG" ]]; then
+    python_cmd="$python_cmd --base_config $BASE_CONFIG"
 fi
 
 # Add headless flag

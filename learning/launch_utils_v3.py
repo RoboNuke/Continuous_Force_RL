@@ -99,7 +99,8 @@ def apply_wrappers(env, configs):
             contact_force_threshold=wrappers_config.force_torque_sensor.contact_force_threshold,
             contact_torque_threshold=wrappers_config.force_torque_sensor.contact_torque_threshold,
             log_contact_state=wrappers_config.force_torque_sensor.log_contact_state,
-            use_contact_sensor=wrappers_config.force_torque_sensor.use_contact_sensor
+            use_contact_sensor=wrappers_config.force_torque_sensor.use_contact_sensor,
+            exclude_torques=wrappers_config.force_torque_sensor.exclude_torques
         )
 
     if wrappers_config.force_reward.enabled:

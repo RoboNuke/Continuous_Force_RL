@@ -276,7 +276,7 @@ def reconstruct_obs_order(configs: dict) -> list:
     Wrappers append additional components based on config flags:
         - force_torque_sensor.add_force_obs -> appends "force_torque"
         - force_torque_sensor.add_contact_obs -> appends "in_contact"
-        - obs_rand.use_yaw_noise -> appends "fingertip_yaw_rel_fixed"
+        - obs_rand.use_fixed_asset_yaw_noise -> appends "fingertip_yaw_rel_fixed"
 
     Args:
         configs: Training configuration dict from WandB.
@@ -296,7 +296,7 @@ def reconstruct_obs_order(configs: dict) -> list:
 
     # Check yaw observation
     env_cfg = configs['environment']
-    if hasattr(env_cfg, 'obs_rand') and getattr(env_cfg.obs_rand, 'use_yaw_noise', False):
+    if hasattr(env_cfg, 'obs_rand') and getattr(env_cfg.obs_rand, 'use_fixed_asset_yaw_noise', False):
         obs_order.append("fingertip_yaw_rel_fixed")
 
     return obs_order
@@ -1310,8 +1310,8 @@ def main():
     if use_rr_noise:
         # Load ALL noise values from real robot config (fail-fast if missing)
         goal_pos_noise_scale = torch.tensor(noise_cfg['goal_pos_noise'], device=args.device, dtype=torch.float32)
-        use_yaw_noise = noise_cfg['use_yaw_noise']
-        goal_yaw_noise_scale = noise_cfg['goal_yaw_noise'] if use_yaw_noise else 0.0
+        use_fixed_asset_yaw_noise = noise_cfg['use_fixed_asset_yaw_noise']
+        goal_yaw_noise_scale = noise_cfg['goal_yaw_noise'] if use_fixed_asset_yaw_noise else 0.0
         hand_init_pos = torch.tensor(noise_cfg['hand_init_pos'], device=args.device, dtype=torch.float32)
         hand_init_pos_noise = torch.tensor(noise_cfg['hand_init_pos_noise'], device=args.device, dtype=torch.float32)
         hand_init_orn = list(noise_cfg['hand_init_orn'])
@@ -1320,8 +1320,8 @@ def main():
         # Load noise from WandB training config (matching sim exactly)
         obs_rand = configs['environment'].obs_rand
         goal_pos_noise_scale = torch.tensor(obs_rand.fixed_asset_pos, device=args.device, dtype=torch.float32)
-        use_yaw_noise = hasattr(obs_rand, 'use_yaw_noise') and obs_rand.use_yaw_noise
-        goal_yaw_noise_scale = obs_rand.fixed_asset_yaw if use_yaw_noise else 0.0
+        use_fixed_asset_yaw_noise = hasattr(obs_rand, 'use_fixed_asset_yaw_noise') and obs_rand.use_fixed_asset_yaw_noise
+        goal_yaw_noise_scale = obs_rand.fixed_asset_yaw if use_fixed_asset_yaw_noise else 0.0
 
         # Get task config for start pose params (field is 'task' on ExtendedFactoryPegEnvCfg)
         cfg_task = getattr(configs['environment'], 'task', None) or configs['environment']

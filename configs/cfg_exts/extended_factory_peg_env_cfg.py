@@ -22,11 +22,14 @@ class ExtendedObsRandCfg:
     fixed_asset_yaw: float = 0.0523599
     """Yaw noise for fixed asset (radians) - default 3 degrees"""
 
-    use_yaw_noise: bool = False
-    """Enable yaw observation noise - automatically adds fingertip_yaw_rel_fixed to observations"""
+    use_fixed_asset_yaw_noise: bool = False
+    """Enable fixed asset yaw observation noise - automatically adds fingertip_yaw_rel_fixed to observations"""
 
     ee_pos: list = [0.00025, 0.00025, 0.00025]
     """Position noise for end-effector (meters) - default 0.25mm per axis"""
+
+    ee_rpy: list = [0.0, 0.0, 0.0]
+    """RPY noise for end-effector orientation (radians) - [roll, pitch, yaw] - default disabled"""
 
     force_torque: list = [0.25, 0.25, 0.25, 0.01, 0.01, 0.01]
     """Force-torque sensor noise [Fx, Fy, Fz, Tx, Ty, Tz] in N and Nm - applied per step"""

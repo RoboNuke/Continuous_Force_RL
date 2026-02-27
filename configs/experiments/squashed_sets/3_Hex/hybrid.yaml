@@ -7,7 +7,7 @@ primary:
   agents_per_break_force: 5
   num_envs_per_agent: 256
   break_forces: [10000]
-  max_steps: 5000500
+  max_steps: 4000500
   ctrl_mode: "force_only"
 
 # Model configuration for hybrid agent
@@ -75,7 +75,7 @@ environment:
   # OBSERVATION RANDOMIZATION CONFIGURATION
   obs_rand:
     fixed_asset_pos: [0.001, 0.001, 0.001]
-    use_yaw_noise: true
+    use_fixed_asset_yaw_noise: true
     fixed_asset_yaw: 0.2618 #0.0523599
 
 # Experiment metadata

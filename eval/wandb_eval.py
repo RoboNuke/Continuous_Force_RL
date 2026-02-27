@@ -456,7 +456,13 @@ class FixedNoiseWrapper(gym.Wrapper):
             self.unwrapped.init_fixed_pos_obs_noise[env_ids]
         )
 
-        # also must update pos actions for initial ema
+        # Recompute initial pos actions to match the new action frame.
+        # The factory env's randomize_initial_state back-calculates actions as
+        # (fingertip_pos - action_frame) / pos_action_bounds using its original
+        # Gaussian noise. Since we just overrode that noise, the back-calculated
+        # actions are now stale. We must recompute them because observation wrappers
+        # use self.unwrapped.actions.clone() for prev_actions in the policy observation.
+        # Without this, the first observation has prev_actions from the wrong noise.
         pos_actions = self.unwrapped.fingertip_midpoint_pos - self.unwrapped.fixed_pos_action_frame
         pos_action_bounds = torch.tensor(self.unwrapped.cfg.ctrl.pos_action_bounds, device=self.unwrapped.device)
         pos_actions = pos_actions @ torch.diag(1.0 / pos_action_bounds)
@@ -561,7 +567,7 @@ class FixedYawObsNoiseWrapper(gym.Wrapper):
         if not hasattr(self.unwrapped, 'init_fixed_yaw_obs_noise'):
             raise RuntimeError(
                 "FixedYawObsNoiseWrapper requires init_fixed_yaw_obs_noise attribute. "
-                "Ensure EEPoseNoiseWrapper is applied with use_yaw_noise=True before this wrapper."
+                "Ensure EEPoseNoiseWrapper is applied with use_fixed_asset_yaw_noise=True before this wrapper."
             )
 
     def _wrapped_reset_idx(self, env_ids):

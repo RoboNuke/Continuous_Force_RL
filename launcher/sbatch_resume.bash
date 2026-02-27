@@ -7,6 +7,7 @@
 TAGS=""
 CHECKPOINT_STEP=""
 OVERRIDES=""
+NEW_PROJECT=""
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -23,9 +24,13 @@ while [[ $# -gt 0 ]]; do
             OVERRIDES="$2"
             shift 2
             ;;
+        --new_project)
+            NEW_PROJECT="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 --tags \"tag1 tag2 tag3\" [--checkpoint_step STEP] [--overrides \"key=value key2=value2\"]"
+            echo "Usage: $0 --tags \"tag1 tag2 tag3\" [--checkpoint_step STEP] [--overrides \"key=value key2=value2\"] [--new_project PROJECT]"
             exit 1
             ;;
     esac
@@ -34,7 +39,7 @@ done
 # Validate required arguments
 if [[ -z "$TAGS" ]]; then
     echo "Error: --tags is required"
-    echo "Usage: $0 --tags \"tag1 tag2 tag3\" [--checkpoint_step STEP] [--overrides \"key=value key2=value2\"]"
+    echo "Usage: $0 --tags \"tag1 tag2 tag3\" [--checkpoint_step STEP] [--overrides \"key=value key2=value2\"] [--new_project PROJECT]"
     exit 1
 fi
 
@@ -44,6 +49,9 @@ if [[ -n "$CHECKPOINT_STEP" ]]; then
     echo "Checkpoint Step: $CHECKPOINT_STEP"
 else
     echo "Checkpoint Step: (auto-discover latest)"
+fi
+if [[ -n "$NEW_PROJECT" ]]; then
+    echo "New Project: $NEW_PROJECT"
 fi
 echo "Overrides: $OVERRIDES"
 echo ""
@@ -75,6 +83,9 @@ for tag_name in "${TAG_ARRAY[@]}"; do
     fi
     if [[ -n "$OVERRIDES" ]]; then
         HPC_ARGS="$HPC_ARGS --overrides $OVERRIDES"
+    fi
+    if [[ -n "$NEW_PROJECT" ]]; then
+        HPC_ARGS="$HPC_ARGS --new_project $NEW_PROJECT"
     fi
 
     # Submit SLURM job with dynamic output file paths

@@ -348,6 +348,13 @@ class EfficientResetWrapper(gym.Wrapper):
         self.unwrapped.prev_fingertip_quat[env_ids, :] = self.cached_factory_states['prev_fingertip_quat'][source_idxs, :].clone()
 
         # Zero out actions and velocities (preserve tensor shape with explicit indexing)
+        # NOTE: This zeros actions, but the full reset path (randomize_initial_state)
+        # back-calculates them as (fingertip_pos - action_frame) / pos_action_bounds.
+        # This means the policy sees different initial prev_actions in observations
+        # depending on reset type: non-zero after full resets (every 150 steps),
+        # zero after partial resets (mid-episode terminations). The policy learned
+        # with both during training so it handles this, but it is an inconsistency.
+        # If fixing, the back-calculation should match randomize_initial_state lines 849-856.
         self.unwrapped.actions[env_ids, :] = torch.zeros_like(self.unwrapped.actions[env_ids, :])
         self.unwrapped.prev_actions[env_ids, :] = torch.zeros_like(self.unwrapped.prev_actions[env_ids, :])
         self.unwrapped.ee_angvel_fd[env_ids, :] = torch.zeros_like(self.unwrapped.ee_angvel_fd[env_ids, :])

@@ -38,7 +38,7 @@ class ForceTorqueWrapper(gym.Wrapper):
     def __init__(self, env, use_tanh_scaling=False, tanh_scale=0.03, add_force_obs=False,
                  add_contact_obs=False, add_contact_state=True,
                  contact_force_threshold=0.1, contact_torque_threshold=0.01, log_contact_state=True,
-                 use_contact_sensor=True):
+                 use_contact_sensor=True, exclude_torques=False):
         """
         Initialize the force-torque sensor wrapper.
 
@@ -56,6 +56,8 @@ class ForceTorqueWrapper(gym.Wrapper):
         # Store configuration
         self.use_tanh_scaling = use_tanh_scaling
         self.tanh_scale = tanh_scale
+        self.exclude_torques = exclude_torques
+        self._ft_obs_dim = 3 if exclude_torques else 6
         self.contact_force_threshold = contact_force_threshold
         self.contact_torque_threshold = contact_torque_threshold
         self.log_contact_state = log_contact_state
@@ -188,11 +190,9 @@ class ForceTorqueWrapper(gym.Wrapper):
                     "in_contact": 3
                 }
 
-        # Add force_torque dimensions to the configs if not already present
-        if 'force_torque' not in OBS_DIM_CFG:
-            OBS_DIM_CFG['force_torque'] = 6
-        if 'force_torque' not in STATE_DIM_CFG:
-            STATE_DIM_CFG['force_torque'] = 6
+        # Set force_torque dimensions (3 if exclude_torques, else 6)
+        OBS_DIM_CFG['force_torque'] = self._ft_obs_dim
+        STATE_DIM_CFG['force_torque'] = self._ft_obs_dim
 
         # Add in_contact dimensions to the configs if not already present
         if 'in_contact' not in OBS_DIM_CFG:
@@ -733,21 +733,19 @@ class ForceTorqueWrapper(gym.Wrapper):
             using the formula: tanh(tanh_scale * force_torque_data)
         """
         if self.has_force_torque_data():
-            # Start with raw sensor data
-            force_torque_obs = self.unwrapped.robot_force_torque.clone()
+            # Start with raw sensor data, sliced to observation dim
+            force_torque_obs = self.unwrapped.robot_force_torque[:, :self._ft_obs_dim].clone()
 
-            # Apply per-step observation noise (if configured)
-            #if hasattr(self.unwrapped.cfg, 'obs_rand') and hasattr(self.unwrapped.cfg.obs_rand, 'force_torque'):
-            # Generate fresh noise every step
+            # Generate fresh noise every step, only for the observed dimensions
             force_torque_noise = torch.randn(
-                (self.unwrapped.num_envs, 6),
+                (self.unwrapped.num_envs, self._ft_obs_dim),
                 dtype=torch.float32,
                 device=self.unwrapped.device
             )
 
-            # Scale by config values
+            # Scale by config values (use first _ft_obs_dim noise values)
             force_torque_rand = torch.tensor(
-                self.unwrapped.cfg.obs_rand.force_torque,
+                self.unwrapped.cfg.obs_rand.force_torque[:self._ft_obs_dim],
                 dtype=torch.float32,
                 device=self.unwrapped.device
             )
@@ -763,7 +761,7 @@ class ForceTorqueWrapper(gym.Wrapper):
             return force_torque_obs
         else:
             # Return zeros if no data available
-            return torch.zeros((self.unwrapped.num_envs, 6), device=self.unwrapped.device)
+            return torch.zeros((self.unwrapped.num_envs, self._ft_obs_dim), device=self.unwrapped.device)
 
     def get_in_contact_observation(self):
         """

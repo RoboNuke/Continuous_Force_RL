@@ -307,6 +307,10 @@ class FactoryMetricsWrapper(gym.Wrapper):
             if hasattr(self.unwrapped.cfg_task, 'success_threshold'):
                 success_threshold = self.unwrapped.cfg_task.success_threshold
                 check_rot = getattr(self.unwrapped.cfg_task, 'name', '') == "nut_thread"
+                if check_rot and not hasattr(self.unwrapped, 'curr_yaw'):
+                    self.unwrapped.curr_yaw = torch.zeros(
+                        self.unwrapped.num_envs, device=self.unwrapped.device
+                    )
                 curr_successes = self.unwrapped._get_curr_successes(success_threshold, check_rot)
 
             if hasattr(self.unwrapped.cfg_task, 'engage_threshold'):
@@ -679,6 +683,10 @@ class FactoryMetricsWrapper(gym.Wrapper):
             if hasattr(self.unwrapped.cfg_task, 'success_threshold'):
                 success_threshold = self.unwrapped.cfg_task.success_threshold
                 check_rot = getattr(self.unwrapped.cfg_task, 'name', '') == "nut_thread"
+                if check_rot and not hasattr(self.unwrapped, 'curr_yaw'):
+                    self.unwrapped.curr_yaw = torch.zeros(
+                        self.unwrapped.num_envs, device=self.unwrapped.device
+                    )
                 curr_successes = self.unwrapped._get_curr_successes(success_threshold, check_rot)
 
                 # For terminating envs that are currently successful but haven't been marked yet

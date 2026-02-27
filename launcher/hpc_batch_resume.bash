@@ -13,6 +13,7 @@
 CHECKPOINT_TAG=""
 CHECKPOINT_STEP=""
 OVERRIDES=""
+NEW_PROJECT=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -26,6 +27,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --overrides)
             OVERRIDES="$2"
+            shift 2
+            ;;
+        --new_project)
+            NEW_PROJECT="$2"
             shift 2
             ;;
         *)
@@ -45,6 +50,7 @@ echo "Job Name: $SLURM_JOB_NAME"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Checkpoint Tag: $CHECKPOINT_TAG"
 echo "Checkpoint Step: ${CHECKPOINT_STEP:-"(auto-discover)"}"
+echo "New Project: ${NEW_PROJECT:-"(inherit from checkpoint)"}"
 echo "Overrides: $OVERRIDES"
 echo ""
 
@@ -67,6 +73,11 @@ python_cmd="$python_cmd --checkpoint_tag $CHECKPOINT_TAG"
 # Add checkpoint_step if provided
 if [[ -n "$CHECKPOINT_STEP" ]]; then
     python_cmd="$python_cmd --checkpoint_step $CHECKPOINT_STEP"
+fi
+
+# Add new_project if provided
+if [[ -n "$NEW_PROJECT" ]]; then
+    python_cmd="$python_cmd --new_project $NEW_PROJECT"
 fi
 
 # Add additional overrides if provided

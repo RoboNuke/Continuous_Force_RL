@@ -81,6 +81,28 @@ class EEPoseNoiseWrapper(gym.Wrapper):
             device=self.device
         )
 
+        # EE RPY noise configuration
+        if not hasattr(self.unwrapped.cfg.obs_rand, 'ee_rpy'):
+            raise ValueError(
+                "obs_rand config missing 'ee_rpy' attribute. "
+                "Please add ee_rpy field to ExtendedObsRandCfg. "
+                "Use [0.0, 0.0, 0.0] to disable orientation noise."
+            )
+
+        ee_rpy_cfg = self.unwrapped.cfg.obs_rand.ee_rpy
+        if len(ee_rpy_cfg) != 3:
+            raise ValueError(
+                f"obs_rand.ee_rpy must have exactly 3 values [roll, pitch, yaw] in radians. "
+                f"Got {len(ee_rpy_cfg)} values: {ee_rpy_cfg}"
+            )
+
+        self.ee_rpy_noise_scale = torch.tensor(
+            ee_rpy_cfg,
+            dtype=torch.float32,
+            device=self.device
+        )
+        self.ee_rpy_noise_enabled = torch.any(self.ee_rpy_noise_scale > 0.0).item()
+
         # Get yaw noise scale from config (default 3 degrees = 0.0523599 radians)
         self.fixed_asset_yaw_noise_scale = getattr(
             self.unwrapped.cfg.obs_rand, 'fixed_asset_yaw', 0.0523599
@@ -92,13 +114,13 @@ class EEPoseNoiseWrapper(gym.Wrapper):
             (self.num_envs,), dtype=torch.float32, device=self.device
         )
 
-        # Check if yaw noise observation is enabled
-        self.use_yaw_noise = getattr(
-            self.unwrapped.cfg.obs_rand, 'use_yaw_noise', False
+        # Check if fixed asset yaw noise observation is enabled
+        self.use_fixed_asset_yaw_noise = getattr(
+            self.unwrapped.cfg.obs_rand, 'use_fixed_asset_yaw_noise', False
         )
 
-        # If yaw noise is enabled, add fingertip_yaw_rel_fixed to obs_order and state_order
-        if self.use_yaw_noise:
+        # If fixed asset yaw noise is enabled, add fingertip_yaw_rel_fixed to obs_order and state_order
+        if self.use_fixed_asset_yaw_noise:
             self._add_yaw_observation_to_config()
 
         # Initialize previous noisy position for FD calculation
@@ -108,6 +130,9 @@ class EEPoseNoiseWrapper(gym.Wrapper):
             dtype=torch.float32,
             device=self.device
         )
+
+        # Find ForceTorqueWrapper in wrapper chain for noisy FT observations
+        self._ft_wrapper = self._find_force_torque_wrapper()
 
         # Flag to track if wrapper is initialized
         self._wrapper_initialized = False
@@ -123,8 +148,10 @@ class EEPoseNoiseWrapper(gym.Wrapper):
 
         print(f" EE Pose Noise Wrapper initialized")
         print(f"  - Noise scale (ee_pos): {self.unwrapped.cfg.obs_rand.ee_pos}")
-        print(f"  - Yaw noise enabled: {self.use_yaw_noise}")
-        if self.use_yaw_noise:
+        print(f"  - Noise scale (ee_rpy): {self.unwrapped.cfg.obs_rand.ee_rpy} radians")
+        print(f"  - EE RPY noise active: {self.ee_rpy_noise_enabled}")
+        print(f"  - Fixed asset yaw noise enabled: {self.use_fixed_asset_yaw_noise}")
+        if self.use_fixed_asset_yaw_noise:
             print(f"  - Noise scale (fixed_asset_yaw): {np.rad2deg(self.fixed_asset_yaw_noise_scale):.1f} degrees")
         print(f"  - Noise timing: per-step (in _compute_intermediate_values)")
         print(f"  - FD velocity: computed from noisy positions")
@@ -161,11 +188,28 @@ class EEPoseNoiseWrapper(gym.Wrapper):
             else:
                 break
 
+    def _find_force_torque_wrapper(self):
+        """
+        Search the wrapper chain for a ForceTorqueWrapper instance.
+
+        Returns the wrapper if found, None otherwise. Used to call
+        get_force_torque_observation() for noisy FT data in observations.
+        """
+        current_env = self.env
+        while current_env is not None:
+            if current_env.__class__.__name__ == 'ForceTorqueWrapper':
+                return current_env
+            if hasattr(current_env, 'env'):
+                current_env = current_env.env
+            else:
+                break
+        return None
+
     def _add_yaw_observation_to_config(self):
         """
         Add fingertip_yaw_rel_fixed to obs_order, state_order, and update observation spaces.
 
-        Called during initialization when use_yaw_noise is True.
+        Called during initialization when use_fixed_asset_yaw_noise is True.
         """
         env_cfg = self.unwrapped.cfg
 
@@ -266,6 +310,14 @@ class EEPoseNoiseWrapper(gym.Wrapper):
             device=self.device
         )
 
+        # Noisy orientation quaternion (initialized to identity)
+        self.unwrapped.noisy_fingertip_quat = torch.zeros(
+            (self.num_envs, 4),
+            dtype=torch.float32,
+            device=self.device
+        )
+        self.unwrapped.noisy_fingertip_quat[:, 0] = 1.0  # Identity: (w=1, x=0, y=0, z=0)
+
         self._wrapper_initialized = True
 
     def _wrapped_compute_intermediate_values(self, dt):
@@ -308,6 +360,30 @@ class EEPoseNoiseWrapper(gym.Wrapper):
         # Update previous noisy position for next step
         self.prev_noisy_ee_pos = self.unwrapped.noisy_fingertip_pos.clone()
 
+        # Generate noisy EE orientation quaternion (RPY noise, no angular velocity propagation)
+        if self.ee_rpy_noise_enabled:
+            # Decompose clean quaternion to RPY
+            clean_roll, clean_pitch, clean_yaw = torch_utils.get_euler_xyz(
+                self.unwrapped.fingertip_midpoint_quat
+            )
+
+            # Per-step Gaussian RPY noise
+            rpy_noise = torch.randn(
+                (self.num_envs, 3),
+                dtype=torch.float32,
+                device=self.device
+            )
+            rpy_noise = rpy_noise * self.ee_rpy_noise_scale
+
+            # Add noise and convert back to quaternion
+            self.unwrapped.noisy_fingertip_quat = torch_utils.quat_from_euler_xyz(
+                roll=clean_roll + rpy_noise[:, 0],
+                pitch=clean_pitch + rpy_noise[:, 1],
+                yaw=clean_yaw + rpy_noise[:, 2]
+            )
+        else:
+            self.unwrapped.noisy_fingertip_quat = self.unwrapped.fingertip_midpoint_quat.clone()
+
     def _compute_fingertip_yaw_rel_fixed(self, noisy=True):
         """
         Compute fingertip yaw relative to fixed object (optionally with noise).
@@ -322,9 +398,15 @@ class EEPoseNoiseWrapper(gym.Wrapper):
         fixed_yaw_clean = torch_utils.get_euler_xyz(self.unwrapped.fixed_quat)[-1]
         fixed_yaw = fixed_yaw_clean.clone()
 
-        # Add noise if requested
+        # Add fixed asset yaw noise if requested
         if noisy:
             fixed_yaw = fixed_yaw + self.unwrapped.init_fixed_yaw_obs_noise
+
+        # Select source quaternion: noisy if RPY noise is active and we want noisy obs
+        if noisy and self.ee_rpy_noise_enabled:
+            source_quat = self.unwrapped.noisy_fingertip_quat
+        else:
+            source_quat = self.unwrapped.fingertip_midpoint_quat
 
         # Get fingertip yaw (from upright reference frame, accounting for gripper pointing down)
         # The gripper is inverted (pointing down), so we need to unrotate by 180 degrees around X
@@ -337,7 +419,7 @@ class EEPoseNoiseWrapper(gym.Wrapper):
             yaw=unrot_180_euler[:, 2]
         )
         fingertip_quat_unrot = torch_utils.quat_mul(
-            unrot_quat, self.unwrapped.fingertip_midpoint_quat
+            unrot_quat, source_quat
         )
         fingertip_yaw = torch_utils.get_euler_xyz(fingertip_quat_unrot)[-1]
 
@@ -370,7 +452,7 @@ class EEPoseNoiseWrapper(gym.Wrapper):
         obs_dict = {
             "fingertip_pos": self.unwrapped.noisy_fingertip_pos,  # Noisy position
             "fingertip_pos_rel_fixed": self.unwrapped.noisy_fingertip_pos - noisy_fixed_pos,  # Noisy relative
-            "fingertip_quat": self.unwrapped.fingertip_midpoint_quat,  # Clean orientation
+            "fingertip_quat": self.unwrapped.noisy_fingertip_quat,  # Noisy orientation (RPY noise)
             "ee_linvel": self.unwrapped.noisy_ee_linvel_fd,  # Noisy FD velocity
             "ee_angvel": self.unwrapped.ee_angvel_fd,  # Clean angular velocity
             "prev_actions": prev_actions,
@@ -396,27 +478,44 @@ class EEPoseNoiseWrapper(gym.Wrapper):
         }
 
         # Add yaw observation only if enabled
-        if self.use_yaw_noise:
+        if self.use_fixed_asset_yaw_noise:
             obs_dict["fingertip_yaw_rel_fixed"] = self._compute_fingertip_yaw_rel_fixed(noisy=True)
             state_dict["fingertip_yaw_rel_fixed"] = self._compute_fingertip_yaw_rel_fixed(noisy=False)
 
         # Add force_torque if it exists in obs/state order
+        # Use ForceTorqueWrapper.get_force_torque_observation() to include sensor noise
         if hasattr(self.unwrapped.cfg, 'obs_order') and 'force_torque' in self.unwrapped.cfg.obs_order:
-            if hasattr(self.unwrapped, 'robot_force_torque'):
-                obs_dict['force_torque'] = self.unwrapped.robot_force_torque
+            if self._ft_wrapper is None:
+                raise RuntimeError(
+                    "force_torque is in obs_order but ForceTorqueWrapper not found in wrapper chain. "
+                    "EEPoseNoiseWrapper requires ForceTorqueWrapper to be applied before it."
+                )
+            obs_dict['force_torque'] = self._ft_wrapper.get_force_torque_observation()
 
         if hasattr(self.unwrapped.cfg, 'state_order') and 'force_torque' in self.unwrapped.cfg.state_order:
-            if hasattr(self.unwrapped, 'robot_force_torque'):
-                state_dict['force_torque'] = self.unwrapped.robot_force_torque
+            if self._ft_wrapper is None:
+                raise RuntimeError(
+                    "force_torque is in state_order but ForceTorqueWrapper not found in wrapper chain. "
+                    "EEPoseNoiseWrapper requires ForceTorqueWrapper to be applied before it."
+                )
+            state_dict['force_torque'] = self._ft_wrapper.get_force_torque_observation()
 
         # Add in_contact if it exists in obs/state order
         if hasattr(self.unwrapped.cfg, 'obs_order') and 'in_contact' in self.unwrapped.cfg.obs_order:
-            if hasattr(self.unwrapped, 'in_contact'):
-                obs_dict['in_contact'] = self.unwrapped.in_contact[:, :3]
+            if self._ft_wrapper is None:
+                raise RuntimeError(
+                    "in_contact is in obs_order but ForceTorqueWrapper not found in wrapper chain. "
+                    "EEPoseNoiseWrapper requires ForceTorqueWrapper to be applied before it."
+                )
+            obs_dict['in_contact'] = self._ft_wrapper.get_in_contact_observation()
 
         if hasattr(self.unwrapped.cfg, 'state_order') and 'in_contact' in self.unwrapped.cfg.state_order:
-            if hasattr(self.unwrapped, 'in_contact'):
-                state_dict['in_contact'] = self.unwrapped.in_contact[:, :3]
+            if self._ft_wrapper is None:
+                raise RuntimeError(
+                    "in_contact is in state_order but ForceTorqueWrapper not found in wrapper chain. "
+                    "EEPoseNoiseWrapper requires ForceTorqueWrapper to be applied before it."
+                )
+            state_dict['in_contact'] = self._ft_wrapper.get_in_contact_observation()
 
         # Concatenate observations in the correct order
         obs_tensors = [obs_dict[obs_name] for obs_name in self.unwrapped.cfg.obs_order + ["prev_actions"]]
@@ -459,7 +558,7 @@ class EEPoseNoiseWrapper(gym.Wrapper):
         self.prev_noisy_ee_pos[env_ids] = clean_ee_pos + initial_noise
 
         # Generate fresh yaw noise for reset environments
-        if self.use_yaw_noise:
+        if self.use_fixed_asset_yaw_noise:
             yaw_noise = torch.randn(
                 (num_reset_envs,), dtype=torch.float32, device=self.device
             )
