@@ -312,6 +312,7 @@ def _comm_process_fn(state_shm, torque_shm, cmd_queue, response_queue,
                     sys.stdout.write(f"[COMM PROCESS] Reset motion failed: {e}\r\n")
                     sys.stdout.flush()
                     try:
+                        ctrl = None
                         robot.stop()
                     except Exception:
                         pass
@@ -498,6 +499,7 @@ def _comm_process_fn(state_shm, torque_shm, cmd_queue, response_queue,
                     sys.stdout.write(f"[COMM PROCESS] Retract motion failed: {e}\r\n")
                     sys.stdout.flush()
                     try:
+                        ctrl = None
                         robot.stop()
                     except Exception:
                         pass

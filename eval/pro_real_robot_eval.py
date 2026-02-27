@@ -1186,11 +1186,23 @@ def main():
                              "(num_episodes becomes per-range, total = 4 × num_episodes)")
     parser.add_argument("--policy_idx", type=int, default=None,
                         help="Run only the policy at this index (0-based) from the tag's run list")
+    parser.add_argument("--start_forge_idx", type=int, default=0,
+                        help="Forge eval: skip to this noise range index (0-based). "
+                             "Noise is still generated for all ranges to preserve seed consistency.")
     parser.add_argument("--log_trajectories", action="store_true",
                         help="Save per-episode 1kHz trajectory data as .npz files")
     parser.add_argument("--trajectory_dir", type=str, default="./trajectory_logs",
                         help="Directory for trajectory files")
     args = parser.parse_args()
+
+    # Validate --start_forge_idx
+    if args.start_forge_idx != 0 and not args.forge_eval:
+        raise ValueError("--start_forge_idx requires --forge_eval")
+    if args.start_forge_idx < 0 or args.start_forge_idx >= len(FORGE_NOISE_RANGES):
+        raise ValueError(
+            f"--start_forge_idx {args.start_forge_idx} out of range "
+            f"[0, {len(FORGE_NOISE_RANGES) - 1}]"
+        )
 
     # Set seed
     torch.manual_seed(args.eval_seed)
@@ -1410,6 +1422,8 @@ def main():
         if args.forge_eval:
             rp(f"EVALUATING {len(runs)} RUN(S), {args.num_episodes} EPISODES x {len(FORGE_NOISE_RANGES)} RANGES = {total_episodes} TOTAL")
             rp(f"  Forge eval noise ranges: {', '.join(r[2] for r in FORGE_NOISE_RANGES)}")
+            if args.start_forge_idx > 0:
+                rp(f"  Starting from range index {args.start_forge_idx} ({FORGE_NOISE_RANGES[args.start_forge_idx][2]})")
         else:
             rp(f"EVALUATING {len(runs)} RUN(S), {args.num_episodes} EPISODES EACH")
         rp(f"{'=' * 80}")
@@ -1438,267 +1452,498 @@ def main():
             # Validate observation dimensions
             obs_builder.validate_against_checkpoint(model_info['obs_dim'])
 
-            # Run episodes
-            episode_results = []
-            running_success = 0
-            running_breaks = 0
-            running_breaks_engaged = 0
-            running_timeouts = 0
-            running_timeouts_engaged = 0
-            for ep_idx in range(total_episodes):
-                result = run_episode(
-                    robot, policy_net, normalizer, model_info,
-                    obs_builder, controller, real_config,
-                    episode_noises[ep_idx],
-                    hand_init_pos,
-                    hand_init_orn, hand_init_orn_noise,
-                    keyboard,
-                    args.device,
-                    log_trajectory=args.log_trajectories,
-                )
+            # ================================================================
+            # Run episodes — forge eval iterates per-range with per-range
+            # WandB logging; non-forge uses a flat loop with one log at end.
+            # ================================================================
 
-                # Motion retries exhausted — skip remaining episodes for this policy
-                if result is None:
-                    sys.stdout.write("\r\n")
-                    rp(f"  [ABORT] Motion failed after retries — skipping remaining episodes")
+            if args.forge_eval:
+                # --- FORGE EVAL: per-range loop ---
+                episode_results = []  # all results across ranges (for final summary)
+                forge_range_results = {}
+                quit_requested = False
+                all_forge_wandb_metrics = {}  # accumulate per-range metrics with range-specific keys
+
+                # Init single WandB run for all forge ranges (matching wandb_eval.py pattern)
+                eval_run = None
+                if not args.no_wandb:
+                    import wandb
+                    keyboard.stop()
+                    eval_prefix = "Eval_RealRobotForge"
+                    eval_tags = [
+                        eval_prefix.lower(), f"source_run:{run_id}",
+                    ] + list(run.tags)
+                    eval_group = f"{eval_prefix}_{run.group}_{args.tag}" if run.group else None
+                    eval_run = wandb.init(
+                        project=run.project,
+                        entity=args.entity,
+                        name=f"{eval_prefix}_{run.name}",
+                        group=eval_group,
+                        tags=eval_tags,
+                        reinit="create_new",
+                        config={
+                            "source_run_id": run_id,
+                            "source_run_name": run.name,
+                            "source_run_group": run.group,
+                            "source_project": run.project,
+                            "eval_mode": "real_robot_forge",
+                            "eval_seed": args.eval_seed,
+                            "best_step": best_step,
+                            "num_episodes": args.num_episodes,
+                            "forge_ranges": [r[2] for r in FORGE_NOISE_RANGES],
+                            "real_robot_config": real_config,
+                        },
+                    )
+                    keyboard.start()
+
+                for range_idx, (_min_val, _max_val, range_name) in enumerate(FORGE_NOISE_RANGES):
+                    if range_idx < args.start_forge_idx:
+                        rp(f"  [SKIP] Range {range_idx} ({range_name}) — skipped via --start_forge_idx")
+                        continue
+
+                    rp(f"  --- Range {range_idx}/{len(FORGE_NOISE_RANGES)-1}: {range_name} ---")
+
+                    range_results = []
+                    running_success = 0
+                    running_breaks = 0
+                    running_breaks_engaged = 0
+                    running_timeouts = 0
+                    running_timeouts_engaged = 0
+                    abort = False
+
+                    for ep_in_range in range(args.num_episodes):
+                        ep_idx = range_idx * args.num_episodes + ep_in_range
+                        result = run_episode(
+                            robot, policy_net, normalizer, model_info,
+                            obs_builder, controller, real_config,
+                            episode_noises[ep_idx],
+                            hand_init_pos,
+                            hand_init_orn, hand_init_orn_noise,
+                            keyboard,
+                            args.device,
+                            log_trajectory=args.log_trajectories,
+                        )
+
+                        if result is None:
+                            sys.stdout.write("\r\n")
+                            rp(f"  [ABORT] Motion failed after retries — skipping remaining episodes in range")
+                            abort = True
+                            break
+
+                        result['forge_range_idx'] = range_idx
+
+                        if result['succeeded'] and not result['terminated']:
+                            running_success += 1
+                        elif result['terminated']:
+                            running_breaks += 1
+                            if result['engaged']:
+                                running_breaks_engaged += 1
+                        else:
+                            running_timeouts += 1
+                            if result['engaged']:
+                                running_timeouts_engaged += 1
+
+                        status = (f"  [{ep_in_range+1}/{args.num_episodes}] [{range_name}] "
+                                  f"S:{running_success} B:{running_breaks}({running_breaks_engaged}) "
+                                  f"T:{running_timeouts}({running_timeouts_engaged})")
+                        sys.stdout.write(f"\r\x1b[K{status}")
+                        sys.stdout.flush()
+
+                        range_results.append(result)
+
+                        # Save trajectory data
+                        if args.log_trajectories and result.get('trajectory_1khz') is not None:
+                            policy_traj_dir = os.path.join(args.trajectory_dir, run.name)
+                            os.makedirs(policy_traj_dir, exist_ok=True)
+                            np.savez_compressed(
+                                os.path.join(policy_traj_dir, f"traj_{ep_idx:03d}.npz"),
+                                **result['trajectory_1khz'],
+                                action_15hz=np.stack([a.numpy() for a in result['actions_15hz']]),
+                                sel_matrix_15hz=np.stack([s.numpy() for s in result['sel_matrices_15hz']]),
+                                time_ms_15hz=np.array(result['time_ms_15hz']),
+                            )
+
+                        if keyboard.should_quit:
+                            sys.stdout.write("\r\n")
+                            rp("  [QUIT] Shutting down...")
+                            quit_requested = True
+                            break
+
+                        if keyboard.should_pause:
+                            sys.stdout.write("\r\n")
+                            keyboard.set_paused(True)
+                            rp("  [PAUSED] 'c' = calibrate, Enter = resume, ESC = quit")
+                            while True:
+                                if keyboard.should_quit:
+                                    rp("  [QUIT] Shutting down...")
+                                    keyboard.set_paused(False)
+                                    quit_requested = True
+                                    break
+                                if keyboard.should_calibrate:
+                                    rp("  [CALIBRATING] Moving to goal XY, 5cm above goal Z...")
+                                    robot.retract_up(retract_height)
+                                    robot.reset_to_start_pose(cal_pose)
+                                    snap = robot.get_state_snapshot()
+                                    rp(f"  [CALIBRATED] xyz=[{snap.ee_pos[0].item():.4f}, "
+                                       f"{snap.ee_pos[1].item():.4f}, {snap.ee_pos[2].item():.4f}]")
+                                    rp("  [PAUSED] 'c' = calibrate, Enter = resume, ESC = quit")
+                                if keyboard.should_resume:
+                                    keyboard.set_paused(False)
+                                    rp("  [RESUMED]")
+                                    break
+                                time.sleep(0.05)
+                            if quit_requested:
+                                break
+                    else:
+                        # All episodes in this range completed
+                        sys.stdout.write("\r\n")
+
+                    # --- Log completed range results ---
+                    if range_results:
+                        episode_results.extend(range_results)
+
+                        r_n = len(range_results)
+                        r_s = sum(1 for ep in range_results if ep['succeeded'] and not ep['terminated'])
+                        r_b = sum(1 for ep in range_results if ep['terminated'])
+                        r_be = sum(1 for ep in range_results if ep['terminated'] and ep['engaged'])
+                        r_t = r_n - r_s - r_b
+                        r_te = sum(1 for ep in range_results if not ep['succeeded'] and not ep['terminated'] and ep['engaged'])
+                        forge_range_results[range_name] = {
+                            'n': r_n, 'success': r_s, 'breaks': r_b, 'break_eng': r_be,
+                            'timeouts': r_t, 'timeout_eng': r_te,
+                        }
+                        rp(f"    [{range_name:<10}] N={r_n:<3} S:{r_s:<3} B:{r_b}(E:{r_be}) T:{r_t}(E:{r_te})")
+
+                        # Compute per-range metrics and accumulate with range-specific keys
+                        range_metrics = compute_real_robot_metrics(range_results)
+                        for k, v in range_metrics.items():
+                            all_forge_wandb_metrics[f"Noise_Eval({range_name})_Core/{k}"] = v
+
+                    if quit_requested or abort:
+                        break
+
+                # Log all accumulated forge metrics to WandB in a single call
+                if eval_run is not None and all_forge_wandb_metrics:
+                    keyboard.stop()
+                    all_forge_wandb_metrics["total_steps"] = best_step
+                    eval_run.log(all_forge_wandb_metrics, step=best_step)
+                    eval_run.finish()
+                    keyboard.start()
+                    rp(f"    Logged forge eval to WandB: {eval_run.url}")
+                elif eval_run is not None:
+                    # No metrics collected but run was opened — close it cleanly
+                    keyboard.stop()
+                    eval_run.finish()
+                    keyboard.start()
+
+                # --- End-of-policy summary for forge eval ---
+                if not episode_results:
+                    rp(f"  Results for {run.name}: NO EPISODES COMPLETED")
+                    all_run_summaries.append({
+                        'name': run.name, 'total': 0, 'success': 0,
+                        'breaks': 0, 'break_eng': 0, 'timeouts': 0, 'timeout_eng': 0,
+                        'avg_len': 0.0, 'ssv': 0.0, 'avg_force': 0.0, 'max_force': 0.0,
+                        'energy': 0.0, 'blocked_avg': 0.0, 'blocked_std': 0.0,
+                    })
+                else:
+                    all_obs = []
+                    for ep in episode_results:
+                        all_obs.extend(ep['obs_history'])
+                    print_obs_distribution_comparison(all_obs, obs_builder, normalizer)
+
+                    metrics = compute_real_robot_metrics(episode_results)
+                    break_engaged = sum(1 for ep in episode_results if ep['terminated'] and ep['engaged'])
+                    timeout_engaged = sum(1 for ep in episode_results
+                                          if not ep['succeeded'] and not ep['terminated'] and ep['engaged'])
+
+                    rp(f"  Overall results for {run.name}:")
+                    for rn, rr in forge_range_results.items():
+                        rp(f"    [{rn:<10}] N={rr['n']:<3} S:{rr['success']:<3} B:{rr['breaks']}(E:{rr['break_eng']}) T:{rr['timeouts']}(E:{rr['timeout_eng']})")
+
+                    blocked_counts = [ep['force_blocked_steps'] for ep in episode_results]
+                    blocked_avg = sum(blocked_counts) / len(blocked_counts)
+                    blocked_std = (sum((x - blocked_avg) ** 2 for x in blocked_counts) / len(blocked_counts)) ** 0.5
+
+                    rp(f"    Successes: {metrics['num_successful_completions']}/{metrics['total_episodes']}")
+                    rp(f"    Breaks:    {metrics['num_breaks']}/{metrics['total_episodes']} ({break_engaged} engaged)")
+                    rp(f"    Timeouts:  {metrics['num_failed_timeouts']}/{metrics['total_episodes']} ({timeout_engaged} engaged)")
+                    rp(f"    Avg Length: {metrics['episode_length']:.1f}")
+                    rp(f"    SSV:       {metrics['ssv']:.4f}")
+                    rp(f"    Avg Force: {metrics['avg_force']:.2f}N")
+                    rp(f"    Max Force: {metrics['max_force']:.2f}N")
+                    rp(f"    Energy:    {metrics['energy']:.2f}")
+                    rp(f"    Blocked:   {blocked_avg:.1f} +/- {blocked_std:.1f} steps/ep")
+
+                    summary_entry = {
+                        'name': run.name,
+                        'total': metrics['total_episodes'],
+                        'success': metrics['num_successful_completions'],
+                        'breaks': metrics['num_breaks'],
+                        'break_eng': break_engaged,
+                        'timeouts': metrics['num_failed_timeouts'],
+                        'timeout_eng': timeout_engaged,
+                        'avg_len': metrics['episode_length'],
+                        'ssv': metrics['ssv'],
+                        'avg_force': metrics['avg_force'],
+                        'max_force': metrics['max_force'],
+                        'energy': metrics['energy'],
+                        'blocked_avg': blocked_avg,
+                        'blocked_std': blocked_std,
+                        'forge_range_results': forge_range_results,
+                    }
+                    all_run_summaries.append(summary_entry)
+
+                    if hybrid_enabled:
+                        total_fe_x = 0.0; total_cf_x = 0.0; total_mf_x = 0.0; total_steps_x = 0
+                        total_fe_y = 0.0; total_cf_y = 0.0; total_mf_y = 0.0; total_steps_y = 0
+                        total_fe_z = 0.0; total_cf_z = 0.0; total_mf_z = 0.0; total_steps_z = 0
+                        for ep in episode_results:
+                            total_fe_x += ep['avg_force_error_x'] * ep['force_selected_steps_x']
+                            total_cf_x += ep['avg_cmd_force_x'] * ep['force_selected_steps_x']
+                            total_mf_x += ep['avg_meas_force_x'] * ep['force_selected_steps_x']
+                            total_steps_x += ep['force_selected_steps_x']
+                            total_fe_y += ep['avg_force_error_y'] * ep['force_selected_steps_y']
+                            total_cf_y += ep['avg_cmd_force_y'] * ep['force_selected_steps_y']
+                            total_mf_y += ep['avg_meas_force_y'] * ep['force_selected_steps_y']
+                            total_steps_y += ep['force_selected_steps_y']
+                            total_fe_z += ep['avg_force_error_z'] * ep['force_selected_steps_z']
+                            total_cf_z += ep['avg_cmd_force_z'] * ep['force_selected_steps_z']
+                            total_mf_z += ep['avg_meas_force_z'] * ep['force_selected_steps_z']
+                            total_steps_z += ep['force_selected_steps_z']
+                        avg_fe_x = total_fe_x / total_steps_x if total_steps_x > 0 else 0.0
+                        avg_cf_x = total_cf_x / total_steps_x if total_steps_x > 0 else 0.0
+                        avg_mf_x = total_mf_x / total_steps_x if total_steps_x > 0 else 0.0
+                        avg_fe_y = total_fe_y / total_steps_y if total_steps_y > 0 else 0.0
+                        avg_cf_y = total_cf_y / total_steps_y if total_steps_y > 0 else 0.0
+                        avg_mf_y = total_mf_y / total_steps_y if total_steps_y > 0 else 0.0
+                        avg_fe_z = total_fe_z / total_steps_z if total_steps_z > 0 else 0.0
+                        avg_cf_z = total_cf_z / total_steps_z if total_steps_z > 0 else 0.0
+                        avg_mf_z = total_mf_z / total_steps_z if total_steps_z > 0 else 0.0
+                        rp(f"    Force Err X: {avg_fe_x:.3f}N ({total_steps_x} steps) cmd={avg_cf_x:.3f}N meas={avg_mf_x:.3f}N")
+                        rp(f"    Force Err Y: {avg_fe_y:.3f}N ({total_steps_y} steps) cmd={avg_cf_y:.3f}N meas={avg_mf_y:.3f}N")
+                        rp(f"    Force Err Z: {avg_fe_z:.3f}N ({total_steps_z} steps) cmd={avg_cf_z:.3f}N meas={avg_mf_z:.3f}N")
+
+                if quit_requested:
                     break
 
-                # Tag result with range index for per-range stats
-                if args.forge_eval:
-                    result['forge_range_idx'] = forge_range_indices[ep_idx]
-
-                if result['succeeded'] and not result['terminated']:
-                    running_success += 1
-                elif result['terminated']:
-                    running_breaks += 1
-                    if result['engaged']:
-                        running_breaks_engaged += 1
-                else:
-                    running_timeouts += 1
-                    if result['engaged']:
-                        running_timeouts_engaged += 1
-
-                if args.forge_eval:
-                    range_name = FORGE_NOISE_RANGES[forge_range_indices[ep_idx]][2]
-                    status = f"  [{ep_idx+1}/{total_episodes}] [{range_name}] S:{running_success} B:{running_breaks}({running_breaks_engaged}) T:{running_timeouts}({running_timeouts_engaged})"
-                else:
-                    status = f"  [{ep_idx+1}/{total_episodes}] S:{running_success} B:{running_breaks}({running_breaks_engaged}) T:{running_timeouts}({running_timeouts_engaged})"
-                sys.stdout.write(f"\r\x1b[K{status}")
-                sys.stdout.flush()
-
-                episode_results.append(result)
-
-                # Save 1kHz + 15Hz trajectory data to .npz
-                if args.log_trajectories and result.get('trajectory_1khz') is not None:
-                    policy_traj_dir = os.path.join(args.trajectory_dir, run.name)
-                    os.makedirs(policy_traj_dir, exist_ok=True)
-                    np.savez_compressed(
-                        os.path.join(policy_traj_dir, f"traj_{ep_idx:03d}.npz"),
-                        # 1kHz signals
-                        **result['trajectory_1khz'],
-                        # 15Hz signals
-                        action_15hz=np.stack([a.numpy() for a in result['actions_15hz']]),
-                        sel_matrix_15hz=np.stack([s.numpy() for s in result['sel_matrices_15hz']]),
-                        time_ms_15hz=np.array(result['time_ms_15hz']),
+            else:
+                # --- NON-FORGE: flat episode loop (unchanged) ---
+                episode_results = []
+                running_success = 0
+                running_breaks = 0
+                running_breaks_engaged = 0
+                running_timeouts = 0
+                running_timeouts_engaged = 0
+                for ep_idx in range(total_episodes):
+                    result = run_episode(
+                        robot, policy_net, normalizer, model_info,
+                        obs_builder, controller, real_config,
+                        episode_noises[ep_idx],
+                        hand_init_pos,
+                        hand_init_orn, hand_init_orn_noise,
+                        keyboard,
+                        args.device,
+                        log_trajectory=args.log_trajectories,
                     )
 
-                # Check for quit (ESC)
-                if keyboard.should_quit:
-                    sys.stdout.write("\r\n")
-                    rp("  [QUIT] Shutting down...")
-                    break
+                    if result is None:
+                        sys.stdout.write("\r\n")
+                        rp(f"  [ABORT] Motion failed after retries — skipping remaining episodes")
+                        break
 
-                # Check for pause request after episode completes
-                if keyboard.should_pause:
-                    sys.stdout.write("\r\n")
-                    keyboard.set_paused(True)
-                    rp("  [PAUSED] 'c' = calibrate, Enter = resume, ESC = quit")
-                    while True:
+                    if result['succeeded'] and not result['terminated']:
+                        running_success += 1
+                    elif result['terminated']:
+                        running_breaks += 1
+                        if result['engaged']:
+                            running_breaks_engaged += 1
+                    else:
+                        running_timeouts += 1
+                        if result['engaged']:
+                            running_timeouts_engaged += 1
+
+                    status = f"  [{ep_idx+1}/{total_episodes}] S:{running_success} B:{running_breaks}({running_breaks_engaged}) T:{running_timeouts}({running_timeouts_engaged})"
+                    sys.stdout.write(f"\r\x1b[K{status}")
+                    sys.stdout.flush()
+
+                    episode_results.append(result)
+
+                    if args.log_trajectories and result.get('trajectory_1khz') is not None:
+                        policy_traj_dir = os.path.join(args.trajectory_dir, run.name)
+                        os.makedirs(policy_traj_dir, exist_ok=True)
+                        np.savez_compressed(
+                            os.path.join(policy_traj_dir, f"traj_{ep_idx:03d}.npz"),
+                            **result['trajectory_1khz'],
+                            action_15hz=np.stack([a.numpy() for a in result['actions_15hz']]),
+                            sel_matrix_15hz=np.stack([s.numpy() for s in result['sel_matrices_15hz']]),
+                            time_ms_15hz=np.array(result['time_ms_15hz']),
+                        )
+
+                    if keyboard.should_quit:
+                        sys.stdout.write("\r\n")
+                        rp("  [QUIT] Shutting down...")
+                        break
+
+                    if keyboard.should_pause:
+                        sys.stdout.write("\r\n")
+                        keyboard.set_paused(True)
+                        rp("  [PAUSED] 'c' = calibrate, Enter = resume, ESC = quit")
+                        while True:
+                            if keyboard.should_quit:
+                                rp("  [QUIT] Shutting down...")
+                                keyboard.set_paused(False)
+                                break
+                            if keyboard.should_calibrate:
+                                rp("  [CALIBRATING] Moving to goal XY, 5cm above goal Z...")
+                                robot.retract_up(retract_height)
+                                robot.reset_to_start_pose(cal_pose)
+                                snap = robot.get_state_snapshot()
+                                rp(f"  [CALIBRATED] xyz=[{snap.ee_pos[0].item():.4f}, "
+                                   f"{snap.ee_pos[1].item():.4f}, {snap.ee_pos[2].item():.4f}]")
+                                rp("  [PAUSED] 'c' = calibrate, Enter = resume, ESC = quit")
+                            if keyboard.should_resume:
+                                keyboard.set_paused(False)
+                                rp("  [RESUMED]")
+                                break
+                            time.sleep(0.05)
                         if keyboard.should_quit:
-                            rp("  [QUIT] Shutting down...")
-                            keyboard.set_paused(False)
                             break
-                        if keyboard.should_calibrate:
-                            rp("  [CALIBRATING] Moving to goal XY, 5cm above goal Z...")
-                            robot.retract_up(retract_height)
-                            robot.reset_to_start_pose(cal_pose)
-                            snap = robot.get_state_snapshot()
-                            rp(f"  [CALIBRATED] xyz=[{snap.ee_pos[0].item():.4f}, "
-                               f"{snap.ee_pos[1].item():.4f}, {snap.ee_pos[2].item():.4f}]")
-                            rp("  [PAUSED] 'c' = calibrate, Enter = resume, ESC = quit")
-                        if keyboard.should_resume:
-                            keyboard.set_paused(False)
-                            rp("  [RESUMED]")
-                            break
-                        time.sleep(0.05)
+                else:
+                    sys.stdout.write("\r\n")
+
+                if not episode_results:
+                    rp(f"  Results for {run.name}: NO EPISODES COMPLETED (motion failures)")
+                    all_run_summaries.append({
+                        'name': run.name, 'total': 0, 'success': 0,
+                        'breaks': 0, 'break_eng': 0, 'timeouts': 0, 'timeout_eng': 0,
+                        'avg_len': 0.0, 'ssv': 0.0, 'avg_force': 0.0, 'max_force': 0.0,
+                        'energy': 0.0, 'blocked_avg': 0.0, 'blocked_std': 0.0,
+                    })
                     if keyboard.should_quit:
                         break
-            else:
-                # All episodes completed — finalize the status line
-                sys.stdout.write("\r\n")
+                    continue
 
-            # Handle case where no episodes completed (motion failures)
-            if not episode_results:
-                rp(f"  Results for {run.name}: NO EPISODES COMPLETED (motion failures)")
-                all_run_summaries.append({
-                    'name': run.name, 'total': 0, 'success': 0,
-                    'breaks': 0, 'break_eng': 0, 'timeouts': 0, 'timeout_eng': 0,
-                    'avg_len': 0.0, 'ssv': 0.0, 'max_force': 0.0, 'energy': 0.0,
-                    'blocked_avg': 0.0, 'blocked_std': 0.0,
-                })
+                all_obs = []
+                for ep in episode_results:
+                    all_obs.extend(ep['obs_history'])
+                print_obs_distribution_comparison(all_obs, obs_builder, normalizer)
+
+                metrics = compute_real_robot_metrics(episode_results)
+
+                break_engaged = 0
+                timeout_engaged = 0
+                for ep in episode_results:
+                    if ep['succeeded'] and not ep['terminated']:
+                        pass
+                    elif ep['terminated']:
+                        if ep['engaged']:
+                            break_engaged += 1
+                    else:
+                        if ep['engaged']:
+                            timeout_engaged += 1
+
+                rp(f"  Results for {run.name}:")
+
+                blocked_counts = [ep['force_blocked_steps'] for ep in episode_results]
+                blocked_avg = sum(blocked_counts) / len(blocked_counts)
+                blocked_std = (sum((x - blocked_avg) ** 2 for x in blocked_counts) / len(blocked_counts)) ** 0.5
+
+                rp(f"    Successes: {metrics['num_successful_completions']}/{metrics['total_episodes']}")
+                rp(f"    Breaks:    {metrics['num_breaks']}/{metrics['total_episodes']} ({break_engaged} engaged)")
+                rp(f"    Timeouts:  {metrics['num_failed_timeouts']}/{metrics['total_episodes']} ({timeout_engaged} engaged)")
+                rp(f"    Avg Length: {metrics['episode_length']:.1f}")
+                rp(f"    SSV:       {metrics['ssv']:.4f}")
+                rp(f"    Avg Force: {metrics['avg_force']:.2f}N")
+                rp(f"    Max Force: {metrics['max_force']:.2f}N")
+                rp(f"    Energy:    {metrics['energy']:.2f}")
+                rp(f"    Blocked:   {blocked_avg:.1f} +/- {blocked_std:.1f} steps/ep")
+
+                summary_entry = {
+                    'name': run.name,
+                    'total': metrics['total_episodes'],
+                    'success': metrics['num_successful_completions'],
+                    'breaks': metrics['num_breaks'],
+                    'break_eng': break_engaged,
+                    'timeouts': metrics['num_failed_timeouts'],
+                    'timeout_eng': timeout_engaged,
+                    'avg_len': metrics['episode_length'],
+                    'ssv': metrics['ssv'],
+                    'avg_force': metrics['avg_force'],
+                    'max_force': metrics['max_force'],
+                    'energy': metrics['energy'],
+                    'blocked_avg': blocked_avg,
+                    'blocked_std': blocked_std,
+                }
+                all_run_summaries.append(summary_entry)
+
+                if hybrid_enabled:
+                    total_fe_x = 0.0; total_cf_x = 0.0; total_mf_x = 0.0; total_steps_x = 0
+                    total_fe_y = 0.0; total_cf_y = 0.0; total_mf_y = 0.0; total_steps_y = 0
+                    total_fe_z = 0.0; total_cf_z = 0.0; total_mf_z = 0.0; total_steps_z = 0
+                    for ep in episode_results:
+                        total_fe_x += ep['avg_force_error_x'] * ep['force_selected_steps_x']
+                        total_cf_x += ep['avg_cmd_force_x'] * ep['force_selected_steps_x']
+                        total_mf_x += ep['avg_meas_force_x'] * ep['force_selected_steps_x']
+                        total_steps_x += ep['force_selected_steps_x']
+                        total_fe_y += ep['avg_force_error_y'] * ep['force_selected_steps_y']
+                        total_cf_y += ep['avg_cmd_force_y'] * ep['force_selected_steps_y']
+                        total_mf_y += ep['avg_meas_force_y'] * ep['force_selected_steps_y']
+                        total_steps_y += ep['force_selected_steps_y']
+                        total_fe_z += ep['avg_force_error_z'] * ep['force_selected_steps_z']
+                        total_cf_z += ep['avg_cmd_force_z'] * ep['force_selected_steps_z']
+                        total_mf_z += ep['avg_meas_force_z'] * ep['force_selected_steps_z']
+                        total_steps_z += ep['force_selected_steps_z']
+                    avg_fe_x = total_fe_x / total_steps_x if total_steps_x > 0 else 0.0
+                    avg_cf_x = total_cf_x / total_steps_x if total_steps_x > 0 else 0.0
+                    avg_mf_x = total_mf_x / total_steps_x if total_steps_x > 0 else 0.0
+                    avg_fe_y = total_fe_y / total_steps_y if total_steps_y > 0 else 0.0
+                    avg_cf_y = total_cf_y / total_steps_y if total_steps_y > 0 else 0.0
+                    avg_mf_y = total_mf_y / total_steps_y if total_steps_y > 0 else 0.0
+                    avg_fe_z = total_fe_z / total_steps_z if total_steps_z > 0 else 0.0
+                    avg_cf_z = total_cf_z / total_steps_z if total_steps_z > 0 else 0.0
+                    avg_mf_z = total_mf_z / total_steps_z if total_steps_z > 0 else 0.0
+                    rp(f"    Force Err X: {avg_fe_x:.3f}N ({total_steps_x} steps) cmd={avg_cf_x:.3f}N meas={avg_mf_x:.3f}N")
+                    rp(f"    Force Err Y: {avg_fe_y:.3f}N ({total_steps_y} steps) cmd={avg_cf_y:.3f}N meas={avg_mf_y:.3f}N")
+                    rp(f"    Force Err Z: {avg_fe_z:.3f}N ({total_steps_z} steps) cmd={avg_cf_z:.3f}N meas={avg_mf_z:.3f}N")
+
+                # Log to WandB
+                if not args.no_wandb:
+                    import wandb
+                    keyboard.stop()
+                    eval_tags = [
+                        "eval_realrobot", f"source_run:{run_id}",
+                    ] + list(run.tags)
+                    eval_group = f"Eval_RealRobot_{run.group}_{args.tag}" if run.group else None
+                    eval_run = wandb.init(
+                        project=run.project,
+                        entity=args.entity,
+                        name=f"Eval_RealRobot_{run.name}",
+                        group=eval_group,
+                        tags=eval_tags,
+                        reinit="create_new",
+                        config={
+                            "source_run_id": run_id,
+                            "source_run_name": run.name,
+                            "source_run_group": run.group,
+                            "source_project": run.project,
+                            "eval_mode": "real_robot",
+                            "eval_seed": args.eval_seed,
+                            "best_step": best_step,
+                            "num_episodes": args.num_episodes,
+                            "real_robot_config": real_config,
+                        },
+                    )
+                    prefixed_metrics = {f"Eval_Core/{k}": v for k, v in metrics.items()}
+                    prefixed_metrics["total_steps"] = best_step
+                    eval_run.log(prefixed_metrics)
+                    eval_run.finish()
+                    keyboard.start()
+                    rp(f"    Logged to WandB: {eval_run.url}")
+                else:
+                    rp("    (WandB logging disabled)")
+
                 if keyboard.should_quit:
                     break
-                continue
-
-            # Observation distribution comparison
-            all_obs = []
-            for ep in episode_results:
-                all_obs.extend(ep['obs_history'])
-            print_obs_distribution_comparison(all_obs, obs_builder, normalizer)
-
-            # Compute metrics
-            metrics = compute_real_robot_metrics(episode_results)
-
-            # Count engagements for breaks and timeouts
-            break_engaged = 0
-            timeout_engaged = 0
-            for ep in episode_results:
-                if ep['succeeded'] and not ep['terminated']:
-                    pass  # success
-                elif ep['terminated']:
-                    if ep['engaged']:
-                        break_engaged += 1
-                else:
-                    if ep['engaged']:
-                        timeout_engaged += 1
-
-            # Print summary
-            rp(f"  Results for {run.name}:")
-
-            # Per-range breakdown for forge eval
-            forge_range_results = {}
-            if args.forge_eval:
-                for range_idx, (_min_val, _max_val, range_name) in enumerate(FORGE_NOISE_RANGES):
-                    range_eps = [ep for ep in episode_results if ep.get('forge_range_idx') == range_idx]
-                    r_n = len(range_eps)
-                    r_s = sum(1 for ep in range_eps if ep['succeeded'] and not ep['terminated'])
-                    r_b = sum(1 for ep in range_eps if ep['terminated'])
-                    r_be = sum(1 for ep in range_eps if ep['terminated'] and ep['engaged'])
-                    r_t = r_n - r_s - r_b
-                    r_te = sum(1 for ep in range_eps if not ep['succeeded'] and not ep['terminated'] and ep['engaged'])
-                    forge_range_results[range_name] = {
-                        'n': r_n, 'success': r_s, 'breaks': r_b, 'break_eng': r_be,
-                        'timeouts': r_t, 'timeout_eng': r_te,
-                    }
-                    rp(f"    [{range_name:<10}] N={r_n:<3} S:{r_s:<3} B:{r_b}(E:{r_be}) T:{r_t}(E:{r_te})")
-
-            # Force blocked stats per episode
-            blocked_counts = [ep['force_blocked_steps'] for ep in episode_results]
-            blocked_avg = sum(blocked_counts) / len(blocked_counts) if blocked_counts else 0.0
-            blocked_std = (sum((x - blocked_avg) ** 2 for x in blocked_counts) / len(blocked_counts)) ** 0.5 if blocked_counts else 0.0
-
-            rp(f"    Successes: {metrics['num_successful_completions']}/{metrics['total_episodes']}")
-            rp(f"    Breaks:    {metrics['num_breaks']}/{metrics['total_episodes']} ({break_engaged} engaged)")
-            rp(f"    Timeouts:  {metrics['num_failed_timeouts']}/{metrics['total_episodes']} ({timeout_engaged} engaged)")
-            rp(f"    Avg Length: {metrics['episode_length']:.1f}")
-            rp(f"    SSV:       {metrics['ssv']:.4f}")
-            rp(f"    Avg Force: {metrics['avg_force']:.2f}N")
-            rp(f"    Max Force: {metrics['max_force']:.2f}N")
-            rp(f"    Energy:    {metrics['energy']:.2f}")
-            rp(f"    Blocked:   {blocked_avg:.1f} +/- {blocked_std:.1f} steps/ep")
-
-            # Store for final summary table
-            summary_entry = {
-                'name': run.name,
-                'total': metrics['total_episodes'],
-                'success': metrics['num_successful_completions'],
-                'breaks': metrics['num_breaks'],
-                'break_eng': break_engaged,
-                'timeouts': metrics['num_failed_timeouts'],
-                'timeout_eng': timeout_engaged,
-                'avg_len': metrics['episode_length'],
-                'ssv': metrics['ssv'],
-                'avg_force': metrics['avg_force'],
-                'max_force': metrics['max_force'],
-                'energy': metrics['energy'],
-                'blocked_avg': blocked_avg,
-                'blocked_std': blocked_std,
-            }
-            if args.forge_eval:
-                summary_entry['forge_range_results'] = forge_range_results
-            all_run_summaries.append(summary_entry)
-
-            # Force tracking error (hybrid only)
-            if hybrid_enabled:
-                total_fe_x = 0.0; total_cf_x = 0.0; total_mf_x = 0.0; total_steps_x = 0
-                total_fe_y = 0.0; total_cf_y = 0.0; total_mf_y = 0.0; total_steps_y = 0
-                total_fe_z = 0.0; total_cf_z = 0.0; total_mf_z = 0.0; total_steps_z = 0
-                for ep in episode_results:
-                    total_fe_x += ep['avg_force_error_x'] * ep['force_selected_steps_x']
-                    total_cf_x += ep['avg_cmd_force_x'] * ep['force_selected_steps_x']
-                    total_mf_x += ep['avg_meas_force_x'] * ep['force_selected_steps_x']
-                    total_steps_x += ep['force_selected_steps_x']
-                    total_fe_y += ep['avg_force_error_y'] * ep['force_selected_steps_y']
-                    total_cf_y += ep['avg_cmd_force_y'] * ep['force_selected_steps_y']
-                    total_mf_y += ep['avg_meas_force_y'] * ep['force_selected_steps_y']
-                    total_steps_y += ep['force_selected_steps_y']
-                    total_fe_z += ep['avg_force_error_z'] * ep['force_selected_steps_z']
-                    total_cf_z += ep['avg_cmd_force_z'] * ep['force_selected_steps_z']
-                    total_mf_z += ep['avg_meas_force_z'] * ep['force_selected_steps_z']
-                    total_steps_z += ep['force_selected_steps_z']
-                avg_fe_x = total_fe_x / total_steps_x if total_steps_x > 0 else 0.0
-                avg_cf_x = total_cf_x / total_steps_x if total_steps_x > 0 else 0.0
-                avg_mf_x = total_mf_x / total_steps_x if total_steps_x > 0 else 0.0
-                avg_fe_y = total_fe_y / total_steps_y if total_steps_y > 0 else 0.0
-                avg_cf_y = total_cf_y / total_steps_y if total_steps_y > 0 else 0.0
-                avg_mf_y = total_mf_y / total_steps_y if total_steps_y > 0 else 0.0
-                avg_fe_z = total_fe_z / total_steps_z if total_steps_z > 0 else 0.0
-                avg_cf_z = total_cf_z / total_steps_z if total_steps_z > 0 else 0.0
-                avg_mf_z = total_mf_z / total_steps_z if total_steps_z > 0 else 0.0
-                rp(f"    Force Err X: {avg_fe_x:.3f}N ({total_steps_x} steps) cmd={avg_cf_x:.3f}N meas={avg_mf_x:.3f}N")
-                rp(f"    Force Err Y: {avg_fe_y:.3f}N ({total_steps_y} steps) cmd={avg_cf_y:.3f}N meas={avg_mf_y:.3f}N")
-                rp(f"    Force Err Z: {avg_fe_z:.3f}N ({total_steps_z} steps) cmd={avg_cf_z:.3f}N meas={avg_mf_z:.3f}N")
-
-            # Log to WandB (restore terminal from raw mode so wandb prints normally)
-            if not args.no_wandb:
-                import wandb
-                keyboard.stop()
-                eval_tags = [
-                    "eval_real_robot", f"source_run:{run_id}",
-                ] + list(run.tags)
-                eval_group = f"Eval_RealRobot_{run.group}_{args.tag}" if run.group else None
-                eval_run = wandb.init(
-                    project=run.project,
-                    entity=args.entity,
-                    name=f"Eval_RealRobot_{run.name}",
-                    group=eval_group,
-                    tags=eval_tags,
-                    reinit="create_new",
-                    config={
-                        "source_run_id": run_id,
-                        "source_run_name": run.name,
-                        "source_run_group": run.group,
-                        "source_project": run.project,
-                        "eval_mode": "real_robot",
-                        "eval_seed": args.eval_seed,
-                        "best_step": best_step,
-                        "num_episodes": args.num_episodes,
-                        "real_robot_config": real_config,
-                    },
-                )
-
-                # Log with Eval_Core prefix (matching sim eval format)
-                prefixed_metrics = {f"Eval_Core/{k}": v for k, v in metrics.items()}
-                prefixed_metrics["total_steps"] = best_step
-                eval_run.log(prefixed_metrics)
-                eval_run.finish()
-                keyboard.start()
-                rp(f"    Logged to WandB: {eval_run.url}")
-            else:
-                rp("    (WandB logging disabled)")
-
-            if keyboard.should_quit:
-                break
 
         # 11. Final summary table across all policies
         if all_run_summaries:
