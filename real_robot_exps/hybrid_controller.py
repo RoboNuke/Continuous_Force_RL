@@ -33,7 +33,10 @@ ControlTargets = namedtuple('ControlTargets', [
     'task_prop_gains',   # [6] pose PD proportional gains
     'task_deriv_gains',  # [6] pose PD derivative gains
     'force_kp',          # [6] force proportional gains
-    'force_di_wrench',   # [6] precomputed D+I contribution (constant within policy step)
+    'force_di_wrench',   # [6] precomputed force D+I contribution (constant within policy step)
+    'pose_ki',           # [6] pose integral gains (accumulated at 1kHz)
+    'pose_integral_clamp',  # float — anti-windup clamp for pose integral error
+    'pose_integral_reset_on_target',  # bool — reset integral each policy step
     'default_dof_pos',   # [7] null-space target joint positions
     'kp_null',           # float — null-space proportional gain
     'kd_null',           # float — null-space derivative gain
@@ -352,6 +355,7 @@ def compute_torques_from_targets(
     jacobian: torch.Tensor,
     mass_matrix: torch.Tensor,
     targets: ControlTargets,
+    pose_integral_error: torch.Tensor = None,
 ) -> torch.Tensor:
     """Recompute joint torques from current state and fixed control targets.
 
@@ -362,6 +366,10 @@ def compute_torques_from_targets(
     The pose wrench PD is fully recomputed. For the force wrench, the P-term
     is recomputed from current F/T; the D+I contribution is precomputed at
     the policy rate and held constant (matching sim's ~120Hz decimation).
+
+    The pose integral accumulates at 1kHz and is reset each policy step
+    (when targets change). The caller owns the pose_integral_error tensor
+    and is responsible for resetting it.
 
     Args:
         ee_pos: [3] current EE position.
@@ -374,9 +382,11 @@ def compute_torques_from_targets(
         jacobian: [6,7] current geometric Jacobian.
         mass_matrix: [7,7] current arm mass matrix.
         targets: ControlTargets from the latest policy step.
+        pose_integral_error: [6] mutable tensor for pose integral accumulation.
+            Mutated in-place each call. If None, pose integral is disabled.
 
     Returns:
-        (joint_torques [7], task_wrench [6]) tuple.
+        (joint_torques [7], task_wrench [6], jt_torque [7], null_torque [7]) tuple.
     """
     # 1. Pose wrench — full PD recomputation from current state
     pose_wrench = compute_pose_task_wrench(
@@ -384,6 +394,18 @@ def compute_torques_from_targets(
         targets.target_pos, targets.target_quat,
         targets.task_prop_gains, targets.task_deriv_gains,
     )
+
+    # 1b. Pose integral — accumulate at 1kHz, add I-term to pose wrench
+    if pose_integral_error is not None:
+        pos_error, aa_error = compute_pose_error(
+            ee_pos, ee_quat, targets.target_pos, targets.target_quat,
+        )
+        pose_error = torch.cat([pos_error, aa_error], dim=-1)
+        pose_integral_error += pose_error
+        pose_integral_error.clamp_(
+            -targets.pose_integral_clamp, targets.pose_integral_clamp,
+        )
+        pose_wrench = pose_wrench + targets.pose_ki * pose_integral_error
 
     # 2. Force wrench — P-term from current F/T + precomputed D+I offset
     force_p = targets.force_kp * (targets.target_force - force_torque)
@@ -637,6 +659,23 @@ class RealRobotController:
         else:
             print("[RealRobotController] Using WANDB training control gains (control_gains.use_rr_gains=false)")
 
+        # Pose integral control (applies to both pose-only and hybrid paths)
+        self.enable_pose_integral = gains_cfg.get('enable_pose_integral', False)
+        if self.enable_pose_integral:
+            if 'pose_ki' not in gains_cfg:
+                raise RuntimeError(
+                    "control_gains.enable_pose_integral=true but 'pose_ki' not specified"
+                )
+            self.pose_ki = torch.tensor(
+                gains_cfg['pose_ki'], device=device, dtype=torch.float32
+            )
+            self.pose_integral_clamp = gains_cfg.get('pose_integral_clamp', 50.0)
+            self.pose_integral_reset_on_target = gains_cfg.get('pose_integral_reset_on_target', True)
+        else:
+            self.pose_ki = None
+            self.pose_integral_clamp = 0.0
+            self.pose_integral_reset_on_target = True
+
         # Singularity damping for J M^-1 J^T inverse
         if gains_cfg.get('singularity_damping_enabled', False):
             self.singularity_damping = gains_cfg.get('singularity_damping_lambda', 0.01)
@@ -684,6 +723,8 @@ class RealRobotController:
         print(f"[RealRobotController] task_deriv_gains={self.task_deriv_gains.tolist()}")
         print(f"[RealRobotController] kp_null={self.kp_null}, kd_null={self.kd_null}")
         print(f"[RealRobotController] default_dof_pos={self.default_dof_pos.tolist()}")
+        print(f"[RealRobotController] enable_pose_integral={self.enable_pose_integral}"
+              f"{f', pose_ki={self.pose_ki.tolist()}, clamp={self.pose_integral_clamp}, reset_on_target={self.pose_integral_reset_on_target}' if self.pose_ki is not None else ''}")
         if self.hybrid_enabled:
             print(f"[RealRobotController] force_kp={self.force_kp.tolist()}")
             print(f"[RealRobotController] enable_force_derivative={self.enable_force_derivative}"
@@ -745,6 +786,9 @@ class RealRobotController:
     ) -> Dict[str, torch.Tensor]:
         """Compute joint torques and intermediate targets from policy action.
 
+        Unified control path for both pose-only and hybrid modes. Pose-only
+        is equivalent to hybrid with sel_matrix=zeros and no force computation.
+
         Args:
             raw_action: [action_dim] raw policy output (after sigmoid/tanh).
             ee_pos: [3] current EE position.
@@ -764,55 +808,84 @@ class RealRobotController:
                 'ema_actions': [action_dim] EMA-smoothed actions (for prev_actions obs)
                 'target_pos': [3] Cartesian position target
                 'target_quat': [4] Cartesian orientation target
-                'target_force': [6] Force target (hybrid only)
-                'sel_matrix': [6] Selection matrix (hybrid only)
+                'target_force': [6] Force target (zeros for pose-only)
+                'sel_matrix': [6] Selection matrix (zeros for pose-only)
                 'task_wrench': [6] Final task-space wrench
+                'control_targets': ControlTargets for 1kHz recomputation
         """
+        # ----------------------------------------------------------------
+        # Step 1: EMA smoothing
+        # ----------------------------------------------------------------
         if self.hybrid_enabled:
-            return self._compute_hybrid(
-                raw_action, ee_pos, ee_quat, ee_linvel, ee_angvel,
-                force_torque, joint_pos, joint_vel, jacobian, mass_matrix,
-                goal_position,
+            fs = self.force_size
+
+            # Selection EMA
+            sel_actions = raw_action[:fs]
+            if self.no_sel_ema:
+                self.ema_actions[:fs] = sel_actions
+            else:
+                self.ema_actions[:fs] = (
+                    self.ema_factor * sel_actions
+                    + (1 - self.ema_factor) * self.ema_actions[:fs]
+                )
+
+            # Pose + force EMA
+            apply_ema_force_effective = self.apply_ema_force or (self.ema_mode == 'wrench')
+            if apply_ema_force_effective:
+                pf_start, pf_end = fs, 2*fs + 6
+            else:
+                pf_start, pf_end = fs, fs + 6
+                self.ema_actions[fs+6:] = raw_action[fs+6:]
+
+            self.ema_actions[pf_start:pf_end] = (
+                self.ema_factor * raw_action[pf_start:pf_end]
+                + (1 - self.ema_factor) * self.ema_actions[pf_start:pf_end]
             )
+
+            # Select control actions (raw for wrench mode, ema for action mode)
+            if self.ema_mode == 'wrench':
+                control_actions = raw_action
+            else:
+                control_actions = self.ema_actions
         else:
-            return self._compute_pose_only(
-                raw_action, ee_pos, ee_quat, ee_linvel, ee_angvel,
-                joint_pos, joint_vel, jacobian, mass_matrix, goal_position,
+            # Uniform EMA on all 6 actions
+            self.ema_actions = (
+                self.ema_factor * raw_action
+                + (1 - self.ema_factor) * self.ema_actions
             )
+            control_actions = self.ema_actions
 
-    # ========================================================================
-    # POSE-ONLY control (sigma_idx == 0)
-    # ========================================================================
+        # ----------------------------------------------------------------
+        # Step 2: Selection matrix
+        # ----------------------------------------------------------------
+        if self.hybrid_enabled:
+            sel_matrix = torch.zeros(6, device=self.device)
+            if self.ctrl_mode == "force_tz":
+                sel_matrix[:3] = (self.ema_actions[:3] > 0.5).float()
+                sel_matrix[3:5] = 0.0
+                sel_matrix[5] = (self.ema_actions[3] > 0.5).float()
+            elif self.ctrl_mode == "force_torque":
+                sel_matrix[:6] = (self.ema_actions[:6] > 0.5).float()
+            else:  # force_only
+                sel_matrix[:3] = (self.ema_actions[:3] > 0.5).float()
+                sel_matrix[3:] = 0.0
+        else:
+            sel_matrix = torch.zeros(6, device=self.device)
 
-    def _compute_pose_only(
-        self,
-        raw_action: torch.Tensor,
-        ee_pos: torch.Tensor,
-        ee_quat: torch.Tensor,
-        ee_linvel: torch.Tensor,
-        ee_angvel: torch.Tensor,
-        joint_pos: torch.Tensor,
-        joint_vel: torch.Tensor,
-        jacobian: torch.Tensor,
-        mass_matrix: torch.Tensor,
-        goal_position: torch.Tensor,
-    ) -> Dict[str, torch.Tensor]:
-        """Pose-only control path (matches FactoryEnv._apply_action)."""
-        # Step 1: EMA on all 6 actions uniformly
-        self.ema_actions = (
-            self.ema_factor * raw_action
-            + (1 - self.ema_factor) * self.ema_actions
-        )
-
-        # Step 2: Position target
-        pos_actions = self.ema_actions[:3] * self.pos_threshold
+        # ----------------------------------------------------------------
+        # Step 3: Position target
+        # ----------------------------------------------------------------
+        pos_offset = self.force_size if self.hybrid_enabled else 0
+        pos_actions = control_actions[pos_offset:pos_offset+3] * self.pos_threshold
         pos_target = ee_pos + pos_actions
         delta_pos = pos_target - goal_position
         pos_error_clipped = torch.clamp(delta_pos, -self.pos_bounds, self.pos_bounds)
         target_pos = goal_position + pos_error_clipped
 
-        # Step 3: Rotation target
-        rot_actions = self.ema_actions[3:6] * self.rot_threshold
+        # ----------------------------------------------------------------
+        # Step 4: Rotation target
+        # ----------------------------------------------------------------
+        rot_actions = control_actions[pos_offset+3:pos_offset+6] * self.rot_threshold
         angle = torch.norm(rot_actions)
         axis = rot_actions / (angle + 1e-6)
 
@@ -829,233 +902,84 @@ class RealRobotController:
         pitch = torch.tensor(0.0, device=self.device, dtype=torch.float32)
         target_quat = quat_from_euler_xyz(roll, pitch, yaw)
 
-        # Step 4: Compute pose wrench (PD control)
-        task_wrench = compute_pose_task_wrench(
-            ee_pos, ee_quat, ee_linvel, ee_angvel,
-            target_pos, target_quat,
-            self.task_prop_gains, self.task_deriv_gains,
-        )
-
-        # Step 5: J^T mapping + null-space compensation
-        joint_torques, _, _ = compute_joint_torques_from_wrench(
-            task_wrench, jacobian, mass_matrix,
-            joint_pos, joint_vel, self.default_dof_pos,
-            self.kp_null, self.kd_null, self.singularity_damping,
-            self.partial_inertia_decoupling, self.sep_ori,
-        )
-
-        # Build ControlTargets for 1kHz recomputation
-        control_targets = ControlTargets(
-            target_pos=target_pos,
-            target_quat=target_quat,
-            target_force=torch.zeros(6, device=self.device),
-            sel_matrix=torch.zeros(6, device=self.device),
-            task_prop_gains=self.task_prop_gains,
-            task_deriv_gains=self.task_deriv_gains,
-            force_kp=torch.zeros(6, device=self.device),
-            force_di_wrench=torch.zeros(6, device=self.device),
-            default_dof_pos=self.default_dof_pos,
-            kp_null=self.kp_null,
-            kd_null=self.kd_null,
-            pos_bounds=self.pos_bounds,
-            goal_position=goal_position,
-            ctrl_mode=self.ctrl_mode,
-            singularity_damping=self.singularity_damping,
-            partial_inertia_decoupling=self.partial_inertia_decoupling,
-            sep_ori=self.sep_ori,
-        )
-
-        return {
-            'joint_torques': joint_torques,
-            'ema_actions': self.ema_actions.clone(),
-            'target_pos': target_pos,
-            'target_quat': target_quat,
-            'target_force': torch.zeros(6, device=self.device),
-            'sel_matrix': torch.zeros(6, device=self.device),
-            'task_wrench': task_wrench,
-            'control_targets': control_targets,
-        }
-
-    # ========================================================================
-    # HYBRID control (sigma_idx > 0)
-    # ========================================================================
-
-    def _compute_hybrid(
-        self,
-        raw_action: torch.Tensor,
-        ee_pos: torch.Tensor,
-        ee_quat: torch.Tensor,
-        ee_linvel: torch.Tensor,
-        ee_angvel: torch.Tensor,
-        force_torque: torch.Tensor,
-        joint_pos: torch.Tensor,
-        joint_vel: torch.Tensor,
-        jacobian: torch.Tensor,
-        mass_matrix: torch.Tensor,
-        goal_position: torch.Tensor,
-    ) -> Dict[str, torch.Tensor]:
-        """Hybrid force-position control path.
-
-        Matches HybridForcePositionWrapper._apply_ema_to_actions() +
-        _compute_control_targets() + _wrapped_apply_action().
-        """
-        fs = self.force_size
-
         # ----------------------------------------------------------------
-        # Step 1: Apply per-stream EMA (matching lines 556-637)
+        # Step 5: Force target + integral/derivative state (hybrid only)
         # ----------------------------------------------------------------
-        # Selection EMA
-        sel_actions = raw_action[:fs]
-        if self.no_sel_ema:
-            self.ema_actions[:fs] = sel_actions
-        else:
-            self.ema_actions[:fs] = (
-                self.ema_factor * sel_actions
-                + (1 - self.ema_factor) * self.ema_actions[:fs]
-            )
+        if self.hybrid_enabled:
+            fs = self.force_size
+            force_actions = control_actions[fs+6:2*fs+6]
+            target_force = torch.zeros(6, device=self.device)
 
-        # Pose + force EMA
-        apply_ema_force_effective = self.apply_ema_force or (self.ema_mode == 'wrench')
-        if apply_ema_force_effective:
-            # EMA on both pose and force
-            pf_start, pf_end = fs, 2*fs + 6
-        else:
-            # EMA on pose only, raw force
-            pf_start, pf_end = fs, fs + 6
-            self.ema_actions[fs+6:] = raw_action[fs+6:]
-
-        self.ema_actions[pf_start:pf_end] = (
-            self.ema_factor * raw_action[pf_start:pf_end]
-            + (1 - self.ema_factor) * self.ema_actions[pf_start:pf_end]
-        )
-
-        # Select control actions (raw for wrench mode, ema for action mode)
-        if self.ema_mode == 'wrench':
-            control_actions = raw_action
-        else:
-            control_actions = self.ema_actions
-
-        # ----------------------------------------------------------------
-        # Step 2: Selection matrix (matching _compute_control_targets)
-        # ----------------------------------------------------------------
-        sel_matrix = torch.zeros(6, device=self.device)
-        if self.ctrl_mode == "force_tz":
-            sel_matrix[:3] = (self.ema_actions[:3] > 0.5).float()
-            sel_matrix[3:5] = 0.0  # Rx, Ry always position
-            sel_matrix[5] = (self.ema_actions[3] > 0.5).float()
-        elif self.ctrl_mode == "force_torque":
-            sel_matrix[:6] = (self.ema_actions[:6] > 0.5).float()
-        else:  # force_only
-            sel_matrix[:3] = (self.ema_actions[:3] > 0.5).float()
-            sel_matrix[3:] = 0.0  # All rotation is position control
-
-        # ----------------------------------------------------------------
-        # Step 3: Position target
-        # ----------------------------------------------------------------
-        pos_actions = control_actions[fs:fs+3] * self.pos_threshold
-        pos_target = ee_pos + pos_actions
-        delta_pos = pos_target - goal_position
-        pos_error_clipped = torch.clamp(delta_pos, -self.pos_bounds, self.pos_bounds)
-        target_pos = goal_position + pos_error_clipped
-
-        # ----------------------------------------------------------------
-        # Step 4: Rotation target
-        # ----------------------------------------------------------------
-        rot_actions = control_actions[fs+3:fs+6] * self.rot_threshold
-        angle = torch.norm(rot_actions)
-        axis = rot_actions / (angle + 1e-6)
-
-        if angle > 1e-6:
-            rot_quat = quat_from_angle_axis(angle, axis)
-        else:
-            rot_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device)
-
-        target_quat = quat_mul(rot_quat, ee_quat)
-
-        # Restrict to upright
-        roll, pitch, yaw = get_euler_xyz(target_quat)
-        roll = torch.tensor(math.pi, device=self.device, dtype=torch.float32)
-        pitch = torch.tensor(0.0, device=self.device, dtype=torch.float32)
-        target_quat = quat_from_euler_xyz(roll, pitch, yaw)
-
-        # ----------------------------------------------------------------
-        # Step 5: Force target
-        # ----------------------------------------------------------------
-        force_actions = control_actions[fs+6:2*fs+6]
-        target_force = torch.zeros(6, device=self.device)
-
-        if self.use_delta_force:
-            force_delta = force_actions[:3] * self.force_threshold
-            target_force[:3] = torch.clamp(
-                force_delta + force_torque[:3],
-                -self.force_bounds, self.force_bounds,
-            )
-        else:
-            target_force[:3] = force_actions[:3] * self.force_bounds
-
-        # Async Z bounds: map Z force to [-bounds, 0] (downward only)
-        if self.async_z_bounds:
-            target_force[2] = (target_force[2] - self.force_bounds[2]) / 2.0
-
-        # Handle torque based on ctrl_mode
-        if self.ctrl_mode == "force_tz":
             if self.use_delta_force:
-                tz_delta = force_actions[3] * self.torque_threshold[2] / self.force_threshold[0]
-                target_force[5] = torch.clamp(
-                    tz_delta + force_torque[5],
-                    -self.torque_bounds[2], self.torque_bounds[2],
+                force_delta = force_actions[:3] * self.force_threshold
+                target_force[:3] = torch.clamp(
+                    force_delta + force_torque[:3],
+                    -self.force_bounds, self.force_bounds,
                 )
             else:
-                target_force[5] = force_actions[3] * self.torque_bounds[2]
-        elif self.ctrl_mode == "force_torque":
-            if self.use_delta_force:
-                torque_delta = force_actions[3:] * self.torque_threshold / self.force_threshold[:3]
-                target_force[3:] = torch.clamp(
-                    torque_delta + force_torque[3:],
-                    -self.torque_bounds, self.torque_bounds,
+                target_force[:3] = force_actions[:3] * self.force_bounds
+
+            # Async Z bounds: map Z force to [-bounds, 0] (downward only)
+            if self.async_z_bounds:
+                target_force[2] = (target_force[2] - self.force_bounds[2]) / 2.0
+
+            # Handle torque based on ctrl_mode
+            if self.ctrl_mode == "force_tz":
+                if self.use_delta_force:
+                    tz_delta = force_actions[3] * self.torque_threshold[2] / self.force_threshold[0]
+                    target_force[5] = torch.clamp(
+                        tz_delta + force_torque[5],
+                        -self.torque_bounds[2], self.torque_bounds[2],
+                    )
+                else:
+                    target_force[5] = force_actions[3] * self.torque_bounds[2]
+            elif self.ctrl_mode == "force_torque":
+                if self.use_delta_force:
+                    torque_delta = force_actions[3:] * self.torque_threshold / self.force_threshold[:3]
+                    target_force[3:] = torch.clamp(
+                        torque_delta + force_torque[3:],
+                        -self.torque_bounds, self.torque_bounds,
+                    )
+                else:
+                    target_force[3:] = force_actions[3:] * self.torque_bounds
+
+            # Integral state update (if enabled)
+            if self.enable_force_integral:
+                force_error = target_force - force_torque
+                force_ctrl_mask = sel_matrix > 0.5
+
+                # Reset integral for axes that just switched to force control
+                just_switched = (self.prev_sel_matrix <= 0.5) & (sel_matrix > 0.5)
+                self.force_integral_error = torch.where(
+                    just_switched, torch.zeros_like(self.force_integral_error),
+                    self.force_integral_error,
                 )
-            else:
-                target_force[3:] = force_actions[3:] * self.torque_bounds
+
+                # Accumulate only for force-controlled axes
+                self.force_integral_error = torch.where(
+                    force_ctrl_mask,
+                    self.force_integral_error + force_error,
+                    self.force_integral_error,
+                )
+
+                # Anti-windup
+                self.force_integral_error = torch.clamp(
+                    self.force_integral_error,
+                    -self.force_integral_clamp, self.force_integral_clamp,
+                )
+
+            # Update previous sel matrix
+            self.prev_sel_matrix = sel_matrix.clone()
+
+            # Derivative initialization (avoid spike on first step)
+            if self.enable_force_derivative and self.derivative_needs_init:
+                self.prev_force_error = (target_force - force_torque).clone()
+                self.derivative_needs_init = False
+        else:
+            target_force = torch.zeros(6, device=self.device)
 
         # ----------------------------------------------------------------
-        # Step 6: Integral state update (if enabled)
-        # ----------------------------------------------------------------
-        if self.enable_force_integral:
-            force_error = target_force - force_torque
-            force_ctrl_mask = sel_matrix > 0.5
-
-            # Reset integral for axes that just switched to force control
-            just_switched = (self.prev_sel_matrix <= 0.5) & (sel_matrix > 0.5)
-            self.force_integral_error = torch.where(
-                just_switched, torch.zeros_like(self.force_integral_error),
-                self.force_integral_error,
-            )
-
-            # Accumulate only for force-controlled axes
-            self.force_integral_error = torch.where(
-                force_ctrl_mask,
-                self.force_integral_error + force_error,
-                self.force_integral_error,
-            )
-
-            # Anti-windup
-            self.force_integral_error = torch.clamp(
-                self.force_integral_error,
-                -self.force_integral_clamp, self.force_integral_clamp,
-            )
-
-        # Update previous sel matrix
-        self.prev_sel_matrix = sel_matrix.clone()
-
-        # ----------------------------------------------------------------
-        # Step 7: Derivative initialization (avoid spike on first step)
-        # ----------------------------------------------------------------
-        if self.enable_force_derivative and self.derivative_needs_init:
-            self.prev_force_error = (target_force - force_torque).clone()
-            self.derivative_needs_init = False
-
-        # ----------------------------------------------------------------
-        # Step 8: Compute wrenches
+        # Step 6: Pose wrench (shared)
         # ----------------------------------------------------------------
         pose_wrench = compute_pose_task_wrench(
             ee_pos, ee_quat, ee_linvel, ee_angvel,
@@ -1063,31 +987,39 @@ class RealRobotController:
             self.task_prop_gains, self.task_deriv_gains,
         )
 
-        force_wrench = compute_force_task_wrench(
-            force_torque, target_force, self.force_kp,
-            task_deriv_gains=self.force_kd,
-            prev_force_error=self.prev_force_error if self.enable_force_derivative else None,
-            task_integ_gains=self.force_ki,
-            force_integral_error=self.force_integral_error if self.enable_force_integral else None,
-            enable_derivative=self.enable_force_derivative,
-            enable_integral=self.enable_force_integral,
-        )
-
-        # Update prev force error (only for force-controlled axes)
-        if self.enable_force_derivative:
-            current_force_error = target_force - force_torque
-            force_ctrl_mask = sel_matrix > 0.5
-            self.prev_force_error = torch.where(
-                force_ctrl_mask, current_force_error, self.prev_force_error,
+        # ----------------------------------------------------------------
+        # Step 7: Force wrench (hybrid only)
+        # ----------------------------------------------------------------
+        if self.hybrid_enabled:
+            force_wrench = compute_force_task_wrench(
+                force_torque, target_force, self.force_kp,
+                task_deriv_gains=self.force_kd,
+                prev_force_error=self.prev_force_error if self.enable_force_derivative else None,
+                task_integ_gains=self.force_ki,
+                force_integral_error=self.force_integral_error if self.enable_force_integral else None,
+                enable_derivative=self.enable_force_derivative,
+                enable_integral=self.enable_force_integral,
             )
 
+            # Update prev force error (only for force-controlled axes)
+            if self.enable_force_derivative:
+                current_force_error = target_force - force_torque
+                force_ctrl_mask = sel_matrix > 0.5
+                self.prev_force_error = torch.where(
+                    force_ctrl_mask, current_force_error, self.prev_force_error,
+                )
+        else:
+            force_wrench = torch.zeros(6, device=self.device)
+
         # ----------------------------------------------------------------
-        # Step 9: Blend wrenches
+        # Step 8: Blend wrenches (sel_matrix=0 means pure pose for pose-only)
         # ----------------------------------------------------------------
         task_wrench = (1.0 - sel_matrix) * pose_wrench + sel_matrix * force_wrench
 
-        # Wrench EMA (if enabled)
-        if self.ema_mode == 'wrench':
+        # ----------------------------------------------------------------
+        # Step 9: Wrench EMA (hybrid only, if ema_mode == 'wrench')
+        # ----------------------------------------------------------------
+        if self.hybrid_enabled and self.ema_mode == 'wrench':
             task_wrench = (
                 self.ema_factor * task_wrench
                 + (1.0 - self.ema_factor) * self.ema_task_wrench
@@ -1105,12 +1037,13 @@ class RealRobotController:
                 task_wrench[i] = 0.0
 
         # ----------------------------------------------------------------
-        # Step 11: Rotation override based on ctrl_mode
+        # Step 11: Rotation override (hybrid only)
         # ----------------------------------------------------------------
-        if self.ctrl_mode == "force_only":
-            task_wrench[3:] = pose_wrench[3:]
-        elif self.ctrl_mode == "force_tz":
-            task_wrench[3:5] = pose_wrench[3:5]  # Rx, Ry always position
+        if self.hybrid_enabled:
+            if self.ctrl_mode == "force_only":
+                task_wrench[3:] = pose_wrench[3:]
+            elif self.ctrl_mode == "force_tz":
+                task_wrench[3:5] = pose_wrench[3:5]
 
         # ----------------------------------------------------------------
         # Step 12: J^T + null-space
@@ -1125,11 +1058,13 @@ class RealRobotController:
         # ----------------------------------------------------------------
         # Step 13: Build ControlTargets for 1kHz recomputation
         # ----------------------------------------------------------------
-        # Extract D+I contribution: force_wrench = kp*(target-current) + D + I
-        # The 1kHz thread recomputes P from current F/T, adds this constant offset.
-        force_p_wrench = self.force_kp * (target_force - force_torque)
-        force_di_wrench = force_wrench - force_p_wrench
+        if self.hybrid_enabled:
+            force_p_wrench = self.force_kp * (target_force - force_torque)
+            force_di_wrench = force_wrench - force_p_wrench
+        else:
+            force_di_wrench = torch.zeros(6, device=self.device)
 
+        pose_ki = self.pose_ki if self.pose_ki is not None else torch.zeros(6, device=self.device)
         control_targets = ControlTargets(
             target_pos=target_pos,
             target_quat=target_quat,
@@ -1137,8 +1072,11 @@ class RealRobotController:
             sel_matrix=sel_matrix,
             task_prop_gains=self.task_prop_gains,
             task_deriv_gains=self.task_deriv_gains,
-            force_kp=self.force_kp,
+            force_kp=self.force_kp if self.hybrid_enabled else torch.zeros(6, device=self.device),
             force_di_wrench=force_di_wrench,
+            pose_ki=pose_ki,
+            pose_integral_clamp=self.pose_integral_clamp,
+            pose_integral_reset_on_target=self.pose_integral_reset_on_target,
             default_dof_pos=self.default_dof_pos,
             kp_null=self.kp_null,
             kd_null=self.kd_null,
@@ -1184,6 +1122,9 @@ def pack_control_targets(targets: ControlTargets) -> dict:
         'task_deriv_gains': targets.task_deriv_gains.tolist(),
         'force_kp': targets.force_kp.tolist(),
         'force_di_wrench': targets.force_di_wrench.tolist(),
+        'pose_ki': targets.pose_ki.tolist(),
+        'pose_integral_clamp': float(targets.pose_integral_clamp),
+        'pose_integral_reset_on_target': bool(targets.pose_integral_reset_on_target),
         'default_dof_pos': targets.default_dof_pos.tolist(),
         'kp_null': float(targets.kp_null),
         'kd_null': float(targets.kd_null),
@@ -1215,6 +1156,9 @@ def unpack_control_targets(data: dict, device: str = "cpu") -> ControlTargets:
         task_deriv_gains=torch.tensor(data['task_deriv_gains'], device=device, dtype=torch.float32),
         force_kp=torch.tensor(data['force_kp'], device=device, dtype=torch.float32),
         force_di_wrench=torch.tensor(data['force_di_wrench'], device=device, dtype=torch.float32),
+        pose_ki=torch.tensor(data.get('pose_ki', [0.0]*6), device=device, dtype=torch.float32),
+        pose_integral_clamp=data.get('pose_integral_clamp', 0.0),
+        pose_integral_reset_on_target=data.get('pose_integral_reset_on_target', True),
         default_dof_pos=torch.tensor(data['default_dof_pos'], device=device, dtype=torch.float32),
         kp_null=data['kp_null'],
         kd_null=data['kd_null'],

@@ -111,7 +111,7 @@ def main():
             f"or populate the cache manually."
         )
 
-    configs, runs, best_checkpoints = load_from_cache(cache_path, args.run_id)
+    configs, runs, best_checkpoints, _best_scores = load_from_cache(cache_path, args.run_id)
 
     # ---- 4. Reconstruct obs_order (same as eval) ----
     obs_order = reconstruct_obs_order(configs)

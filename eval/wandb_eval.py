@@ -4421,7 +4421,7 @@ def main():
         if args_cli.eval_best_policies:
             # Best policies mode: get best checkpoints and run specialized evaluation
             api = wandb.Api()
-            best_checkpoints = get_best_checkpoints_for_runs(
+            best_checkpoints, _best_scores = get_best_checkpoints_for_runs(
                 api=api,
                 runs=runs,
                 method_tag=args_cli.tag,

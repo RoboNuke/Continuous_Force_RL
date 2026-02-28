@@ -59,8 +59,8 @@ task:
   # Target peg base position (where peg base should be when fully inserted)
   # This is "target_held_base_pos" in sim - used for SUCCESS/ENGAGEMENT DETECTION
   # May differ from fixed_asset_position depending on geometry
-  fixed_asset_position: [0.6105, -0.0131, 0.1649]
-  target_peg_base_position: [0.6105, -0.0131, 0.1649]
+  fixed_asset_position: [0.6112, -0.0165, 0.1558]
+  target_peg_base_position: [0.6112, -0.0165, 0.1558]
 
 
   # Offset from EE (fingertip midpoint) to peg base (grasped object root)
@@ -80,7 +80,7 @@ task:
   engage_threshold: 0.9            # Multiplied by hole_height -> 22.5mm Z threshold
 
   # Break detection (matches FragileObjectWrapper)
-  break_force_threshold: 10.0      # N - L2 norm of force (Fx,Fy,Fz) >= this triggers break
+  break_force_threshold: 20.0      # N - L2 norm of force (Fx,Fy,Fz) >= this triggers break
 
   # Safety: force control is blocked when peg tip is more than this height
   # above the hole top. Prevents force control in free space where there's
@@ -107,8 +107,18 @@ control_gains:
   #task_prop_gains: [100.0, 100.0, 100.0, 30.0, 30.0, 30.0]
   #task_deriv_gains: [20.0, 20.0, 20.0, 10.95, 10.95, 10.95]
 
-  task_prop_gains: [100.0, 100.0, 100.0, 45.0, 40.0, 40.0]
-  task_deriv_gains: [20.0, 20.0, 20.0,13.4, 12.649110641, 12.649110641]
+  #task_prop_gains: [180.0, 180.0, 100.0, 40.0, 40.0, 30.0]
+  #task_deriv_gains: [26.83, 26.83, 20.0,13.4, 12.649110641, 12.649110641]
+  
+  task_prop_gains: [150.0, 150.0, 100.0, 40.0, 40.0, 30.0]
+  task_deriv_gains: [24.5, 24.5, 20.0,13.4, 12.649110641, 12.649110641]
+
+  # Pose integral control (applies to both pose-only and hybrid paths)
+  enable_pose_integral: true
+  #pose_ki: [10, 10, 0.0, 0.0, 0.0, 0.0]  # [Fx, Fy, Fz, Tx, Ty, Tz] - Pose control ideal gains
+  pose_ki: [2.0, 2.0, 0.0, 0.0, 0.0, 0.0]
+  pose_integral_clamp: 50.0                   # Anti-windup clamp on accumulated error
+  pose_integral_reset_on_target: true         # Reset integral each policy step (true) or accumulate across steps (false)
 
   # 60 - 15.5
   # 45 - 13.4
@@ -133,12 +143,13 @@ control_gains:
 
   # Force gains [6] (hybrid only, ignored for pose-only control)
   # Zeroing based on ctrl_mode is applied automatically after loading.
-  force_kp: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+  force_kp: [0.1, 0.1, 0.05, 0.1, 0.1, 0.1]
   force_kd: [0.63, 0.63, 0.63, 0.0, 0.0, 0.0]
-  force_ki: [0.05, 0.05, 0.05, 0.0, 0.0, 0.0]
-
+  #force_ki: [0.01, 0.01, 0.05, 0.0, 0.0, 0.0]
+  force_ki: [0.01, 0.01, 0, 0, 0, 0]
 
   #force_kp: [-1.0, 1.0, 1.0, 0.1, 0.1, 0.1]
+
   # Singularity damping for J M^-1 J^T inverse (Levenberg-Marquardt)
   # Adds lambda*I to prevent blow-up near kinematic singularities.
   # Set enabled=false to revert to undamped inverse.
@@ -150,6 +161,12 @@ control_gains:
   # Prevents position dynamics from suppressing orientation control.
   partial_inertia_decoupling: false
   sep_ori: true
+
+policy:
+  # Multiplier on the learned std dev for action sampling.
+  # 0.0 = deterministic (mean only, current default behavior).
+  # 1.0 = full training std dev. 0.1 = 10% of training std dev.
+  std_scale: 0.05
 
 noise:
   # When true, use noise values defined below instead of WandB training config.

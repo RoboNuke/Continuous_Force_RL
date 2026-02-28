@@ -312,6 +312,7 @@ def _comm_process_fn(state_shm, torque_shm, cmd_queue, response_queue,
                     sys.stdout.write(f"[COMM PROCESS] Reset motion failed: {e}\r\n")
                     sys.stdout.flush()
                     try:
+                        ctrl = None
                         robot.stop()
                     except Exception:
                         pass
@@ -498,6 +499,7 @@ def _comm_process_fn(state_shm, torque_shm, cmd_queue, response_queue,
                     sys.stdout.write(f"[COMM PROCESS] Retract motion failed: {e}\r\n")
                     sys.stdout.flush()
                     try:
+                        ctrl = None
                         robot.stop()
                     except Exception:
                         pass
@@ -644,6 +646,7 @@ def _compute_process_fn(state_shm, torque_shm, targets_queue,
     targets = None
     was_active = False
     start_time = time.time()
+    pose_integral_error = None  # initialized when first targets arrive
 
     print("[COMPUTE PROCESS] Started (PID={})".format(os.getpid()))
 
@@ -664,6 +667,7 @@ def _compute_process_fn(state_shm, torque_shm, targets_queue,
                     except _q.Empty:
                         break
                 targets = None
+                pose_integral_error = None
                 was_active = True
                 start_time = time.time()
 
@@ -676,6 +680,12 @@ def _compute_process_fn(state_shm, torque_shm, targets_queue,
                     break
             if new_targets is not None:
                 targets = unpack_control_targets(new_targets, device)
+                # Manage pose integral state
+                if (targets.pose_ki.abs() > 0).any():
+                    if pose_integral_error is None or targets.pose_integral_reset_on_target:
+                        pose_integral_error = torch.zeros(6, device=device, dtype=torch.float32)
+                else:
+                    pose_integral_error = None
 
             if targets is None:
                 time.sleep(0.001)
@@ -729,7 +739,7 @@ def _compute_process_fn(state_shm, torque_shm, targets_queue,
             torques, task_wrench, jt_torque, null_torque = compute_torques_from_targets(
                 ee_pos, ee_quat, ee_linvel, ee_angvel,
                 force_torque, joint_pos, joint_vel, jacobian, mass_matrix,
-                targets,
+                targets, pose_integral_error,
             )
 
             # Write torques and task wrench to shared memory (comm process reads these)
