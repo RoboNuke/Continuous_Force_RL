@@ -452,7 +452,7 @@ def get_best_checkpoints_for_runs(
     method_tag: str,
     entity: str,
     project: str
-) -> Dict[str, int]:
+) -> Tuple[Dict[str, int], Dict[str, dict]]:
     """
     Determine the best checkpoint for each run based on eval_performance data.
 
@@ -467,7 +467,9 @@ def get_best_checkpoints_for_runs(
         project: WandB project name
 
     Returns:
-        Dict mapping source_run_id -> best_checkpoint_step
+        Tuple of (best_checkpoints, best_scores) where:
+        - best_checkpoints: Dict mapping source_run_id -> best_checkpoint_step
+        - best_scores: Dict mapping source_run_id -> {'score': int, 'successes': int, 'breaks': int}
 
     Raises:
         RuntimeError: If no eval_performance data found for any run
@@ -507,6 +509,7 @@ def get_best_checkpoints_for_runs(
 
     # Find best checkpoint for each training run
     best_checkpoints = {}
+    best_scores = {}
     missing_runs = []
 
     for training_run in runs:
@@ -550,7 +553,15 @@ def get_best_checkpoints_for_runs(
         best_step = int(history.loc[best_idx, steps_col])
         best_score = history.loc[best_idx, "_score"]
 
+        best_successes = int(history.loc[best_idx, success_col])
+        best_breaks = int(history.loc[best_idx, breaks_col])
+
         best_checkpoints[training_run.id] = best_step
+        best_scores[training_run.id] = {
+            'score': int(best_score),
+            'successes': best_successes,
+            'breaks': best_breaks,
+        }
         print(f"  {training_run.name}: best checkpoint at step {best_step} (score: {best_score:.0f})")
 
     # Error if any runs are missing eval_performance data
@@ -562,4 +573,4 @@ def get_best_checkpoints_for_runs(
         )
 
     print(f"\nFound best checkpoints for all {len(best_checkpoints)} runs")
-    return best_checkpoints
+    return best_checkpoints, best_scores

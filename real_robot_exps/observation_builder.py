@@ -168,15 +168,8 @@ class ObservationBuilder:
         # On real robot there's no obs noise - goal_position includes any calibration offset
         components["fingertip_pos_rel_fixed"] = ee_pos - goal_position
 
-        # EE orientation quaternion — yaw from robot state, roll=pi, pitch=0 (fixed)
-        # quat_from_euler(roll=pi, pitch=0, yaw=θ) = [0, cos(θ/2), sin(θ/2), 0]
-        w, x, y, z = ee_quat[0].item(), ee_quat[1].item(), ee_quat[2].item(), ee_quat[3].item()
-        ee_yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
-        half_yaw = ee_yaw / 2.0
-        components["fingertip_quat"] = torch.tensor(
-            [0.0, math.cos(half_yaw), math.sin(half_yaw), 0.0],
-            device=self.device, dtype=torch.float32,
-        )
+        # EE orientation quaternion — use actual measured quaternion from robot
+        components["fingertip_quat"] = ee_quat.clone()
 
         # Relative yaw (if in obs_order)
         # Matches sim's EEPoseNoiseWrapper._compute_fingertip_yaw_rel_fixed:

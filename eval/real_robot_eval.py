@@ -333,7 +333,9 @@ def load_single_agent_policy(
         action_dim = 6
 
     # Determine tan_out and network output size
-    tan_out = (sigma_idx == 0)
+    # Must match training: BlockSimBaActor uses (sigma_idx == 0) and (not squash_actions)
+    squash_actions = getattr(configs['model'], 'squash_actions', False)
+    tan_out = (sigma_idx == 0) and (not squash_actions)
 
     if use_state_dependent_std:
         std_out_dim = action_dim - sigma_idx
@@ -364,36 +366,57 @@ def load_single_agent_policy(
         checkpoint['state_preprocessor'], device=device, obs_dim=obs_dim
     )
 
+    # Load log_std for optional stochastic sampling
+    if use_state_dependent_std:
+        log_std = None  # computed at runtime from network output
+    else:
+        if 'log_std' not in checkpoint:
+            raise RuntimeError(
+                f"Policy checkpoint missing 'log_std' (required for non-state-dependent std): {policy_path}"
+            )
+        log_std = checkpoint['log_std'].to(device)  # [1, num_components]
+
     model_info = {
         'sigma_idx': sigma_idx,
         'action_dim': action_dim,
         'use_state_dependent_std': use_state_dependent_std,
+        'squash_actions': squash_actions,
         'obs_dim': obs_dim,
+        'log_std': log_std,
     }
 
     return policy_net, normalizer, model_info
 
 
 # ============================================================================
-# Deterministic inference
+# Action inference (deterministic or stochastic)
 # ============================================================================
 
 @torch.no_grad()
-def get_deterministic_action(
+def get_action(
     policy_net: SimBaNet,
     normalizer: ObservationNormalizer,
     obs: torch.Tensor,
     model_info: dict,
+    std_scale: float = 0.0,
 ) -> torch.Tensor:
-    """Get deterministic action from policy (mean, no sampling).
+    """Get action from policy, optionally with stochastic sampling.
 
-    Handles both pose-only and hybrid models.
+    When std_scale <= 0, returns the deterministic mean action.
+    When std_scale > 0, samples from the policy distribution with the
+    learned std dev scaled by std_scale. E.g. std_scale=0.1 uses 10%
+    of the training std dev.
+
+    Selection actions in hybrid mode always stay deterministic (thresholded
+    at 0.5) for safety — only continuous components are sampled.
 
     Args:
         policy_net: Trained SimBaNet in eval mode.
         normalizer: ObservationNormalizer with frozen stats.
         obs: [obs_dim] raw observation tensor.
-        model_info: Dict with sigma_idx, action_dim, use_state_dependent_std.
+        model_info: Dict with sigma_idx, action_dim, use_state_dependent_std,
+                     squash_actions, log_std.
+        std_scale: Multiplier on learned std dev. 0.0 = deterministic.
 
     Returns:
         [action_dim] action tensor with appropriate activations applied.
@@ -407,13 +430,51 @@ def get_deterministic_action(
 
     sigma_idx = model_info['sigma_idx']
 
-    if sigma_idx == 0:
-        # POSE-ONLY: SimBaNet has tan_out=True, tanh already applied
-        return mean_action  # [6] in [-1, 1]
+    # --- Deterministic path ---
+    if std_scale <= 0.0:
+        if sigma_idx == 0:
+            if model_info.get('squash_actions', False):
+                return torch.tanh(mean_action)
+            else:
+                return mean_action
+        else:
+            selection = torch.sigmoid(mean_action[:sigma_idx])
+            components = torch.tanh(mean_action[sigma_idx:])
+            return torch.cat([selection, components])
+
+    # --- Stochastic path ---
+    # Extract log_std
+    if model_info['log_std'] is not None:
+        log_std = model_info['log_std'].squeeze(0)  # [num_components]
     else:
-        # HYBRID: SimBaNet has tan_out=False, apply activations manually
-        selection = torch.sigmoid(mean_action[:sigma_idx])  # [0, 1]
-        components = torch.tanh(mean_action[sigma_idx:])    # [-1, 1]
+        # State-dependent: std is in network output after action_dim
+        log_std = raw_output[0, model_info['action_dim']:]
+
+    # Clamp log_std (matching training: min=-20, max=2)
+    log_std = torch.clamp(log_std, -20.0, 2.0)
+    std = torch.exp(log_std) * std_scale
+
+    if sigma_idx == 0:
+        noise = torch.randn_like(mean_action)
+        if model_info.get('squash_actions', False):
+            # Squashed: noise in pre-tanh space, then tanh
+            return torch.tanh(mean_action + std * noise)
+        else:
+            # Standard: mean already tanh'd by network, noise in that space
+            return mean_action + std * noise
+    else:
+        # Hybrid: selection stays deterministic, noise on components only
+        selection = (torch.sigmoid(mean_action[:sigma_idx]) > 0.5).float()
+        raw_components = mean_action[sigma_idx:]
+        noise = torch.randn_like(raw_components)
+
+        if model_info.get('squash_actions', False):
+            # Squashed: noise pre-tanh, then tanh
+            components = torch.tanh(raw_components + std * noise)
+        else:
+            # Non-squash: noise in post-tanh space (matching training)
+            components = torch.tanh(raw_components) + std * noise
+
         return torch.cat([selection, components])
 
 
@@ -573,6 +634,7 @@ def run_episode(
     hand_init_orn: list,
     hand_init_orn_noise: list,
     device: str = "cpu",
+    std_scale: float = 0.0,
 ) -> dict:
     """Run a single evaluation episode on the real robot.
 
@@ -665,7 +727,7 @@ def run_episode(
     # 7. Warmup policy + controller (triggers PyTorch JIT compilation)
     for _wi in range(3):
         _warmup_obs = obs_builder.build_observation(snap, noisy_goal, prev_actions, fixed_yaw_offset=yaw_offset)
-        _warmup_action = get_deterministic_action(policy_net, normalizer, _warmup_obs, model_info)
+        _warmup_action = get_action(policy_net, normalizer, _warmup_obs, model_info, std_scale=std_scale)
         _warmup_ctrl = controller.compute_action(
             _warmup_action, snap.ee_pos, snap.ee_quat, snap.ee_linvel, snap.ee_angvel,
             snap.force_torque, snap.joint_pos, snap.joint_vel, snap.jacobian, snap.mass_matrix,
@@ -692,7 +754,7 @@ def run_episode(
         print(f"[POLICY step={step} t={_t_obs:.3f}s] obs built")
 
         # Get action
-        action = get_deterministic_action(policy_net, normalizer, obs, model_info)
+        action = get_action(policy_net, normalizer, obs, model_info, std_scale=std_scale)
         _t_act = time.time() - _ep_start
         print(f"[POLICY step={step} t={_t_act:.3f}s] action generated (inference took {(_t_act - _t_obs)*1000:.1f}ms)")
 
@@ -851,7 +913,7 @@ def main():
         # Get best checkpoint for each run
         print("\nFinding best checkpoints...")
         api = wandb.Api(timeout=60)
-        best_checkpoints_wb = get_best_checkpoints_for_runs(
+        best_checkpoints_wb, _best_scores_wb = get_best_checkpoints_for_runs(
             api, runs_wb, args.tag, args.entity, args.project
         )
 
@@ -954,6 +1016,13 @@ def main():
     print("\nInitializing controller...")
     controller = RealRobotController(configs, real_config, device=args.device)
 
+    # 8c. Policy sampling config
+    std_scale = real_config.get('policy', {}).get('std_scale', 0.0)
+    if std_scale > 0.0:
+        print(f"[Policy] Stochastic sampling ENABLED (std_scale={std_scale})")
+    else:
+        print("[Policy] Deterministic (mean only)")
+
     # 8b. Move robot to default null-space joint angles
     print(f"\nDefault null-space joint positions: {controller.default_dof_pos.tolist()}")
     input("    [WAIT] Press Enter to MOVE TO DEFAULT JOINT POSITIONS...")
@@ -993,6 +1062,7 @@ def main():
                 hand_init_pos, hand_init_pos_noise,
                 hand_init_orn, hand_init_orn_noise,
                 args.device,
+                std_scale=std_scale,
             )
 
             outcome = "SUCCESS" if result['succeeded'] and not result['terminated'] else \

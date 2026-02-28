@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from models.SimBa import SimBaNet
 from real_robot_exps.pro_robot_interface import FrankaInterface, StateSnapshot, make_ee_target_pose
 from real_robot_exps.observation_builder import ObservationBuilder, ObservationNormalizer, OBS_DIM_MAP
-from real_robot_exps.hybrid_controller import RealRobotController
+from real_robot_exps.hybrid_controller import RealRobotController, get_euler_xyz
 
 
 # ============================================================================
@@ -119,6 +119,7 @@ def save_to_cache(
     runs: list,
     best_checkpoints: Dict[str, int],
     checkpoint_paths: Dict[str, Tuple[str, str]],
+    best_scores: Optional[Dict[str, dict]] = None,
 ) -> None:
     """Save WandB data to local cache directory.
 
@@ -131,6 +132,7 @@ def save_to_cache(
         runs: List of WandB run objects (need .id, .name).
         best_checkpoints: Dict mapping run_id -> best checkpoint step.
         checkpoint_paths: Dict mapping run_id -> (policy_path, critic_path).
+        best_scores: Optional dict mapping run_id -> {'score', 'successes', 'breaks'}.
     """
     os.makedirs(cache_path, exist_ok=True)
 
@@ -157,8 +159,9 @@ def save_to_cache(
         shutil.copy2(critic_path, os.path.join(run_dir, 'critic.pt'))
 
     # Write runs.json LAST (serves as "cache complete" marker)
-    runs_data = [
-        {
+    runs_data = []
+    for r in runs:
+        entry = {
             'id': r.id,
             'name': r.name,
             'group': r.group,
@@ -166,8 +169,11 @@ def save_to_cache(
             'tags': list(r.tags),
             'best_step': best_checkpoints[r.id],
         }
-        for r in runs
-    ]
+        if best_scores and r.id in best_scores:
+            entry['best_score'] = best_scores[r.id]['score']
+            entry['best_successes'] = best_scores[r.id]['successes']
+            entry['best_breaks'] = best_scores[r.id]['breaks']
+        runs_data.append(entry)
     with open(os.path.join(cache_path, 'runs.json'), 'w') as f:
         json.dump(runs_data, f, indent=2)
 
@@ -177,7 +183,7 @@ def save_to_cache(
 def load_from_cache(
     cache_path: str,
     run_id_filter: Optional[str] = None,
-) -> Tuple[dict, list, Dict[str, int]]:
+) -> Tuple[dict, list, Dict[str, int], Dict[str, dict]]:
     """Load cached WandB data from local directory.
 
     Args:
@@ -185,10 +191,11 @@ def load_from_cache(
         run_id_filter: Optional run ID to filter to a single run.
 
     Returns:
-        Tuple of (configs, run_infos, best_checkpoints) where:
+        Tuple of (configs, run_infos, best_checkpoints, best_scores) where:
         - configs: Config dict from ConfigManagerV3.process_config()
         - run_infos: List of objects with .id and .name attributes
         - best_checkpoints: Dict mapping run_id -> best checkpoint step
+        - best_scores: Dict mapping run_id -> {'score', 'successes', 'breaks'} (empty for old caches)
 
     Raises:
         RuntimeError: If cache is incomplete or requested run not found.
@@ -201,9 +208,10 @@ def load_from_cache(
     with open(runs_json_path, 'r') as f:
         runs_data = json.load(f)
 
-    # Build run info objects and best_checkpoints mapping
+    # Build run info objects, best_checkpoints, and best_scores mappings
     run_infos = []
     best_checkpoints = {}
+    best_scores = {}
     for entry in runs_data:
         for required_field in ('group', 'project', 'tags'):
             if required_field not in entry:
@@ -217,6 +225,13 @@ def load_from_cache(
             tags=entry['tags'],
         ))
         best_checkpoints[entry['id']] = entry['best_step']
+        # Load sim eval scores (may be absent in old caches)
+        if 'best_score' in entry:
+            best_scores[entry['id']] = {
+                'score': entry['best_score'],
+                'successes': entry['best_successes'],
+                'breaks': entry['best_breaks'],
+            }
 
     # Apply run_id filter
     if run_id_filter is not None:
@@ -229,6 +244,7 @@ def load_from_cache(
                 f"Delete the cache directory to re-download: {cache_path}"
             )
         best_checkpoints = {r.id: best_checkpoints[r.id] for r in run_infos}
+        best_scores = {r.id: best_scores[r.id] for r in run_infos if r.id in best_scores}
 
     # Validate checkpoint files exist
     for run_info in run_infos:
@@ -260,7 +276,7 @@ def load_from_cache(
     for r in run_infos:
         print(f"    - {r.id} ({r.name}) [best step: {best_checkpoints[r.id]}]")
 
-    return configs, run_infos, best_checkpoints
+    return configs, run_infos, best_checkpoints, best_scores
 
 
 # ============================================================================
@@ -365,7 +381,9 @@ def load_single_agent_policy(
         action_dim = 6
 
     # Determine tan_out and network output size
-    tan_out = (sigma_idx == 0)
+    # Must match training: BlockSimBaActor uses (sigma_idx == 0) and (not squash_actions)
+    squash_actions = getattr(configs['model'], 'squash_actions', False)
+    tan_out = (sigma_idx == 0) and (not squash_actions)
 
     if use_state_dependent_std:
         std_out_dim = action_dim - sigma_idx
@@ -392,36 +410,63 @@ def load_single_agent_policy(
         checkpoint['state_preprocessor'], device=device, obs_dim=obs_dim
     )
 
+    # Load log_std for optional stochastic sampling
+    if use_state_dependent_std:
+        log_std = None  # computed at runtime from network output
+    else:
+        if 'log_std' not in checkpoint:
+            raise RuntimeError(
+                f"Policy checkpoint missing 'log_std' (required for non-state-dependent std): {policy_path}"
+            )
+        log_std = checkpoint['log_std'].to(device)  # [1, num_components]
+
     model_info = {
         'sigma_idx': sigma_idx,
         'action_dim': action_dim,
         'use_state_dependent_std': use_state_dependent_std,
+        'squash_actions': squash_actions,
         'obs_dim': obs_dim,
+        'log_std': log_std,
     }
 
     return policy_net, normalizer, model_info
 
 
 # ============================================================================
-# Deterministic inference
+# Action inference (deterministic or stochastic)
 # ============================================================================
 
 @torch.no_grad()
-def get_deterministic_action(
+def get_action(
     policy_net: SimBaNet,
     normalizer: ObservationNormalizer,
     obs: torch.Tensor,
     model_info: dict,
+    std_scale: float = 0.0,
 ) -> torch.Tensor:
-    """Get deterministic action from policy (mean, no sampling).
+    """Get action from policy, optionally with stochastic sampling.
 
-    Handles both pose-only and hybrid models.
+    When std_scale <= 0, returns the deterministic mean action.
+    When std_scale > 0, samples from the policy distribution with the
+    learned std dev scaled by std_scale. E.g. std_scale=0.1 uses 10%
+    of the training std dev.
+
+    Selection actions in hybrid mode always stay deterministic (thresholded
+    at 0.5) for safety — only continuous components are sampled.
+
+    Noise is added in the same space as training:
+    - Standard (tan_out=True): noise in post-tanh space
+    - Squashed (squash_actions=True): noise in pre-tanh space, then tanh applied
+    - Hybrid non-squash: noise in post-tanh space on components
+    - Hybrid squash: noise in pre-tanh space on components, then tanh applied
 
     Args:
         policy_net: Trained SimBaNet in eval mode.
         normalizer: ObservationNormalizer with frozen stats.
         obs: [obs_dim] raw observation tensor.
-        model_info: Dict with sigma_idx, action_dim, use_state_dependent_std.
+        model_info: Dict with sigma_idx, action_dim, use_state_dependent_std,
+                     squash_actions, log_std.
+        std_scale: Multiplier on learned std dev. 0.0 = deterministic.
 
     Returns:
         [action_dim] action tensor with appropriate activations applied.
@@ -435,13 +480,51 @@ def get_deterministic_action(
 
     sigma_idx = model_info['sigma_idx']
 
-    if sigma_idx == 0:
-        # POSE-ONLY: SimBaNet has tan_out=True, tanh already applied
-        return mean_action  # [6] in [-1, 1]
+    # --- Deterministic path ---
+    if std_scale <= 0.0:
+        if sigma_idx == 0:
+            if model_info.get('squash_actions', False):
+                return torch.tanh(mean_action)
+            else:
+                return mean_action
+        else:
+            selection = torch.sigmoid(mean_action[:sigma_idx])
+            components = torch.tanh(mean_action[sigma_idx:])
+            return torch.cat([selection, components])
+
+    # --- Stochastic path ---
+    # Extract log_std
+    if model_info['log_std'] is not None:
+        log_std = model_info['log_std'].squeeze(0)  # [num_components]
     else:
-        # HYBRID: SimBaNet has tan_out=False, apply activations manually
-        selection = torch.sigmoid(mean_action[:sigma_idx])  # [0, 1]
-        components = torch.tanh(mean_action[sigma_idx:])    # [-1, 1]
+        # State-dependent: std is in network output after action_dim
+        log_std = raw_output[0, model_info['action_dim']:]
+
+    # Clamp log_std (matching training: min=-20, max=2)
+    log_std = torch.clamp(log_std, -20.0, 2.0)
+    std = torch.exp(log_std) * std_scale
+
+    if sigma_idx == 0:
+        noise = torch.randn_like(mean_action)
+        if model_info.get('squash_actions', False):
+            # Squashed: noise in pre-tanh space, then tanh
+            return torch.tanh(mean_action + std * noise)
+        else:
+            # Standard: mean already tanh'd by network, noise in that space
+            return mean_action + std * noise
+    else:
+        # Hybrid: selection stays deterministic, noise on components only
+        selection = (torch.sigmoid(mean_action[:sigma_idx]) > 0.5).float()
+        raw_components = mean_action[sigma_idx:]
+        noise = torch.randn_like(raw_components)
+
+        if model_info.get('squash_actions', False):
+            # Squashed: noise pre-tanh, then tanh
+            components = torch.tanh(raw_components + std * noise)
+        else:
+            # Non-squash: noise in post-tanh space (matching training)
+            components = torch.tanh(raw_components) + std * noise
+
         return torch.cat([selection, components])
 
 
@@ -614,7 +697,7 @@ def print_obs_distribution_comparison(
     # Build channel labels from obs_order + prev_actions
     labels = []
     for name in obs_builder.obs_order:
-        dim = OBS_DIM_MAP[name]
+        dim = obs_builder._obs_dim_map[name]
         if dim == 1:
             labels.append(name)
         else:
@@ -798,6 +881,7 @@ def run_episode(
     keyboard: EvalKeyboardController,
     device: str = "cpu",
     log_trajectory: bool = False,
+    std_scale: float = 0.0,
 ) -> Optional[dict]:
     """Run a single evaluation episode on the real robot.
 
@@ -931,6 +1015,20 @@ def run_episode(
     sum_meas_force_z = 0.0
     force_selected_steps_z = 0
 
+    # Position tracking error (per-axis, on position-selected steps)
+    sum_pos_error_x = 0.0
+    sum_cmd_pos_x = 0.0
+    sum_meas_pos_x = 0.0
+    pos_selected_steps_x = 0
+    sum_pos_error_y = 0.0
+    sum_cmd_pos_y = 0.0
+    sum_meas_pos_y = 0.0
+    pos_selected_steps_y = 0
+    sum_pos_error_z = 0.0
+    sum_cmd_pos_z = 0.0
+    sum_meas_pos_z = 0.0
+    pos_selected_steps_z = 0
+
     contact_force_threshold = obs_builder.contact_force_threshold
 
     # Collect raw observations for distribution analysis
@@ -943,7 +1041,7 @@ def run_episode(
     # 7. Warmup policy + controller (triggers PyTorch JIT compilation)
     for _wi in range(3):
         _warmup_obs = obs_builder.build_observation(snap, noisy_goal, prev_actions, fixed_yaw_offset=yaw_offset)
-        _warmup_action = get_deterministic_action(policy_net, normalizer, _warmup_obs, model_info)
+        _warmup_action = get_action(policy_net, normalizer, _warmup_obs, model_info, std_scale=std_scale)
         _warmup_ctrl = controller.compute_action(
             _warmup_action, snap.ee_pos, snap.ee_quat, snap.ee_linvel, snap.ee_angvel,
             snap.force_torque, snap.joint_pos, snap.joint_vel, snap.jacobian, snap.mass_matrix,
@@ -979,7 +1077,19 @@ def run_episode(
         obs_history.append(obs.clone())
 
         # Get action
-        action = get_deterministic_action(policy_net, normalizer, obs, model_info)
+        action = get_action(policy_net, normalizer, obs, model_info, std_scale=std_scale)
+
+        # Print achieved error for previous target before computing new one
+        if step > 0:
+            cr, cpi, cy = get_euler_xyz(snap.ee_quat)
+            xy_err = (snap.ee_pos[:2] - prev_tp[:2]).norm().item() * 1000.0
+            z_err = (snap.ee_pos[2] - prev_tp[2]).item() * 1000.0
+            rpy_err = [np.degrees(cr - prev_tr), np.degrees(cpi - prev_tpi), np.degrees(cy - prev_ty)]
+            # sp = snap.ee_pos
+            # EvalKeyboardController.raw_print(
+            #     f"    [ACHIEVED] step={step-1} xy_err={xy_err:.1f}mm z_err={z_err:.1f}mm "
+            #     f"rpy_err=[{rpy_err[0]:.2f}, {rpy_err[1]:.2f}, {rpy_err[2]:.2f}]deg")
+            #     # f"pos=[{sp[0]:.4f}, {sp[1]:.4f}, {sp[2]:.4f}]")
 
         # Compute control from snapshot state (action frame uses noisy goal)
         ctrl_output = controller.compute_action(
@@ -987,6 +1097,35 @@ def run_episode(
             snap.force_torque, snap.joint_pos, snap.joint_vel, snap.jacobian, snap.mass_matrix,
             noisy_goal,
         )
+
+        tp = ctrl_output['target_pos']
+        tr, tpi, ty = get_euler_xyz(ctrl_output['target_quat'])
+        cr, cpi, cy = get_euler_xyz(snap.ee_quat)
+        xy_err = (snap.ee_pos[:2] - tp[:2]).norm().item() * 1000.0
+        z_err = (snap.ee_pos[2] - tp[2]).item() * 1000.0
+        rpy_err = [np.degrees(cr - tr), np.degrees(cpi - tpi), np.degrees(cy - ty)]
+        sel = ctrl_output.get('sel_matrix', None)
+        if sel is not None:
+            fx = 'F' if sel[0].item() > 0.5 else 'P'
+            fy = 'F' if sel[1].item() > 0.5 else 'P'
+            fz = 'F' if sel[2].item() > 0.5 else 'P'
+            force_str = f" ctrl=[X:{fx} Y:{fy} Z:{fz}]"
+        else:
+            force_str = ""
+        # EvalKeyboardController.raw_print(
+        #     f"    [POLICY] step={step} xy_err={xy_err:.1f}mm z_err={z_err:.1f}mm "
+        #     f"rpy_err=[{rpy_err[0]:.2f}, {rpy_err[1]:.2f}, {rpy_err[2]:.2f}]deg{force_str}")
+        #     # f"tgt=[{tp[0]:.4f}, {tp[1]:.4f}, {tp[2]:.4f}]")
+        if sel is not None:
+            sx = 'F' if sel[0].item() > 0.5 else 'P'
+            sy = 'F' if sel[1].item() > 0.5 else 'P'
+            sz = 'F' if sel[2].item() > 0.5 else 'P'
+            EvalKeyboardController.raw_print(
+                f"    [SEL] step={step} X:{sx} Y:{sy} Z:{sz}")
+
+        # Save target for next step's achieved error
+        prev_tp = tp
+        prev_tr, prev_tpi, prev_ty = tr, tpi, ty
 
         # Safety: block force selection when peg tip is too far from hole
         if is_hybrid:
@@ -1003,6 +1142,11 @@ def run_episode(
             )
             if should_block:
                 force_blocked_steps += 1
+                blocked_axes = [ax for ax, s in zip(['X','Y','Z'], sel[:3]) if s.item() > 0.5]
+                EvalKeyboardController.raw_print(
+                    f"    [FORCE BLOCKED] step={step} axes={blocked_axes} "
+                    f"z={z_above_hole_m*1000:.1f}mm (max={force_select_max_height_m*1000:.1f}) "
+                    f"xy={xy_dist_m*1000:.1f}mm (max={force_select_max_xy_dist_m*1000:.1f})")
                 zero_sel = torch.zeros(6, device=device)
                 ctrl_output['sel_matrix'] = zero_sel
                 ctrl_output['control_targets'] = ctrl_output['control_targets']._replace(
@@ -1077,6 +1221,25 @@ def run_episode(
                 sum_meas_force_z += abs(mf[2].item())
                 force_selected_steps_z += 1
 
+        # Position tracking error (per-axis, on position-selected steps)
+        pos_sel = ctrl_output.get('sel_matrix', None)
+        pos_err = (tp - snap.ee_pos).abs()
+        if pos_sel is None or pos_sel[0].item() <= 0.5:
+            sum_pos_error_x += pos_err[0].item()
+            sum_cmd_pos_x += abs(tp[0].item())
+            sum_meas_pos_x += abs(snap.ee_pos[0].item())
+            pos_selected_steps_x += 1
+        if pos_sel is None or pos_sel[1].item() <= 0.5:
+            sum_pos_error_y += pos_err[1].item()
+            sum_cmd_pos_y += abs(tp[1].item())
+            sum_meas_pos_y += abs(snap.ee_pos[1].item())
+            pos_selected_steps_y += 1
+        if pos_sel is None or pos_sel[2].item() <= 0.5:
+            sum_pos_error_z += pos_err[2].item()
+            sum_cmd_pos_z += abs(tp[2].item())
+            sum_meas_pos_z += abs(snap.ee_pos[2].item())
+            pos_selected_steps_z += 1
+
         # ---- Check termination conditions ----
 
         # Engage check (uses TRUE target position, not noisy goal)
@@ -1113,6 +1276,38 @@ def run_episode(
     robot.end_control()
 
     episode_length = step + 1
+
+    # Per-episode force control summary (hybrid only, only axes with actual usage)
+    if is_hybrid:
+        axis_data = [
+            ('X', force_selected_steps_x, sum_cmd_force_x, sum_force_error_x, sum_meas_force_x),
+            ('Y', force_selected_steps_y, sum_cmd_force_y, sum_force_error_y, sum_meas_force_y),
+            ('Z', force_selected_steps_z, sum_cmd_force_z, sum_force_error_z, sum_meas_force_z),
+        ]
+        used_axes = [(name, steps, cmd, err, meas) for name, steps, cmd, err, meas in axis_data if steps > 0]
+        if used_axes:
+            EvalKeyboardController.raw_print("    Force Control Summary (episode):")
+            for name, steps, cmd, err, meas in used_axes:
+                EvalKeyboardController.raw_print(
+                    f"      {name}: {steps} steps | "
+                    f"cmd={cmd/steps:.2f}N | err={err/steps:.2f}N | meas={meas/steps:.2f}N")
+            if force_blocked_steps > 0:
+                EvalKeyboardController.raw_print(
+                    f"      Blocked: {force_blocked_steps} steps")
+
+    # Per-episode position control summary (axes with actual usage)
+    pos_axis_data = [
+        ('X', pos_selected_steps_x, sum_cmd_pos_x, sum_pos_error_x, sum_meas_pos_x),
+        ('Y', pos_selected_steps_y, sum_cmd_pos_y, sum_pos_error_y, sum_meas_pos_y),
+        ('Z', pos_selected_steps_z, sum_cmd_pos_z, sum_pos_error_z, sum_meas_pos_z),
+    ]
+    pos_used_axes = [(name, steps, cmd, err, meas) for name, steps, cmd, err, meas in pos_axis_data if steps > 0]
+    if pos_used_axes:
+        EvalKeyboardController.raw_print("    Position Control Summary (episode):")
+        for name, steps, cmd, err, meas in pos_used_axes:
+            EvalKeyboardController.raw_print(
+                f"      {name}: {steps} steps | "
+                f"cmd={cmd/steps*1000:.2f}mm | err={err/steps*1000:.2f}mm | meas={meas/steps*1000:.2f}mm")
 
     # Normalize smoothness by episode length (matching sim: ssv = sum / ep_len)
     ssv = ssv_sum / episode_length if episode_length > 0 else 0.0
@@ -1159,6 +1354,18 @@ def run_episode(
         'force_selected_steps_y': force_selected_steps_y,
         'force_selected_steps_z': force_selected_steps_z,
         'force_blocked_steps': force_blocked_steps,
+        'avg_pos_error_x': sum_pos_error_x / pos_selected_steps_x if pos_selected_steps_x > 0 else 0.0,
+        'avg_pos_error_y': sum_pos_error_y / pos_selected_steps_y if pos_selected_steps_y > 0 else 0.0,
+        'avg_pos_error_z': sum_pos_error_z / pos_selected_steps_z if pos_selected_steps_z > 0 else 0.0,
+        'avg_cmd_pos_x': sum_cmd_pos_x / pos_selected_steps_x if pos_selected_steps_x > 0 else 0.0,
+        'avg_cmd_pos_y': sum_cmd_pos_y / pos_selected_steps_y if pos_selected_steps_y > 0 else 0.0,
+        'avg_cmd_pos_z': sum_cmd_pos_z / pos_selected_steps_z if pos_selected_steps_z > 0 else 0.0,
+        'avg_meas_pos_x': sum_meas_pos_x / pos_selected_steps_x if pos_selected_steps_x > 0 else 0.0,
+        'avg_meas_pos_y': sum_meas_pos_y / pos_selected_steps_y if pos_selected_steps_y > 0 else 0.0,
+        'avg_meas_pos_z': sum_meas_pos_z / pos_selected_steps_z if pos_selected_steps_z > 0 else 0.0,
+        'pos_selected_steps_x': pos_selected_steps_x,
+        'pos_selected_steps_y': pos_selected_steps_y,
+        'pos_selected_steps_z': pos_selected_steps_z,
         **trajectory_data,
     }
 
@@ -1186,6 +1393,9 @@ def main():
                              "(num_episodes becomes per-range, total = 4 × num_episodes)")
     parser.add_argument("--policy_idx", type=int, default=None,
                         help="Run only the policy at this index (0-based) from the tag's run list")
+    parser.add_argument("--use_sim_best", action="store_true", default=False,
+                        help="Auto-select the best policy by sim eval score (successes - breaks). "
+                             "Without this flag, all policies are run consecutively.")
     parser.add_argument("--start_forge_idx", type=int, default=0,
                         help="Forge eval: skip to this noise range index (0-based). "
                              "Noise is still generated for all ranges to preserve seed consistency.")
@@ -1244,7 +1454,7 @@ def main():
         # Get best checkpoint for each run
         print("\nFinding best checkpoints...")
         api = wandb.Api(timeout=60)
-        best_checkpoints_wb = get_best_checkpoints_for_runs(
+        best_checkpoints_wb, best_scores_wb = get_best_checkpoints_for_runs(
             api, runs_wb, args.tag, args.entity, args.project
         )
 
@@ -1258,7 +1468,7 @@ def main():
             download_dirs.append(os.path.dirname(os.path.dirname(policy_path)))
 
         # Save everything to local cache
-        save_to_cache(cache_path, temp_dir, runs_wb, best_checkpoints_wb, checkpoint_paths)
+        save_to_cache(cache_path, temp_dir, runs_wb, best_checkpoints_wb, checkpoint_paths, best_scores_wb)
 
         # Cleanup temp directories (data is now in cache)
         for d in download_dirs:
@@ -1268,9 +1478,32 @@ def main():
         print(f"\nUsing cached checkpoints from: {cache_path}")
 
     # Load from cache (single code path for both fresh download and cached)
-    configs, runs, best_checkpoints = load_from_cache(cache_path, args.run_id)
+    configs, runs, best_checkpoints, best_scores = load_from_cache(cache_path, args.run_id)
 
-    # Filter to single policy by index if requested
+    # Print sim eval performance table
+    has_scores = len(best_scores) == len(runs)
+    if has_scores:
+        print(f"\n{'=' * 90}")
+        print("SIM EVAL PERFORMANCE (score = successes - breaks)")
+        print(f"{'=' * 90}")
+        best_policy_idx = 0
+        best_policy_score = -float('inf')
+        for i, r in enumerate(runs):
+            sc = best_scores[r.id]
+            marker = ""
+            if sc['score'] > best_policy_score:
+                best_policy_score = sc['score']
+                best_policy_idx = i
+            print(f"  [{i}] {r.name:<40s}  step={best_checkpoints[r.id]:<10d}"
+                  f"  succ={sc['successes']:<4d}  brk={sc['breaks']:<4d}  score={sc['score']}")
+        # Mark best
+        print(f"{'=' * 90}")
+        print(f"  Best: [{best_policy_idx}] {runs[best_policy_idx].name} (score={best_policy_score})")
+        print(f"{'=' * 90}")
+    else:
+        print("\n  [WARNING] No sim eval scores in cache. Delete cache and re-download to get scores.")
+
+    # Filter to single policy by index if requested, or auto-select best
     if args.policy_idx is not None:
         if args.policy_idx < 0 or args.policy_idx >= len(runs):
             print(f"\nAvailable policies for tag '{args.tag}':")
@@ -1283,6 +1516,18 @@ def main():
         print(f"\n  --policy_idx {args.policy_idx}: selected '{selected.name}' (id={selected.id})")
         runs = [selected]
         best_checkpoints = {selected.id: best_checkpoints[selected.id]}
+    elif args.use_sim_best:
+        if not has_scores:
+            raise RuntimeError(
+                "--use_sim_best requires sim eval scores in cache. "
+                "Delete cache and re-download, or use --policy_idx instead."
+            )
+        selected = runs[best_policy_idx]
+        print(f"\n  --use_sim_best: selected [{best_policy_idx}] '{selected.name}' (id={selected.id})")
+        runs = [selected]
+        best_checkpoints = {selected.id: best_checkpoints[selected.id]}
+    else:
+        print(f"\n  Running all {len(runs)} policies consecutively")
 
     # 5. Reconstruct obs_order and determine model properties
     obs_order = reconstruct_obs_order(configs)
@@ -1301,6 +1546,7 @@ def main():
     use_tanh = getattr(ft_cfg, 'use_tanh_scaling', False)
     tanh_scale = getattr(ft_cfg, 'tanh_scale', 0.03)
     contact_threshold = getattr(ft_cfg, 'contact_force_threshold', 1.5)
+    exclude_torques = getattr(ft_cfg, 'exclude_torques', False)
     ee_pose_noise_enabled = getattr(configs['wrappers'].ee_pose_noise, 'enabled', False)
 
     # Per-episode noise config: real robot override or WandB training config
@@ -1342,6 +1588,7 @@ def main():
         contact_force_threshold=contact_threshold,
         fixed_asset_yaw=fixed_asset_yaw,
         ee_pose_noise_enabled=ee_pose_noise_enabled,
+        exclude_torques=exclude_torques,
         device=args.device,
     )
 
@@ -1356,6 +1603,13 @@ def main():
     # 8. Initialize controller
     print("\nInitializing controller...")
     controller = RealRobotController(configs, real_config, device=args.device)
+
+    # 8c. Policy sampling config
+    std_scale = real_config.get('policy', {}).get('std_scale', 0.0)
+    if std_scale > 0.0:
+        print(f"[Policy] Stochastic sampling ENABLED (std_scale={std_scale})")
+    else:
+        print("[Policy] Deterministic (mean only)")
 
     # 8b. Move robot to default null-space joint angles (disabled for now)
     # print(f"\nDefault null-space joint positions: {controller.default_dof_pos.tolist()}")
@@ -1522,6 +1776,7 @@ def main():
                             keyboard,
                             args.device,
                             log_trajectory=args.log_trajectories,
+                            std_scale=std_scale,
                         )
 
                         if result is None:
@@ -1744,6 +1999,7 @@ def main():
                         keyboard,
                         args.device,
                         log_trajectory=args.log_trajectories,
+                        std_scale=std_scale,
                     )
 
                     if result is None:
