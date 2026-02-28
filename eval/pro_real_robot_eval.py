@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.SimBa import SimBaNet
 from real_robot_exps.pro_robot_interface import FrankaInterface, StateSnapshot, make_ee_target_pose
+from real_robot_exps.robot_interface import SafetyViolation
 from real_robot_exps.observation_builder import ObservationBuilder, ObservationNormalizer, OBS_DIM_MAP
 from real_robot_exps.hybrid_controller import RealRobotController, get_euler_xyz
 
@@ -668,6 +669,53 @@ def compute_real_robot_metrics(episode_results: List[dict]) -> Dict[str, float]:
     return metrics
 
 
+def log_episode_to_wandb(
+    eval_run,
+    result: dict,
+    ep_idx: int,
+    forge_range_name: Optional[str] = None,
+) -> None:
+    """Log per-episode metrics to a WandB run.
+
+    Args:
+        eval_run: Active wandb run object.
+        result: Single episode result dict from run_episode().
+        ep_idx: Episode index (used as wandb step).
+        forge_range_name: If provided, prefix keys with Noise_Eval({name})_Core/,
+                          otherwise prefix with Eval_Core/.
+    """
+    if eval_run is None:
+        return
+
+    if forge_range_name is not None:
+        prefix = f"Noise_Eval({forge_range_name})_Core"
+    else:
+        prefix = "Eval_Core"
+
+    # Keys to skip (large arrays, not scalar metrics)
+    skip_keys = {
+        'obs_history', 'trajectory_1khz', 'actions_15hz',
+        'sel_matrices_15hz', 'time_ms_15hz', 'forge_range_idx',
+    }
+
+    metrics = {}
+    for k, v in result.items():
+        if k in skip_keys:
+            continue
+        if isinstance(v, bool):
+            metrics[f"{prefix}/{k}"] = int(v)
+        elif isinstance(v, (int, float)):
+            metrics[f"{prefix}/{k}"] = v
+
+    # Derived metric: avg_force = sum_force / length
+    if result['length'] > 0:
+        metrics[f"{prefix}/avg_force"] = result['sum_force'] / result['length']
+    else:
+        metrics[f"{prefix}/avg_force"] = 0.0
+
+    eval_run.log(metrics, step=ep_idx)
+
+
 # ============================================================================
 # Observation distribution comparison
 # ============================================================================
@@ -979,10 +1027,10 @@ def run_episode(
 
     # 5. Calibrate FT bias at the start pose for this episode
     ft_bias = robot.calibrate_ft_bias()
-    EvalKeyboardController.raw_print(
-        f"  FT bias: [{ft_bias[0]:+.4f}, {ft_bias[1]:+.4f}, {ft_bias[2]:+.4f}, "
-        f"{ft_bias[3]:+.4f}, {ft_bias[4]:+.4f}, {ft_bias[5]:+.4f}]"
-    )
+    # EvalKeyboardController.raw_print(
+    #     f"  FT bias: [{ft_bias[0]:+.4f}, {ft_bias[1]:+.4f}, {ft_bias[2]:+.4f}, "
+    #     f"{ft_bias[3]:+.4f}, {ft_bias[4]:+.4f}, {ft_bias[5]:+.4f}]"
+    # )
 
     prev_actions = torch.zeros(model_info['action_dim'], device=device)
 
@@ -1116,12 +1164,12 @@ def run_episode(
         #     f"    [POLICY] step={step} xy_err={xy_err:.1f}mm z_err={z_err:.1f}mm "
         #     f"rpy_err=[{rpy_err[0]:.2f}, {rpy_err[1]:.2f}, {rpy_err[2]:.2f}]deg{force_str}")
         #     # f"tgt=[{tp[0]:.4f}, {tp[1]:.4f}, {tp[2]:.4f}]")
-        if sel is not None:
-            sx = 'F' if sel[0].item() > 0.5 else 'P'
-            sy = 'F' if sel[1].item() > 0.5 else 'P'
-            sz = 'F' if sel[2].item() > 0.5 else 'P'
-            EvalKeyboardController.raw_print(
-                f"    [SEL] step={step} X:{sx} Y:{sy} Z:{sz}")
+        # if sel is not None:
+        #     sx = 'F' if sel[0].item() > 0.5 else 'P'
+        #     sy = 'F' if sel[1].item() > 0.5 else 'P'
+        #     sz = 'F' if sel[2].item() > 0.5 else 'P'
+        #     EvalKeyboardController.raw_print(
+        #         f"    [SEL] step={step} X:{sx} Y:{sy} Z:{sz}")
 
         # Save target for next step's achieved error
         prev_tp = tp
@@ -1142,11 +1190,11 @@ def run_episode(
             )
             if should_block:
                 force_blocked_steps += 1
-                blocked_axes = [ax for ax, s in zip(['X','Y','Z'], sel[:3]) if s.item() > 0.5]
-                EvalKeyboardController.raw_print(
-                    f"    [FORCE BLOCKED] step={step} axes={blocked_axes} "
-                    f"z={z_above_hole_m*1000:.1f}mm (max={force_select_max_height_m*1000:.1f}) "
-                    f"xy={xy_dist_m*1000:.1f}mm (max={force_select_max_xy_dist_m*1000:.1f})")
+                # blocked_axes = [ax for ax, s in zip(['X','Y','Z'], sel[:3]) if s.item() > 0.5]
+                # EvalKeyboardController.raw_print(
+                #     f"    [FORCE BLOCKED] step={step} axes={blocked_axes} "
+                #     f"z={z_above_hole_m*1000:.1f}mm (max={force_select_max_height_m*1000:.1f}) "
+                #     f"xy={xy_dist_m*1000:.1f}mm (max={force_select_max_xy_dist_m*1000:.1f})")
                 zero_sel = torch.zeros(6, device=device)
                 ctrl_output['sel_matrix'] = zero_sel
                 ctrl_output['control_targets'] = ctrl_output['control_targets']._replace(
@@ -1278,36 +1326,36 @@ def run_episode(
     episode_length = step + 1
 
     # Per-episode force control summary (hybrid only, only axes with actual usage)
-    if is_hybrid:
-        axis_data = [
-            ('X', force_selected_steps_x, sum_cmd_force_x, sum_force_error_x, sum_meas_force_x),
-            ('Y', force_selected_steps_y, sum_cmd_force_y, sum_force_error_y, sum_meas_force_y),
-            ('Z', force_selected_steps_z, sum_cmd_force_z, sum_force_error_z, sum_meas_force_z),
-        ]
-        used_axes = [(name, steps, cmd, err, meas) for name, steps, cmd, err, meas in axis_data if steps > 0]
-        if used_axes:
-            EvalKeyboardController.raw_print("    Force Control Summary (episode):")
-            for name, steps, cmd, err, meas in used_axes:
-                EvalKeyboardController.raw_print(
-                    f"      {name}: {steps} steps | "
-                    f"cmd={cmd/steps:.2f}N | err={err/steps:.2f}N | meas={meas/steps:.2f}N")
-            if force_blocked_steps > 0:
-                EvalKeyboardController.raw_print(
-                    f"      Blocked: {force_blocked_steps} steps")
+    # if is_hybrid:
+    #     axis_data = [
+    #         ('X', force_selected_steps_x, sum_cmd_force_x, sum_force_error_x, sum_meas_force_x),
+    #         ('Y', force_selected_steps_y, sum_cmd_force_y, sum_force_error_y, sum_meas_force_y),
+    #         ('Z', force_selected_steps_z, sum_cmd_force_z, sum_force_error_z, sum_meas_force_z),
+    #     ]
+    #     used_axes = [(name, steps, cmd, err, meas) for name, steps, cmd, err, meas in axis_data if steps > 0]
+    #     if used_axes:
+    #         EvalKeyboardController.raw_print("    Force Control Summary (episode):")
+    #         for name, steps, cmd, err, meas in used_axes:
+    #             EvalKeyboardController.raw_print(
+    #                 f"      {name}: {steps} steps | "
+    #                 f"cmd={cmd/steps:.2f}N | err={err/steps:.2f}N | meas={meas/steps:.2f}N")
+    #         if force_blocked_steps > 0:
+    #             EvalKeyboardController.raw_print(
+    #                 f"      Blocked: {force_blocked_steps} steps")
 
     # Per-episode position control summary (axes with actual usage)
-    pos_axis_data = [
-        ('X', pos_selected_steps_x, sum_cmd_pos_x, sum_pos_error_x, sum_meas_pos_x),
-        ('Y', pos_selected_steps_y, sum_cmd_pos_y, sum_pos_error_y, sum_meas_pos_y),
-        ('Z', pos_selected_steps_z, sum_cmd_pos_z, sum_pos_error_z, sum_meas_pos_z),
-    ]
-    pos_used_axes = [(name, steps, cmd, err, meas) for name, steps, cmd, err, meas in pos_axis_data if steps > 0]
-    if pos_used_axes:
-        EvalKeyboardController.raw_print("    Position Control Summary (episode):")
-        for name, steps, cmd, err, meas in pos_used_axes:
-            EvalKeyboardController.raw_print(
-                f"      {name}: {steps} steps | "
-                f"cmd={cmd/steps*1000:.2f}mm | err={err/steps*1000:.2f}mm | meas={meas/steps*1000:.2f}mm")
+    # pos_axis_data = [
+    #     ('X', pos_selected_steps_x, sum_cmd_pos_x, sum_pos_error_x, sum_meas_pos_x),
+    #     ('Y', pos_selected_steps_y, sum_cmd_pos_y, sum_pos_error_y, sum_meas_pos_y),
+    #     ('Z', pos_selected_steps_z, sum_cmd_pos_z, sum_pos_error_z, sum_meas_pos_z),
+    # ]
+    # pos_used_axes = [(name, steps, cmd, err, meas) for name, steps, cmd, err, meas in pos_axis_data if steps > 0]
+    # if pos_used_axes:
+    #     EvalKeyboardController.raw_print("    Position Control Summary (episode):")
+    #     for name, steps, cmd, err, meas in pos_used_axes:
+    #         EvalKeyboardController.raw_print(
+    #             f"      {name}: {steps} steps | "
+    #             f"cmd={cmd/steps*1000:.2f}mm | err={err/steps*1000:.2f}mm | meas={meas/steps*1000:.2f}mm")
 
     # Normalize smoothness by episode length (matching sim: ssv = sum / ep_len)
     ssv = ssv_sum / episode_length if episode_length > 0 else 0.0
@@ -1716,7 +1764,6 @@ def main():
                 episode_results = []  # all results across ranges (for final summary)
                 forge_range_results = {}
                 quit_requested = False
-                all_forge_wandb_metrics = {}  # accumulate per-range metrics with range-specific keys
 
                 # Init single WandB run for all forge ranges (matching wandb_eval.py pattern)
                 eval_run = None
@@ -1767,17 +1814,32 @@ def main():
 
                     for ep_in_range in range(args.num_episodes):
                         ep_idx = range_idx * args.num_episodes + ep_in_range
-                        result = run_episode(
-                            robot, policy_net, normalizer, model_info,
-                            obs_builder, controller, real_config,
-                            episode_noises[ep_idx],
-                            hand_init_pos,
-                            hand_init_orn, hand_init_orn_noise,
-                            keyboard,
-                            args.device,
-                            log_trajectory=args.log_trajectories,
-                            std_scale=std_scale,
-                        )
+                        result = None
+                        for _attempt in range(5):
+                            try:
+                                result = run_episode(
+                                    robot, policy_net, normalizer, model_info,
+                                    obs_builder, controller, real_config,
+                                    episode_noises[ep_idx],
+                                    hand_init_pos,
+                                    hand_init_orn, hand_init_orn_noise,
+                                    keyboard,
+                                    args.device,
+                                    log_trajectory=args.log_trajectories,
+                                    std_scale=std_scale,
+                                )
+                                break
+                            except (RuntimeError, SafetyViolation) as e:
+                                rp(f"  [EPISODE RETRY {_attempt+1}/5] {e}")
+                                try:
+                                    robot.end_control()
+                                except Exception:
+                                    pass
+                                try:
+                                    robot.error_recovery()
+                                except Exception:
+                                    pass
+                                time.sleep(1.0)
 
                         if result is None:
                             sys.stdout.write("\r\n")
@@ -1805,6 +1867,9 @@ def main():
                         sys.stdout.flush()
 
                         range_results.append(result)
+
+                        # Log per-episode metrics to WandB
+                        log_episode_to_wandb(eval_run, result, ep_idx, forge_range_name=range_name)
 
                         # Save trajectory data
                         if args.log_trajectories and result.get('trajectory_1khz') is not None:
@@ -1869,27 +1934,15 @@ def main():
                         }
                         rp(f"    [{range_name:<10}] N={r_n:<3} S:{r_s:<3} B:{r_b}(E:{r_be}) T:{r_t}(E:{r_te})")
 
-                        # Compute per-range metrics and accumulate with range-specific keys
-                        range_metrics = compute_real_robot_metrics(range_results)
-                        for k, v in range_metrics.items():
-                            all_forge_wandb_metrics[f"Noise_Eval({range_name})_Core/{k}"] = v
-
                     if quit_requested or abort:
                         break
 
-                # Log all accumulated forge metrics to WandB in a single call
-                if eval_run is not None and all_forge_wandb_metrics:
+                # Finish WandB run (per-episode metrics already logged)
+                if eval_run is not None:
                     keyboard.stop()
-                    all_forge_wandb_metrics["total_steps"] = best_step
-                    eval_run.log(all_forge_wandb_metrics, step=best_step)
                     eval_run.finish()
                     keyboard.start()
                     rp(f"    Logged forge eval to WandB: {eval_run.url}")
-                elif eval_run is not None:
-                    # No metrics collected but run was opened — close it cleanly
-                    keyboard.stop()
-                    eval_run.finish()
-                    keyboard.start()
 
                 # --- End-of-policy summary for forge eval ---
                 if not episode_results:
@@ -1982,7 +2035,37 @@ def main():
                     break
 
             else:
-                # --- NON-FORGE: flat episode loop (unchanged) ---
+                # --- NON-FORGE: flat episode loop ---
+                # Init WandB run before episode loop
+                eval_run = None
+                if not args.no_wandb:
+                    import wandb
+                    keyboard.stop()
+                    eval_tags = [
+                        "eval_realrobot", f"source_run:{run_id}",
+                    ] + list(run.tags)
+                    eval_group = f"Eval_RealRobot_{run.group}_{args.tag}" if run.group else None
+                    eval_run = wandb.init(
+                        project=run.project,
+                        entity=args.entity,
+                        name=f"Eval_RealRobot_{run.name}",
+                        group=eval_group,
+                        tags=eval_tags,
+                        reinit="create_new",
+                        config={
+                            "source_run_id": run_id,
+                            "source_run_name": run.name,
+                            "source_run_group": run.group,
+                            "source_project": run.project,
+                            "eval_mode": "real_robot",
+                            "eval_seed": args.eval_seed,
+                            "best_step": best_step,
+                            "num_episodes": args.num_episodes,
+                            "real_robot_config": real_config,
+                        },
+                    )
+                    keyboard.start()
+
                 episode_results = []
                 running_success = 0
                 running_breaks = 0
@@ -1990,17 +2073,32 @@ def main():
                 running_timeouts = 0
                 running_timeouts_engaged = 0
                 for ep_idx in range(total_episodes):
-                    result = run_episode(
-                        robot, policy_net, normalizer, model_info,
-                        obs_builder, controller, real_config,
-                        episode_noises[ep_idx],
-                        hand_init_pos,
-                        hand_init_orn, hand_init_orn_noise,
-                        keyboard,
-                        args.device,
-                        log_trajectory=args.log_trajectories,
-                        std_scale=std_scale,
-                    )
+                    result = None
+                    for _attempt in range(5):
+                        try:
+                            result = run_episode(
+                                robot, policy_net, normalizer, model_info,
+                                obs_builder, controller, real_config,
+                                episode_noises[ep_idx],
+                                hand_init_pos,
+                                hand_init_orn, hand_init_orn_noise,
+                                keyboard,
+                                args.device,
+                                log_trajectory=args.log_trajectories,
+                                std_scale=std_scale,
+                            )
+                            break
+                        except (RuntimeError, SafetyViolation) as e:
+                            rp(f"  [EPISODE RETRY {_attempt+1}/5] {e}")
+                            try:
+                                robot.end_control()
+                            except Exception:
+                                pass
+                            try:
+                                robot.error_recovery()
+                            except Exception:
+                                pass
+                            time.sleep(1.0)
 
                     if result is None:
                         sys.stdout.write("\r\n")
@@ -2023,6 +2121,9 @@ def main():
                     sys.stdout.flush()
 
                     episode_results.append(result)
+
+                    # Log per-episode metrics to WandB
+                    log_episode_to_wandb(eval_run, result, ep_idx)
 
                     if args.log_trajectories and result.get('trajectory_1khz') is not None:
                         policy_traj_dir = os.path.join(args.trajectory_dir, run.name)
@@ -2162,36 +2263,9 @@ def main():
                     rp(f"    Force Err Y: {avg_fe_y:.3f}N ({total_steps_y} steps) cmd={avg_cf_y:.3f}N meas={avg_mf_y:.3f}N")
                     rp(f"    Force Err Z: {avg_fe_z:.3f}N ({total_steps_z} steps) cmd={avg_cf_z:.3f}N meas={avg_mf_z:.3f}N")
 
-                # Log to WandB
-                if not args.no_wandb:
-                    import wandb
+                # Finish WandB run (per-episode metrics already logged)
+                if eval_run is not None:
                     keyboard.stop()
-                    eval_tags = [
-                        "eval_realrobot", f"source_run:{run_id}",
-                    ] + list(run.tags)
-                    eval_group = f"Eval_RealRobot_{run.group}_{args.tag}" if run.group else None
-                    eval_run = wandb.init(
-                        project=run.project,
-                        entity=args.entity,
-                        name=f"Eval_RealRobot_{run.name}",
-                        group=eval_group,
-                        tags=eval_tags,
-                        reinit="create_new",
-                        config={
-                            "source_run_id": run_id,
-                            "source_run_name": run.name,
-                            "source_run_group": run.group,
-                            "source_project": run.project,
-                            "eval_mode": "real_robot",
-                            "eval_seed": args.eval_seed,
-                            "best_step": best_step,
-                            "num_episodes": args.num_episodes,
-                            "real_robot_config": real_config,
-                        },
-                    )
-                    prefixed_metrics = {f"Eval_Core/{k}": v for k, v in metrics.items()}
-                    prefixed_metrics["total_steps"] = best_step
-                    eval_run.log(prefixed_metrics)
                     eval_run.finish()
                     keyboard.start()
                     rp(f"    Logged to WandB: {eval_run.url}")
