@@ -22,8 +22,8 @@ environment:
 
   ctrl:
     # VIC (Variable Impedance Control) gain bounds - translational only
-    vic_gain_min_pos: [20.0, 20.0, 20.0]
-    vic_gain_max_pos: [500.0, 500.0, 500.0]
+    vic_gain_min_pos: [0.0, 0.0, 0.0]
+    vic_gain_max_pos: [200.0, 200.0, 200.0]
 
 wrappers:
   vic_pose:
