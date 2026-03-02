@@ -3875,6 +3875,18 @@ def _run_parallel_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
                     eval_run_name = f"Eval_{args_cli.eval_mode}_{run.name}"
                     eval_group_name = f"Eval_{args_cli.eval_mode}_{run.group}_{args_cli.tag}" if run.group else None
 
+                    eval_config = dict(run.config)
+                    eval_config.update({
+                        "source_run_id": run.id,
+                        "source_run_name": run.name,
+                        "source_run_group": run.group,
+                        "source_project": run.project,
+                        "eval_mode": args_cli.eval_mode,
+                        "eval_seed": args_cli.eval_seed,
+                        "num_checkpoints": len(checkpoint_steps),
+                        "parallel_mode": True,
+                    })
+
                     wandb_run = wandb.init(
                         project=target_project,
                         entity=args_cli.entity,
@@ -3882,16 +3894,7 @@ def _run_parallel_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
                         group=eval_group_name,
                         tags=eval_tags,
                         reinit="create_new",
-                        config={
-                            "source_run_id": run.id,
-                            "source_run_name": run.name,
-                            "source_run_group": run.group,
-                            "source_project": run.project,
-                            "eval_mode": args_cli.eval_mode,
-                            "eval_seed": args_cli.eval_seed,
-                            "num_checkpoints": len(checkpoint_steps),
-                            "parallel_mode": True,
-                        }
+                        config=eval_config,
                     )
                     print(f"  Initialized eval run {run_idx + 1}/{num_runs}: {eval_run_name}")
 
@@ -4170,21 +4173,24 @@ def _run_sequential_evaluation(runs: List[wandb.Run], configs: Dict[str, Any]):
                         if eval_group_name:
                             print(f"  Group: {eval_group_name}")
 
+                    eval_config = dict(run.config)
+                    eval_config.update({
+                        "source_run_id": run.id,
+                        "source_run_name": run.name,
+                        "source_run_group": run.group,
+                        "source_project": run.project,
+                        "eval_mode": args_cli.eval_mode,
+                        "eval_seed": args_cli.eval_seed,
+                        "num_checkpoints": len(checkpoint_steps),
+                    })
+
                     wandb.init(
                         project=target_project,
                         entity=args_cli.entity,
                         name=eval_run_name,
                         group=eval_group_name,
                         tags=eval_tags,
-                        config={
-                            "source_run_id": run.id,
-                            "source_run_name": run.name,
-                            "source_run_group": run.group,
-                            "source_project": run.project,
-                            "eval_mode": args_cli.eval_mode,
-                            "eval_seed": args_cli.eval_seed,
-                            "num_checkpoints": len(checkpoint_steps),
-                        }
+                        config=eval_config,
                     )
                     eval_run_initialized = True
                     print(f"  Eval run initialized successfully")
@@ -4305,22 +4311,25 @@ def _run_best_policies_evaluation(
                     if eval_group_name:
                         print(f"  Group: {eval_group_name}")
 
+                eval_config = dict(run.config)
+                eval_config.update({
+                    "source_run_id": run.id,
+                    "source_run_name": run.name,
+                    "source_run_group": run.group,
+                    "source_project": run.project,
+                    "eval_mode": args_cli.eval_mode,
+                    "eval_seed": args_cli.eval_seed,
+                    "best_checkpoint_step": best_step,
+                    "eval_best_policies": True,
+                })
+
                 wandb.init(
                     project=target_project,
                     entity=args_cli.entity,
                     name=eval_run_name,
                     group=eval_group_name,
                     tags=eval_tags,
-                    config={
-                        "source_run_id": run.id,
-                        "source_run_name": run.name,
-                        "source_run_group": run.group,
-                        "source_project": run.project,
-                        "eval_mode": args_cli.eval_mode,
-                        "eval_seed": args_cli.eval_seed,
-                        "best_checkpoint_step": best_step,
-                        "eval_best_policies": True,
-                    }
+                    config=eval_config,
                 )
                 eval_run_initialized = True
                 print(f"  Eval run initialized successfully")
